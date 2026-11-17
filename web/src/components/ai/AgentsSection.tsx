@@ -55,7 +55,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
   return (
     <>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Each agent has one purpose and its own model, from any provider. Agents hand work to each other; every change goes to Watson as a card a person approves.
+        Each agent has one purpose and its own model; every change it asks for goes to Watson for approval.
       </p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} aria-label="Agents now" data-testid="agents-summary">
         <span className="rk-pill" data-tone={on ? 'ok' : 'muted'}>

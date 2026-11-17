@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { fetchNotifications, saveNotifications, testChannel, type ChannelInput, type ChannelKind, type Notifications } from '../api/cards'
 import { fmtTs } from '../lib/format'
-import { Unsaved } from '../lib/unsaved'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -12,7 +11,7 @@ const KINDS: { id: ChannelKind; label: string; hint: string }[] = [
 ]
 
 /** A channel being edited: its new address, typed, never the one kept. */
-interface Draft extends ChannelInput {
+export interface Draft extends ChannelInput {
   urlSet: boolean
   lastAt?: string
   lastError?: string
@@ -20,61 +19,84 @@ interface Draft extends ChannelInput {
 
 const draftsOf = (n: Notifications): Draft[] => n.channels.map((c) => ({ id: c.id, kind: c.kind, name: c.name, on: c.on, url: '', urlSet: c.urlSet, lastAt: c.lastAt, lastError: c.lastError }))
 
-/**
- * Where new agents' proposals are announced (Phase 12, ADR-102), for a
- * SuperAdmin in Settings › Watson: Slack, Teams or any webhook, each
- * message a summary and a link, never a secret or any output. An address
- * is written here and never shown again: whoever has it can post.
- */
-export function NotificationChannels() {
+/** The channels as Settings › Watson edits them; the page's one Save bar saves them with the rest, only when changed (CU-16). */
+export interface NotifyForm {
+  saved: Notifications | null
+  loadError: string
+  link: string
+  setLink: (s: string) => void
+  drafts: Draft[]
+  setDrafts: (d: Draft[]) => void
+  changed: boolean
+  undo: () => void
+  /** Saves the console's address and the channels as typed; throws what failed. */
+  save: () => Promise<void>
+}
+
+/** Reads the notification channels and keeps the form's edits of them. */
+export function useNotifyForm(): NotifyForm {
   const [saved, setSaved] = useState<Notifications | null>(null)
   const [link, setLink] = useState('')
   const [drafts, setDrafts] = useState<Draft[]>([])
-  const [err, setErr] = useState('')
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
-  const load = (n: Notifications) => {
+  const [loadError, setLoadError] = useState('')
+  const load = useCallback((n: Notifications) => {
     setSaved(n)
     setLink(n.link)
     setDrafts(draftsOf(n))
-  }
+  }, [])
   useEffect(() => {
     let gone = false
     fetchNotifications().then(
       (n) => !gone && load(n),
-      (e: unknown) => !gone && setErr(errText(e)),
+      (e: unknown) => !gone && setLoadError(errText(e)),
     )
     return () => {
       gone = true
     }
-  }, [])
+  }, [load])
+  const strip = (l: Draft[]) => JSON.stringify(l.map(({ lastAt: _a, lastError: _e, ...d }) => d))
+  const changed = !!saved && (link !== saved.link || strip(drafts) !== strip(draftsOf(saved)))
+  return {
+    saved,
+    loadError,
+    link,
+    setLink,
+    drafts,
+    setDrafts,
+    changed,
+    undo: () => saved && load(saved),
+    save: async () => {
+      // An address goes only when one is typed.
+      load(
+        await saveNotifications(
+          link.trim(),
+          drafts.map((d) => ({ id: d.id, kind: d.kind, name: d.name.trim(), on: d.on, url: d.url?.trim() || undefined, clearUrl: d.clearUrl || undefined })),
+        ),
+      )
+    },
+  }
+}
+
+/**
+ * Where new agents' proposals are announced (Phase 12, ADR-102), for a
+ * SuperAdmin in Settings › Watson: Slack, Teams or any webhook, each
+ * message a summary and a link, never a secret or any output. An address
+ * is written here and never shown again: whoever has it can post. The
+ * page's Save bar saves them (CU-16); Test sends to a channel as saved.
+ */
+export function NotificationChannels({ form, busy }: { form: NotifyForm; busy: boolean }) {
+  const { saved, link, setLink, drafts, setDrafts, changed } = form
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
   if (!saved) {
     return (
       <section aria-label="Notifications" data-testid="notify-channels">
         <h3 className="rk-h">Notifications</h3>
-        <p className={err ? 'tb-err' : 'rk-fhint'}>{err || 'Loading…'}</p>
+        <p className={form.loadError ? 'tb-err' : 'rk-fhint'}>{form.loadError || 'Loading…'}</p>
       </section>
     )
   }
   const set = (i: number, d: Partial<Draft>) => setDrafts(drafts.map((x, j) => (j === i ? { ...x, ...d } : x)))
-  const changed = link !== saved.link || JSON.stringify(drafts.map(({ lastAt: _a, lastError: _e, ...d }) => d)) !== JSON.stringify(draftsOf(saved).map(({ lastAt: _a, lastError: _e, ...d }) => d))
-  const save = async () => {
-    setBusy(true)
-    setErr('')
-    setNote('')
-    try {
-      const n = await saveNotifications(
-        link.trim(),
-        drafts.map((d) => ({ id: d.id, kind: d.kind, name: d.name.trim(), on: d.on, url: d.url?.trim() || undefined, clearUrl: d.clearUrl || undefined })),
-      )
-      load(n)
-      setNote('Saved.')
-    } catch (e) {
-      setErr(errText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
   const test = async (id: string, name: string) => {
     setErr('')
     setNote('')
@@ -87,7 +109,6 @@ export function NotificationChannels() {
   }
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Notifications" data-testid="notify-channels">
-      <Unsaved when={changed} what="Settings › Watson’s notification channels" />
       <h3 className="rk-h">Notifications of proposed changes</h3>
       <p className="rk-fhint" style={{ margin: 0 }}>
         A proposed change that waits for approval is announced here as well as on the gear: its title, cluster, agent and a link, never its reasoning, evidence, commands or any output. Each address is kept{' '}
@@ -138,7 +159,7 @@ export function NotificationChannels() {
               </button>
             )}
             {d.id && d.urlSet && (
-              <button className="rk-btn" data-size="sm" onClick={() => void test(d.id!, d.name)} disabled={changed} title={changed ? 'Save first' : 'Send a test message'} data-testid="notify-test">
+              <button className="rk-btn" data-size="sm" onClick={() => void test(d.id!, d.name)} disabled={busy || changed} title={changed ? 'Save first' : 'Send a test message'} data-testid="notify-test">
                 Test
               </button>
             )}
@@ -154,35 +175,15 @@ export function NotificationChannels() {
         )
       })}
       <div>
-        <button className="rk-btn" onClick={() => setDrafts([...drafts, { kind: 'slack', name: '', on: true, url: '', urlSet: false }])} disabled={drafts.length >= 10} data-testid="notify-add">
+        <button className="rk-btn" onClick={() => setDrafts([...drafts, { kind: 'slack', name: '', on: true, url: '', urlSet: false }])} disabled={busy || drafts.length >= 10} data-testid="notify-add">
           Add a channel
         </button>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button className="rk-btn" data-primary="true" disabled={!changed || busy} onClick={() => void save()} data-testid="notify-save">
-          Save the channels
-        </button>
-        {changed && (
-          <button className="rk-link" onClick={() => load(saved)} disabled={busy} style={{ fontSize: 12.5 }}>
-            Undo changes
-          </button>
-        )}
-        {err ? (
-          <span className="rk-t" data-tone="err" role="alert" style={{ fontSize: 12.5 }} data-testid="notify-error">
-            {err}
-          </span>
-        ) : note ? (
-          <span className="rk-t" data-tone="ok" role="status" style={{ fontSize: 12.5 }}>
-            {note}
-          </span>
-        ) : (
-          changed && (
-            <span className="rk-fhint" style={{ fontSize: 12.5 }}>
-              Not saved yet.
-            </span>
-          )
-        )}
-      </div>
+      {(err || note) && (
+        <span className="rk-t" data-tone={err ? 'err' : 'ok'} role={err ? 'alert' : 'status'} style={{ fontSize: 12.5 }} data-testid={err ? 'notify-error' : 'notify-note'}>
+          {err || note}
+        </span>
+      )}
     </section>
   )
 }

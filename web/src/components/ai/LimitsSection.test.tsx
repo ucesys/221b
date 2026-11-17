@@ -95,7 +95,9 @@ describe('Settings › Limits (AI-37)', () => {
     render(<LimitsSection onToast={(m) => toasts.push(m)} />)
     const daily = (await screen.findByTestId('limit-daily')) as HTMLInputElement
     expect(daily.value).toBe('20')
-    expect(screen.getByTestId('limits-total-hint').textContent).toBe('All agents on all providers together. 0 means no limit. Spent: $2.00 today, $13.50 this month.')
+    expect(screen.getByTestId('limits-total-hint').textContent).toBe(
+      'All agents on all providers together, checked first, then the provider’s limit, then the agent’s own cap; once one is reached, the agents it covers stop until the next day or month. 0 means no limit. Spent: $2.00 today, $13.50 this month.',
+    )
     const rows = screen.getAllByTestId('limits-provider')
     expect(rows.map((r) => r.dataset.provider)).toEqual(['default', 'gw'])
     expect(rows[1]!.textContent).toContain('$0.75')
@@ -147,9 +149,29 @@ describe('Settings › Limits (AI-37)', () => {
     expect(daily.value).toBe('20')
     expect(screen.getByTestId('limits-total-hint').textContent).not.toContain('$')
     expect(screen.getByTestId('limits-providers').textContent).not.toContain('Spent')
+    expect(screen.getByTestId('limits-providers').querySelector('tbody')!.textContent).not.toContain('$')
+    const total = screen.getByTestId('limits-providers-total')
+    expect([...total.querySelectorAll('th, td')].map((c) => c.textContent)).toEqual(['Total', '20', '200'])
     expect(screen.getByTestId('limits-agents').textContent).not.toContain('$')
     expect(screen.getAllByTestId('limits-agent')[0]!.textContent).toContain('set')
     fireEvent.change(screen.getAllByTestId('provider-limit-daily')[1]!, { target: { value: '7' } })
     expect((screen.getByTestId('limits-save') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('ends the providers with a Total row: the total limits and the ledger’s spend, saying what was not counted per provider (AI-42)', async () => {
+    render(<LimitsSection />)
+    const total = await screen.findByTestId('limits-providers-total')
+    expect(total.parentElement!.tagName).toBe('TFOOT')
+    expect([...total.querySelectorAll('th, td')].map((c) => c.textContent)).toEqual(['Total', '20', '200', '$2.00', '$13.50'])
+    expect(screen.queryByTestId('limits-providers-uncounted')).toBeNull()
+    // Typed limits show at once; 0 is no limit.
+    fireEvent.change(screen.getByTestId('limit-daily'), { target: { value: '0' } })
+    expect(total.querySelectorAll('td')[0]!.textContent).toBe('no limit')
+    cleanup()
+    // Spent before the providers were counted: the ledger's total, and the part not in their rows.
+    ov = { ...ov, spend: { ...ov.spend, monthUSD: 20 } }
+    render(<LimitsSection />)
+    expect((await screen.findByTestId('limits-providers-total-month')).textContent).toBe('$20.00includes $6.50 not counted per provider (before the upgrade, or on a provider since removed)')
+    expect(screen.getByTestId('limits-providers-total-day').textContent).toBe('$2.00')
   })
 })

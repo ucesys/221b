@@ -33,8 +33,8 @@ export function IssueSettings({ open }: { open: boolean }) {
       stop = true
     }
   }, [open])
-  const save = async () => {
-    if (!draft) return
+  const save = async (): Promise<boolean> => {
+    if (!draft) return false
     setBusy(true)
     setError('')
     setNote('')
@@ -43,8 +43,10 @@ export function IssueSettings({ open }: { open: boolean }) {
       setSaved(s)
       setDraft(s)
       setNote('Saved.')
+      return true
     } catch (e) {
       setError(errorText(e))
+      return false
     } finally {
       setBusy(false)
     }
@@ -62,12 +64,7 @@ export function IssueSettings({ open }: { open: boolean }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Issues" data-testid="issue-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        People report problems at the report page, /report, or the address the chart’s <span className="rk-mono">issues.reportURL</span> sets. Each report is matched against the known issues; a confident match is linked and told the known
-        issue’s workaround and expected fix. The name in the page’s header is set in{' '}
-        <a className="rk-link" href="#/admin/settings">
-          Settings › General
-        </a>
-        .
+        People report problems at /report, or the chart’s <span className="rk-mono">issues.reportURL</span>; each is matched to the known issues.
       </p>
       {!draft || !saved ? (
         <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
@@ -77,7 +74,7 @@ export function IssueSettings({ open }: { open: boolean }) {
         <>
           <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Matching and limits">
             <h3 className="rk-h">Matching and limits</h3>
-            {num('matchThreshold', 'Link to a known issue at', '% confidence or more')}
+            {num('matchThreshold', 'Link to a known issue at', '% confidence or more; the reporter is told its workaround and expected fix')}
             {num('ratePerHour', 'Reports one person may send', 'an hour')}
             {num('retentionDays', 'Keep a closed report’s text', 'days')}
             {num('duplicateHours', 'Alike reports on one service are similar within', 'hours')}
@@ -105,7 +102,7 @@ export function IssueSettings({ open }: { open: boolean }) {
             </span>
             <span className="rk-fhint">Told of every change as JSON with a text field Slack shows, carrying summaries only: never a report’s text. With the network policy on, its address must be allowed in the chart.</span>
           </section>
-          <SaveBar changed={JSON.stringify(draft) !== JSON.stringify(saved)} busy={busy} onSave={() => void save()} onUndo={() => setDraft(saved)} error={error} saved={note} testId="issue-settings-save" />
+          <SaveBar changed={JSON.stringify(draft) !== JSON.stringify(saved)} busy={busy} onSave={() => void save()} save={save} onUndo={() => setDraft(saved)} error={error} saved={note} testId="issue-settings-save" />
         </>
       )}
     </section>

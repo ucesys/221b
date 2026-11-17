@@ -66,9 +66,7 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }} aria-label="Helm repositories" data-testid="helm-repos-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Applications install charts from git, and from the Helm repositories and OCI registries listed here: in the Helm tab’s new application, and in Watson as{' '}
-        <code className="rk-mono rk-icode">helm install NAME REPO/CHART --version V</code> or <code className="rk-mono rk-icode">oci://REGISTRY/PATH/CHART</code>. An OCI registry’s entry signs in to every chart under its address. Passwords
-        and tokens are kept in a Secret, never shown again, never in a backup.
+        Applications install charts from git and from the Helm repositories and OCI registries listed here.
       </p>
       {error && (
         <p className="rk-t" data-tone="err" style={{ margin: 0 }} data-testid="helm-repos-error">
@@ -227,6 +225,9 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
           <span className="rk-field">
             <input className="rk-mono" value={d.name} disabled={!!saved} maxLength={63} onChange={(e) => set({ name: e.target.value.toLowerCase() })} placeholder="bitnami" data-testid="helm-repo-name" />
           </span>
+          <span className="rk-fhint">
+            In the Helm tab’s new application, and in Watson as <code className="rk-mono rk-icode">helm install NAME REPO/CHART --version V</code> (an OCI registry: <code className="rk-mono rk-icode">oci://REGISTRY/PATH/CHART</code>).
+          </span>
         </label>
         <div style={fieldLabel}>
           Kind
@@ -282,7 +283,7 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
                 data-testid="helm-repo-secret"
               />
             </span>
-            {moved && <span className="rk-fhint">The address changed: give it again, as the kept one belongs to the old address.</span>}
+            <span className="rk-fhint">{moved ? 'The address changed: give it again, as the kept one belongs to the old address.' : 'Kept in a Secret, never shown again, never in a backup.'}</span>
           </label>
         )}
       </div>

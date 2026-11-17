@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api/mail'
-import { EmailSettings, mailStatus } from './EmailSettings'
+import { EmailSettings, mailStatus, useMailForm } from './EmailSettings'
 
 vi.mock('../api/mail', async (original) => ({
   ...(await original<typeof import('../api/mail')>()),
@@ -12,6 +13,21 @@ vi.mock('../api/mail', async (original) => ({
 
 const off: api.MailSettings = { host: '', port: 587, security: 'starttls', username: '', from: '', passwordSet: false, inSecret: true, state: 'notConfigured', on: false, link: '', you: 'sam@corp.example' }
 const saved: api.MailSettings = { ...off, host: 'smtp.example.com', username: '221b', from: '221b@example.com', passwordSet: true, state: 'notTested', link: 'https://221b.example.com' }
+
+/** The section with a Save of its own, as General's one bar saves it (CU-16). */
+function Email() {
+  const mail = useMailForm()
+  const [said, setSaid] = useState('')
+  return (
+    <>
+      <EmailSettings mail={mail} busy={false} />
+      <button data-testid="email-save" onClick={() => void mail.save().then(setSaid, (e: Error) => setSaid(e.message))}>
+        Save
+      </button>
+      <p>{said}</p>
+    </>
+  )
+}
 
 describe('Settings › Email (EM-01 to EM-04)', () => {
   beforeEach(() => {
@@ -33,7 +49,7 @@ describe('Settings › Email (EM-01 to EM-04)', () => {
   it('saves the server with a password typed once, never shown; then tests it to the admin’s own address by default', async () => {
     vi.mocked(api.saveMail).mockResolvedValue(saved)
     vi.mocked(api.testMail).mockResolvedValue({ ...saved, state: 'on', on: true, tested: { at: '2026-11-13T10:00:00Z', by: 'Sam', to: 'sam@corp.example', ok: true } })
-    render(<EmailSettings />)
+    render(<Email />)
     await screen.findByText(/Not configured/)
     expect((screen.getByTestId('email-test') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByTestId('email-host'), { target: { value: ' smtp.example.com ' } })
@@ -54,18 +70,19 @@ describe('Settings › Email (EM-01 to EM-04)', () => {
     expect((screen.getByTestId('email-test-to') as HTMLInputElement).value).toBe('sam@corp.example')
     fireEvent.click(screen.getByTestId('email-test'))
     await waitFor(() => expect(api.testMail).toHaveBeenCalledWith('sam@corp.example'))
-    await screen.findByText(/A test email went to sam@corp.example: email is on/)
+    expect((await screen.findByTestId('email-test-result')).textContent).toBe('A test email went to sam@corp.example: email is on.')
     expect(screen.getByTestId('email-status').textContent).toContain('On: tested')
   })
 
   it('keeps the password unless asked to forget it, and tests only what is saved', async () => {
     vi.mocked(api.fetchMail).mockResolvedValue(saved)
     vi.mocked(api.saveMail).mockResolvedValue({ ...saved, passwordSet: false })
-    render(<EmailSettings />)
+    render(<Email />)
     await screen.findByText(/Configured, not tested/)
     expect((screen.getByTestId('email-test') as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByTestId('email-forget-password'))
     expect((screen.getByTestId('email-test') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('email-test').getAttribute('title')).toBe('Save first')
     fireEvent.click(screen.getByTestId('email-save'))
     await waitFor(() => expect(api.saveMail).toHaveBeenCalled())
     expect(vi.mocked(api.saveMail).mock.calls[0]![0]).toMatchObject({ clearPassword: true })
@@ -74,7 +91,7 @@ describe('Settings › Email (EM-01 to EM-04)', () => {
 
   it('says what the server refused', async () => {
     vi.mocked(api.saveMail).mockRejectedValue(new Error('not valid: the server is a host name or an IP address'))
-    render(<EmailSettings />)
+    render(<Email />)
     await screen.findByText(/Not configured/)
     fireEvent.change(screen.getByTestId('email-host'), { target: { value: 'https://smtp' } })
     fireEvent.click(screen.getByTestId('email-save'))

@@ -4,16 +4,16 @@ import { fetchHistory, fetchHistoryItem, type HistoryEntry, type HistoryText, ty
 import { trapTab } from '../../lib/focus'
 import { fmtTs } from '../../lib/format'
 import { layer } from '../../lib/layer'
-import { VersionDiff } from './TextDiff'
+import { DiffView } from '../apps/DiffView'
+import { CloseIcon } from '../Icons'
+import { instructionsDiff } from './TextDiff'
 
 interface Props {
   agentId: string
   agentName: string
   clusterName?: (id: string) => string
-  /** Why Restore cannot be used now (unsaved edits, a change under way); "" when it can. */
-  restoreBlocked?: string
-  /** Restores a version once live; the dialog reads the history again after. */
-  onRestore?: (n: number) => Promise<void>
+  /** A version whose Diff… was clicked: shown against the version before it. Without one, the version in force against the draft now. */
+  version?: number
   onClose: () => void
 }
 
@@ -34,9 +34,31 @@ export function testText(t: TestBrief): string {
   return `tested: ${how}${t.passed} of ${t.cases} passed, ${fmtTs(t.at)}`
 }
 
-/** What to compare at first: the draft now against the version in force, else the newest two. */
-export function defaultPair(entries: HistoryEntry[]): [string, string] | null {
+/** An entry as its select lists it: "Version 7 · live · in force · Nov 17 18:44 · ann", "Draft 9 · the draft now · tested 12/12 passed · …", "Draft 8 · discarded · …". */
+export function entryOption(e: HistoryEntry): string {
+  const t = e.test
+  const parts = [
+    entryLabel(e),
+    e.kind === 'live' ? 'live' : e.kind === 'discarded' ? 'discarded' : '',
+    e.inForce ? 'in force' : '',
+    e.current ? 'the draft now' : '',
+    t ? `tested ${t.passed}/${t.cases} passed${t.state === 'stopped' ? ' (stopped)' : t.state === 'failed' ? ' (failed)' : ''}` : '',
+    e.at && !e.at.startsWith('0001') ? fmtTs(e.at) : '',
+    e.by ?? '',
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+/** What to compare at first: a version against the version before it; else the draft now against the version in force, else the newest two. */
+export function defaultPair(entries: HistoryEntry[], version?: number): [string, string] | null {
   if (!entries.length) return null
+  if (version !== undefined) {
+    const at = entries.findIndex((e) => e.kind === 'live' && (e.n ?? 0) === version)
+    if (at >= 0) {
+      const before = entries.slice(at + 1).find((e) => e.kind === 'live')
+      return [entryKey(before ?? entries[at]!), entryKey(entries[at]!)]
+    }
+  }
   const current = entries.find((e) => e.current)
   const inForce = entries.find((e) => e.inForce)
   if (current && inForce) return [entryKey(inForce), entryKey(current)]
@@ -44,25 +66,17 @@ export function defaultPair(entries: HistoryEntry[]): [string, string] | null {
   return [entryKey(entries[1]!), entryKey(entries[0]!)]
 }
 
-const KIND: Record<HistoryEntry['kind'], { text: string; tone: string }> = {
-  live: { text: 'Live', tone: 'ok' },
-  draft: { text: 'Draft', tone: 'info' },
-  discarded: { text: 'Discarded', tone: 'muted' },
-}
-
 /**
- * The agent's history (AI-32): every version once live and every draft
- * saved since the last went live, newest first, any two compared field by
- * field as Helm › History compares a release's revisions. A version once
- * live, not in force, can be restored from here as from the drawer.
+ * The agent's history (AI-32, AI-41): any two of its versions and drafts
+ * compared as Helm › History compares a release's revisions (DiffDialog):
+ * a select for each side, and one unified diff of the fields that changed.
+ * Restore lives in the drawer's Versions list.
  */
-export function HistoryDialog({ agentId, agentName, clusterName, restoreBlocked = '', onRestore, onClose }: Props) {
+export function HistoryDialog({ agentId, agentName, clusterName, version, onClose }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null)
   const [error, setError] = useState('')
   const [pair, setPair] = useState<[string, string] | null>(null)
   const [texts, setTexts] = useState<Record<string, HistoryText>>({})
-  const [busy, setBusy] = useState(false)
-  const [reads, setReads] = useState(0)
   const closeRef = useRef<HTMLButtonElement>(null)
   // The sides read or being read, each once.
   const asked = useRef(new Set<string>())
@@ -78,16 +92,14 @@ export function HistoryDialog({ agentId, agentName, clusterName, restoreBlocked 
         if (!live) return
         const list = r.entries ?? []
         setEntries(list)
-        asked.current.clear()
-        setTexts({})
-        setPair((p) => (p && list.some((e) => entryKey(e) === p[0]) && list.some((e) => entryKey(e) === p[1]) ? p : defaultPair(list)))
+        setPair(defaultPair(list, version))
       },
       (e: unknown) => live && setError(e instanceof Error ? e.message : String(e)),
     )
     return () => {
       live = false
     }
-  }, [agentId, reads])
+  }, [agentId, version])
   // Each side's whole text, read once.
   useEffect(() => {
     if (!pair || !entries) return
@@ -105,38 +117,44 @@ export function HistoryDialog({ agentId, agentName, clusterName, restoreBlocked 
     }
   }, [agentId, pair, entries])
   const list = entries ?? []
-  const byKey = (k: string) => list.find((e) => entryKey(e) === k)
+  const name = (k: string) => {
+    const e = list.find((x) => entryKey(x) === k)
+    return e ? entryLabel(e) : k
+  }
   const from = pair ? texts[pair[0]] : undefined
   const to = pair ? texts[pair[1]] : undefined
-  const pick = (side: 0 | 1, key: string) => setPair((p) => (side === 0 ? [key, p?.[1] ?? key] : [p?.[0] ?? key, key]))
-  const restore = async (n: number) => {
-    if (!onRestore) return
-    setBusy(true)
-    setError('')
-    try {
-      await onRestore(n)
-      setReads((x) => x + 1)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const busy = !!pair && (!from || !to) && !error
   const halt = (e: { stopPropagation: () => void }) => e.stopPropagation()
-  const sideName = (k?: string) => {
-    const e = k ? byKey(k) : undefined
-    return e ? entryLabel(e) : '—'
-  }
+  const side = (i: 0 | 1, label: string, testId: string) => (
+    <label className="rk-field" style={{ minWidth: 200, maxWidth: 'min(520px, 100%)' }}>
+      <select
+        value={pair?.[i] ?? ''}
+        disabled={!pair}
+        onChange={(e) => {
+          const k = e.target.value
+          setPair((p) => (p ? (i === 0 ? [k, p[1]] : [p[0], k]) : [k, k]))
+        }}
+        aria-label={label}
+        data-testid={testId}
+      >
+        {list.map((e) => (
+          <option key={entryKey(e)} value={entryKey(e)}>
+            {entryOption(e)}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
   return createPortal(
     <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, whiteSpace: 'normal' }} onClick={halt} onMouseDown={halt} onKeyDown={halt}>
-      <button aria-label="Close the history" tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
+      <button aria-label="Close the diff" tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="history-dialog-title"
         className="rk-card"
         data-testid="history-dialog"
-        data-state={entries ? 'ready' : 'loading'}
+        data-state={entries && !busy ? 'ready' : 'loading'}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             onClose()
@@ -144,93 +162,34 @@ export function HistoryDialog({ agentId, agentName, clusterName, restoreBlocked 
           }
           trapTab(e)
         }}
-        style={{ position: 'relative', width: 'min(1400px, 96vw)', height: '90vh', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: 'var(--shadow)', minHeight: 0, overflowWrap: 'anywhere' }}
+        style={{ position: 'relative', width: 'min(1400px, 96vw)', height: '90vh', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)', minHeight: 0 }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
-          <h2 id="history-dialog-title" style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
-            History of the {agentName}
-          </h2>
-          {pair && (
-            <span style={{ fontSize: 12.5 }} data-testid="history-pair">
-              <b style={{ fontWeight: 600 }}>{sideName(pair[0])}</b> → <b style={{ fontWeight: 600 }}>{sideName(pair[1])}</b>
-            </span>
-          )}
-          <span style={{ flex: '1 1 auto' }} />
-          <button ref={closeRef} className="rk-btn" title="Close (Esc)" onClick={onClose} data-testid="history-close">
-            Close
-          </button>
-        </div>
-        <p className="rk-fhint" style={{ margin: 0, fontSize: 12.5 }}>
-          Every version that went live, and every draft saved since the last one did, newest first. Pick any two to compare them: From is the older side, To the newer. The drafts are kept until a draft goes live; the one that does is kept
-          as its version.
-        </p>
-        {error && (
-          <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
-            {error}
-          </p>
-        )}
-        <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          <ul
-            style={{ flex: '1 1 300px', maxWidth: 420, minHeight: 0, maxHeight: '100%', overflow: 'auto', margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}
-            aria-label="Versions and drafts"
-            data-testid="history-list"
-          >
-            {!entries && !error && <li className="rk-fhint">Reading the history…</li>}
-            {list.map((e) => {
-              const key = entryKey(e)
-              const kind = KIND[e.kind]
-              return (
-                <li key={key} data-testid="history-entry" data-key={key} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '6px 10px', fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <strong>{entryLabel(e)}</strong>
-                    <span className="rk-pill" data-tone={kind.tone}>
-                      {kind.text}
-                    </span>
-                    {e.inForce && (
-                      <span className="rk-pill" data-tone="ok" data-testid="history-in-force">
-                        In force
-                      </span>
-                    )}
-                    {e.current && (
-                      <span className="rk-pill" data-tone="info" data-testid="history-current">
-                        The draft now
-                      </span>
-                    )}
-                    {e.kind === 'live' && e.rev ? <span className="rk-fhint">was draft {e.rev}</span> : null}
-                  </span>
-                  {(e.by || (e.at && !e.at.startsWith('0001'))) && (
-                    <span className="rk-fhint">
-                      {e.by ?? ''}
-                      {e.at && !e.at.startsWith('0001') ? `${e.by ? ', ' : ''}${fmtTs(e.at)}` : ''}
-                    </span>
-                  )}
-                  {e.note && <span data-testid="history-note">{e.note}</span>}
-                  {e.test && (
-                    <span className="rk-fhint" data-tone={e.test.passed < e.test.cases ? 'err' : undefined}>
-                      {testText(e.test)}
-                    </span>
-                  )}
-                  <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button className="rk-btn" aria-pressed={pair?.[0] === key} onClick={() => pick(0, key)} data-testid="history-from">
-                      From
-                    </button>
-                    <button className="rk-btn" aria-pressed={pair?.[1] === key} onClick={() => pick(1, key)} data-testid="history-to">
-                      To
-                    </button>
-                    {e.kind === 'live' && !!e.n && !e.inForce && onRestore && (
-                      <button className="rk-btn" disabled={busy || !!restoreBlocked} title={restoreBlocked || undefined} onClick={() => void restore(e.n!)} data-testid="history-restore">
-                        Restore
-                      </button>
-                    )}
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
-          <div style={{ flex: '3 1 420px', minWidth: 0, minHeight: 0, maxHeight: '100%', overflow: 'auto' }} data-testid="history-diff">
-            {pair && (!from || !to) && !error && <p className="rk-fhint">Comparing…</p>}
-            {from && to && <VersionDiff from={from} to={to} clusterName={clusterName} />}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+            <h2 id="history-dialog-title" style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+              Diff of {agentName} instructions
+            </h2>
+            <span style={{ fontSize: 12.5 }}>from</span>
+            {side(0, 'From', 'history-from')}
+            <span style={{ fontSize: 12.5 }}>to</span>
+            {side(1, 'To', 'history-to')}
+            {(!entries || busy) && !error && <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>{entries ? 'Comparing…' : 'Reading the history…'}</span>}
+            <span style={{ flex: '1 1 auto' }} />
+            <button ref={closeRef} className="rk-icon-btn" aria-label="Close the diff" title="Close (Esc)" onClick={onClose} data-testid="history-close">
+              <CloseIcon />
+            </button>
           </div>
+          <p className="rk-fhint" style={{ margin: 0, fontSize: 12.5 }} data-testid="history-hint">
+            Every version that went live and every draft saved since, newest first.
+          </p>
+        </div>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }} data-testid="history-diff">
+          {error && (
+            <p className="rk-callout" data-tone="warn" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
+              {error}
+            </p>
+          )}
+          {pair && from && to && <DiffView diff={instructionsDiff(from, to, name(pair[0]), name(pair[1]), clusterName)} same="are the same" fill />}
         </div>
       </div>
     </div>,

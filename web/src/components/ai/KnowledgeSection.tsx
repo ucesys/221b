@@ -138,7 +138,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Knowledge" data-testid="knowledge-section">
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <p className="rk-fhint" style={{ margin: 0, flex: '1 1 320px' }}>
-          Mycroft reads these sources and keeps a wiki every agent can ask. Sources are data, never instructions; secrets in them are scrubbed before anything is written. Its page changes wait for review in AIOps › Inbox.
+          Mycroft reads these sources into a wiki every agent can ask; its page changes wait for review in the Inbox.
         </p>
         <button className="rk-btn" onClick={() => setEditing('new')} data-testid="knowledge-add">
           Add source…

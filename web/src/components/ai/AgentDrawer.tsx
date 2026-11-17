@@ -519,8 +519,8 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
   // shows how many there are.
   const [history, setHistory] = useState(false)
   const [historyCount, setHistoryCount] = useState<number | null>(null)
-  // The versions and drafts, to compare (AI-32).
-  const [versions, setVersions] = useState(false)
+  // The versions and drafts, to compare (AI-32): open on a version's Diff…, else on the draft against the version in force (AI-41).
+  const [diffOf, setDiffOf] = useState<{ version?: number } | null>(null)
   const piloted = ins?.draft?.pilot?.started
   useEffect(() => {
     if (!piloted) return
@@ -829,7 +829,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
             </button>
           )
         )}
-        <button className="rk-btn" aria-haspopup="dialog" onClick={() => setVersions(true)} data-testid="ins-history">
+        <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDiffOf({})} data-testid="ins-history">
           History
         </button>
         {d && (
@@ -921,19 +921,8 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         />
       )}
       {history && <PilotHistoryDialog agentId={agent.id} agentName={agent.name} onClose={() => setHistory(false)} onCount={setHistoryCount} />}
-      {versions && (
-        <HistoryDialog
-          agentId={agent.id}
-          agentName={agent.name}
-          clusterName={(id) => (id === ALL_CLUSTERS ? 'every cluster' : (ov.clusters.find((c) => c.id === id)?.name ?? id))}
-          restoreBlocked={edited ? 'Save or undo your edits first.' : busy ? 'Wait for the change under way.' : ''}
-          onRestore={async (n) => {
-            const r = await restoreVersion(agent.id, n)
-            onToast?.(r.waiting ? `Version ${n} waits for another SuperAdmin on Approvals.` : `Version ${n} is live again, as version ${r.live?.n}.`)
-            await load()
-          }}
-          onClose={() => setVersions(false)}
-        />
+      {diffOf && (
+        <HistoryDialog agentId={agent.id} agentName={agent.name} clusterName={(id) => (id === ALL_CLUSTERS ? 'every cluster' : (ov.clusters.find((c) => c.id === id)?.name ?? id))} version={diffOf.version} onClose={() => setDiffOf(null)} />
       )}
       {ins.versions.length > 0 && (
         <details>
@@ -945,6 +934,9 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
                 <span className="rk-fhint">
                   {v.why ?? 'made live'} by {v.by}, {fmtTs(v.at)}
                 </span>
+                <button className="rk-btn" aria-haspopup="dialog" title="What this version changed against the one before it" onClick={() => setDiffOf({ version: v.n })} data-testid="ins-version-diff">
+                  Diff…
+                </button>
                 {v.n === ins.live ? (
                   <span className="rk-pill" data-tone="ok">
                     In force
@@ -953,6 +945,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
                   <button
                     className="rk-btn"
                     disabled={busy || edited}
+                    title={edited ? 'Save or undo your edits first.' : busy ? 'Wait for the change under way.' : undefined}
                     onClick={() =>
                       void act(async () => {
                         const r = await restoreVersion(agent.id, v.n)

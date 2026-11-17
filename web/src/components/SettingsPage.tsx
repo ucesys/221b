@@ -7,7 +7,7 @@ import { fetchIssueSettings, saveIssueSettings } from '../api/issues'
 import { IssueSettings } from './IssueSettings'
 import { SLASettings } from './SLASettings'
 import { CasesSettings } from './CasesSettings' // One flow for findings and cases (Phase 12, wave 6)
-import { EmailSettings } from './EmailSettings' // Email about cases (EM-01)
+import { EmailSettings, useMailForm } from './EmailSettings' // Email about cases (EM-01)
 import { SaveBar } from './SaveBar'
 import { WatsonSettings } from './WatsonSettings'
 import { AgentsSection } from './ai/AgentsSection'
@@ -18,6 +18,9 @@ import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
 import { leftText, useSetup } from '../api/setup'
+import { LeaveSaveContext } from '../lib/leaveSave'
+import { hasUnsaved, unsavedWhat } from '../lib/unsaved'
+import { ConfirmDialog } from './ConfirmDialog'
 
 type Section = 'start' | 'general' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
 
@@ -113,73 +116,122 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
     navigate(settingsHref('general'), true)
   }, [askedEmail])
 
+  // Leaving a page with changes not saved asks first (CU-16): Save (where
+  // the page's Save can say it all went), Discard, or stay. Closing or
+  // reloading the browser's tab asks the browser's own way.
+  const leaveSave = useRef<(() => Promise<boolean>) | null>(null)
+  const [leaving, setLeaving] = useState<{ to: string; canSave: boolean } | null>(null)
+  const [leaveBusy, setLeaveBusy] = useState(false)
+  useEffect(() => {
+    const ask = (e: BeforeUnloadEvent) => {
+      if (!hasUnsaved()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', ask)
+    return () => window.removeEventListener('beforeunload', ask)
+  }, [])
+  const go = (to: string) => {
+    if (to !== settingsHref(section) && hasUnsaved()) setLeaving({ to, canSave: !!leaveSave.current })
+    else navigate(to, true)
+  }
+
   const label = SECTIONS.find((s) => s.id === section)!.label
   // Getting started's hint says how many steps are left (Phase 12).
   const { view: setup } = useSetup(true)
   return (
-    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
-      <nav aria-label="Settings sections" style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
-        {GROUPS.map((g) => [
-          g.label && (
-            <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
-              {g.label}
-            </span>
-          ),
-          ...g.sections.map((s) => (
-            <a
-              key={s.id}
-              href={settingsHref(s.id)}
-              aria-current={s.id === section ? 'page' : undefined}
-              onClick={(e) => {
-                e.preventDefault()
-                navigate(settingsHref(s.id), true)
-              }}
-              data-testid="settings-section"
-              data-section={s.id}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                padding: '8px 12px',
-                borderRadius: 8,
-                textDecoration: 'none',
-                color: 'var(--fg)',
-                background: s.id === section ? 'var(--surface)' : 'transparent',
-                boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-              <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
-            </a>
-          )),
-        ])}
-      </nav>
-      <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
-        <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
-          {label}
-        </h2>
-        {section === 'start' && <GettingStartedSection onToast={onToast} />}
-        {section === 'general' && (
-          <>
-            <General settings={settings} refreshedAt={refreshedAt} />
-            {/* --- Email about cases (EM-01), in General since 0.12.1 --- */}
-            <section id="settings-email" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 16 }} aria-label="Email" data-testid="settings-email-section">
-              <h3 className="rk-h">Email</h3>
-              <EmailSettings />
-            </section>
-          </>
+    <LeaveSaveContext.Provider value={leaveSave}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
+        <nav aria-label="Settings sections" style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
+          {GROUPS.map((g) => [
+            g.label && (
+              <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
+                {g.label}
+              </span>
+            ),
+            ...g.sections.map((s) => (
+              <a
+                key={s.id}
+                href={settingsHref(s.id)}
+                aria-current={s.id === section ? 'page' : undefined}
+                onClick={(e) => {
+                  e.preventDefault()
+                  go(settingsHref(s.id))
+                }}
+                data-testid="settings-section"
+                data-section={s.id}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  textDecoration: 'none',
+                  color: 'var(--fg)',
+                  background: s.id === section ? 'var(--surface)' : 'transparent',
+                  boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
+                }}
+              >
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
+              </a>
+            )),
+          ])}
+        </nav>
+        <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
+          <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
+            {label}
+          </h2>
+          {section === 'start' && <GettingStartedSection onToast={onToast} />}
+          {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
+          {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
+          {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
+          {section === 'limits' && <LimitsSection onToast={onToast} />}
+          {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
+          {section === 'watson' && <WatsonSettings open />}
+          {section === 'apps' && <HelmReposSettings onToast={onToast} />}
+          {section === 'issues' && <IssueSettings open />}
+          {section === 'jobs' && <JobsSettings />}
+          {section === 'sla' && <SLASettings />}
+          {section === 'cases' && <CasesSettings />}
+        </section>
+        {leaving && (
+          <ConfirmDialog
+            title={leaving.canSave ? 'Save or discard?' : 'Discard the changes?'}
+            confirm="Discard"
+            danger
+            busy={leaveBusy}
+            also={
+              leaving.canSave
+                ? {
+                    label: 'Save',
+                    testId: 'leave-save',
+                    onClick: () => {
+                      const save = leaveSave.current
+                      if (!save) return
+                      setLeaveBusy(true)
+                      void save().then((ok) => {
+                        setLeaveBusy(false)
+                        setLeaving(null)
+                        // What failed is said on the page's Save bar, where it stays.
+                        if (ok) navigate(leaving.to, true)
+                      })
+                    },
+                  }
+                : undefined
+            }
+            onCancel={() => setLeaving(null)}
+            onConfirm={() => {
+              setLeaving(null)
+              navigate(leaving.to, true)
+            }}
+          >
+            <p style={{ margin: 0 }} data-testid="leave-unsaved">
+              {unsavedWhat().join(', ') || 'This page'} has changes not saved. {leaving.canSave ? 'Save them, or discard them and leave.' : 'Discard them and leave, or cancel to stay.'}
+            </p>
+          </ConfirmDialog>
         )}
-        {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
-        {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
-        {section === 'limits' && <LimitsSection onToast={onToast} />}
-        {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
-        {section === 'watson' && <WatsonSettings open />}
-        {section === 'apps' && <HelmReposSettings onToast={onToast} />}
-        {section === 'issues' && <IssueSettings open />}
-        {section === 'jobs' && <JobsSettings />}
-        {section === 'sla' && <SLASettings />}
-        {section === 'cases' && <CasesSettings />}
-      </section>
-    </div>
+      </div>
+    </LeaveSaveContext.Provider>
   )
 }
 
@@ -227,34 +279,56 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     }
   }, [])
   const companyChanged = company !== null && companyDraft !== undefined && companyDraft.trim() !== company
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined || companyChanged
+  const settingsChanged = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined
+  // Email (EM-11) is saved by the same bar (CU-16).
+  const mail = useMailForm()
+  const changed = settingsChanged || companyChanged || mail.changed
 
-  const save = async () => {
-    if (picked === undefined) return
+  // One Save for the page (CU-16): only the parts changed, in turn; a part
+  // that fails keeps what was typed and is named, the others stay saved,
+  // and Save again tries only what is left.
+  const save = async (): Promise<boolean> => {
     setBusy(true)
     setError('')
     setSaved('')
-    try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
-      if (companyChanged) {
+    const failed: string[] = []
+    const notes: string[] = []
+    const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
+    if (settingsChanged && picked !== undefined) {
+      try {
+        await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
+        setDraft(undefined)
+        setBannersDraft(undefined)
+        setFleetsDraft(undefined)
+        setImagesDraft(undefined)
+        setFormatDraft(undefined)
+        setGraceDraft(undefined)
+      } catch (err) {
+        failed.push(`Console settings not saved: ${why(err)}`)
+      }
+    }
+    if (companyChanged) {
+      try {
         // Read again just before, so Settings › Issues' other values stay as they are now.
         const current = await fetchIssueSettings()
         const s = await saveIssueSettings({ ...current, company: companyDraft.trim() })
         setCompany(s.company)
         setCompanyDraft(undefined)
+      } catch (err) {
+        failed.push(`Company or IT name not saved: ${why(err)}`)
       }
-      setDraft(undefined)
-      setBannersDraft(undefined)
-      setFleetsDraft(undefined)
-      setImagesDraft(undefined)
-      setFormatDraft(undefined)
-      setGraceDraft(undefined)
-      setSaved('Saved.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
     }
+    if (mail.changed) {
+      try {
+        notes.push(await mail.save())
+      } catch (err) {
+        failed.push(`Email not saved: ${why(err)}`)
+      }
+    }
+    setError(failed.join(' '))
+    if (!failed.length) setSaved(['Saved.', ...notes].join(' '))
+    setBusy(false)
+    return !failed.length
   }
 
   const current = settings?.refreshSeconds
@@ -303,11 +377,17 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           </p>
         </section>
       )}
+      {/* --- Email about cases (EM-01), in General since 0.12.1, saved by its bar (CU-16) --- */}
+      <section id="settings-email" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 16 }} aria-label="Email" data-testid="settings-email-section">
+        <h3 className="rk-h">Email</h3>
+        <EmailSettings mail={mail} busy={busy} />
+      </section>
       <SaveBar
         what="Settings › General"
         changed={changed}
         busy={busy}
         onSave={() => void save()}
+        save={save}
         onUndo={() => {
           setDraft(undefined)
           setFormatDraft(undefined)
@@ -316,6 +396,8 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           setFleetsDraft(undefined)
           setImagesDraft(undefined)
           setCompanyDraft(undefined)
+          mail.undo()
+          setError('')
         }}
         error={error}
         saved={saved}

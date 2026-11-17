@@ -1,3 +1,4 @@
+import { useLeaveSave } from '../lib/leaveSave'
 import { useUnsaved } from '../lib/unsaved'
 
 /**
@@ -14,6 +15,7 @@ export function SaveBar({
   saved,
   testId,
   what = 'a Settings section',
+  save,
 }: {
   changed: boolean
   busy: boolean
@@ -24,8 +26,11 @@ export function SaveBar({
   testId: string
   /** What holds the changes, as Sherlock is told: "Settings › SLA". */
   what?: string
+  /** The same Save, saying whether all was saved: offered by the prompt on leaving the page with changes (CU-16). */
+  save?: () => Promise<boolean>
 }) {
   useUnsaved(changed, what)
+  useLeaveSave(changed && save ? save : null)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', position: 'sticky', bottom: 0, padding: '10px 0', background: 'var(--surface)', borderTop: '1px solid var(--line)' }} data-testid="save-bar">
       <button className="rk-btn" data-primary="true" disabled={!changed || busy} onClick={onSave} data-testid={testId}>

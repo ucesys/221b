@@ -1,4 +1,5 @@
 import type { HistoryText } from '../../api/ai'
+import type { AppDiff } from '../../api/apps'
 import { lineDiff } from '../../lib/linediff'
 import { DiffLines } from '../apps/DiffView'
 
@@ -67,4 +68,17 @@ export function VersionDiff({ from, to, clusterName, testId }: { from: Pick<Hist
       )}
     </div>
   )
+}
+
+const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1)
+
+/**
+ * Two versions of an agent's instructions as one unified diff, in the form
+ * Helm › History shows a revision's (DiffView): each changed field a section
+ * with its own ---/+++ lines naming the field and the side, then its hunks.
+ */
+export function instructionsDiff(from: Pick<HistoryText, 'house' | 'notes' | 'parts'>, to: Pick<HistoryText, 'house' | 'notes' | 'parts'>, fromName: string, toName: string, clusterName?: (id: string) => string): AppDiff {
+  const changed = versionFields(from, to, clusterName).filter((f) => f.from !== f.to)
+  const text = changed.map((f) => [`--- ${lower(f.label)} (${lower(fromName)})`, `+++ ${lower(f.label)} (${lower(toName)})`, lineDiff(f.from, f.to).text].join('\n')).join('\n')
+  return { from: fromName, to: toName, same: !changed.length, changed: changed.map((f) => f.label), added: [], removed: [], text }
 }
