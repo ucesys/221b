@@ -111,8 +111,8 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	}
 	keys := ch.apply(have)
 	switch {
-	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3 && x.Kind != SourceLive:
-		return SourceTest{}, invalid("only a Confluence space, a git repository, an S3 bucket or a live source is tested")
+	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3 && x.Kind != SourceLive && x.Kind != SourceWeb:
+		return SourceTest{}, invalid("only a Confluence space, a git repository, an S3 bucket, a web site or a live source is tested")
 	case x.Kind == SourceConfluence && keys.Token == "":
 		return SourceTest{}, invalid("type the API token to test")
 	case x.Kind == SourceS3 && x.Credentials == CredentialsKeys && (keys.AccessKeyID == "" || keys.SecretAccessKey == ""):
@@ -144,7 +144,12 @@ func (s *Service) testSource(ctx context.Context, x Source, keys Creds) (SourceT
 }
 
 func (s *Service) listForTest(ctx context.Context, x Source, keys Creds) (SourceTest, error) {
-	tctx, cancel := context.WithTimeout(ctx, testTimeout)
+	timeout := testTimeout
+	if x.Kind == SourceWeb {
+		// A web site is listed by crawling it, as a read does.
+		timeout = SiteCrawlTime
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := s.reach(tctx, x); err != nil {
 		return SourceTest{}, err
@@ -160,7 +165,7 @@ func (s *Service) listForTest(ctx context.Context, x Source, keys Creds) (Source
 			if u := sourceAddr(x); u != nil {
 				where = u.Host
 			}
-			return SourceTest{}, fmt.Errorf("%s took the connection but did not list its items within %d s: %v", where, int(testTimeout/time.Second), err)
+			return SourceTest{}, fmt.Errorf("%s took the connection but did not list its items within %d s: %v", where, int(timeout/time.Second), err)
 		}
 		return SourceTest{}, err
 	}
@@ -189,7 +194,7 @@ func sourceAddr(x Source) *url.URL {
 	switch x.Kind {
 	case SourceConfluence:
 		raw = x.BaseURL
-	case SourceGit:
+	case SourceGit, SourceWeb:
 		raw = x.URL
 	case SourceS3:
 		raw = x.Endpoint

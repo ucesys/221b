@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,14 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET wiki", h.getWiki)
 	route("POST add", h.postAdd)
 	route("DELETE added/{name}", h.deleteAdded)
+	// What Mycroft draws on (0.12.1, KN-45, KN-47, MY-12 to MY-14).
+	route("GET uploads", h.getUploads)
+	route("DELETE uploads/{source}/{name}", h.deleteUpload)
+	route("GET items", h.getItems)
+	route("GET items/detail", h.getItem)
+	route("POST sources/{id}/exclusions", h.postExclusion)
+	route("DELETE sources/{id}/exclusions", h.deleteExclusion)
+	route("POST rewrite", h.postRewrite)
 	// A page's own actions (KN-23, KN-24).
 	route("POST outdated", h.postOutdated)
 	route("GET requests", h.getRequests)
@@ -432,6 +441,87 @@ func (h *handler) deleteAdded(w http.ResponseWriter, r *http.Request, c Caller) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})
+}
+
+// --- What Mycroft draws on (0.12.1) ---
+
+func (h *handler) getUploads(w http.ResponseWriter, r *http.Request, c Caller) {
+	v, err := h.s.Uploads(r.Context(), c)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (h *handler) deleteUpload(w http.ResponseWriter, r *http.Request, c Caller) {
+	res, err := h.s.RemoveUpload(r.Context(), c, r.PathValue("source"), r.PathValue("name"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *handler) getItems(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	page, err := h.s.Items(r.Context(), c, ItemsQuery{Source: q.Get("source"), Type: q.Get("type"), State: q.Get("state"), Q: q.Get("q"), Offset: offset, Limit: limit})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) getItem(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	d, err := h.s.Item(r.Context(), c, q.Get("source"), q.Get("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (h *handler) postExclusion(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in ExcludeInput
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.Exclude(r.Context(), c, r.PathValue("id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *handler) deleteExclusion(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	if err := h.s.Include(r.Context(), c, r.PathValue("id"), q.Get("pattern"), q.Get("under") == "1"); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"included": true, "text": "Included again: it is read at the next sync, its Wiki sync job's next run or Run now."})
+}
+
+func (h *handler) postRewrite(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Pages []string `json:"pages"`
+		Title string   `json:"title"`
+		Why   string   `json:"why"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.Rewrite(r.Context(), c, in.Pages, in.Title, in.Why)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, res)
 }
 
 // --- A page's own actions (KN-23, KN-24) ---

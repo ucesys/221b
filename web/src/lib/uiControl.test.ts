@@ -413,7 +413,7 @@ describe('Sherlock opens Administration and Settings pages the person may open (
     expect(() => open({ page: 'knowledge' })).toThrow('is for SuperAdmins')
     expect(window.location.hash).toBe(before)
     expect(open({ page: 'roles' }).label).toBe('Opened Administration › Roles')
-    // An Admin sees Knowledge's Added in Mycroft card.
+    // An Admin sees Knowledge's Uploaded documents section.
     setUIMe(ME({ roles: ['admin'] }))
     expect(open({ page: 'knowledge' }).label).toBe('Opened Settings › Knowledge')
     setUIMe(ME({ mode: 'none', roles: [] }))

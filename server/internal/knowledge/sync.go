@@ -230,6 +230,9 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// their versions: their text is let go once Mycroft has had it.
 	uploads := map[string]string{}
 	var why []string
+	// handedOver are the web sites that took over the pages they were
+	// made from (KN-46).
+	var handedOver []string
 	for _, x := range set.Sources {
 		// A live source is never read into the wiki (KN-39).
 		if x.Off || x.Kind == SourceLive || (req.Source != "" && x.ID != req.Source) {
@@ -249,6 +252,15 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 			var items []Item
 			var complete bool
 			items, complete, err = rd.List(ctx, since)
+			// What is excluded is never read (KN-45): left out of the
+			// listing, it is gone at a full read, its excerpts emptied.
+			if err == nil && len(x.Excluded) > 0 && excludable(x.Kind) {
+				parents := parentsOf(m, x.ID, items)
+				items = slices.DeleteFunc(items, func(it Item) bool {
+					_, ok := matchExclusion(x.Kind, x.Excluded, it.ID, ancestorsOf(it.ID, parents))
+					return ok
+				})
+			}
 			if sk, ok := rd.(skipper); ok && err == nil {
 				ss.Skipped, ss.SkippedWhy = sk.Skipped()
 				if ss.Skipped > 0 {
@@ -273,6 +285,12 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				if rerr != nil {
 					delete(uploads, key)
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: “%s” could not be read: %v", x.Name, it.Title, rerr))
+					// Said on the item (KN-47); it is read again next time.
+					if st == nil {
+						st = &ItemState{Source: x.ID, ID: it.ID, Title: it.Title, URL: it.URL, By: it.By, Type: it.Type}
+						m.Items[key] = st
+					}
+					st.Error, st.Skipped, st.LastSeen, st.Version = clip(scrub.Known(rerr.Error(), secrets), 300), "", now, ""
 					continue
 				}
 				text = scrub.Known(scrub.Text(text), secrets)
@@ -282,6 +300,13 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					m.Items[key] = st
 				}
 				st.Title, st.URL, st.Modified, st.LastSeen, st.Gone = it.Title, it.URL, it.Modified.UTC(), now, false
+				st.Error, st.Skipped = "", ""
+				if it.Parent != "" {
+					st.Parent = it.Parent
+				}
+				if it.Type != "" {
+					st.Type = it.Type
+				}
 				if it.By != "" {
 					st.By = it.By
 				}
@@ -307,13 +332,32 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				for _, st := range m.bySource(x.ID) {
 					if key := itemKey(st.Source, st.ID); !listed[key] && !st.Gone {
 						st.Gone = true
+						if st.record() {
+							// A record of an item never read holds no excerpt.
+							delete(m.Items, key)
+							continue
+						}
+						// Should it come back, it is read in whole: its
+						// excerpt is emptied now.
+						st.Hash = ""
 						gone = append(gone, key)
 						res.Gone++
 					}
 				}
 			}
+			if sl, ok := rd.(skippedLister); ok {
+				keepSkipped(m, x.ID, sl.SkippedItems(), listed, now)
+			}
+			// A web site made from the pages added in Mycroft takes them
+			// over once it has read its own (KN-46).
+			if err == nil && x.Kind == SourceWeb {
+				if g := handOver(m, x, items); len(g) > 0 {
+					gone = append(gone, g...)
+					handedOver = append(handedOver, x.ID)
+				}
+			}
 			for _, st := range m.bySource(x.ID) {
-				if !st.Gone {
+				if !st.Gone && !st.record() {
 					ss.Items++
 				}
 			}
@@ -384,8 +428,11 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	writes = append(writes, Change{Path: ManifestPath, Body: m.encode()})
 	if err := store.Write(ctx, writes, fmt.Sprintf("Mycroft read %d changed items (%s)", len(changed), req.By)); err != nil {
 		res.Errors = append(res.Errors, "the manifest and excerpts could not be written: "+err.Error())
-	} else if err := s.Refresh(ctx); err != nil {
-		s.o.Logger.Warn("reading the wiki after a sync failed", "err", err)
+	} else {
+		if err := s.Refresh(ctx); err != nil {
+			s.o.Logger.Warn("reading the wiki after a sync failed", "err", err)
+		}
+		s.handedOver(ctx, handedOver)
 	}
 	s.manifestMu.Unlock()
 	// What the documents list and the console lacks.
@@ -1053,4 +1100,57 @@ func (s *Service) stage(ctx context.Context, store Store, files map[string]File,
 		return nil, errors.Join(cause, fmt.Errorf("staging the pages for review: %w", err))
 	}
 	return run, cause
+}
+
+// keepSkipped records the items a read of a source left out, each with
+// why, in place of those it recorded before (KN-47): at most
+// maxSkippedKept, never over an item read.
+func keepSkipped(m *Manifest, source string, left []skippedItem, listed map[string]bool, now time.Time) {
+	for _, st := range m.bySource(source) {
+		if st.Skipped == "" {
+			continue
+		}
+		if st.LastRead.IsZero() && len(st.Pages) == 0 {
+			delete(m.Items, itemKey(source, st.ID))
+		} else {
+			st.Skipped = ""
+		}
+	}
+	n := 0
+	for _, sk := range left {
+		key := itemKey(source, sk.ID)
+		if listed[key] {
+			continue
+		}
+		if st := m.Items[key]; st != nil {
+			// An item read before and gone now says why, its pages kept.
+			if st.Gone {
+				st.Skipped = clip(sk.Why, 200)
+			}
+			continue
+		}
+		if n >= maxSkippedKept {
+			continue
+		}
+		m.Items[key] = &ItemState{Source: source, ID: sk.ID, Title: clip(sk.Title, 200), URL: sk.URL, Skipped: clip(sk.Why, 200), LastSeen: now}
+		n++
+	}
+}
+
+// handedOver lets go of what web sites were made from, once they took it
+// over (KN-46).
+func (s *Service) handedOver(ctx context.Context, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	if _, err := s.editSettings(ctx, func(set *Settings) error {
+		for i := range set.Sources {
+			if slices.Contains(ids, set.Sources[i].ID) {
+				set.Sources[i].MigratedFrom = nil
+			}
+		}
+		return nil
+	}); err != nil {
+		s.o.Logger.Warn("a web site still names the pages it was made from", "err", err)
+	}
 }

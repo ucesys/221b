@@ -193,34 +193,30 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     expect(calls).toHaveLength(0)
   })
 
-  // MY-11: an Admin adds to Mycroft's wiki in Settings › Knowledge's Added in Mycroft card, the rest of Settings closed.
-  it('shows an Admin Settings › Knowledge’s Added in Mycroft card alone, and refuses a Viewer there', async () => {
-    const wiki = (mayAdd: boolean) => ({
+  // MY-11, 0.12.1: an Admin adds to Mycroft's wiki in Settings › Knowledge's Uploaded documents section, the rest of Settings closed.
+  it('shows an Admin Settings › Knowledge’s Uploaded documents section alone, and refuses a Viewer there', async () => {
+    const uploads = (mayAdd: boolean) => ({
+      items: [],
+      limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
+      mayAdd,
+      maySetup: false,
       store: 'git',
       model: true,
-      pages: 0,
-      excerpts: 0,
-      running: false,
-      mayAdd,
-      mayReview: mayAdd,
-      maySetup: false,
-      sources: [],
-      added: [],
-      limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
+      off: [],
     })
-    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(true) } : {}))
+    serve((_m, url) => (url.endsWith('/knowledge/uploads') ? { body: uploads(true) } : {}))
     const admin = me({ admin: false, roles: ['admin'], user: { subject: 'carol', username: 'carol' } })
     render(<AdminPageView {...common('#/admin/settings/knowledge/added', admin)} settings={null} refreshedAt={null} />)
-    expect(await screen.findByTestId('wiki-add')).toBeTruthy()
+    expect(await screen.findByTestId('uploads-note-open')).toBeTruthy()
     expect(screen.getByTestId('admin-knowledge-added').textContent).toContain('is for SuperAdmins')
     expect(screen.queryByTestId('admin-refusal')).toBeNull()
     expect(screen.queryByTestId('settings-page')).toBeNull()
-    expect(calls.map((c) => c.url)).toEqual(['/api/v1/knowledge/wiki'])
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/knowledge/uploads'])
     cleanup()
-    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(false) } : {}))
+    serve((_m, url) => (url.endsWith('/knowledge/uploads') ? { body: uploads(false) } : {}))
     render(<AdminPageView {...common('#/admin/settings/knowledge', viewer)} settings={null} refreshedAt={null} />)
     expect((await screen.findByTestId('admin-refusal')).textContent).toContain('Settings is for SuperAdmins')
-    expect(screen.queryByTestId('wiki-add')).toBeNull()
+    expect(screen.queryByTestId('uploads-section')).toBeNull()
     cleanup()
     // Another section of Settings stays closed to an Admin.
     render(<AdminPageView {...common('#/admin/settings/agents', admin)} settings={null} refreshedAt={null} />)

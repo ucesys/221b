@@ -58,6 +58,7 @@ func (s *Service) SetJobs(ctx context.Context, js *jobs.Service) {
 	s.jobs.Store(js)
 	s.syncKinds(ctx)
 	s.migrateJobs(ctx)
+	s.migrateWebSites(ctx)
 	go func() {
 		t := time.NewTicker(syncKindsEvery)
 		defer t.Stop()
@@ -69,6 +70,7 @@ func (s *Service) SetJobs(ctx context.Context, js *jobs.Service) {
 			}
 			s.syncKinds(ctx)
 			s.migrateJobs(ctx)
+			s.migrateWebSites(ctx)
 		}
 	}()
 }
@@ -160,6 +162,10 @@ func (s *Service) syncKind(x Source) jobs.Kind {
 		k.Reads = fmt.Sprintf("The repository %s, branch %s%s: its documents at the branch's head. A push, through the webhook of Settings › Knowledge, starts a run.%s", x.URL, x.Branch, dir, changed)
 		k.Default = jobs.When{Schedule: &schedule.Spec{Kind: schedule.Hours, Every: 1, At: "00:00"}, Event: jobs.EventSource}
 		k.Events = []string{jobs.EventSource}
+	case SourceWeb:
+		k.Does = "Reads the web site's pages every night, and drafts the wiki's pages from what changed"
+		k.Reads = fmt.Sprintf("The web site from %s, %d links deep and at most %d pages, robots.txt respected; its excluded pages never.%s", x.URL, x.Depth, x.Pages, changed)
+		k.Default = jobs.When{Schedule: nightly}
 	case SourceS3:
 		k.Does = "Reads the bucket's documents every night, and drafts the wiki's pages from what changed"
 		k.Reads = fmt.Sprintf("The bucket s3://%s/%s: its documents of the kinds Mycroft reads, at most 1000 a read.%s", x.Bucket, x.Prefix, changed)

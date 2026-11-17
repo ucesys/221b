@@ -771,7 +771,7 @@ function viewAIOps(_route: Route, input: Record<string, unknown>): Applied {
 
 // ---- Administration and Settings (SR-12, SR-13) ----
 
-/** Who may open a page: everyone, anyone signed in, a SuperAdmin, or who sees Knowledge's Added in Mycroft card. */
+/** Who may open a page: everyone, anyone signed in, a SuperAdmin, or who sees Knowledge's Uploaded documents section. */
 type AdminAccess = 'all' | 'signed' | 'super' | 'knowledge'
 
 interface AdminViewPage {

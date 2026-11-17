@@ -44,6 +44,16 @@ function view(over: Partial<KnowledgeView> = {}): KnowledgeView {
   }
 }
 
+const uploads = {
+  items: [{ source: 'documents', id: 'plan.docx', type: 'document', title: 'plan.docx', by: 'Ann', at: '2026-11-04T10:00:00Z', state: 'read', lastRead: '2026-11-04T10:00:00Z' }],
+  limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
+  mayAdd: true,
+  maySetup: true,
+  store: 'git',
+  model: true,
+  off: [],
+}
+
 describe('Settings › Knowledge', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let current = view()
@@ -54,6 +64,7 @@ describe('Settings › Knowledge', () => {
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
       if (String(url).endsWith('/sources') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'ops' }), { status: 201 })
+      if (String(url).endsWith('/knowledge/uploads')) return new Response(JSON.stringify(uploads))
       return new Response(JSON.stringify(current))
     })
   })
@@ -65,9 +76,9 @@ describe('Settings › Knowledge', () => {
   it('lists the sources with their state and what was reported', async () => {
     render(<KnowledgeSection />)
     const rows = await screen.findAllByTestId('knowledge-source')
-    expect(rows.map((r) => r.dataset.source)).toEqual(['console', 'infra', 'documents', 'fixes'])
+    expect(rows.map((r) => r.dataset.source)).toEqual(['console', 'infra', 'fixes'])
     expect(within(rows[1]!).getByText('1 page not followed')).toBeTruthy()
-    expect(screen.getByTestId('knowledge-documents').textContent).toContain('plan.docx')
+    await waitFor(() => expect(screen.getByTestId('uploads-section').textContent).toContain('Documents'))
     expect(screen.getByTestId('knowledge-store-cred').textContent).toContain('Token saved by Ann')
     expect(screen.getByTestId('knowledge-model-link').getAttribute('href')).toContain('settings/agents')
   })
@@ -323,38 +334,55 @@ describe('Settings › Knowledge', () => {
     expect(body).toEqual({ source: view().settings.sources[1], saved: 'infra' })
   })
 
-  // --- Add only in Settings (MY-11) ---
-  it('has the Added in Mycroft card with the form to add a note, a web address or documents, and scrolls to it when asked', async () => {
+  // --- Uploaded documents and web sites (0.12.1) ---
+  it('lists only what is synced or looked up: the uploads are the Uploaded documents section after the table, which focus scrolls to', async () => {
     const base = view()
     current = view({ settings: { ...base.settings, sources: [...base.settings.sources, { id: 'added', name: 'Added in Mycroft', kind: 'upload' }] } })
-    const wiki = {
-      store: 'git',
-      model: true,
-      pages: 0,
-      excerpts: 0,
-      running: false,
-      mayAdd: true,
-      mayReview: true,
-      maySetup: true,
-      sources: [],
-      added: [],
-      limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
-    }
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
-      if (String(url).endsWith('/knowledge/wiki')) return new Response(JSON.stringify(wiki))
-      return new Response(JSON.stringify(current))
-    })
     const scrolled = vi.fn()
     Element.prototype.scrollIntoView = scrolled
     render(<KnowledgeSection focus="added" />)
-    const card = await screen.findByTestId('knowledge-added')
-    expect(await within(card).findByTestId('wiki-add-kind-text')).toBeTruthy()
-    expect(within(card).getByTestId('wiki-add-kind-url')).toBeTruthy()
-    expect(within(card).getByTestId('wiki-add-kind-document')).toBeTruthy()
-    // The uploaded documents keep their card; Added in Mycroft is not one of them.
-    expect(screen.getAllByTestId('knowledge-documents')).toHaveLength(1)
+    const rows = await screen.findAllByTestId('knowledge-source')
+    expect(rows.map((r) => r.dataset.source)).toEqual(['console', 'infra', 'fixes'])
+    const section = await screen.findByTestId('uploads-section')
+    expect((await within(section).findAllByTestId('uploads-tab-notes')).length).toBe(1)
+    expect(screen.queryByTestId('knowledge-documents')).toBeNull()
+    expect(screen.queryByTestId('knowledge-added')).toBeNull()
+    expect(screen.getByTestId('knowledge-items-link').getAttribute('href')).toBe('#/aiops/mycroft/sources')
     await waitFor(() => expect(scrolled).toHaveBeenCalled())
+  })
+
+  it('adds a web site: its start address, link depth, page limit and sign-in, with the token apart', async () => {
+    render(<KnowledgeSection />)
+    fireEvent.click(await screen.findByTestId('knowledge-add'))
+    const drawer = screen.getByTestId('knowledge-source-drawer')
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-kind'), { target: { value: 'web' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Vendor docs' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-web-url'), { target: { value: 'https://docs.example.com/' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-web-depth'), { target: { value: '2' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-web-pages'), { target: { value: '120' } })
+    // No sign-in: no token to type.
+    expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
+    fireEvent.change(within(drawer).getByTestId('knowledge-web-auth'), { target: { value: 'basic' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-web-user'), { target: { value: 'reader' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-token'), { target: { value: 's3cret' } })
+    expect(within(drawer).getByTestId('knowledge-source-test')).toBeTruthy()
+    fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
+    await waitFor(() => {
+      const body = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body
+      expect(body).toEqual({ source: { id: 'vendor-docs', name: 'Vendor docs', kind: 'web', url: 'https://docs.example.com/', depth: 2, pages: 120, auth: 'basic', username: 'reader' }, token: 's3cret' })
+    })
+  })
+
+  it('lists a web site with its start address, depth, pages and what is excluded, and its Wiki sync job', async () => {
+    const base = view()
+    const site = { id: 'vendor', name: 'Vendor docs', kind: 'web' as const, url: 'https://docs.example.com/', depth: 1, pages: 20, excluded: [{ pattern: '/blog/*', by: 'Ann', at: '2026-11-10T10:00:00Z' }] }
+    current = view({ settings: { ...base.settings, sources: [...base.settings.sources, site] } })
+    render(<KnowledgeSection />)
+    const row = (await screen.findAllByTestId('knowledge-source')).find((r) => r.dataset.source === 'vendor')!
+    expect(within(row).getByTestId('knowledge-source-web-line').textContent).toBe('https://docs.example.com/ · and the pages it links to · at most 20 pages · 1 excluded')
+    expect(row.textContent).toContain('Web site')
+    expect(row.textContent).toContain('no sign-in')
+    expect(within(row).getByTestId('knowledge-source-job').getAttribute('href')).toContain('wiki-sync-vendor')
   })
 
   // --- Live sources (0.12.1, KN-39, KN-42) ---

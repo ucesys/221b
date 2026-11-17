@@ -6,9 +6,10 @@
 // Confluence publisher or API tokens any more (0.12.1). AIOps › Mycroft (Phase 12, wave 5, MY-01
 // to MY-10): its sub-tabs and addresses, the Wiki in the default store
 // (never "Loading…" for good), and, since MY-11, adding in Settings ›
-// Knowledge's Added in Mycroft card with a store (the simulator's fake S3
-// bucket): a note, a CSV document, and an address the console does not
-// read. A source's Test is in its dialog, with the values as typed (KN-26). A page's own actions (KN-23, KN-24): This is outdated…
+// Knowledge's Uploaded documents section (0.12.1) with a store (the
+// simulator's fake S3 bucket): a note under Notes and a CSV document under
+// Documents, listed in AIOps › Mycroft › Sources, and removed again. An S3
+// bucket's item is excluded in Mycroft › Sources and included again. A source's Test is in its dialog, with the values as typed (KN-26). A page's own actions (KN-23, KN-24): This is outdated…
 // sends a correction, and a page retired by one person and approved by
 // another leaves the agents' index, then comes back the same way.
 import { createHash, createHmac } from 'node:crypto'
@@ -23,7 +24,10 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   await expect(section.locator('[data-testid=knowledge-source][data-source=console]')).toBeVisible()
-  await expect(section.locator('[data-testid=knowledge-source][data-source=documents]')).toBeVisible()
+  // The uploads are not a source to sync again (0.12.1): no row, but the Uploaded documents section.
+  await expect(section.locator('[data-testid=knowledge-source][data-source=documents]')).toHaveCount(0)
+  await expect(section.locator('[data-testid=knowledge-source][data-source=added]')).toHaveCount(0)
+  await expect(section.getByTestId('uploads-section')).toBeVisible()
   // The fixes proven in cases, there from the start, offered by the
   // housekeeping for a runbook (KN-34).
   await expect(section.locator('[data-testid=knowledge-source][data-source=fixes]')).toContainText('offered by the housekeeping for a runbook')
@@ -108,8 +112,15 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await expect(page.getByTestId('wiki-no-store')).toHaveCount(0)
   // Add is in Settings › Knowledge only (MY-11): the Wiki has no Add view.
   await expect(page.getByTestId('knowledge-view-add')).toHaveCount(0)
-  await page.getByTestId('knowledge-view-sources').click()
-  await expect(page.getByTestId('wiki-sources').locator('[data-testid=wiki-source][data-source=added]')).toContainText('Added in Mycroft')
+  // Sources is a sub-tab of its own (0.12.1); the Wiki has no Sources view.
+  await expect(page.getByTestId('knowledge-view-sources')).toHaveCount(0)
+  await page.getByTestId('mycroft-sub-sources').click()
+  await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources$/)
+  await expect(page.getByTestId('sources-table')).toBeVisible({ timeout: 20_000 })
+  await page.goto('/#/aiops/mycroft/wiki/sources')
+  await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources$/)
+  await expect(page.getByTestId('mycroft-sub-sources')).toHaveAttribute('aria-pressed', 'true')
+  await page.goto('/#/aiops/mycroft')
 
   for (const [sub, url, view] of [
     ['known', /#\/aiops\/mycroft\/known$/, 'known-tab'],
@@ -134,19 +145,19 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await page.goto('/#/cases/knowledge/drafts')
   await expect(page.getByTestId('mycroft-sub-wiki')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('knowledge-view-drafts')).toHaveAttribute('aria-pressed', 'true')
-  // The Add view's old address opens Settings › Knowledge's Added in Mycroft card (MY-11).
+  // The Add view's old address opens Settings › Knowledge's Uploaded documents section (MY-11, 0.12.1).
   await page.goto('/#/cases/mycroft/wiki/add')
-  await expect(page.getByTestId('knowledge-added').getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('uploads-section').getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('knowledge-section')).toBeVisible()
-  await expect(page.getByTestId('wiki-add-refused')).toHaveCount(0)
+  await expect(page.getByTestId('uploads-refused')).toHaveCount(0)
 })
 
-test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV become sources the wiki quotes; a loopback address is refused', async ({ page }) => {
+test('Settings › Knowledge › Uploaded documents with a store: a note under Notes and a CSV under Documents become sources the wiki quotes, listed in Mycroft › Sources, and are removed', async ({ page }) => {
   test.skip(inKind, 'the fake S3 bucket is the simulator’s')
   test.setTimeout(120_000)
   await page.goto('/#/admin/settings/knowledge/added')
-  const card = page.getByTestId('knowledge-added')
-  await expect(card.getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
+  const card = page.getByTestId('uploads-section')
+  await expect(card.getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   const api = (path: string, method = 'GET', body?: unknown) =>
     page.evaluate(
       async ([p, m, b]) => {
@@ -159,63 +170,68 @@ test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV
   const store = { kind: 's3', endpoint: SIM, region: 'us-east-1', bucket: 'sim-wiki', prefix: 'e2e/', pathStyle: true, credentials: 'keys' }
   const saved = await api('/api/v1/knowledge/store', 'PUT', { store, keys: { accessKeyId: 'sim-access-key', secretAccessKey: 'sim-secret-key' } })
   expect(saved.status, saved.body).toBe(200)
+  const row = (title: string) => card.getByTestId('uploads-row').filter({ hasText: title })
   try {
     await page.reload()
-    await expect(card.getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
-    await expect(card.getByTestId('wiki-add-refused')).toHaveCount(0, { timeout: 15_000 })
+    await expect(card.getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
+    await expect(card.getByTestId('uploads-refused')).toHaveCount(0, { timeout: 15_000 })
 
-    // A note, with a password that never reaches the wiki.
-    await card.getByTestId('wiki-add-title').fill('E2E zephyr backups')
-    await card.getByTestId('wiki-add-text').fill('The zephyr backups run nightly on nas-7 and are kept for 30 days.\n\npassword=e2e-hunter2-secret-value')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-result')).toContainText('“E2E zephyr backups” was added.')
-    await expect(card.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toBeVisible()
+    // A note, with a password that never reaches the wiki: listed under Notes.
+    await card.getByTestId('uploads-tab-notes').click()
+    await card.getByTestId('uploads-note-open').click()
+    await card.getByTestId('uploads-note-title').fill('E2E zephyr backups')
+    await card.getByTestId('uploads-note-text').fill('The zephyr backups run nightly on nas-7 and are kept for 30 days.\n\npassword=e2e-hunter2-secret-value')
+    await card.getByTestId('uploads-note-submit').click()
+    await expect(row('E2E zephyr backups')).toBeVisible({ timeout: 15_000 })
 
-    // A CSV document.
-    await card.getByTestId('wiki-add-kind-document').click()
-    await card.getByTestId('wiki-add-file').setInputFiles({ name: 'e2e-quokka-hosts.csv', mimeType: 'text/csv', buffer: Buffer.from('host,address,role\nquokka-1,10.9.0.1,cache\n') })
-    await expect(card.getByTestId('wiki-add-files')).toContainText('e2e-quokka-hosts.csv')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-result')).toContainText('“e2e-quokka-hosts.csv” was added.')
+    // A CSV document, listed under Documents and not under Notes.
+    await card.getByTestId('uploads-tab-documents').click()
+    await card.getByTestId('uploads-file').setInputFiles({ name: 'e2e-quokka-hosts.csv', mimeType: 'text/csv', buffer: Buffer.from('host,address,role\nquokka-1,10.9.0.1,cache\n') })
+    await expect(row('e2e-quokka-hosts.csv')).toBeVisible({ timeout: 15_000 })
+    await expect(row('E2E zephyr backups')).toHaveCount(0)
 
-    // An address inside the console's own pod is not read.
-    await card.getByTestId('wiki-add-kind-url').click()
-    await card.getByTestId('wiki-add-url').fill('http://127.0.0.1:8080/')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-error')).toContainText('does not read loopback')
-
-    // Both are read, listed under Sources, and quoted by the search.
+    // Both are read, and their rows say so.
     await expect
       .poll(
         async () => {
-          const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; lastRead?: string }[] }
-          return w.added.filter((a) => a.lastRead && /zephyr|quokka/.test(a.title)).length
+          const u = JSON.parse((await api('/api/v1/knowledge/uploads')).body) as { items: { title: string; state: string }[] }
+          return u.items.filter((a) => a.state === 'read' && /zephyr|quokka/.test(a.title)).length
         },
         { timeout: 60_000 },
       )
       .toBe(2)
-    await page.goto('/#/aiops/mycroft/wiki/sources')
-    const added = page.getByTestId('wiki-added')
-    await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toContainText('read ')
-    await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
-    await page.getByTestId('knowledge-view-pages').click()
+    await page.reload()
+    await card.getByTestId('uploads-tab-notes').click()
+    await expect(row('E2E zephyr backups').getByTestId('uploads-state')).toHaveAttribute('data-state', 'read')
+
+    // AIOps › Mycroft › Sources lists them under Uploaded documents; the search quotes them.
+    await page.goto('/#/aiops/mycroft/sources')
+    await page.getByTestId('sources-filter-source').selectOption('uploads')
+    const items = page.getByTestId('sources-item')
+    await expect(items.filter({ hasText: 'E2E zephyr backups' })).toBeVisible({ timeout: 20_000 })
+    await expect(items.filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
     await page.getByTestId('mycroft-search').fill('zephyr nightly')
     await expect(page.getByTestId('mycroft-search-results')).toContainText('E2E zephyr backups')
     await page.getByTestId('mycroft-search').fill('quokka cache')
     await expect(page.getByTestId('mycroft-search-results')).toContainText('quokka-1 | 10.9.0.1 | cache')
-    // The results stand in for the sub-tabs until the search is cleared.
     await page.getByTestId('mycroft-search').fill('')
     const search = await api('/api/v1/knowledge/search?q=zephyr')
     expect(search.body).not.toContain('e2e-hunter2-secret-value')
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.add'), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain('e2e-hunter2-secret-value')
 
-    // Removed again, from Sources.
-    await page.getByTestId('knowledge-view-sources').click()
-    for (const title of ['E2E zephyr backups', 'e2e-quokka-hosts.csv']) {
-      await added.getByTestId('wiki-added-item').filter({ hasText: title }).getByTestId('wiki-added-remove').click()
+    // Removed again, item by item, in Settings › Knowledge: final, and said so.
+    await page.goto('/#/admin/settings/knowledge/added')
+    for (const [tab, title] of [
+      ['notes', 'E2E zephyr backups'],
+      ['documents', 'e2e-quokka-hosts.csv'],
+    ] as const) {
+      await card.getByTestId(`uploads-tab-${tab}`).click()
+      await row(title).getByTestId('uploads-remove').click()
+      await expect(page.getByTestId('uploads-remove-dialog')).toContainText('This is final')
       await page.getByTestId('confirm-ok').click()
-      await expect(added.getByTestId('wiki-added-item').filter({ hasText: title })).toHaveCount(0)
+      await expect(card.getByTestId('source-impact')).toContainText(`“${title}” was removed`)
+      await expect(row(title)).toHaveCount(0)
     }
   } finally {
     // Mycroft's drafts, if it wrote any, are rejected, and the wiki is
@@ -492,15 +508,37 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.source' && String(r.target) === ID), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain(SECRET)
 
-    // Mycroft › Wiki › Sources lists it with its items; the search quotes it, by its s3:// address.
-    await page.goto('/#/aiops/mycroft')
-    await expect(page.getByTestId('mycroft-tab')).toBeVisible({ timeout: 20_000 })
-    await page.getByTestId('knowledge-view-sources').click()
-    const listed = page.getByTestId('wiki-sources').locator(`[data-testid=wiki-source][data-source=${ID}]`)
-    await expect(listed).toContainText('S3 bucket')
-    await expect(listed).toContainText('2')
-    await expect(listed.getByTestId('wiki-source-skipped')).toHaveText('1 skipped')
-    await page.getByTestId('knowledge-view-pages').click()
+    // Mycroft › Sources (0.12.1) lists its items, filtered by source.
+    await page.goto('/#/aiops/mycroft/sources')
+    await expect(page.getByTestId('mycroft-sources')).toBeVisible({ timeout: 20_000 })
+    await page.getByTestId('sources-filter-source').selectOption(ID)
+    const item = (key: string) => page.locator(`[data-testid=sources-item][data-id="${key}"]`)
+    await expect(item('docs/backup-windows.csv')).toBeVisible({ timeout: 20_000 })
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toBeVisible()
+    await expect(page.locator('[data-testid=sources-item][data-source]:not([data-source="' + ID + '"])')).toHaveCount(0)
+    await expect(item('docs/backup-windows.csv')).toContainText('S3 object')
+
+    // Excluded by a SuperAdmin, with a reason: its excerpts are emptied at once; listed under Excluded.
+    await item('docs/backup-windows.csv').getByTestId('sources-item-exclude').click()
+    await page.getByTestId('sources-exclude-this').check()
+    await page.getByTestId('sources-exclude-reason').fill('e2e: not needed')
+    await page.getByTestId('confirm-ok').click()
+    await expect(page.getByTestId('source-impact')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('sources-filter-state').selectOption('excluded')
+    await expect(item('docs/backup-windows.csv').getByTestId('sources-item-state')).toHaveAttribute('data-state', 'excluded', { timeout: 15_000 })
+    await expect(item('docs/backup-windows.csv')).toContainText('e2e: not needed')
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toHaveCount(0)
+    await expect.poll(async () => (await api('/api/v1/knowledge/search?q=backup+windows')).body, { timeout: 15_000 }).not.toContain('backup-windows.csv')
+    expect((await api(`/api/v1/knowledge/settings`)).body).toContain('docs/backup-windows.csv')
+
+    // Included again: it is read at the next sync, or Run now.
+    await item('docs/backup-windows.csv').getByTestId('sources-item-include').click()
+    await expect(page.getByTestId('sources-notice')).toContainText('next sync')
+    await expect(item('docs/backup-windows.csv')).toHaveCount(0)
+    await expect.poll(async () => (await cluster.auditLog()).filter((r) => JSON.stringify(r).includes('docs/backup-windows.csv')).length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
+
+    // The search quotes it, by its s3:// address.
+    await page.getByTestId('mycroft-sub-wiki').click()
     await page.getByTestId('mycroft-search').fill('wombat cache rollout')
     await expect(page.getByTestId('mycroft-search-results')).toContainText('restart-the-wombat-cache.md')
     await expect(page.getByTestId('mycroft-search-results')).toContainText('rollout restart of deploy/wombat-cache')
