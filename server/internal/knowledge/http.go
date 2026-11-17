@@ -225,7 +225,24 @@ func (h *handler) postSourceTest(w http.ResponseWriter, r *http.Request, c Calle
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
+	writeJSON(w, http.StatusOK, testAnswer(t))
+}
+
+// testAnswer is a Test's answer: a live source is OK when every address
+// was read.
+func testAnswer(t SourceTest) map[string]any {
+	ok := true
+	for _, c := range t.Live {
+		ok = ok && c.OK
+	}
+	out := map[string]any{"ok": ok, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy}
+	if t.Live != nil {
+		out["live"] = t.Live
+	}
+	if !ok {
+		out["error"] = "not every address could be read"
+	}
+	return out
 }
 
 // sourceTestInput is a source's dialog as typed (KN-26): saved is the id
@@ -249,7 +266,7 @@ func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c 
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
+	writeJSON(w, http.StatusOK, testAnswer(t))
 }
 
 func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller) {

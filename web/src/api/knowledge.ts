@@ -1,11 +1,10 @@
 // Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): Settings › Knowledge,
-// the wiki's pages and the drafts in Cases, and the Confluence publisher's
-// part of Settings › Issues. Credentials go in and never come back: the
-// server says only whether each is set.
+// the wiki's pages and the drafts in Cases. Credentials go in and never
+// come back: the server says only whether each is set.
 import { call, post } from './call'
 
-/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. */
-export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes'
+/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. live: never copied, looked up when the agents troubleshoot (KN-39). */
+export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes' | 'live'
 
 export interface KnowledgeSource {
   id: string
@@ -28,8 +27,39 @@ export interface KnowledgeSource {
   pathStyle?: boolean
   credentials?: 'keys' | 'identity'
   caPEM?: string
+  /** A live source's addresses and how it signs in (KN-39): none, a bearer token, or the user (username) with a password or API token. */
+  addresses?: LiveAddress[]
+  auth?: '' | 'bearer' | 'basic'
   added?: string
   addedBy?: string
+}
+
+/** One address of a live source: a web page, a Confluence page, or a search of a Confluence space (its site, with /wiki for Cloud, and the space's key). */
+export interface LiveAddress {
+  kind: 'page' | 'confluencePage' | 'confluenceSearch'
+  url: string
+  space?: string
+}
+
+export const LIVE_ADDRESS_LABEL: Record<LiveAddress['kind'], string> = {
+  page: 'Web page',
+  confluencePage: 'Confluence page',
+  confluenceSearch: 'Confluence space search',
+}
+
+/** Whether a source is read into the wiki (Ingest) or looked up when the agents troubleshoot (Live, KN-39). */
+export const sourceMode = (s: Pick<KnowledgeSource, 'kind'>): 'Ingest' | 'Live' => (s.kind === 'live' ? 'Live' : 'Ingest')
+
+/** One address of a live source as its Test read it (KN-42). */
+export interface LiveCheck {
+  url: string
+  kind: LiveAddress['kind']
+  ok: boolean
+  pages?: number
+  bytes?: number
+  title?: string
+  cut?: boolean
+  error?: string
 }
 
 /** The temporary ConfigMap store's name wherever a person sees it (CF-57). */
@@ -83,6 +113,8 @@ export interface SourceTestResult {
   skipped?: number
   skippedWhy?: string
   error?: string
+  /** A live source's addresses, each read once (KN-42). */
+  live?: LiveCheck[]
 }
 
 export interface SyncResult {
@@ -298,6 +330,10 @@ export const testTypedSource = (source: KnowledgeSource, token?: string, keys?: 
 
 /** A source's Test, in words: what it reached, the first few items, and what is skipped; or what is wrong. */
 export function sourceTestText(r: SourceTestResult): string {
+  if (r.live) {
+    const read = r.live.filter((c) => c.ok).length
+    return `${read} of ${r.live.length} ${r.live.length === 1 ? 'address' : 'addresses'} read.`
+  }
   if (!r.ok) return r.error ?? 'The test failed.'
   const n = r.items ?? 0
   let text = `Reached: ${n} ${n === 1 ? 'item' : 'items'}`
@@ -448,6 +484,18 @@ export const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   upload: 'Uploaded documents',
   console: 'This console',
   fixes: 'Fixes',
+  live: 'Live pages',
+}
+
+/** A live address's Test, in words: "OK · 12 KiB · Title", or what was wrong. */
+export function liveCheckText(c: LiveCheck): string {
+  if (!c.ok) return c.error ?? 'not read'
+  const kib = Math.max(1, Math.round((c.bytes ?? 0) / 1024))
+  let text = `OK · ${kib} KiB`
+  if ((c.pages ?? 1) > 1) text += ` · ${c.pages} pages`
+  if (c.title) text += ` · ${c.title}`
+  if (c.cut) text += ' · read up to 200 KiB'
+  return text
 }
 
 // --- One search across Mycroft (Phase 12.1, KN-35) ---

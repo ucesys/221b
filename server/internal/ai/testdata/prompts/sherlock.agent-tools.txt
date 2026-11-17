@@ -10,6 +10,12 @@ Ask the console's knowledge base about the infrastructure: Mycroft's wiki and ru
 
 {"type":"object","properties":{"question":{"type":"string","description":"The question."}},"required":["question"]}
 
+## lookup_live_sources
+
+Look up the live sources: pages the organization keeps outside the console, such as a known-problems or status page, a Confluence page or a Confluence space, read as they are now and never copied into the wiki. Gives the parts that bear on the words, with each page's source, title and address. When troubleshooting, check them once for a problem already known there.
+
+{"type":"object","properties":{"query":{"type":"string","description":"A few words of the problem: the symptom, the service, the error. Empty gives each page as it starts."}}}
+
 ## setup_status
 
 Read Getting started as the console is now: each step of setting the console up, whether it is done, dismissed or open, what is missing, why it comes where it does, and the link to the screen where it is done. Read only; it changes nothing and holds no secret.
@@ -25,3 +31,7 @@ Check kubectl or helm command lines against Watson before proposing them: for ea
 ## when no knowledge is connected
 
 No knowledge is connected yet: Mycroft has no sources here. Answer from what the tools show, and say what you could not confirm.
+
+## when no live source is set up
+
+No live source is set up (Settings › Knowledge, mode Live): there are no pages to look up. Answer from what the tools and ask_knowledge show.

@@ -91,6 +91,9 @@ func (s *Service) syncKinds(ctx context.Context) {
 	reg := js.Kinds()
 	want := map[string]bool{}
 	for _, x := range set.Sources {
+		if x.Kind == SourceLive {
+			continue
+		}
 		k := s.syncKind(x)
 		want[k.ID] = true
 		reg.Register(k)
@@ -356,6 +359,10 @@ func (c Caller) person() jobs.Person {
 // source once at once, as a run of its job (KN-28). Without the jobs, a
 // source added is read in the background (GS-11).
 func (s *Service) sourceSaved(ctx context.Context, c Caller, x Source, create, read bool) {
+	if x.Kind == SourceLive {
+		// Never read into the wiki: it has no job and no first read.
+		return
+	}
 	js := s.jobs.Load()
 	if js == nil {
 		if create && s.o.ReadNew && !x.Off {

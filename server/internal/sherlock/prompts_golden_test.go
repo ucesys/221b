@@ -13,7 +13,7 @@ import (
 // the golden directory (P-3). Sherlock's built-in instructions are kept
 // with package ai's, as an agent gets them.
 func TestGoldenPrompts(t *testing.T) {
-	a := &Agent{ID: SherlockID, Tools: []string{ToolAskKnowledge, ToolSetupStatus, ToolCheckCommand},
+	a := &Agent{ID: SherlockID, Tools: []string{ToolAskKnowledge, ToolLookupLive, ToolSetupStatus, ToolCheckCommand},
 		Roster: []RosterEntry{{ID: "troubleshooter", Name: "Troubleshooter"}, {ID: "changePlanner", Name: "Change planner"}},
 		Setup:  func(context.Context) string { return "" }}
 	var b strings.Builder
@@ -21,6 +21,7 @@ func TestGoldenPrompts(t *testing.T) {
 		b.WriteString("## " + d.Name + "\n\n" + d.Description + "\n\n" + string(d.InputSchema) + "\n\n")
 	}
 	b.WriteString("## when no knowledge is connected\n\n" + NoKnowledge + "\n")
+	b.WriteString("\n## when no live source is set up\n\n" + NoLive + "\n")
 	prompttest.Check(t, "sherlock.agent-tools", b.String())
 	b.Reset()
 	for _, d := range uiDefs(true) {

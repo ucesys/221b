@@ -120,6 +120,39 @@ func knowledgeHits(svc *knowledge.Service) func(ctx context.Context, q string, l
 	}
 }
 
+// liveLookup is lookup_live_sources' lookup, for Sherlock's agents
+// (0.12.1, KN-40).
+func liveLookup(ctx context.Context, svc *knowledge.Service, q string) (sherlock.LiveLookup, error) {
+	res, err := svc.LookupLive(ctx, q)
+	if err != nil {
+		return sherlock.LiveLookup{}, err
+	}
+	out := sherlock.LiveLookup{Problems: res.Problems, Sources: res.Sources}
+	for _, e := range res.Excerpts {
+		out.Excerpts = append(out.Excerpts, sherlock.LiveExcerpt{Source: e.Source, Title: e.Title, URL: e.URL, Text: e.Text})
+	}
+	for _, p := range res.Pages {
+		out.Pages = append(out.Pages, sherlock.LivePage{Source: p.Source, Title: p.Title, URL: p.URL})
+	}
+	return out, nil
+}
+
+// livePages are the live sources' pages a report is matched against
+// (0.12.1, KN-43).
+func livePages(svc *knowledge.Service) issues.LiveFunc {
+	return func(ctx context.Context, text string) ([]issues.LivePage, error) {
+		docs, _, _, err := svc.LiveDocs(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]issues.LivePage, 0, len(docs))
+		for _, d := range docs {
+			out = append(out, issues.LivePage{Source: d.Source, Title: d.Title, URL: d.URL, Parts: d.Parts})
+		}
+		return out, nil
+	}
+}
+
 // --- Known issues in ask_knowledge (Phase 12, wave 6e, CF-43) ---
 
 // knownForAgents is the least confidence, and the most known issues, that
@@ -750,6 +783,11 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	}
 	knowledgeStored = l
 	w.knowledgeSvc = svc
+	// A report no known issue explains is checked against the live
+	// sources too (0.12.1, KN-43).
+	if w.issueSvc != nil {
+		w.issueSvc.SetLive(livePages(svc))
+	}
 	go func() {
 		w.knowledgeSvc.Start(ctx)
 		w.knowledgeSvc.Run(ctx)

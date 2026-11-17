@@ -357,6 +357,98 @@ describe('Settings › Knowledge', () => {
     await waitFor(() => expect(scrolled).toHaveBeenCalled())
   })
 
+  // --- Live sources (0.12.1, KN-39, KN-42) ---
+  it('adds a live source: its addresses and sign-in, a Test that reads each address, and the list says its mode', async () => {
+    render(<KnowledgeSection />)
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      if (String(url).endsWith('/sources/test'))
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            items: 1,
+            error: 'not every address could be read',
+            live: [
+              { url: 'https://status.example.com/', kind: 'page', ok: true, pages: 1, bytes: 12288, title: 'All known problems' },
+              { url: 'https://example.atlassian.net/wiki', kind: 'confluenceSearch', ok: false, error: 'it refused the credential (401 Unauthorized)' },
+            ],
+          }),
+        )
+      if (String(url).endsWith('/sources') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'known-problems' }), { status: 201 })
+      return new Response(JSON.stringify(current))
+    })
+    fireEvent.click(await screen.findByTestId('knowledge-add'))
+    const drawer = screen.getByTestId('knowledge-source-drawer')
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-mode-select'), { target: { value: 'live' } })
+    expect(within(drawer).queryByTestId('knowledge-source-kind')).toBeNull()
+    // No sign-in, no credential to type.
+    expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Known problems' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-live-url'), { target: { value: 'https://status.example.com/' } })
+    fireEvent.click(within(drawer).getByTestId('knowledge-live-add'))
+    const rows = within(drawer).getAllByTestId('knowledge-live-address')
+    expect(rows).toHaveLength(2)
+    fireEvent.change(within(rows[1]!).getByTestId('knowledge-live-kind'), { target: { value: 'confluenceSearch' } })
+    fireEvent.change(within(rows[1]!).getByTestId('knowledge-live-url'), { target: { value: 'https://example.atlassian.net/wiki' } })
+    fireEvent.change(within(rows[1]!).getByTestId('knowledge-live-space'), { target: { value: 'OPS' } })
+    // A third, left empty, is not sent.
+    fireEvent.click(within(drawer).getByTestId('knowledge-live-add'))
+    fireEvent.change(within(drawer).getByTestId('knowledge-live-auth'), { target: { value: 'basic' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-live-user'), { target: { value: 'ann@example.com' } })
+    expect(within(drawer).getByText('Password or API token')).toBeTruthy()
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-token'), { target: { value: 'api-token-typed' } })
+    const source = {
+      id: 'known-problems',
+      name: 'Known problems',
+      kind: 'live',
+      addresses: [
+        { kind: 'page', url: 'https://status.example.com/' },
+        { kind: 'confluenceSearch', url: 'https://example.atlassian.net/wiki', space: 'OPS' },
+      ],
+      auth: 'basic',
+      username: 'ann@example.com',
+    }
+    fireEvent.click(within(drawer).getByTestId('knowledge-source-test'))
+    await waitFor(() => expect(within(drawer).getByTestId('knowledge-source-test-result').textContent).toBe('1 of 2 addresses read.'))
+    expect(calls.find((c) => c.url === '/api/v1/knowledge/sources/test')?.body).toEqual({ source, token: 'api-token-typed' })
+    const results = within(drawer).getByTestId('knowledge-source-live-results')
+    expect(results.textContent).toContain('https://status.example.com/: OK · 12 KiB · All known problems')
+    expect(results.textContent).toContain('https://example.atlassian.net/wiki: it refused the credential (401 Unauthorized)')
+    expect(results.querySelectorAll('[data-state="error"]')).toHaveLength(1)
+    fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({ source, token: 'api-token-typed' }))
+  })
+
+  it('lists a live source as Live, looked up when asked, with no Wiki sync job', async () => {
+    current = view({
+      settings: {
+        ...view().settings,
+        sources: [
+          ...view().settings.sources,
+          {
+            id: 'status',
+            name: 'Known problems',
+            kind: 'live',
+            addresses: [
+              { kind: 'page', url: 'https://status.example.com/' },
+              { kind: 'confluencePage', url: 'https://wiki.example.com/x' },
+            ],
+            auth: '',
+          },
+        ],
+      },
+    })
+    render(<KnowledgeSection />)
+    const rows = await screen.findAllByTestId('knowledge-source')
+    const live = rows.find((r) => r.dataset.source === 'status')!
+    expect(within(live).getByTestId('knowledge-source-mode').textContent).toBe('Live')
+    expect(within(rows[1]!).getByTestId('knowledge-source-mode').textContent).toBe('Ingest')
+    expect(within(live).getByTestId('knowledge-source-state').textContent).toBe('Looked up when asked')
+    expect(within(live).getByTestId('knowledge-source-live-line').textContent).toBe('https://status.example.com/ and 1 more')
+    expect(within(live).queryByTestId('knowledge-source-job')).toBeNull()
+    expect(within(live).getByText('no sign-in')).toBeTruthy()
+  })
+
   it('makes an id from a name', () => {
     expect(idFrom('Confluence space: Infrastructure')).toBe('confluence-space-infrastructure')
     expect(idFrom('!!!')).toBe('source')

@@ -262,6 +262,9 @@ type Service struct {
 	// http.ProxyFromEnvironment, which reads the environment once).
 	proxy func(*http.Request) (*url.URL, error)
 
+	// live keeps what the live sources' addresses gave (KN-41).
+	live liveCache
+
 	// covers are the known issues and the exceptions that keep a
 	// difference from being proposed, once SetCovers gives them (KN-31).
 	covers atomic.Pointer[Covers]

@@ -65,6 +65,33 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   await expect(page.getByTestId('issue-tokens')).toHaveCount(0)
 })
 
+// A live source (0.12.1, KN-39): added with its address and a bearer
+// token that never comes back; listed as Live, with no Wiki sync job.
+test('Settings › Knowledge takes a live source, listed as Live, never read into the wiki', async ({ page }) => {
+  const LIVE_TOKEN = 'e2e-live-bearer-token-5c1d'
+  await page.goto('/#/admin/settings/knowledge')
+  const section = page.getByTestId('knowledge-section')
+  await expect(section).toBeVisible({ timeout: 20_000 })
+  await page.getByTestId('knowledge-add').click()
+  const drawer = page.getByTestId('knowledge-source-drawer')
+  await drawer.getByTestId('knowledge-source-mode-select').selectOption('live')
+  await drawer.getByTestId('knowledge-source-name').fill('E2E known problems')
+  await drawer.getByTestId('knowledge-live-url').fill('https://status.e2e.example.com/known')
+  await drawer.getByTestId('knowledge-live-auth').selectOption('bearer')
+  await drawer.getByTestId('knowledge-source-token').fill(LIVE_TOKEN)
+  await drawer.getByTestId('knowledge-source-save').click()
+  const row = section.locator('[data-testid=knowledge-source][data-source=e2e-known-problems]')
+  await expect(row.getByTestId('knowledge-source-mode')).toHaveText('Live')
+  await expect(row.getByTestId('knowledge-source-state')).toHaveText('Looked up when asked')
+  await expect(row.getByTestId('knowledge-source-job')).toHaveCount(0)
+  await expect(row).toContainText('credential in a Secret')
+  const body = await page.evaluate(async () => (await fetch('/api/v1/knowledge/settings')).text())
+  expect(body).not.toContain(LIVE_TOKEN)
+  await row.getByText('Edit…').click()
+  await page.getByTestId('knowledge-source-remove').click()
+  await expect(row).toHaveCount(0)
+})
+
 // --- Mycroft tab (Phase 12, wave 5) ---
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'

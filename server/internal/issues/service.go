@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -139,6 +140,9 @@ type Service struct {
 	// saved in the settings before 0.12.1 is not read any more.
 	reportURL string
 	movedOnce sync.Once
+	// live reads the live knowledge sources for matching (KN-43); nil
+	// reads none.
+	live atomic.Pointer[LiveFunc]
 
 	// writeMu serialises this process's changes, so they meet no conflict
 	// among themselves; cache is the last state read or saved.
@@ -405,7 +409,7 @@ func (s *Service) Submit(ctx context.Context, c Caller, in Submission) (Receipt,
 		ch.audit(AuditRecord{Action: ActionReport, Who: c.Person, Target: fmt.Sprintf("report #%d", pr.Number), Detail: detail, From: c.From})
 		if known == nil {
 			n := pr.Number
-			ch.after = append(ch.after, func() { s.investigate(n) })
+			ch.after = append(ch.after, func() { s.matchLive(n, text); s.investigate(n) })
 		}
 		return saveReports, nil
 	})

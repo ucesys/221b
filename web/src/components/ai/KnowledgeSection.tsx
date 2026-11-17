@@ -3,6 +3,8 @@ import {
   addSource,
   fetchKnowledge,
   fileBase64,
+  LIVE_ADDRESS_LABEL,
+  liveCheckText,
   moveStore,
   removeDocument,
   removeSource,
@@ -12,6 +14,7 @@ import {
   saveStore,
   setSourceOn,
   SOURCE_KIND_LABEL,
+  sourceMode,
   sourceTestText,
   syncJobId,
   testStore,
@@ -19,6 +22,7 @@ import {
   uploadDocument,
   type KeysChange,
   type KnowledgeSource,
+  type LiveAddress,
   type KnowledgeView,
   CONFIGMAP_STORE_LABEL,
   type SourceTestResult,
@@ -61,6 +65,8 @@ function Text({ label, value, onChange, placeholder, testId, type, width }: { la
 /** Where a source was last read, and how; title says more when there is more. */
 function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone: string; title?: string } {
   if (s.off) return { text: 'Off', tone: 'muted' }
+  // A live source is never read into the wiki: looked up when asked (KN-39).
+  if (s.kind === 'live') return s.auth && !v.creds[s.id]?.token ? { text: 'No token', tone: 'warn' } : { text: 'Looked up when asked', tone: 'ok' }
   const st = v.status.sources?.[s.id]
   if (st?.error) return { text: st.error, tone: 'err' }
   if (s.kind === 'confluence' && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
@@ -173,6 +179,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
               <tr>
                 <th scope="col">Source</th>
                 <th scope="col">Kind</th>
+                <th scope="col">Mode</th>
                 <th scope="col">Last read</th>
                 <th scope="col">State</th>
                 <th scope="col">
@@ -199,6 +206,12 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                           {s.path ? ` /${s.path}` : ''} @ {s.branch}
                         </div>
                       )}
+                      {s.kind === 'live' && (
+                        <div className="rk-fhint rk-mono" data-testid="knowledge-source-live-line">
+                          {s.addresses?.[0]?.url}
+                          {(s.addresses?.length ?? 0) > 1 ? ` and ${(s.addresses?.length ?? 0) - 1} more` : ''}
+                        </div>
+                      )}
                       {s.kind === 's3' && (
                         <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
                           s3://{s.bucket}/{s.prefix ?? ''}
@@ -216,6 +229,10 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                       )}
                       {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
                       {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
+                      {s.kind === 'live' && <div className="rk-fhint">{!s.auth ? 'no sign-in' : v.creds[s.id]?.token ? 'credential in a Secret' : 'no credential'}</div>}
+                    </td>
+                    <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
+                      {sourceMode(s)}
                     </td>
                     <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
                     <td style={{ maxWidth: 320 }}>
@@ -232,9 +249,13 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {/* Test is in the source's dialog, with the values as typed (KN-26). */}
-                      <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
-                        Job
-                      </a>{' '}
+                      {s.kind !== 'live' && (
+                        <>
+                          <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
+                            Job
+                          </a>{' '}
+                        </>
+                      )}
                       <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
                         {s.off ? 'Turn on' : 'Turn off'}
                       </button>{' '}
@@ -689,6 +710,7 @@ function SourceDrawer({
     let r: SourceTestResult
     try {
       const src = { ...s, id }
+      if (s.kind === 'live') src.addresses = liveAddresses(s)
       r = s.kind === 's3' ? await testTypedSource(src, undefined, typedKeys(), seed?.id) : await testTypedSource(src, token || undefined, undefined, seed?.id)
     } catch (e) {
       r = { ok: false, error: errorText(e) }
@@ -700,6 +722,7 @@ function SourceDrawer({
     setError('')
     try {
       const src = { ...s, id }
+      if (s.kind === 'live') src.addresses = liveAddresses(s)
       if (s.kind === 's3') {
         if (seed) await saveSource(src, undefined, typedKeys())
         else await addSource(src, undefined, typedKeys())
@@ -745,6 +768,21 @@ function SourceDrawer({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 0' }}>
         {!seed && (
           <Select
+            label="Mode"
+            value={s.kind === 'live' ? 'live' : 'ingest'}
+            options={[
+              ['ingest', 'Ingest (read into the wiki)'],
+              ['live', 'Live (looked up when troubleshooting, not copied)'],
+            ]}
+            onChange={(m) => {
+              setS(m === 'live' ? { id: s.id, name: s.name, kind: 'live', addresses: [{ kind: 'page', url: '' }], auth: '' } : { id: s.id, name: s.name, kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
+              changed()
+            }}
+            testId="knowledge-source-mode-select"
+          />
+        )}
+        {!seed && s.kind !== 'live' && (
+          <Select
             label="Kind"
             value={s.kind}
             options={[
@@ -761,7 +799,13 @@ function SourceDrawer({
             testId="knowledge-source-kind"
           />
         )}
-        <Text label="Name" value={s.name} onChange={(x) => put({ name: x })} placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : 'Confluence space: Infrastructure'} testId="knowledge-source-name" />
+        <Text
+          label="Name"
+          value={s.name}
+          onChange={(x) => put({ name: x })}
+          placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : s.kind === 'live' ? 'Known problems' : 'Confluence space: Infrastructure'}
+          testId="knowledge-source-name"
+        />
         {s.kind === 'confluence' && (
           <>
             <Select
@@ -839,6 +883,7 @@ function SourceDrawer({
             )}
           </>
         )}
+        {s.kind === 'live' && <LiveFields s={s} put={put} />}
         {builtIn && (
           <span className="rk-fhint" data-testid="knowledge-source-builtin">
             There from the start: only its name changes here. Its Wiki sync job is renamed with it.
@@ -846,9 +891,19 @@ function SourceDrawer({
         )}
         {!builtIn && (
           <>
-            {s.kind !== 's3' && (
+            {s.kind !== 's3' && (s.kind !== 'live' || !!s.auth) && (
               <Text
-                label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'}
+                label={
+                  tokenSet
+                    ? 'Token (saved; type a new one to replace it)'
+                    : s.kind === 'git'
+                      ? 'Token (read access)'
+                      : s.kind === 'live' && s.auth === 'basic'
+                        ? 'Password or API token'
+                        : s.kind === 'live'
+                          ? 'Token'
+                          : 'API token (read-only)'
+                }
                 type="password"
                 value={token}
                 onChange={(x) => {
@@ -858,14 +913,19 @@ function SourceDrawer({
                 testId="knowledge-source-token"
               />
             )}
-            <span className="rk-fhint">Kept in the Secret &lt;release&gt;-knowledge and never shown again. Use a read-only credential: Mycroft never writes to its sources.</span>
+            <span className="rk-fhint">
+              Kept in the Secret &lt;release&gt;-knowledge and never shown again{s.kind === 'live' ? ', sent only to the addresses’ own sites, never to a model' : ''}. Use a read-only credential: Mycroft never writes to its sources.
+            </span>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
               Private CA (optional)
               <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
             </label>
             {/* Test's result, under the fields; its button is in the footer (KN-26). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
-              <span className="rk-fhint">Test lists what Mycroft would read with the values typed here, without saving them{seed ? '; a credential left blank is the saved one' : ''}.</span>
+              <span className="rk-fhint">
+                {s.kind === 'live' ? 'Test reads each address once with the values typed here, without saving them' : 'Test lists what Mycroft would read with the values typed here, without saving them'}
+                {seed ? '; a credential left blank is the saved one' : ''}.
+              </span>
               {test?.running && (
                 <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
                   Testing…
@@ -883,6 +943,18 @@ function SourceDrawer({
                   {sourceTestText(test.r)}
                 </p>
               )}
+              {test && !test.running && test.r.live && (
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="knowledge-source-live-results">
+                  {test.r.live.map((c, i) => (
+                    <li key={i} data-state={c.ok ? 'ok' : 'error'} style={{ overflowWrap: 'anywhere' }}>
+                      <span className="rk-mono">{c.url}</span>:{' '}
+                      <span className="rk-t" data-tone={c.ok ? 'ok' : 'err'}>
+                        {liveCheckText(c)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </>
         )}
@@ -893,6 +965,63 @@ function SourceDrawer({
         )}
       </div>
     </Drawer>
+  )
+}
+
+/** A live source's addresses as saved: the empty rows left out. */
+function liveAddresses(s: KnowledgeSource): LiveAddress[] {
+  return (s.addresses ?? []).filter((a) => a.url.trim() !== '').map((a) => (a.kind === 'confluenceSearch' ? a : { kind: a.kind, url: a.url }))
+}
+
+/** A live source's addresses and sign-in (KN-39): never copied, read when the agents troubleshoot. */
+function LiveFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void }) {
+  const list = s.addresses ?? []
+  const set = (i: number, p: Partial<LiveAddress>) => put({ addresses: list.map((a, j) => (j === i ? { ...a, ...p } : a)) })
+  return (
+    <>
+      <span className="rk-fhint">
+        Never copied into the wiki: each address is read when an agent troubleshoots (up to 200 KiB a page, kept five minutes), and a report no known issue explains is checked against it. The console reads them from its pod: with the
+        network policy on, their hosts must be listed under the chart’s knowledge.egressCIDRs.
+      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="knowledge-live-addresses">
+        {list.map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }} data-testid="knowledge-live-address">
+            <Select label={`Address ${i + 1}`} value={a.kind} options={Object.entries(LIVE_ADDRESS_LABEL) as [LiveAddress['kind'], string][]} onChange={(k) => set(i, { kind: k as LiveAddress['kind'] })} testId="knowledge-live-kind" />
+            <Text
+              label={a.kind === 'confluenceSearch' ? 'Confluence site (with /wiki for Cloud)' : 'Address (https)'}
+              value={a.url}
+              onChange={(x) => set(i, { url: x })}
+              placeholder={a.kind === 'confluenceSearch' ? 'https://example.atlassian.net/wiki' : a.kind === 'confluencePage' ? 'https://example.atlassian.net/wiki/spaces/OPS/pages/123/Known+problems' : 'https://status.example.com/'}
+              width={320}
+              testId="knowledge-live-url"
+            />
+            {a.kind === 'confluenceSearch' && <Text label="Space key" value={a.space ?? ''} onChange={(x) => set(i, { space: x })} placeholder="OPS" width={110} testId="knowledge-live-space" />}
+            {list.length > 1 && (
+              <button className="rk-link" onClick={() => put({ addresses: list.filter((_, j) => j !== i) })} data-testid="knowledge-live-remove">
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+        {list.length < 20 && (
+          <button className="rk-btn" style={{ alignSelf: 'flex-start' }} onClick={() => put({ addresses: [...list, { kind: 'page', url: '' }] })} data-testid="knowledge-live-add">
+            Add an address
+          </button>
+        )}
+      </div>
+      <Select
+        label="Sign-in"
+        value={s.auth ?? ''}
+        options={[
+          ['', 'None'],
+          ['bearer', 'Bearer token (Confluence Data Center: a personal access token)'],
+          ['basic', 'User and password or API token (Confluence Cloud: email and API token)'],
+        ]}
+        onChange={(x) => put({ auth: x as KnowledgeSource['auth'] })}
+        testId="knowledge-live-auth"
+      />
+      {s.auth === 'basic' && <Text label="User (for Confluence Cloud, the account’s email)" value={s.username ?? ''} onChange={(x) => put({ username: x })} testId="knowledge-live-user" />}
+    </>
   )
 }
 

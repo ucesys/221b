@@ -231,7 +231,8 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	uploads := map[string]string{}
 	var why []string
 	for _, x := range set.Sources {
-		if x.Off || (req.Source != "" && x.ID != req.Source) {
+		// A live source is never read into the wiki (KN-39).
+		if x.Off || x.Kind == SourceLive || (req.Source != "" && x.ID != req.Source) {
 			continue
 		}
 		// A source that could not be read keeps its last read, so the next

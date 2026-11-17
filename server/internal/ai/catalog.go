@@ -49,15 +49,17 @@ var readTools = []string{
 }
 
 // Catalog is every agent, in the order the settings list them. Every
-// agent may ask Mycroft's wiki (ask_knowledge, Phase 12).
+// agent may ask Mycroft's wiki (ask_knowledge, Phase 12); the ones that
+// troubleshoot (Sherlock, the Troubleshooter and the Host doctor) look up
+// the live sources too (lookup_live_sources, 0.12.1).
 var Catalog = []Info{
-	{ID: Sherlock, Name: "Sherlock", Purpose: "Front desk: answers, routes to the other agents, writes the answer", Tools: append(append([]string(nil), readTools...), sherlock.ToolAskKnowledge), On: true, ViewControl: true},
+	{ID: Sherlock, Name: "Sherlock", Purpose: "Front desk: answers, routes to the other agents, writes the answer", Tools: append(append([]string(nil), readTools...), sherlock.ToolAskKnowledge, sherlock.ToolLookupLive), On: true, ViewControl: true},
 	{ID: Troubleshooter, Name: "Troubleshooter", Purpose: "Root cause of a failing pod, node, ingress, volume or alert", On: true, Tools: []string{
 		"cluster_overview", "list_alerts", "list_nodes", "get_node", "list_pods", "get_pod", "pod_logs", "list_events",
 		"list_objects", "get_object", "get_yaml", "list_services", "get_service", "trace_ingress", "check_connection",
 		"top", "list_volumes", "list_storage_classes", "list_policies", "list_helm_releases", "get_helm_release", "automation_runs",
 		"get_automation_run", "watson_history", "audit_log", "list_cases", "get_case",
-		sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},
+		sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge, sherlock.ToolLookupLive}},
 	{ID: ChangePlanner, Name: "Change planner", Purpose: "Turns an intent into exact Watson actions, with their impact and risk", On: true, Tools: []string{
 		"cluster_overview", "list_nodes", "get_node", "list_pods", "get_pod", "list_objects", "get_object", "get_yaml",
 		"list_services", "get_service", "list_helm_releases", "get_helm_release", "list_policies", "list_fleets", sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},
@@ -66,7 +68,7 @@ var Catalog = []Info{
 		"list_objects", "get_object", "get_yaml", "list_helm_releases", "get_helm_release", "list_storage_classes", "list_volumes", "trace_ingress",
 		sherlock.ToolAskKnowledge}},
 	{ID: HostDoctor, Name: "Host doctor", Purpose: "Operating system checks on nodes and hosts", On: true, Tools: []string{
-		"list_nodes", "get_node", "list_events", "top", "list_fleets", "node_facts", "automation_runs", "get_automation_run", sherlock.ToolAskKnowledge}},
+		"list_nodes", "get_node", "list_events", "top", "list_fleets", "node_facts", "automation_runs", "get_automation_run", sherlock.ToolAskKnowledge, sherlock.ToolLookupLive}},
 	{ID: AutomationAuthor, Name: "Automation author", Purpose: "Drafts Automation scripts and their parameters", On: true, Tools: []string{
 		"node_facts", "list_nodes", "get_node", "list_fleets", "automation_runs", "get_automation_run", "list_scripts", "get_script",
 		"automation_variables", sherlock.ToolAskKnowledge}},
