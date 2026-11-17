@@ -53,6 +53,10 @@
       "item": true,
       "search": false
     },
+    "limits": {
+      "item": false,
+      "search": false
+    },
     "knowledge": {
       "item": false,
       "search": false

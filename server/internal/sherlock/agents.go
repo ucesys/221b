@@ -29,8 +29,14 @@ type Agent struct {
 	Model  string
 	// Price is the model with the price its spend is counted at.
 	Price Model
-	// Caps are the agent's own caps, besides the overall ones.
+	// Caps are the agent's own caps, besides the total ones.
 	Caps Caps
+	// Provider is the id of the provider it answers on, and ProviderName
+	// its name; its spend counts against ProviderCaps, the provider's
+	// limits, too (Phase 12.1). "" counts against no provider's.
+	Provider     string
+	ProviderName string
+	ProviderCaps Caps
 	// Instructions are its whole instructions before the cluster's block:
 	// the fixed core, the agents it can hand work to and the house
 	// instructions, in that order.
@@ -412,13 +418,10 @@ func (s *Service) clientOf(a *Agent) *Client {
 	return s.opts.Client
 }
 
-// capsErr says whether the overall caps or the agent's own are reached.
+// capsErr says whether the total limits, the agent's provider's or its
+// own caps are reached.
 func (s *Service) capsErr(ctx context.Context, a *Agent) error {
-	spend := s.opts.Ledger.Now(ctx)
-	if err := s.opts.Settings().Caps.Check(spend); err != nil {
-		return err
-	}
-	return a.Caps.CheckAgent(spend, a.ID, a.Name)
+	return CheckAll(s.opts.Settings().Caps, s.opts.Ledger.Now(ctx), a)
 }
 
 // runTool runs one call of the agents' own tools; handOver runs a
@@ -662,7 +665,7 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 		out.Usage = out.Usage.Add(resp.Usage)
 		out.CostUSD += used
 		if used > 0 || round == 0 {
-			s.opts.Ledger.AddFor(context.Background(), a.ID, used, round == 0)
+			s.opts.Ledger.AddFor(context.Background(), a.ID, a.Provider, used, round == 0)
 		}
 		if err != nil {
 			if ctx.Err() != nil {

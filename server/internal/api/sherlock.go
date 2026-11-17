@@ -75,12 +75,8 @@ func (s *Server) sherlockStatusFor(r *http.Request, cluster string) sherlockStat
 		st.Reason = "Sherlock has no API key. An administrator adds one in Settings."
 	}
 	spend := s.opts.Sherlock.Ledger().Now(r.Context())
-	if err := (sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}).Check(spend); err != nil {
+	if err := sherlock.CheckAll(sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}, spend, agent); err != nil {
 		st.Capped = err.Error()
-	} else if agent != nil {
-		if err := agent.Caps.CheckAgent(spend, agent.ID, agent.Name); err != nil {
-			st.Capped = err.Error()
-		}
 	}
 	st.Available = st.Reason == "" && st.Capped == ""
 	st.Setup = s.opts.AI != nil && st.Admin && st.Available && s.SetupOpen(r.Context())

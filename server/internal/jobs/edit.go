@@ -35,7 +35,7 @@ type Change struct {
 const MaxTask = 8000
 
 // maxBudget bounds a job's budget: a typo of an extra zero or two should
-// not reach the agents' overall limits unnoticed.
+// not reach the agents' total limits unnoticed.
 const maxBudget = 10000
 
 // check checks a job against its kind.

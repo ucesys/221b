@@ -124,7 +124,7 @@ var setupDefs = []setupDef{
 		"#/admin/settings/providers", "Administration › Settings › Providers", "the default provider's credential field and its default model", "docs/getting-started.md#3-ai-provider-and-default-model"},
 	{"agents", "Agents: turn them on, set budgets",
 		"With a provider working, turning agents on and giving each a budget decides who answers and what it may cost.",
-		"#/admin/settings/agents", "Administration › Settings › Agents", "each agent's switch, model and daily and monthly budget, and the overall limits", "docs/getting-started.md#4-agents"},
+		"#/admin/settings/agents", "Administration › Settings › Agents", "each agent's switch, model and daily and monthly budget; the total and each provider's spending limits are on Settings › Limits", "docs/getting-started.md#4-agents"},
 	{"knowledge", "Knowledge: connect Mycroft's sources",
 		"Mycroft reads your Confluence spaces, runbooks and documents into a wiki the agents cite, and proposes the hosts and fleets they list, so it comes before fleets and hosts.",
 		"#/admin/settings/knowledge", "Administration › Settings › Knowledge", "where the wiki is kept, then Add source; a source's token goes in its own field", "docs/getting-started.md#5-knowledge"},
@@ -348,9 +348,9 @@ func (s *Server) setupAgents(ctx context.Context, _ setupRecord) (bool, string) 
 			sherlockOn, clustersOn = a.Enabled, len(a.Clusters)
 		}
 	}
-	limits := "no overall limit"
+	limits := "no total limit"
 	if v.DailyUSD > 0 || v.MonthlyUSD > 0 {
-		limits = fmt.Sprintf("overall limits $%.2f a day and $%.2f a month", v.DailyUSD, v.MonthlyUSD)
+		limits = fmt.Sprintf("total limits $%.2f a day and $%.2f a month", v.DailyUSD, v.MonthlyUSD)
 	}
 	detail := fmt.Sprintf("%d of %d agents on; %s.", on, len(v.Agents), limits)
 	if sherlockOn {

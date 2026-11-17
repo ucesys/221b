@@ -133,7 +133,7 @@ type When struct {
 
 // Budget is what a job may spend, in US dollars: on one run, and on all its
 // runs of a day (UTC). Zero is no limit of the job's own; the agent's caps
-// and the overall limits still hold.
+// and the total and provider limits still hold.
 type Budget struct {
 	RunUSD float64 `json:"runUSD,omitempty"`
 	DayUSD float64 `json:"dayUSD,omitempty"`

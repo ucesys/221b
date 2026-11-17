@@ -224,12 +224,26 @@ describe('the Agents section', () => {
 })
 
 describe('the agents’ helpers', () => {
-  it('say what the overall limits mean beside an agent’s own caps, with or without the amounts (AI-28)', () => {
+  it('say what the total and provider limits mean beside an agent’s own caps, with or without the amounts (AI-28, AI-39)', () => {
     const ov = { dailyUSD: 20, monthlyUSD: 0 }
-    expect(overallHints({}, ov, (n) => `$${n.toFixed(2)}`)).toEqual([{ which: 'daily', higher: false, text: 'The overall limit of $20.00 a day still applies to all agents together.' }])
-    expect(overallHints({ dailyUSD: 100 }, ov)).toEqual([{ which: 'daily', higher: true, text: 'Its daily cap is higher than the overall daily limit, which counts all agents together and stops it first.' }])
+    const money = (n: number) => `$${n.toFixed(2)}`
+    expect(overallHints({}, ov, money)).toEqual([{ which: 'daily', higher: false, text: 'The total limit of $20.00 a day still applies to all agents together.' }])
+    expect(overallHints({ dailyUSD: 100 }, ov)).toEqual([{ which: 'daily', higher: true, text: 'Its daily cap is higher than the total daily limit, which counts all agents together, and stops it first.' }])
     expect(overallHints({ dailyUSD: 20 }, ov)).toEqual([])
     expect(overallHints({}, { dailyUSD: 0, monthlyUSD: 0 })).toEqual([])
+    // The provider's limit too, when it has one.
+    const gw = { name: 'Gateway', limit: { dailyUSD: 5, monthlyUSD: 50 } }
+    expect(overallHints({}, { dailyUSD: 0, monthlyUSD: 0 }, money, gw)).toEqual([
+      { which: 'daily', higher: false, text: 'The limit of $5.00 a day of its provider Gateway still applies to every agent on Gateway.' },
+      { which: 'monthly', higher: false, text: 'The limit of $50.00 a month of its provider Gateway still applies to every agent on Gateway.' },
+    ])
+    expect(overallHints({ dailyUSD: 30 }, ov, money, gw)[0]).toEqual({
+      which: 'daily',
+      higher: true,
+      text: 'Its daily cap of $30.00 is higher than the total limit of $20.00 a day, which counts all agents together, and the limit of $5.00 a day of its provider Gateway, which counts every agent on Gateway, and stops it first.',
+    })
+    expect(overallHints({ dailyUSD: 10 }, ov, undefined, gw)[0]!.text).toBe('Its daily cap is higher than the daily limit of its provider Gateway, which counts every agent on Gateway, and stops it first.')
+    expect(overallHints({}, { dailyUSD: 0, monthlyUSD: 0 }, money, { name: 'Gateway', limit: { dailyUSD: 0, monthlyUSD: 0 } })).toEqual([])
   })
   it('say where a draft stands, and how to put instructions into the chart', () => {
     expect(stageIndex(instructions())).toBe(3)
@@ -562,7 +576,7 @@ describe('an agent’s built-in text, stages and context', () => {
   })
 })
 
-describe('the drawer’s pilot history, discarded drafts and overall limits', () => {
+describe('the drawer’s pilot history, discarded drafts and the limits', () => {
   const calls: { method: string; url: string; body?: unknown }[] = []
   let ins = instructions()
   let ov = overview()
@@ -629,16 +643,17 @@ describe('the drawer’s pilot history, discarded drafts and overall limits', ()
     expect(toasts).toContain('Saved draft 4. Earlier draft 3 was discarded; the pilot of draft 3 ended; request 1 was withdrawn.')
   })
 
-  it('says the overall limit still applies beside a cap of 0, warns of a cap above it, and leads to Overall limits (AI-28)', async () => {
+  it('says the total limit still applies beside a cap of 0, warns of a cap above it, and leads to Settings › Limits (AI-28, AI-39)', async () => {
     ov = { ...ov, dailyUSD: 20, monthlyUSD: 200, agents: ov.agents.map((a) => (a.id === 'sherlock' ? { ...a, settings: { dailyUSD: 100 } } : a)) }
     render(<AgentsSection />)
     fireEvent.click((await screen.findAllByTestId('agent-open'))[0]!)
     let drawer = await screen.findByTestId('agent-drawer')
     let hints = within(drawer).getAllByTestId('agent-overall-hint')
     expect(hints.map((h) => `${h.dataset.which}:${h.dataset.tone}`)).toEqual(['daily:warn', 'monthly:info'])
-    expect(hints[0]!.textContent).toContain('Its daily cap of $100.00 is higher than the overall limit of $20.00 a day, which counts all agents together and stops it first.')
-    expect(hints[1]!.textContent).toContain('The overall limit of $200.00 a month still applies to all agents together.')
-    // A cap below the overall limit needs no word; an unsaved edit must be saved before leaving.
+    expect(hints[0]!.textContent).toContain('Its daily cap of $100.00 is higher than the total limit of $20.00 a day, which counts all agents together, and stops it first.')
+    expect(hints[1]!.textContent).toContain('The total limit of $200.00 a month still applies to all agents together.')
+    expect(hints[0]!.textContent).toContain('Go to Settings › Limits')
+    // A cap below the total limit needs no word; an unsaved edit must be saved before leaving.
     fireEvent.change(within(drawer).getByTestId('agent-daily'), { target: { value: '5' } })
     hints = within(drawer).getAllByTestId('agent-overall-hint')
     expect(hints.map((h) => h.dataset.which)).toEqual(['monthly'])
@@ -647,6 +662,6 @@ describe('the drawer’s pilot history, discarded drafts and overall limits', ()
     drawer = screen.getByTestId('agent-drawer')
     fireEvent.click(within(drawer).getAllByTestId('agent-overall-link')[0]!)
     await waitFor(() => expect(screen.queryByTestId('agent-drawer')).toBeNull())
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('limit-daily')))
+    expect(window.location.hash).toBe('#/admin/settings/limits')
   })
 })

@@ -273,7 +273,7 @@ func TestACapReachedStopsNewCases(t *testing.T) {
 			waiting++
 		}
 	}
-	if run.State != RunFailed || !strings.Contains(run.Error, "overall daily limit") || run.StoppedAt == 0 || run.Planned[run.StoppedAt-1].State != CaseFailed || waiting == 0 || run.Cases+waiting != len(run.Planned) {
+	if run.State != RunFailed || !strings.Contains(run.Error, "total daily limit") || run.StoppedAt == 0 || run.Planned[run.StoppedAt-1].State != CaseFailed || waiting == 0 || run.Cases+waiting != len(run.Planned) {
 		t.Fatalf("the capped run: %s %q at %d, %d ran, %d waiting", run.State, run.Error, run.StoppedAt, run.Cases, waiting)
 	}
 }

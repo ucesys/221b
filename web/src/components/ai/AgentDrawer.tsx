@@ -44,6 +44,8 @@ import { PilotHistoryDialog } from './PilotHistoryDialog'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useShowCosts } from '../../lib/costs'
 import { Unsaved, useUnsaved } from '../../lib/unsaved'
+import { navigate } from '../../lib/router'
+import { LIMITS_HREF } from './LimitsSection'
 
 /** What each tool lets an agent do, for its checkbox. */
 export const TOOL_LABELS: Record<string, string> = {
@@ -329,10 +331,10 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           </label>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
-          0 is no cap of its own. Its spend counts toward the overall limits too{costs ? ` (${usd(ov.dailyUSD)} a day). Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : '.'}
+          0 means no cap of its own. Its spend counts toward the total limits and its provider’s too, set in Settings › Limits.{costs ? ` Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : ''}
         </p>
-        {/* --- AI-28: the overall limit stops every agent, whatever its own cap says. --- */}
-        {overallHints(set, ov, costs ? usd : undefined).map((h) => (
+        {/* --- AI-28, AI-39: the total and the provider's limits stop every agent under them, whatever its own cap says. --- */}
+        {overallHints(set, ov, costs ? usd : undefined, set.provider ? ov.providers.find((p) => p.id === set.provider) : ov.providers.find((p) => p.default)).map((h) => (
           <p
             key={h.which}
             className="rk-callout"
@@ -343,7 +345,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           >
             <span>{h.text}</span>
             <button className="rk-link" style={{ fontSize: 12.5 }} disabled={changed} title={changed ? 'Save or cancel your changes first.' : undefined} onClick={() => toOverallLimits(onClose)} data-testid="agent-overall-link">
-              Go to Overall limits
+              Go to Settings › Limits
             </button>
           </p>
         ))}
@@ -396,36 +398,43 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   )
 }
 
-/** Where the overall limits are on Settings › Agents (AI-28). */
-export const OVERALL_LIMITS_ID = 'agents-overall-limits'
-
 /**
- * What the drawer says of the overall limits beside the agent's own caps
- * (AI-28): with no cap of its own, or one above the overall limit, the
- * overall limit, all agents together, is what stops it. The amounts show
- * only with money, as costs are shown (CF-40).
+ * What the drawer says of the limits above the agent's own caps (AI-28,
+ * AI-39): the total, all agents together, and its provider's, every agent
+ * on it. With no cap of its own they still apply; with a cap above one of
+ * them, that one stops it first. The amounts show only with money, as
+ * costs are shown (CF-40).
  */
-export function overallHints(set: { dailyUSD?: number; monthlyUSD?: number }, ov: { dailyUSD: number; monthlyUSD: number }, money?: (n: number) => string): { which: 'daily' | 'monthly'; higher: boolean; text: string }[] {
+export function overallHints(
+  set: { dailyUSD?: number; monthlyUSD?: number },
+  ov: { dailyUSD: number; monthlyUSD: number },
+  money?: (n: number) => string,
+  provider?: { name: string; limit?: { dailyUSD: number; monthlyUSD: number } | null },
+): { which: 'daily' | 'monthly'; higher: boolean; text: string }[] {
   const out: { which: 'daily' | 'monthly'; higher: boolean; text: string }[] = []
-  const one = (which: 'daily' | 'monthly', own: number, overall: number, per: string) => {
-    if (overall <= 0) return
-    const limit = money ? `the overall limit of ${money(overall)} a ${per}` : `the overall ${which} limit`
-    if (own <= 0) out.push({ which, higher: false, text: `${limit[0]!.toUpperCase()}${limit.slice(1)} still applies to all agents together.` })
-    else if (own > overall) out.push({ which, higher: true, text: `Its ${which} cap${money ? ` of ${money(own)}` : ''} is higher than ${limit}, which counts all agents together and stops it first.` })
+  const cap = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`
+  const one = (which: 'daily' | 'monthly', own: number, total: number, ofProvider: number, per: string) => {
+    const limits: { amount: number; name: string; who: string }[] = []
+    if (total > 0) limits.push({ amount: total, name: money ? `the total limit of ${money(total)} a ${per}` : `the total ${which} limit`, who: 'all agents together' })
+    if (ofProvider > 0 && provider)
+      limits.push({ amount: ofProvider, name: money ? `the limit of ${money(ofProvider)} a ${per} of its provider ${provider.name}` : `the ${which} limit of its provider ${provider.name}`, who: `every agent on ${provider.name}` })
+    if (!limits.length) return
+    if (own <= 0) {
+      out.push({ which, higher: false, text: limits.map((l) => `${cap(l.name)} still applies to ${l.who}.`).join(' ') })
+      return
+    }
+    const lower = limits.filter((l) => own > l.amount)
+    if (lower.length) out.push({ which, higher: true, text: `Its ${which} cap${money ? ` of ${money(own)}` : ''} is higher than ${lower.map((l) => `${l.name}, which counts ${l.who}`).join(', and ')}, and stops it first.` })
   }
-  one('daily', set.dailyUSD ?? 0, ov.dailyUSD, 'day')
-  one('monthly', set.monthlyUSD ?? 0, ov.monthlyUSD, 'month')
+  one('daily', set.dailyUSD ?? 0, ov.dailyUSD, provider?.limit?.dailyUSD ?? 0, 'day')
+  one('monthly', set.monthlyUSD ?? 0, ov.monthlyUSD, provider?.limit?.monthlyUSD ?? 0, 'month')
   return out
 }
 
-/** Closes the drawer and brings the overall limits into view, their first field focused. */
+/** Closes the drawer and opens Settings › Limits, where the total and the providers' limits are changed (AI-39). */
 export function toOverallLimits(close: () => void) {
   close()
-  window.setTimeout(() => {
-    const el = document.getElementById(OVERALL_LIMITS_ID)
-    el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
-    el?.querySelector<HTMLInputElement>('input')?.focus()
-  }, 0)
+  navigate(LIMITS_HREF)
 }
 
 /** "about 10,259 tokens (3,449 of instructions, 6,810 for 38 tools)". */
