@@ -358,6 +358,19 @@ func (s *Service) BackToDraft(ctx context.Context, id string) error {
 // ReadyForLive says why the draft cannot go live, or returns its revision:
 // it must have been tested, unless it restores a version once live.
 func (s *Service) ReadyForLive(ctx context.Context, id string) (int, error) {
+	return s.readyForLive(ctx, id, false)
+}
+
+// MaxUntestedReason bounds the reason a draft goes live untested.
+const MaxUntestedReason = 300
+
+// ReadyUntested is ReadyForLive for a draft a SuperAdmin puts live
+// without its test, giving a reason (Phase 12.1): only a draft is needed.
+func (s *Service) ReadyUntested(ctx context.Context, id string) (int, error) {
+	return s.readyForLive(ctx, id, true)
+}
+
+func (s *Service) readyForLive(ctx context.Context, id string, untested bool) (int, error) {
 	if _, ok := InfoOf(id); !ok {
 		return 0, ErrNotFound
 	}
@@ -366,7 +379,7 @@ func (s *Service) ReadyForLive(ctx context.Context, id string) (int, error) {
 		return 0, fmt.Errorf("%w: there is no draft", ErrInvalid)
 	}
 	d := ap.Draft
-	if (d.Test == nil || d.Test.Rev != d.Rev) && d.Restored == 0 && d.Stage != StagePilot {
+	if !untested && (d.Test == nil || d.Test.Rev != d.Rev) && d.Restored == 0 && d.Stage != StagePilot {
 		return 0, fmt.Errorf("%w: test the draft first", ErrInvalid)
 	}
 	return d.Rev, nil
@@ -386,12 +399,21 @@ func (s *Service) SetRequest(ctx context.Context, id string, rev, request int) e
 // ApplyLive puts the draft of a revision live: approved by a second
 // SuperAdmin, or by the only one. A draft saved again since is refused.
 func (s *Service) ApplyLive(ctx context.Context, id string, rev int, by string) (Version, error) {
+	return s.ApplyLiveWith(ctx, id, rev, by, "")
+}
+
+// ApplyLiveWith is ApplyLive for a draft that goes live untested, with the
+// reason given, which its version shows (Phase 12.1); "" for a tested one.
+func (s *Service) ApplyLiveWith(ctx context.Context, id string, rev int, by, untested string) (Version, error) {
 	var v Version
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, baseline string) error {
 		if p.Draft == nil || p.Draft.Rev != rev {
 			return fmt.Errorf("%w: the draft changed since it was asked for; ask again", ErrInvalid)
 		}
 		why := "made live"
+		if untested != "" {
+			why = "made live untested: " + untested
+		}
 		if p.Draft.Restored > 0 {
 			why = fmt.Sprintf("restored version %d", p.Draft.Restored)
 		}
@@ -509,6 +531,23 @@ func (s *Service) Legacy(ctx context.Context) (instructions, notes string) {
 	return instructions, ap.Notes[AllClusters]
 }
 
+// trimQuestions drops the questions a draft's test results keep for the
+// test dialog, which the cases still have; it says whether it dropped any.
+func trimQuestions(ps *Prompts) bool {
+	done := false
+	for _, p := range ps.Agents {
+		if p == nil || p.Draft == nil || p.Draft.Test == nil {
+			continue
+		}
+		for i := range p.Draft.Test.Results {
+			if p.Draft.Test.Results[i].Question != "" {
+				p.Draft.Test.Results[i].Question, done = "", true
+			}
+		}
+	}
+	return done
+}
+
 // promptsBudget is what the instructions may take of their key, below its
 // limit in the ConfigMap's layout.
 const promptsBudget = 440 << 10
@@ -530,6 +569,9 @@ func prune(ps *Prompts) {
 		if most != nil {
 			i := slices.IndexFunc(most.Versions, func(v Version) bool { return v.N != most.Live })
 			most.Versions = slices.Delete(most.Versions, i, i+1)
+			continue
+		}
+		if trimQuestions(ps) {
 			continue
 		}
 		dropped := false

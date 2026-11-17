@@ -543,7 +543,15 @@ test('the administrators’ notes join Sherlock’s instructions as a draft, whi
     await drawer.getByTestId('ins-test').click()
     await expect(drawer.getByTestId('ins-test-estimate')).toContainText('about $')
     await drawer.getByTestId('ins-test-run').click()
+    // The run opens in its dialog at once (Phase 12.1): each case as it runs, then the result; closing it leaves the drawer.
+    const dlg = page.getByTestId('test-dialog')
+    await expect(dlg).toBeVisible()
+    await expect(dlg.getByTestId('test-dialog-state')).toHaveAttribute('data-state', 'done', { timeout: 120_000 })
+    await expect(dlg.getByTestId('test-case-row').first()).toBeVisible()
+    await dlg.getByTestId('test-dialog-close').click()
+    await expect(dlg).toHaveCount(0)
     await expect(drawer.getByTestId('ins-last-test')).toContainText('recorded case', { timeout: 120_000 })
+    await expect(drawer.getByTestId('ins-test-results')).toBeVisible()
     await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Test')
     // The whole prompt has the notes after the cluster's description.
     const prompt = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/sherlock/prompt?draft=1')).json())) as { instructions: string; cluster: string }

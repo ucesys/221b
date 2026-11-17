@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"slices"
@@ -61,9 +62,19 @@ type world struct {
 // for the local cluster, and a key saved.
 func setup(t *testing.T, baselines map[string]string) *world {
 	t.Helper()
+	return setupWith(t, baselines, nil)
+}
+
+// setupWith is setup with the fake API behind wrap, to hold its answers.
+func setupWith(t *testing.T, baselines map[string]string, wrap func(http.Handler) http.Handler) *world {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = 0
-	api := httptest.NewServer(fake)
+	var h http.Handler = fake
+	if wrap != nil {
+		h = wrap(fake)
+	}
+	api := httptest.NewServer(h)
 	t.Cleanup(api.Close)
 	w := &world{fake: fake, kv: &kv.Memory{}, audit: &bytes.Buffer{}}
 	w.set = &fakeSettings{sh: settings.Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200, Clusters: map[string]bool{"local": true}}}

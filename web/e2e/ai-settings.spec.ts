@@ -112,10 +112,12 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   await expect(part).toHaveValue(/^You are the Auditor/)
   await expect(part).toHaveValue(/Rules every agent of this console keeps/)
   await expect(drawer.getByTestId('ins-part-state')).toHaveText('Built-in')
-  // No draft: every step says why its action waits.
+  // No draft: every step says why its action waits, and none before Live reads as done.
   await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Live')
   await expect(drawer.getByTestId('ins-test')).toBeDisabled()
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=live] [data-testid=ins-step-why]')).toContainText('Nothing waits to go live')
+  await expect(drawer.locator('[data-testid=ins-stages] [data-stage=draft]')).toHaveAttribute('data-state', 'todo')
+  await expect(drawer.locator('[data-testid=ins-stages] [data-stage=test]')).toContainText('not started')
   // An edit of the built-in text, compared and saved as a draft.
   const text = await part.inputValue()
   await part.fill('You are the Auditor of Acme. Weigh PCI findings first.\n\n' + text.slice(text.indexOf('Rules every agent')))
@@ -128,6 +130,14 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   await expect(drawer.getByTestId('ins-test')).toBeEnabled()
   await expect(drawer.getByTestId('ins-pilot')).toBeDisabled()
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=pilot] [data-testid=ins-step-why]')).toHaveText('Run the tests first: a pilot serves a tested draft.')
+  // An untested draft may go live only with a reason (Phase 12.1): the confirmation waits for one.
+  await drawer.getByTestId('ins-live-untested').click()
+  const confirm = page.getByTestId('confirm')
+  await expect(confirm.getByTestId('confirm-ok')).toBeDisabled()
+  await confirm.getByTestId('ins-untested-reason').fill('A hotfix for the outage.')
+  await expect(confirm.getByTestId('confirm-ok')).toBeEnabled()
+  await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(confirm).toHaveCount(0)
   const prompt = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/auditor/prompt?draft=1')).json())) as { instructions: string }
   expect(prompt.instructions.startsWith('You are the Auditor of Acme.')).toBe(true)
   // Reset to built-in puts the shipped text back in the field.

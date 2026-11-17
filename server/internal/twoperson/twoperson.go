@@ -91,6 +91,9 @@ type Request struct {
 	Agent     string `json:"agent,omitempty"`
 	AgentName string `json:"agentName,omitempty"`
 	Rev       int    `json:"rev,omitempty"`
+	// Untested is the reason the draft goes live without its test (Phase
+	// 12.1); "" for a tested one.
+	Untested string `json:"untested,omitempty"`
 
 	By        Who        `json:"by"`
 	At        time.Time  `json:"at"`
@@ -120,6 +123,9 @@ func (r Request) What() string {
 		}
 		return fmt.Sprintf("%s becomes a SuperAdmin (%s)", r.User, strings.Join(how, " and "))
 	case KindPrompt:
+		if r.Untested != "" {
+			return fmt.Sprintf("%s: instructions, draft %d, go live untested (reason: %s)", r.AgentName, r.Rev, r.Untested)
+		}
 		return fmt.Sprintf("%s: instructions, draft %d, go live", r.AgentName, r.Rev)
 	}
 	return r.Kind

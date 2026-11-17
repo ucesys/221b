@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentView, AIOverview, Instructions } from '../../api/ai'
+import type { AgentView, AIOverview, Instructions, TestRun } from '../../api/ai'
 import { AgentsSection, worksOn } from './AgentsSection'
 import { stageIndex, valuesYAML } from './AgentDrawer'
 import { Hands, agentRef } from '../Sherlock'
@@ -277,17 +277,22 @@ describe('an agent’s built-in text, stages and context', () => {
   const calls: { method: string; url: string; body?: unknown }[] = []
   let ins = instructions()
   let ov = overview()
+  let run: TestRun | null = null
   beforeEach(() => {
     Element.prototype.scrollTo = () => {}
     calls.length = 0
     ins = instructions()
     ov = overview()
+    run = null
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       const u = String(url)
       calls.push({ method, url: u, body })
       if (u.endsWith('/instructions')) return new Response(JSON.stringify(ins))
+      if (u.endsWith('/tests/run')) return run ? new Response(JSON.stringify(run)) : new Response(JSON.stringify({ error: 'No test of this agent has run yet.' }), { status: 404 })
+      if (u.endsWith('/live')) return new Response(JSON.stringify({ waiting: true, request: { id: 7 } }), { status: 202 })
+      if (u.endsWith('/test')) return new Response(JSON.stringify(body.estimate ? { estimateUSD: 0.5, cases: 2, replays: 0 } : { estimateUSD: 0.5, cases: 2, replays: 0, started: true }), { status: body.estimate ? 200 : 202 })
       if (u.endsWith('/draft/back')) {
         ins = { ...ins, draft: { ...ins.draft!, rev: ins.draft!.rev + 1, stage: 'draft', test: undefined } }
         return new Response(JSON.stringify(ins))
@@ -359,6 +364,120 @@ describe('an agent’s built-in text, stages and context', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/draft/back'))).toBe(true))
     await waitFor(() => expect((within(drawer).getByTestId('ins-pilot') as HTMLButtonElement).disabled).toBe(true))
     expect(why()).toContain('Run the tests first: a pilot serves a tested draft.')
+  })
+
+  it('shows the steps before live as not started while no draft waits (Phase 12.1)', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    await waitFor(() => expect(within(drawer).getByTestId('ins-stages').querySelector('[data-stage=live]')?.getAttribute('data-state')).toBe('current'))
+    const stages = within(drawer).getByTestId('ins-stages')
+    for (const name of ['draft', 'test', 'pilot']) {
+      const step = stages.querySelector(`[data-stage=${name}]`)!
+      expect(step.getAttribute('data-state')).toBe('todo')
+      expect(step.textContent).toContain('not started')
+      expect(step.textContent).not.toContain('done')
+    }
+    expect(stages.querySelector('[data-stage=live]')!.textContent).toContain('now')
+    expect(within(drawer).queryByTestId('ins-live-untested')).toBeNull()
+  })
+
+  it('makes an untested draft live only with a reason, and offers it only for an untested draft (Phase 12.1)', async () => {
+    const test = { rev: 3, at: '2026-11-05T11:00:00Z', by: 'ann', cases: 2, passed: 2, same: 0, costUSD: 0.1, estimate: 0.1 }
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z' } })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    let drawer = await screen.findByTestId('agent-drawer')
+    const untested = await within(drawer).findByTestId('ins-live-untested')
+    expect((within(drawer).getByTestId('ins-live') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(untested)
+    const confirm = await screen.findByTestId('confirm')
+    const ok = within(confirm).getByTestId('confirm-ok') as HTMLButtonElement
+    expect(ok.disabled).toBe(true)
+    const reason = within(confirm).getByTestId('ins-untested-reason')
+    fireEvent.change(reason, { target: { value: '   ' } })
+    expect(ok.disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: ' The outage needs it now. ' } })
+    expect(ok.disabled).toBe(false)
+    fireEvent.click(ok)
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/live'))?.body).toEqual({ untested: true, reason: 'The outage needs it now.' }))
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull())
+    cleanup()
+    // A tested draft goes live the usual way, with no untested action.
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'test', by: 'ann', at: '2026-11-05T10:00:00Z', test } })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    drawer = await screen.findByTestId('agent-drawer')
+    await waitFor(() => expect((within(drawer).getByTestId('ins-live') as HTMLButtonElement).disabled).toBe(false))
+    expect(within(drawer).queryByTestId('ins-live-untested')).toBeNull()
+  })
+
+  it('opens the last test’s results in the test dialog, read-only, with the failures counted (Phase 12.1)', async () => {
+    const test: TestRun = {
+      rev: 3,
+      at: '2026-11-05T11:00:00Z',
+      by: 'ann',
+      cases: 2,
+      passed: 1,
+      same: 0,
+      costUSD: 0.1,
+      estimate: 0.1,
+      state: 'done',
+      results: [
+        { id: 't1', name: 'passes', passed: true, answer: 'Fine.', costUSD: 0.05 },
+        { id: 't2', name: 'fails', passed: false, why: ['it did not call pod_logs'], answer: 'No.', costUSD: 0.05 },
+      ],
+    }
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'test', by: 'ann', at: '2026-11-05T10:00:00Z', test } })
+    run = test
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.click(await within(drawer).findByTestId('ins-test-results'))
+    expect(within(drawer).getByTestId('ins-test-failed').textContent).toContain('1 failed')
+    expect(within(drawer).queryByTestId('ins-failures')).toBeNull()
+    const dlg = await screen.findByTestId('test-dialog')
+    await waitFor(() => expect(within(dlg).getByTestId('test-dialog-state').textContent).toBe('Done'))
+    expect(within(dlg).queryByTestId('test-dialog-stop')).toBeNull()
+    expect(within(dlg).getAllByTestId('test-case-row')[0]!.textContent).toContain('fails')
+    fireEvent.click(within(dlg).getByTestId('test-dialog-close'))
+    expect(screen.queryByTestId('test-dialog')).toBeNull()
+    expect(screen.getByTestId('agent-drawer')).toBeTruthy()
+  })
+
+  it('opens the test dialog as the test starts, and shows a run in flight in the drawer to open again (Phase 12.1)', async () => {
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z' } })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.click(await within(drawer).findByTestId('ins-test'))
+    await waitFor(() => expect(within(drawer).getByTestId('ins-test-estimate').textContent).toContain('2 recorded cases'))
+    run = {
+      rev: 3,
+      at: '2026-11-05T11:00:00Z',
+      by: 'ann',
+      cases: 1,
+      passed: 1,
+      same: 0,
+      costUSD: 0.05,
+      estimate: 0.5,
+      state: 'running',
+      planned: [
+        { id: 't1', name: 'passes', state: 'passed' },
+        { id: 't2', name: 'runs', state: 'running' },
+      ],
+      results: [{ id: 't1', name: 'passes', passed: true, answer: 'Fine.', costUSD: 0.05 }],
+    }
+    fireEvent.click(within(drawer).getByTestId('ins-test-run'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/test') && !(c.body as { estimate?: boolean }).estimate)).toBe(true))
+    const dlg = await screen.findByTestId('test-dialog')
+    await within(dlg).findByTestId('test-dialog-stop')
+    fireEvent.keyDown(dlg, { key: 'Escape' })
+    expect(screen.queryByTestId('test-dialog')).toBeNull()
+    expect(calls.some((c) => c.url.endsWith('/tests/stop'))).toBe(false)
+    await waitFor(() => expect(within(drawer).getByTestId('ins-test-running').textContent).toContain('Tests running: 1 of 2 cases…'))
+    fireEvent.click(within(drawer).getByTestId('ins-test-show'))
+    expect(await screen.findByTestId('test-dialog')).toBeTruthy()
   })
 
   it('says how much of its model’s context Sherlock takes, and saves its compact form’s choice and a model from the endpoint', async () => {

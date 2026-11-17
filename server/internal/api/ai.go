@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/audit"
@@ -47,6 +48,9 @@ func (s *Server) aiRoutes() {
 	s.handle("POST /api/v1/ai/agents/{id}/baseline", "ai-baseline", s.postAIBaseline)
 	s.handle("POST /api/v1/ai/agents/{id}/test", "ai-test", s.postAITest)
 	s.handle("GET /api/v1/ai/agents/{id}/tests", "ai-tests", s.getAITests)
+	// --- Test dialog (Phase 12.1): a run's progress, and stopping it. ---
+	s.handle("GET /api/v1/ai/agents/{id}/tests/run", "ai-test-run", s.getAITestRun)
+	s.handle("POST /api/v1/ai/agents/{id}/tests/stop", "ai-test-stop", s.postAITestStop)
 	s.handle("POST /api/v1/ai/agents/{id}/pilot", "ai-pilot", s.postAIPilot)
 	s.handle("DELETE /api/v1/ai/agents/{id}/pilot", "ai-pilot", s.deleteAIPilot)
 	s.handle("GET /api/v1/ai/agents/{id}/pilot", "ai-pilot-log", s.getAIPilot)
@@ -645,23 +649,70 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 		answerJSON(w, r, out)
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// The run is the leader's, as every /api/v1/ai route is (ADR-70): its
+	// progress is read there from any replica. It is claimed before the
+	// answer, so the test dialog finds it running at once.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	err = s.opts.AI.StartTests(ctx, id, o, func(run ai.TestRun, err error) {
 		defer cancel()
-		run, err := s.opts.AI.RunTests(ctx, id, o)
 		detail := fmt.Sprintf("tested: %d of %d cases passed, %d replays (%d the same), $%.4f", run.Passed, run.Cases, len(run.Replays), run.Same, run.CostUSD)
 		outcome := audit.OutcomeOK
-		if err != nil {
+		switch {
+		case err != nil:
 			detail, outcome = "the test failed: "+err.Error(), audit.OutcomeFailed
+		case run.State == ai.RunStopped:
+			detail = fmt.Sprintf("test stopped after %d of %d cases (%d passed), %d replays, $%.4f", run.Cases, len(run.Planned), run.Passed, len(run.Replays), run.CostUSD)
+		case run.State == ai.RunFailed:
+			detail, outcome = "the test failed: "+run.Error, audit.OutcomeFailed
 		}
 		if s.opts.Audit != nil {
 			s.opts.Audit.Record(audit.Event{Action: audit.ActionAITest, Who: o.Who, Target: "agent " + id, Detail: detail, Outcome: outcome})
 		}
-	}()
+	})
+	if err != nil {
+		cancel()
+		s.aiFail(w, err)
+		return
+	}
 	out["started"] = true
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	answerJSONBody(w, out)
+}
+
+// getAITestRun is the agent's test run for the test dialog (Phase 12.1):
+// the one in flight, each case's state and the results so far, else the
+// latest that ended. The planted secrets of a case are counted, never
+// shown.
+func (s *Server) getAITestRun(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	run, ok, err := s.opts.AI.TestProgress(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	if !ok {
+		jsonError(w, http.StatusNotFound, "No test of this agent has run yet.")
+		return
+	}
+	answerJSON(w, r, run)
+}
+
+// postAITestStop stops the agent's tests in flight; the run is kept as
+// stopped.
+func (s *Server) postAITestStop(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.opts.AI.StopTests(id); err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	s.record(r, audit.ActionAITest, "agent "+id, "test stopped")
+	answerJSON(w, r, map[string]bool{"stopping": true})
 }
 
 func (s *Server) getAITests(w http.ResponseWriter, r *http.Request) {
@@ -749,7 +800,9 @@ func (s *Server) postAIRate(w http.ResponseWriter, r *http.Request) {
 
 // postAILive puts the draft live: at once when no other SuperAdmin could
 // approve it, else as a request on Administration › Approvals that
-// another SuperAdmin decides (twoperson.KindPrompt).
+// another SuperAdmin decides (twoperson.KindPrompt). With untested and a
+// reason, a draft not tested goes the same way (Phase 12.1); its version
+// and the records say so.
 func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 	if !s.aiAdmin(w, r) {
 		return
@@ -760,14 +813,33 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "There is no such agent.")
 		return
 	}
-	rev, err := s.opts.AI.ReadyForLive(r.Context(), id)
+	var in struct {
+		Untested bool   `json:"untested"`
+		Reason   string `json:"reason"`
+	}
+	if r.ContentLength != 0 && !decodeAutomation(w, r, &in) {
+		return
+	}
+	untested := ""
+	if in.Untested {
+		untested = strings.Join(strings.Fields(in.Reason), " ")
+		if untested == "" || utf8.RuneCountInString(untested) > ai.MaxUntestedReason {
+			jsonError(w, http.StatusBadRequest, fmt.Sprintf("Say why the draft goes live untested, in at most %d characters.", ai.MaxUntestedReason))
+			return
+		}
+	}
+	ready := s.opts.AI.ReadyForLive
+	if untested != "" {
+		ready = s.opts.AI.ReadyUntested
+	}
+	rev, err := ready(r.Context(), id)
 	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
 	if a := s.twoPersonAuth(); a != nil && a.OtherSuperAdmin(sess) {
-		req, err := s.opts.TwoPerson.Add(r.Context(), twoperson.Request{Kind: twoperson.KindPrompt, Agent: id, AgentName: info.Name, Rev: rev, By: auth.WhoOf(sess)})
+		req, err := s.opts.TwoPerson.Add(r.Context(), twoperson.Request{Kind: twoperson.KindPrompt, Agent: id, AgentName: info.Name, Rev: rev, Untested: untested, By: auth.WhoOf(sess)})
 		if err != nil {
 			code := http.StatusConflict
 			if errors.Is(err, twoperson.ErrInvalid) {
@@ -783,12 +855,16 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 		answerJSONBody(w, map[string]any{"waiting": true, "request": req})
 		return
 	}
-	v, err := s.opts.AI.ApplyLive(r.Context(), id, rev, aiBy(r))
+	v, err := s.opts.AI.ApplyLiveWith(r.Context(), id, rev, aiBy(r), untested)
 	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft %d made live as version %d; no other SuperAdmin could approve it", rev, v.N))
+	how := "made live"
+	if untested != "" {
+		how = "made live untested (reason: " + untested + ")"
+	}
+	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft %d %s as version %d; no other SuperAdmin could approve it", rev, how, v.N))
 	answerJSON(w, r, map[string]any{"live": v})
 }
 
@@ -797,7 +873,7 @@ func (s *Server) applyPrompt(ctx context.Context, req twoperson.Request, by stri
 	if s.opts.AI == nil {
 		return errors.New("this console has no agents")
 	}
-	_, err := s.opts.AI.ApplyLive(ctx, req.Agent, req.Rev, by)
+	_, err := s.opts.AI.ApplyLiveWith(ctx, req.Agent, req.Rev, by, req.Untested)
 	return err
 }
 

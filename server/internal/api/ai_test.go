@@ -22,9 +22,21 @@ import (
 // Claude API, the default provider's key saved, and two SuperAdmins.
 func aiSetup(t *testing.T) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service) {
 	t.Helper()
+	srv, c, fake, aiSvc, svc, _ := aiSetupWith(t, nil)
+	return srv, c, fake, aiSvc, svc
+}
+
+// aiSetupWith is aiSetup with the fake API behind wrap, to hold its
+// answers, and the audit log to read.
+func aiSetupWith(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service, *lockedBuffer) {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = 0
-	api := httptest.NewServer(fake)
+	var h http.Handler = fake
+	if wrap != nil {
+		h = wrap(fake)
+	}
+	api := httptest.NewServer(h)
 	t.Cleanup(api.Close)
 	keys := sherlock.NewKeys(nil, "", nil)
 	if err := keys.Set(context.Background(), "sk-ant-test-key-0123456789", "test"); err != nil {
@@ -33,7 +45,7 @@ func aiSetup(t *testing.T) (*httptest.Server, *http.Client, *fakeclaude.Fake, *a
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var aiSvc *ai.Service
 	var svc *sherlock.Service
-	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+	srv, c, _, aud, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		aiSvc = ai.New(ai.Options{Settings: o.Settings.(ai.SettingsStore), Keys: keys, DefaultURL: api.URL, ToolDefs: sherlocktools.Defs, Logger: logger})
 		svc = sherlock.New(sherlock.Options{
 			Agent: aiSvc.Agent, OnAnswer: aiSvc.OnAnswer, Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
@@ -48,7 +60,7 @@ func aiSetup(t *testing.T) (*httptest.Server, *http.Client, *fakeclaude.Fake, *a
 		o.TwoPerson = twoperson.New(nil, nil)
 	})
 	t.Cleanup(svc.Wait)
-	return srv, c, fake, aiSvc, svc
+	return srv, c, fake, aiSvc, svc, aud
 }
 
 func aiJSON(t *testing.T, c *http.Client, method, url, body string, want int, v any) {

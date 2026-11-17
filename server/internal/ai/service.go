@@ -65,8 +65,10 @@ type Service struct {
 	readAt  time.Time
 	keys    map[string]*sherlock.Keys
 	clients map[string]*sherlock.Client
-	// running names the agents whose tests run now.
-	running map[string]bool
+	// runs are the test runs in flight on this replica (the leader's), by
+	// agent, and lastRuns the last that ended (Phase 12.1).
+	runs     map[string]*liveRun
+	lastRuns map[string]TestRun
 	// setup is Getting started, for Sherlock's setup skill (Phase 12).
 	setup SetupGuide
 }
@@ -97,7 +99,7 @@ func New(o Options) *Service {
 	if o.HTTP == nil {
 		o.HTTP = &http.Client{Timeout: 5 * time.Minute}
 	}
-	return &Service{opts: o, keys: map[string]*sherlock.Keys{}, clients: map[string]*sherlock.Client{}, running: map[string]bool{}}
+	return &Service{opts: o, keys: map[string]*sherlock.Keys{}, clients: map[string]*sherlock.Client{}, runs: map[string]*liveRun{}, lastRuns: map[string]TestRun{}}
 }
 
 // SetEngine gives the service the conversation engine, which runs tests;
@@ -1161,5 +1163,5 @@ func (s *Service) SetLimits(ctx context.Context, daily, monthly float64) error {
 func (s *Service) testing(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.running[id]
+	return s.runs[id] != nil
 }

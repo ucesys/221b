@@ -147,6 +147,36 @@ export interface CaseResult {
   tools?: string[]
   handOvers?: string[]
   costUSD: number
+  /** The case as it ran (Phase 12.1): its question, clipped, and what it expected, the planted secrets only counted. */
+  question?: string
+  expect?: CaseExpect
+  /** Every line the case expects, met or not, in order. */
+  checks?: CaseCheck[]
+}
+
+export interface CaseExpect {
+  tools?: string[]
+  handOvers?: string[]
+  refuse?: boolean
+  points?: string[]
+  /** How many planted secrets the answer must not carry; never the values. */
+  secrets?: number
+}
+
+export interface CaseCheck {
+  what: string
+  ok: boolean
+}
+
+export type RunState = 'running' | 'done' | 'stopped' | 'failed'
+export type CaseState = 'waiting' | 'running' | 'passed' | 'failed'
+
+/** A case of a run and where it stands. */
+export interface PlannedCase {
+  id: string
+  name: string
+  base?: boolean
+  state: CaseState
 }
 
 export interface ReplayResult {
@@ -171,6 +201,13 @@ export interface TestRun {
   costUSD: number
   estimate: number
   error?: string
+  /** Where the run stands (Phase 12.1); a run kept before reads as done. */
+  state?: RunState
+  /** Every case the run runs, with its state. */
+  planned?: PlannedCase[]
+  replaysPlanned?: number
+  /** The number (from 1) of the case it stopped or failed at. */
+  stoppedAt?: number
 }
 
 export interface Pilot {
@@ -341,12 +378,20 @@ export const discardDraft = (id: string) => call<Instructions>('DELETE', `/api/v
 export const resolveBaseline = (id: string, action: 'keep' | 'take') => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/baseline`, { action })
 export const estimateTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live })
 export const startTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live })
+/** The agent's test run: the one in flight, with each case's state, else the latest that ended (Phase 12.1). */
+export const fetchTestRun = (id: string) => call<TestRun>('GET', `/api/v1/ai/agents/${enc(id)}/tests/run`)
+/** Stops the agent's tests in flight; the run is kept as stopped. */
+export const stopTest = (id: string) => call<{ stopping: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/tests/stop`)
 export const startPilot = (id: string, people: string[], clusters: string[], hours: number) => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/pilot`, { people, clusters, hours })
 export const stopPilot = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/pilot`)
 export const fetchPilot = (id: string) => call<{ entries: PilotEntry[] }>('GET', `/api/v1/ai/agents/${enc(id)}/pilot`)
 export const ratePilot = (n: number, rating: number) => call<{ rated: boolean }>('POST', `/api/v1/ai/pilot/${n}/rate`, { rating })
-/** Live at once when no other SuperAdmin could approve; otherwise a request on Approvals. */
-export const makeLive = (id: string) => call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/live`)
+/** Live at once when no other SuperAdmin could approve; otherwise a request on Approvals. With a reason, an untested draft goes the same way (Phase 12.1). */
+export const makeLive = (id: string, untested?: { reason: string }) =>
+  call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/live`, untested ? { untested: true, reason: untested.reason } : undefined)
+
+/** The longest reason a draft goes live untested. */
+export const MAX_UNTESTED_REASON = 300
 export const restoreVersion = (id: string, n: number) => call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/versions/${n}/restore`)
 /** Saves an answer of the person's own conversation as a test case. */
 export const saveTestCase = (cluster: string, message: number, name: string, points: string[], agent?: string) => call<{ id: string }>('POST', '/api/v1/ai/tests', { cluster, message, name, points, ...(agent ? { agent } : {}) })
