@@ -15,7 +15,7 @@ fourth state.
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> New: opened by a person (New Case), a report (/report, the intake API), or an agent's finding or alert; or the console, for a critical alert still going after N minutes that no case covers and no diagnosis concluded on (CF-78, CF-82)
+    [*] --> New: opened by a person (New Case), a report (/report), or an agent's finding or alert; or the console, for a critical alert still going after N minutes that no case covers and no diagnosis concluded on (CF-78, CF-82)
     New --> InProgress: a person takes it, is assigned it, replies or asks the reporter (CF-45, CF-67), or a change they approved is applied
     state InProgress {
         direction LR

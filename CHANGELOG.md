@@ -37,6 +37,8 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **Make live untested** (AI-23): a SuperAdmin may put a draft not yet tested live, giving a reason (required, at most 300 characters); a second SuperAdmin approves it as any other where there is one, and the version, the request and the audit log say it went live untested and why. `POST /api/v1/ai/agents/{id}/live` takes `{"untested": true, "reason": "…"}`.
 - **Test cases run in parallel** (AI-25): a test run runs four cases at once, each case's state shown as it changes, the results still in the order of the cases. A spending cap reached during the run stops new cases from starting and ends the run failed at that case with the cap's words; *Stop* cancels every case in flight.
 - **The pilot's history in a dialog** (AI-27): the answers logged during an agent's pilots open from *Show pilot history (N)* in the drawer's Pilot step, newest first, 25 at a time with *Show more*, instead of a list in the drawer.
+- **Live knowledge sources** (KN-39 to KN-43, ADR-159): Settings › Knowledge › Add source has a **Mode**, *Ingest* (read into the wiki, as before) or *Live* (looked up when troubleshooting, not copied): a list of addresses (any https page, a Confluence page, a Confluence space search), with no sign-in, a bearer token, or a user and password or API token, kept in the Secret `<release>-knowledge`. A live source is never synced or indexed. Sherlock, the Troubleshooter and the Host doctor get **`lookup_live_sources`**: the pages are read when asked (200 KiB a page, 10 s, kept five minutes), scrubbed, and the parts that bear on the words are given as data with the source, title and address to cite; only the addresses set are read, redirects stay on the site and loopback or link-local addresses are refused. A report no known issue explains is checked against the live pages too, and a confident match is noted on the case with its link. The source's **Test** reads each address and says OK with its size, or what was wrong; the list shows each source's mode.
+- **`issues.reportURL`** (IS-34): the report page's address that other pages link to, a chart value now (`ISSUES_REPORT_URL`, `-issues-report-url`; empty is `/report`).
 
 ### Fixed
 
@@ -71,6 +73,13 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **A case's analysis says what it ruled out** (PM-J5), and an analysis asked again is given what people wrote on the case; an RCA's draft also gives the timeline, the detection and the impact (PM-J6).
 - **Validation rules** (PM-R1, PM-R2): ten more for the alert diagnosis, fifteen more for the nightly audit, three RBAC rules reworded. A rule added in the console under an id that now ships becomes that built-in rule, with the console's words as its edit.
 - **Automation's script rules are said once** (PM-J9), in the Automation screen's tasks and in the two agents' cores alike, with new ones: a copy before a file changes, a check after, timeouts, versions compared part by part.
+- **Settings, rearranged** (CU-15, EM-11, IS-32): SLA comes first under AIOps; **Email** is a section of Settings › General (`#/admin/settings/email` leads there); the report page's **Company or IT name** is set in General too, kept where it was; the report page's address moved to the chart (`issues.reportURL`).
+
+### Removed
+
+- **Publishing to Confluence** (KN-38, ADR-159): the Confluence publisher of known issues and wiki pages, its settings in Settings › Issues, its outbox, nightly check and conflicts in AIOps › Inbox, `/api/v1/knowledge/confluence…`, and the chart's `knowledge.consoleURL` (`CONSOLE_URL`, `-console-url`). Its state (`knowledge-publisher.json` in `<release>-knowledge`) and write token (key `confluence` of the Secret `<release>-knowledge`) are left in place, unread. Pages kept elsewhere are read as live sources instead.
+- **The issue API's tokens** (IS-35): `/api/issues/v1/intake/reports`, `/api/issues/v1/tokens` and Settings › Issues' *API tokens*; the stored tokens stay in `issues-config.json`, unread. Integrations may come back later, likely through MCP.
+- **The status page** (IS-33): Settings › Issues' *All known problems* and its link on the report page.
 
 ## 0.12.0 (2026-11-11)
 
