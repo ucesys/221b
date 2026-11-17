@@ -293,8 +293,8 @@ type Options struct {
 	// nil serves none.
 	Fixes *fixes.Service
 	// --- Knowledge (Phase 12) ---
-	// Knowledge is Mycroft's knowledge and the Confluence publisher,
-	// served under /api/v1/knowledge/; nil leaves them out.
+	// Knowledge is Mycroft's knowledge, served under /api/v1/knowledge/;
+	// nil leaves it out.
 	Knowledge *knowledge.Service
 	// --- Case work (Phase 12, CW-10) ---
 	// Casework keeps the cases, served under /api/v1/aiops/cases; nil

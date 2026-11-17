@@ -1,7 +1,7 @@
 // Package confluence is the little of Confluence's REST API the console
 // needs (Phase 12, ADR-97): reading a space's pages for Mycroft's
-// knowledge, and writing the known-issue and wiki page trees the
-// publisher keeps. Confluence Cloud is reached through REST v2 with an
+// knowledge. The publisher that wrote page trees was removed in 0.12.1
+// (ADR-159). Confluence Cloud is reached through REST v2 with an
 // account's email and API token; Data Center through REST v1
 // (/rest/api) with a personal access token. Every call retries what
 // Confluence asks to be retried: 429 after its Retry-After, and 5xx with
