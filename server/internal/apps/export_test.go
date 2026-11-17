@@ -12,3 +12,6 @@ func SetRenderTimeout(d time.Duration) func() {
 
 // RenderHere renders in the test's own process.
 var RenderHere = renderHere
+
+// RenderSlots is how many renders run at once.
+func RenderSlots() int { return cap(renderSlots) }

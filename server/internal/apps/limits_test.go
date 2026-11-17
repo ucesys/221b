@@ -229,15 +229,16 @@ func TestARenderPastItsMemoryIsRefusedAndTheConsoleGoesOn(t *testing.T) {
 func TestARenderThatDoesNotEndIsStoppedAndGivesBackItsSlot(t *testing.T) {
 	defer apps.SetRenderTimeout(2 * time.Second)()
 	endless := templateChart(`{{ range 2000000000 }}{{ range 2000000000 }}{{ end }}{{ end }}`)
-	errs := make(chan error, 4)
+	n := apps.RenderSlots()
+	errs := make(chan error, n)
 	start := time.Now()
-	for range 4 {
+	for range n {
 		go func() {
 			_, err := apps.Render(context.Background(), endless, nil, "x", "default", "")
 			errs <- err
 		}()
 	}
-	for range 4 {
+	for range n {
 		if err := <-errs; !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "in time") {
 			t.Fatalf("%v", err)
 		}
