@@ -56,7 +56,9 @@ func (s *Server) aiRoutes() {
 	s.handle("GET /api/v1/ai/agents/{id}/pilot", "ai-pilot-log", s.getAIPilot)
 	s.handle("POST /api/v1/ai/agents/{id}/live", "ai-live", s.postAILive)
 	s.handle("POST /api/v1/ai/agents/{id}/versions/{n}/restore", "ai-restore", s.postAIRestore)
-	s.handle("POST /api/v1/ai/pilot/{n}/rate", "ai-pilot-rate", s.postAIRate)
+	// --- History (AI-32): the versions once live and the drafts since. ---
+	s.handle("GET /api/v1/ai/agents/{id}/history", "ai-history", s.getAIHistory)
+	s.handle("GET /api/v1/ai/agents/{id}/history/{kind}/{n}", "ai-history", s.getAIHistoryItem)
 	s.handle("POST /api/v1/ai/tests", "ai-test-save", s.postAICase)
 	s.handle("DELETE /api/v1/ai/tests/{id}", "ai-test-remove", s.deleteAICase)
 }
@@ -712,7 +714,7 @@ func (s *Server) postAIBackToDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.opts.AI.BackToDraft(r.Context(), id); err != nil {
+	if err := s.opts.AI.BackToDraft(r.Context(), id, aiBy(r)); err != nil {
 		s.aiFail(w, err)
 		return
 	}
@@ -897,33 +899,12 @@ func (s *Server) getAIPilot(w http.ResponseWriter, r *http.Request) {
 	answerJSON(w, r, map[string]any{"entries": list})
 }
 
-func (s *Server) postAIRate(w http.ResponseWriter, r *http.Request) {
-	if !s.aiAdmin(w, r) {
-		return
-	}
-	n, err := strconv.Atoi(r.PathValue("n"))
-	if err != nil {
-		jsonError(w, http.StatusNotFound, "no such answer")
-		return
-	}
-	var in struct {
-		Rating int `json:"rating"`
-	}
-	if !decodeAutomation(w, r, &in) {
-		return
-	}
-	if err := s.opts.AI.Rate(r.Context(), n, in.Rating, aiBy(r)); err != nil {
-		s.aiFail(w, err)
-		return
-	}
-	answerJSON(w, r, map[string]bool{"rated": true})
-}
-
 // postAILive puts the draft live: at once when no other SuperAdmin could
 // approve it, else as a request on Administration › Approvals that
 // another SuperAdmin decides (twoperson.KindPrompt). With untested and a
 // reason, a draft not tested goes the same way (Phase 12.1); its version
-// and the records say so.
+// and the records say so. Untested on a console whose own cluster is not
+// production, it goes live at once, with no second approval (AI-34).
 func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 	if !s.aiAdmin(w, r) {
 		return
@@ -959,7 +940,8 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	if a := s.twoPersonAuth(); a != nil && a.OtherSuperAdmin(sess) {
+	direct := untested != "" && !s.localProduction()
+	if a := s.twoPersonAuth(); a != nil && !direct && a.OtherSuperAdmin(sess) {
 		req, err := s.opts.TwoPerson.Add(r.Context(), twoperson.Request{Kind: twoperson.KindPrompt, Agent: id, AgentName: info.Name, Rev: rev, Untested: untested, By: auth.WhoOf(sess)})
 		if err != nil {
 			code := http.StatusConflict
@@ -976,7 +958,12 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 		answerJSONBody(w, map[string]any{"waiting": true, "request": req})
 		return
 	}
-	v, err := s.opts.AI.ApplyLiveWith(r.Context(), id, rev, aiBy(r), untested)
+	note, why := "", "no other SuperAdmin could approve it"
+	if direct {
+		note = "no second approval: the console's own cluster is not production"
+		why = "no second approval needed: the console's own cluster is not production"
+	}
+	v, err := s.opts.AI.ApplyLiveNoted(r.Context(), id, rev, aiBy(r), untested, note)
 	if err != nil {
 		s.aiFail(w, err)
 		return
@@ -985,8 +972,61 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 	if untested != "" {
 		how = "made live untested (reason: " + untested + ")"
 	}
-	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft %d %s as version %d; no other SuperAdmin could approve it", rev, how, v.N))
+	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft %d %s as version %d; %s", rev, how, v.N, why))
+	// A request still waiting for the agent could never be approved now.
+	s.withdrawStale(r, id, 0, fmt.Sprintf("Withdrawn: draft %d went live as version %d without it.", rev, v.N))
 	answerJSON(w, r, map[string]any{"live": v})
+}
+
+// localProduction says whether the console's own cluster (the connection
+// "local") is production, for the untested go-live (AI-34). One whose
+// environment is not known counts as production.
+func (s *Server) localProduction() bool {
+	if s.opts.Clusters == nil {
+		return true
+	}
+	sum, ok := s.opts.Clusters.Summary(clusters.LocalID)
+	if !ok {
+		return true
+	}
+	switch sum.Env {
+	case clusters.EnvStaging, clusters.EnvDevelopment, clusters.EnvOther:
+		return false
+	}
+	return true
+}
+
+// getAIHistory lists the agent's versions once live and the drafts saved
+// since the last went live, newest first (AI-32).
+func (s *Server) getAIHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	list, err := s.opts.AI.History(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	answerJSON(w, r, map[string]any{"entries": list})
+}
+
+// getAIHistoryItem is one version (kind live, by its number) or draft
+// (kind draft, by its revision) whole, to compare (AI-32).
+func (s *Server) getAIHistoryItem(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 0 {
+		jsonError(w, http.StatusNotFound, "no such version")
+		return
+	}
+	v, err := s.opts.AI.HistoryItem(r.Context(), r.PathValue("id"), r.PathValue("kind"), n)
+	if err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	answerJSON(w, r, v)
 }
 
 // applyPrompt puts approved instructions live (Administration › Approvals).

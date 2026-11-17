@@ -242,6 +242,37 @@ export interface Version {
   at: string
   why?: string
   parts?: Record<string, string>
+  /** The draft it was, and how that draft's test ended (AI-32). */
+  rev?: number
+  test?: TestBrief
+}
+
+/** How a draft's test ended, kept with its revision and its version (AI-32). */
+export interface TestBrief {
+  at: string
+  cases: number
+  passed: number
+  state?: string
+}
+
+/** One entry of an agent's history (AI-32): a version once live (n; 0 is the chart's baseline), or a draft by its revision. */
+export interface HistoryEntry {
+  kind: 'live' | 'draft' | 'discarded'
+  n?: number
+  rev?: number
+  by?: string
+  at?: string
+  note?: string
+  inForce?: boolean
+  current?: boolean
+  test?: TestBrief
+}
+
+/** An entry whole: its house instructions, its notes by cluster, and each part of the built-in text. */
+export interface HistoryText extends HistoryEntry {
+  house: string
+  notes?: Record<string, string>
+  parts: { name: string; label: string; text: string }[]
 }
 
 export interface Instructions {
@@ -300,7 +331,6 @@ export interface PilotEntry {
   answer: string
   model: string
   costUSD: number
-  rating?: number
 }
 
 /** The notes' key for every cluster. */
@@ -395,13 +425,16 @@ export const stopTest = (id: string) => call<{ stopping: boolean }>('POST', `/ap
 export const startPilot = (id: string, people: string[], clusters: string[], hours: number) => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/pilot`, { people, clusters, hours })
 export const stopPilot = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/pilot`)
 export const fetchPilot = (id: string) => call<{ entries: PilotEntry[] }>('GET', `/api/v1/ai/agents/${enc(id)}/pilot`)
-export const ratePilot = (n: number, rating: number) => call<{ rated: boolean }>('POST', `/api/v1/ai/pilot/${n}/rate`, { rating })
 /** Live at once when no other SuperAdmin could approve; otherwise a request on Approvals. With a reason, an untested draft goes the same way (Phase 12.1). */
 export const makeLive = (id: string, untested?: { reason: string }) =>
   call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/live`, untested ? { untested: true, reason: untested.reason } : undefined)
 
 /** The longest reason a draft goes live untested. */
 export const MAX_UNTESTED_REASON = 300
+/** The agent's versions once live and the drafts saved since, newest first (AI-32). */
+export const fetchHistory = (id: string) => call<{ entries: HistoryEntry[] }>('GET', `/api/v1/ai/agents/${enc(id)}/history`)
+/** One entry whole: a version by its number, or a draft by its revision (a draft that went live is found as its version). */
+export const fetchHistoryItem = (id: string, kind: 'live' | 'draft', n: number) => call<HistoryText>('GET', `/api/v1/ai/agents/${enc(id)}/history/${kind}/${n}`)
 export const restoreVersion = (id: string, n: number) => call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/versions/${n}/restore`)
 /** Saves an answer of the person's own conversation as a test case. */
 export const saveTestCase = (cluster: string, message: number, name: string, points: string[], agent?: string) => call<{ id: string }>('POST', '/api/v1/ai/tests', { cluster, message, name, points, ...(agent ? { agent } : {}) })

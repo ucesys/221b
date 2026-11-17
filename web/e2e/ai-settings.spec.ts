@@ -129,6 +129,14 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Draft')
   await expect(drawer.getByTestId('ins-test')).toBeEnabled()
   await expect(drawer.getByTestId('ins-pilot')).toBeDisabled()
+  // History (AI-32): the draft just saved, compared with the version in force, field by field.
+  await drawer.getByTestId('ins-history').click()
+  const history = page.getByTestId('history-dialog')
+  await expect(history.getByTestId('history-current')).toHaveCount(1)
+  await expect(history.getByTestId('history-in-force')).toHaveCount(1)
+  await expect(history.getByTestId('history-pair')).toContainText('→ Draft')
+  await history.getByTestId('history-close').click()
+  await expect(history).toHaveCount(0)
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=pilot] [data-testid=ins-step-why]')).toHaveText('Run the tests first: a pilot serves a tested draft.')
   // An untested draft may go live only with a reason (Phase 12.1): the confirmation waits for one.
   await drawer.getByTestId('ins-live-untested').click()

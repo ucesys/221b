@@ -452,6 +452,29 @@ describe('an agent’s built-in text, stages and context', () => {
     expect(screen.getByTestId('agent-drawer')).toBeTruthy()
   })
 
+  it('has Show results, History and Discard the draft as buttons in one row with Save draft (AI-31), History opening its dialog (AI-32)', async () => {
+    const test: TestRun = { rev: 3, at: '2026-11-05T11:00:00Z', by: 'ann', cases: 1, passed: 1, same: 0, costUSD: 0.1, estimate: 0.1, state: 'done', results: [] }
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'test', by: 'ann', at: '2026-11-05T10:00:00Z', test } })
+    run = test
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    const results = await within(drawer).findByTestId('ins-test-results')
+    const row = within(drawer).getByTestId('ins-save-draft').parentElement!
+    for (const id of ['ins-test-results', 'ins-history', 'ins-discard']) {
+      const b = within(drawer).getByTestId(id)
+      expect(b.parentElement).toBe(row)
+      expect(b.className).toBe('rk-btn')
+    }
+    expect(results.textContent).toBe('Show results')
+    expect(within(drawer).getByTestId('ins-last-test').querySelector('button')).toBeNull()
+    fireEvent.click(within(drawer).getByTestId('ins-history'))
+    expect(await screen.findByTestId('history-dialog')).toBeTruthy()
+    await waitFor(() => expect(calls.some((c) => /\/api\/v1\/ai\/agents\/[a-zA-Z]+\/history$/.test(c.url))).toBe(true))
+    fireEvent.click(screen.getByTestId('history-close'))
+    expect(screen.queryByTestId('history-dialog')).toBeNull()
+  })
+
   it('opens the test dialog as the test starts, and shows a run in flight in the drawer to open again (Phase 12.1)', async () => {
     ins = instructions({ draft: { rev: 3, house: 'x', stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z' } })
     render(<AgentsSection />)

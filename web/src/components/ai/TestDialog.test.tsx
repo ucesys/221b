@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TestRun } from '../../api/ai'
-import { caseRows, POLL_MS, progressText, TestDialog } from './TestDialog'
+import { caseRows, POLL_MS, progressText, stoppable, TestDialog } from './TestDialog'
 
 const check = (what: string, ok: boolean) => ({ what, ok })
 
@@ -113,6 +113,31 @@ describe('the test dialog', () => {
     fireEvent.click(stop)
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/v1/ai/agents/troubleshooter/tests/stop'))).toBe(true))
     expect(within(dlg).getByTestId('test-dialog-state').textContent).toBe('Stopping…')
+  })
+
+  it('offers Stop only while there is work left, and a Close button closes it (AI-30)', async () => {
+    const done = running().planned!.map((p) => ({ ...p, state: p.state === 'failed' ? ('failed' as const) : ('passed' as const) }))
+    // Every case and real question done, the run being kept: nothing to stop.
+    run = running({ planned: done, replaysPlanned: 1, replays: [{ question: 'Q?', cluster: 'local', before: 'a', after: 'b', same: false, costUSD: 0 }] })
+    const onClose = vi.fn()
+    render(<TestDialog agentId="troubleshooter" agentName="Troubleshooter" draftRev={3} onClose={onClose} />)
+    const dlg = await screen.findByTestId('test-dialog')
+    await waitFor(() => expect(within(dlg).getByTestId('test-dialog-state').textContent).toBe('Finishing…'))
+    expect(within(dlg).queryByTestId('test-dialog-stop')).toBeNull()
+    const close = within(dlg).getByTestId('test-dialog-close')
+    expect(close.textContent).toBe('Close')
+    fireEvent.click(close)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(calls.some((c) => c.url.endsWith('/tests/stop'))).toBe(false)
+  })
+
+  it('knows when a run has anything left to stop', () => {
+    const done = running().planned!.map((p) => ({ ...p, state: 'passed' as const }))
+    expect(stoppable(running())).toBe(true)
+    expect(stoppable(running({ planned: [] }))).toBe(true)
+    expect(stoppable(running({ planned: done, replaysPlanned: 2, replays: [] }))).toBe(true)
+    expect(stoppable(running({ planned: done, replaysPlanned: 0 }))).toBe(false)
+    expect(stoppable(running({ state: 'done' }))).toBe(false)
   })
 
   it('reads the run again while it runs, and stops reading once it ended, read-only', async () => {

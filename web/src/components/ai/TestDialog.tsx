@@ -6,7 +6,6 @@ import { useShowCosts } from '../../lib/costs'
 import { trapTab } from '../../lib/focus'
 import { fmtTs } from '../../lib/format'
 import { layer } from '../../lib/layer'
-import { CloseIcon } from '../Icons'
 
 interface Props {
   agentId: string
@@ -70,9 +69,24 @@ export function progressText(run: TestRun): string {
 }
 
 /**
+ * Whether the run has anything left to stop (AI-30): a case waiting or
+ * running, or real questions still to replay. A run whose work is all done
+ * is only being kept, and offers no Stop.
+ */
+export function stoppable(run: TestRun): boolean {
+  if (run.state !== 'running') return false
+  const planned = run.planned ?? []
+  // Claimed, its cases not listed yet.
+  if (!planned.length) return true
+  if (planned.some((p) => p.state === 'waiting' || p.state === 'running')) return true
+  return (run.replays?.length ?? 0) < (run.replaysPlanned ?? 0)
+}
+
+/**
  * A test run, large enough to read (Phase 12.1): while it runs, each
- * case's state as it changes, read again every two seconds, with a Stop;
- * after, the same read-only. Each case shows its question, what it
+ * case's state as it changes, read again every two seconds, with a Stop
+ * while there is anything left to stop; after, the same read-only. A Close
+ * button closes it, as Escape does (AI-30). Each case shows its question, what it
  * expected line by line, met or not, and what the agent did; the real
  * questions replayed show the earlier answer beside the draft's. Closing
  * it does not stop the run.
@@ -127,6 +141,7 @@ export function TestDialog({ agentId, agentName, draftRev, onClose, onEnded }: P
   }, [agentId])
   const state: RunState = run?.state ?? 'done'
   const running = state === 'running'
+  const canStop = !!run && stoppable(run)
   const stop = () => {
     setStopping(true)
     stopTest(agentId).catch((e: unknown) => {
@@ -168,17 +183,17 @@ export function TestDialog({ agentId, agentName, draftRev, onClose, onEnded }: P
           )}
           {run && (
             <span className="rk-pill" data-tone={RUN_TONE[state]} data-testid="test-dialog-state" data-state={state}>
-              {stopping && running ? 'Stopping…' : RUN_TEXT[state]}
+              {stopping && running ? 'Stopping…' : running && !canStop ? 'Finishing…' : RUN_TEXT[state]}
             </span>
           )}
           <span style={{ flex: '1 1 auto' }} />
-          {running && (
+          {canStop && (
             <button className="rk-btn" onClick={stop} disabled={stopping} data-testid="test-dialog-stop">
               Stop
             </button>
           )}
-          <button ref={closeRef} className="rk-icon-btn" aria-label="Close the tests" title={running ? 'Close (Esc); the tests go on' : 'Close (Esc)'} onClick={onClose} data-testid="test-dialog-close">
-            <CloseIcon />
+          <button ref={closeRef} className="rk-btn" title={running ? 'Close (Esc); the tests go on' : 'Close (Esc)'} onClick={onClose} data-testid="test-dialog-close">
+            Close
           </button>
         </div>
         <p className="rk-fhint" style={{ margin: 0, fontSize: 12.5 }} aria-live="polite" data-testid="test-dialog-progress">

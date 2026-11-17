@@ -550,6 +550,24 @@ export interface ApprovalRow {
   overtaken?: string
   /** The run an approved run request started. */
   run?: number
+  /** What a console change asks for (AI-35). */
+  request?: AdminRequest
+}
+
+/** What a console change that waits for a second SuperAdmin asks for (AI-35). */
+export interface AdminRequest {
+  kind: 'environment' | 'superadmin' | 'prompt'
+  from?: string
+  to?: string
+  user?: string
+  super?: boolean
+  groups?: string[]
+  agent?: string
+  agentName?: string
+  rev?: number
+  /** Why the draft goes live untested; absent for a tested one. */
+  untested?: string
+  withdrawn?: boolean
 }
 
 /** What waits for this person, first, then what was decided, newest first. */

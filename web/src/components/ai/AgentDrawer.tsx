@@ -33,7 +33,6 @@ import {
 } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { copyText } from '../../lib/clipboard'
-import { lineDiff } from '../../lib/linediff'
 import { fmtTs } from '../../lib/format'
 import { Card, Drawer } from '../Drawer'
 import { Select } from '../Select'
@@ -41,6 +40,8 @@ import { AgentJobs } from '../aiops/AgentJobs'
 import { ModelPicker } from './ModelPicker'
 import { TestDialog } from './TestDialog'
 import { PilotHistoryDialog } from './PilotHistoryDialog'
+import { HistoryDialog } from './HistoryDialog'
+import { TextDiff } from './TextDiff'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useShowCosts } from '../../lib/costs'
 import { Unsaved, useUnsaved } from '../../lib/unsaved'
@@ -508,6 +509,8 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
   // shows how many there are.
   const [history, setHistory] = useState(false)
   const [historyCount, setHistoryCount] = useState<number | null>(null)
+  // The versions and drafts, to compare (AI-32).
+  const [versions, setVersions] = useState(false)
   const piloted = ins?.draft?.pilot?.started
   useEffect(() => {
     if (!piloted) return
@@ -747,9 +750,6 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
           <span aria-live="polite">
             Tests running: {running.cases} of {running.planned?.length ?? running.cases} cases…
           </span>
-          <button className="rk-btn" onClick={() => setDialog(true)} data-testid="ins-test-show">
-            Show tests
-          </button>
         </p>
       )}
       {d?.test && (
@@ -761,14 +761,6 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
               {' '}
               · {d.test.cases - d.test.passed} failed
             </span>
-          )}
-          {!running && (
-            <>
-              {' '}
-              <button className="rk-link" onClick={() => setDialog(true)} data-testid="ins-test-results" style={{ fontSize: 12.5 }}>
-                Show results
-              </button>
-            </>
           )}
         </p>
       )}
@@ -816,8 +808,22 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         >
           Save draft
         </button>
+        {running ? (
+          <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDialog(true)} data-testid="ins-test-show">
+            Show tests
+          </button>
+        ) : (
+          d?.test && (
+            <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDialog(true)} data-testid="ins-test-results">
+              Show results
+            </button>
+          )
+        )}
+        <button className="rk-btn" aria-haspopup="dialog" onClick={() => setVersions(true)} data-testid="ins-history">
+          History
+        </button>
         {d && (
-          <button className="rk-link" disabled={busy} onClick={() => void act(() => discardDraft(agent.id), 'Discarded the draft.')} data-testid="ins-discard" style={{ fontSize: 12.5 }}>
+          <button className="rk-btn" disabled={busy} onClick={() => void act(() => discardDraft(agent.id), 'Discarded the draft.')} data-testid="ins-discard">
             Discard the draft
           </button>
         )}
@@ -890,6 +896,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
           version={(ins.versions[0]?.n ?? 0) + 1}
           busy={busy}
           error={error}
+          localEnv={ov.clusters.find((c) => c.id === 'local')?.env}
           onCancel={() => {
             setPanel('')
             setError('')
@@ -904,6 +911,20 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         />
       )}
       {history && <PilotHistoryDialog agentId={agent.id} agentName={agent.name} onClose={() => setHistory(false)} onCount={setHistoryCount} />}
+      {versions && (
+        <HistoryDialog
+          agentId={agent.id}
+          agentName={agent.name}
+          clusterName={(id) => (id === ALL_CLUSTERS ? 'every cluster' : (ov.clusters.find((c) => c.id === id)?.name ?? id))}
+          restoreBlocked={edited ? 'Save or undo your edits first.' : busy ? 'Wait for the change under way.' : ''}
+          onRestore={async (n) => {
+            const r = await restoreVersion(agent.id, n)
+            onToast?.(r.waiting ? `Version ${n} waits for another SuperAdmin on Approvals.` : `Version ${n} is live again, as version ${r.live?.n}.`)
+            await load()
+          }}
+          onClose={() => setVersions(false)}
+        />
+      )}
       {ins.versions.length > 0 && (
         <details>
           <summary style={{ fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Versions ({ins.versions.length})</summary>
@@ -1027,7 +1048,7 @@ function PartEditor({
 const STAGE_TEXT: Record<string, string> = {
   draft: 'Edits saved as a draft change nothing for anyone yet.',
   test: 'The draft answers the recorded cases and recent questions again; nothing reads the cluster.',
-  pilot: 'The tested draft answers for chosen people or clusters for a while; both versions are logged, to rate.',
+  pilot: 'The tested draft answers for chosen people or clusters for a while; both versions are logged, to compare.',
   live: 'In force for everyone; the version before is kept, to restore in one click. A second SuperAdmin approves where there is one.',
 }
 
@@ -1156,35 +1177,47 @@ function Stepper({
   )
 }
 
-/** A line diff of two texts, as Automation shows a script's versions. */
+/** A line diff of two texts, as Helm › History shows a revision's (AI-32). */
 function Diff({ label, from, to, testId }: { label: string; from: string; to: string; testId: string }) {
-  const d = lineDiff(from, to)
-  return (
-    <div data-testid={testId}>
-      <div className="rk-fhint">
-        {label}: {d.added || d.removed ? `+${d.added} −${d.removed} lines` : 'no change'}
-      </div>
-      {d.text && (
-        <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
-          {d.text}
-        </pre>
-      )}
-    </div>
-  )
+  return <TextDiff label={label} from={from} to={to} testId={testId} />
 }
 
 /**
  * Making an untested draft live (Phase 12.1): a SuperAdmin says why it
  * cannot wait for a test. Its version and the audit log keep the reason;
- * a second SuperAdmin approves it where there is one, as any other.
+ * a second SuperAdmin approves it where there is one, as any other, unless
+ * the console's own cluster is not production (AI-34): then it goes live
+ * at once.
  */
-function UntestedConfirm({ agentName, version, busy, error, onConfirm, onCancel }: { agentName: string; version: number; busy: boolean; error: string; onConfirm: (reason: string) => void; onCancel: () => void }) {
+function UntestedConfirm({
+  agentName,
+  version,
+  busy,
+  error,
+  localEnv,
+  onConfirm,
+  onCancel,
+}: {
+  agentName: string
+  version: number
+  busy: boolean
+  error: string
+  /** The environment of the console's own cluster, when known. */
+  localEnv?: string
+  onConfirm: (reason: string) => void
+  onCancel: () => void
+}) {
+  const offProduction = !!localEnv && localEnv !== 'production'
   const [reason, setReason] = useState('')
   return (
     <ConfirmDialog title="Make the draft live untested?" confirm="Make live untested" danger busy={busy} disabled={!reason.trim()} error={error} onConfirm={() => onConfirm(reason.trim())} onCancel={onCancel}>
       <span>
-        The draft becomes the {agentName}’s instructions for everyone, as version {version}, without a test. Its version and the audit log say it went live untested, with your reason. Where there is another SuperAdmin, they approve it
-        first.
+        The draft becomes the {agentName}’s instructions for everyone, as version {version}, without a test. Its version and the audit log say it went live untested, with your reason.{' '}
+        {offProduction ? (
+          <span data-testid="ins-untested-direct">The console’s own cluster is {localEnv}, not production, so it goes live at once: no second SuperAdmin approves it.</span>
+        ) : (
+          'Where there is another SuperAdmin, they approve it first.'
+        )}
       </span>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 600 }}>
         Why it cannot wait for a test
@@ -1270,7 +1303,7 @@ function PilotPanel({ id, ins, ov, onDone }: { id: string; ins: Instructions; ov
         </>
       ) : (
         <>
-          <span>The draft answers for the people or clusters chosen, for a while; the answers of both versions are logged meanwhile, to rate.</span>
+          <span>The draft answers for the people or clusters chosen, for a while; the answers of both versions are logged meanwhile, to compare.</span>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             People (their email addresses or user names, separated by commas)
             <span className="rk-field">

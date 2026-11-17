@@ -104,7 +104,7 @@ function LastCell({ j }: { j: Job }) {
 
 /**
  * AIOps › Jobs › Schedule (Phase 12, JB-15, FX-13): every job that starts an agent with
- * nobody at the screen, and the scheduled backup. Each shows its agent,
+ * a schedule or an event, and the scheduled backup. Each shows its agent,
  * when it runs in plain words, its budget, its last and next run and its
  * state; one opens in a drawer (#/aiops/jobs/<id>) with Run now, Pause,
  * its settings and its runs.
@@ -139,8 +139,8 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
         </h2>
       </div>
       <p style={{ margin: 0, color: 'var(--fg2)', lineHeight: 1.5, fontSize: 13 }}>
-        Jobs that start an agent with nobody at the screen. Open one to see exactly what it does: its agent, the instructions it sends, what it reads and what it may make, all of which may be changed. Their output is read-only: reports,
-        notes, wiki pages. A change they want waits in the Inbox. Who may edit jobs is set in{' '}
+        Jobs that start an agent on schedule or events. Open one to see exactly what it does: its agent, the instructions it sends, what it reads and what it may make, all of which may be changed. Their output is read-only: reports, notes,
+        wiki pages. A change they want waits in the Inbox. Who may edit jobs is set in{' '}
         <a className="rk-link" href={adminHref('settings', ['jobs'])}>
           Administration › Settings
         </a>

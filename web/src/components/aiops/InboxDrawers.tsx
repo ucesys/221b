@@ -7,6 +7,7 @@ import type { ApprovalRow } from '../../api/automation'
 import { fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
+import { AdminRequestDetail } from './AdminRequest'
 import { DecidedVersion, linkOf, RequestActions, WaitingRunFacts } from './InboxApprovals'
 import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
 import { ConflictCard, DraftRunCard } from './KnowledgeDraft'
@@ -26,10 +27,11 @@ function Missing({ label, what, loaded, onClose, testId }: { label: string; what
 
 /**
  * An approval (CS-06): what waits, who asked and when, and who decided.
- * A console change is decided here, as it has no page of its own; every
- * other kind is reviewed where it lives (Review); a decided script version
- * is read here. A decision someone else made first says who and when
- * (IB-09).
+ * A console change is decided here, with what it asks for in full (AI-35):
+ * for an agent's instructions, the agent, the draft, tested or not, its
+ * test and its diff against the version in force. Every other kind is
+ * reviewed where it lives (Review); a decided script version is read here.
+ * A decision someone else made first says who and when (IB-09).
  */
 export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: string; row: ApprovalRow | undefined; loaded: boolean; onClose: () => void; onDecided: () => void }) {
   const [conflict, setConflict] = useState('')
@@ -98,6 +100,7 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
         </p>
       )}
       {row.kind === 'run' && <WaitingRunFacts row={row} />}
+      {row.kind === 'admin' && <AdminRequestDetail row={row} />}
       {conflict && (
         <p className="tb-err" role="alert" data-testid="approval-conflict">
           {conflict}
@@ -105,7 +108,11 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       )}
       <p className="tb-hint" style={{ margin: 0 }}>
         {row.kind === 'admin'
-          ? 'A console change has no page of its own: it is decided here. Whoever asked may only withdraw it.'
+          ? row.state === 'pending'
+            ? row.own
+              ? 'You asked for this: another SuperAdmin approves or rejects it. You can only withdraw it.'
+              : 'You can approve or reject it here. The person who asked can only withdraw it.'
+            : 'Decided.'
           : row.kind === 'run'
             ? 'A run’s own values on production are weighed as a change of the fleet’s values; these need a second admin. It is decided here: approving starts the run as whoever asked; whoever asked may only withdraw it.'
             : row.state === 'pending'

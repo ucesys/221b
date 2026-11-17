@@ -574,6 +574,11 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 			}
 			r := run.clone()
 			p.Draft.Test = &r
+			for i := range p.Revisions {
+				if p.Revisions[i].Rev == rev {
+					p.Revisions[i].Test = briefOf(&r)
+				}
+			}
 			if p.Draft.Stage == StageDraft {
 				p.Draft.Stage = StageTest
 			}

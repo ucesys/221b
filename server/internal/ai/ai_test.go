@@ -528,7 +528,7 @@ func TestTheTestRunnerUsesRecordedResults(t *testing.T) {
 }
 
 // A pilot serves the draft to the people and clusters named, until it
-// ends; every answer of the agent meanwhile is logged and can be rated.
+// ends; every answer of the agent meanwhile is logged, to compare.
 func TestAPilotServesTheDraftToItsPeople(t *testing.T) {
 	w := setup(t, nil)
 	ctx := context.Background()
@@ -573,17 +573,26 @@ func TestAPilotServesTheDraftToItsPeople(t *testing.T) {
 	if len(log) != 2 || !strings.Contains(log[0].Version+log[1].Version, "pilot") || !strings.Contains(log[0].Version+log[1].Version, "live") {
 		t.Fatalf("the log: %+v", log)
 	}
-	if err := w.ai.Rate(ctx, log[0].N, 1, "ann"); err != nil {
-		t.Fatal(err)
-	}
-	if log, _ = w.ai.Pilot(ctx, Sherlock); log[0].Rating != 1 || log[0].RatedBy != "ann" {
-		t.Fatalf("rated: %+v", log[0])
-	}
 	if err := w.ai.StopPilot(ctx, Sherlock); err != nil {
 		t.Fatal(err)
 	}
 	if a := ask("bob@corp.example"); a.Version != "live" {
 		t.Fatal("the pilot outlived its stop")
+	}
+}
+
+// A pilot log an older console kept with ratings reads as before (AI-29):
+// the ratings are ignored, and dropped when the log is next written.
+func TestAPilotLogWithRatingsStillReads(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	old := `{"next":2,"entries":[{"n":1,"agent":"sherlock","version":"pilot","who":"bob","question":"Why?","answer":"Because.","rating":1,"ratedBy":"ann"},{"n":2,"agent":"sherlock","version":"live","who":"eve","question":"Why?","answer":"So.","rating":-1,"ratedBy":"ann"}]}`
+	if _, err := w.kv.SaveKey(ctx, PilotKey, []byte(old), ""); err != nil {
+		t.Fatal(err)
+	}
+	log, err := w.ai.Pilot(ctx, Sherlock)
+	if err != nil || len(log) != 2 || log[0].N != 2 || log[1].Answer != "Because." {
+		t.Fatalf("the log: %+v %v", log, err)
 	}
 }
 

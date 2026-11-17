@@ -44,6 +44,27 @@ type approvalRow struct {
 	Overtaken string `json:"overtaken,omitempty"`
 	// Run is the run an approved run request started.
 	Run int `json:"run,omitempty"`
+	// Request is what a console change asks for, for its drawer to show
+	// (AI-35).
+	Request *adminRequest `json:"request,omitempty"`
+}
+
+// adminRequest is what a console change that waits for a second
+// SuperAdmin asks for (AI-35): an environment's from and to, the user made
+// a SuperAdmin and how, or the agent and the draft that goes live, tested
+// or not.
+type adminRequest struct {
+	Kind      string   `json:"kind"`
+	From      string   `json:"from,omitempty"`
+	To        string   `json:"to,omitempty"`
+	User      string   `json:"user,omitempty"`
+	Super     bool     `json:"super,omitempty"`
+	Groups    []string `json:"groups,omitempty"`
+	Agent     string   `json:"agent,omitempty"`
+	AgentName string   `json:"agentName,omitempty"`
+	Rev       int      `json:"rev,omitempty"`
+	Untested  string   `json:"untested,omitempty"`
+	Withdrawn bool     `json:"withdrawn,omitempty"`
 }
 
 // The kinds and states of an approval row.

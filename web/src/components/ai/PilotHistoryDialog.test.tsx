@@ -26,7 +26,6 @@ describe('the pilot history dialog (AI-27)', () => {
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
       calls.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
-      if (String(url).endsWith('/rate')) return new Response(JSON.stringify({ rated: true }))
       return new Response(JSON.stringify({ entries }))
     })
   })
@@ -35,7 +34,7 @@ describe('the pilot history dialog (AI-27)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists a long history newest first, a page at a time, scrolled inside the dialog, and rates an answer', async () => {
+  it('lists a long history newest first, a page at a time, scrolled inside the dialog, with nothing to rate (AI-29)', async () => {
     const onCount = vi.fn()
     render(<PilotHistoryDialog agentId="troubleshooter" agentName="Troubleshooter" onClose={() => {}} onCount={onCount} />)
     const dlg = await screen.findByTestId('pilot-history-dialog')
@@ -57,10 +56,10 @@ describe('the pilot history dialog (AI-27)', () => {
     expect(rows()).toHaveLength(60)
     expect(within(dlg).queryByTestId('pilot-history-more')).toBeNull()
     expect(rows()[59]!.textContent).toContain('Question 1?')
-    const good = within(rows()[0]!).getByTestId('pilot-history-good')
-    fireEvent.click(good)
-    await waitFor(() => expect(good.getAttribute('aria-pressed')).toBe('true'))
-    expect(calls.find((c) => c.method === 'POST')).toMatchObject({ url: '/api/v1/ai/pilot/60/rate', body: { rating: 1 } })
+    expect(within(dlg).queryByTestId('pilot-history-good')).toBeNull()
+    expect(within(dlg).queryByTestId('pilot-history-poor')).toBeNull()
+    expect(within(dlg).queryByRole('button', { name: /good|poor/i })).toBeNull()
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
   })
 
   it('says when nothing was logged yet, and Escape closes it', async () => {

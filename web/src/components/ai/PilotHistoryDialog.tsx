@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { fetchPilot, ratePilot, type PilotEntry } from '../../api/ai'
+import { fetchPilot, type PilotEntry } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
 import { trapTab } from '../../lib/focus'
@@ -25,8 +25,8 @@ export function newestFirst(entries: PilotEntry[]): PilotEntry[] {
 }
 
 /**
- * The answers logged during the agent's pilots, both versions', to rate
- * (AI-27): in a dialog of their own, as the test dialog is, since the
+ * The answers logged during the agent's pilots, both versions', to compare
+ * (AI-27; not rated since AI-29): in a dialog of their own, as the test dialog is, since the
  * history can be long. Newest first, a page at a time, scrolled inside the
  * dialog. The server keeps the latest 200 answers of all agents.
  */
@@ -62,15 +62,6 @@ export function PilotHistoryDialog({ agentId, agentName, onClose, onCount }: Pro
       live = false
     }
   }, [agentId])
-  const rate = async (e: PilotEntry, r: number) => {
-    const next = e.rating === r ? 0 : r
-    try {
-      await ratePilot(e.n, next)
-      setEntries((list) => (list ?? []).map((x) => (x.n === e.n ? { ...x, rating: next } : x)))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
   const list = entries ?? []
   const page = list.slice(0, shown)
   const left = list.length - page.length
@@ -109,7 +100,7 @@ export function PilotHistoryDialog({ agentId, agentName, onClose, onCount }: Pro
           </button>
         </div>
         <p className="rk-fhint" style={{ margin: 0, fontSize: 12.5 }}>
-          Every answer of the {agentName} while a draft was piloted, the draft’s and the live version’s alike, newest first. Rate them to compare the two before the draft goes live.
+          Every answer of the {agentName} while a draft was piloted, the draft’s and the live version’s alike, newest first, to compare the two before the draft goes live.
         </p>
         {error && (
           <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
@@ -137,14 +128,6 @@ export function PilotHistoryDialog({ agentId, agentName, onClose, onCount }: Pro
                   </span>
                   <strong>{e.question}</strong>
                   <span style={{ whiteSpace: 'pre-wrap' }}>{e.answer}</span>
-                  <span style={{ display: 'flex', gap: 6 }}>
-                    <button className="rk-btn" aria-pressed={e.rating === 1} onClick={() => void rate(e, 1)} data-testid="pilot-history-good">
-                      Good
-                    </button>
-                    <button className="rk-btn" aria-pressed={e.rating === -1} onClick={() => void rate(e, -1)} data-testid="pilot-history-poor">
-                      Poor
-                    </button>
-                  </span>
                 </li>
               ))}
             </ul>

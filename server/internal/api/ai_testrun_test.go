@@ -24,6 +24,8 @@ func TestAIMakeLiveUntestedAPI(t *testing.T) {
 	srv, ops, _, _, _, aud := aiSetupWith(t, nil)
 	ops2 := signIn(t, srv, "ops2@corp.example")
 	viewer := signIn(t, srv, "viewer@corp.example")
+	// On production; off it, no second approval is needed (AI-34).
+	setLocalEnv(t, srv, ops, "production")
 	var v ai.InstructionsView
 	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh PCI findings first."}`, 200, &v)
 	live := srv.URL + "/api/v1/ai/agents/auditor/live"
@@ -180,6 +182,7 @@ func TestAITestRunProgressAndStopAPI(t *testing.T) {
 func TestAINewDraftDiscardsTheEarlierAPI(t *testing.T) {
 	srv, ops, _, aiSvc, _, aud := aiSetupWith(t, nil)
 	ops2 := signIn(t, srv, "ops2@corp.example")
+	setLocalEnv(t, srv, ops, "production")
 	ctx := context.Background()
 	draft := srv.URL + "/api/v1/ai/agents/auditor/draft"
 	live := srv.URL + "/api/v1/ai/agents/auditor/live"

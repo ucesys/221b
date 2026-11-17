@@ -274,6 +274,7 @@ func (s *Service) SaveDraftReplacing(ctx context.Context, id, house string, note
 		if partsGiven {
 			p.Draft.Parts = draftParts(parts, builtIn)
 		}
+		p.addRevision(p.Draft, "")
 		out.Rev = p.Draft.Rev
 		return nil
 	})
@@ -287,11 +288,16 @@ func (s *Service) SaveDraftReplacing(ctx context.Context, id, house string, note
 	return out, nil
 }
 
-// DiscardDraft drops the agent's draft, and with it any pilot.
+// DiscardDraft drops the agent's draft, and with it any pilot. Its
+// revisions stay in the history, marked discarded, until a draft goes live
+// (AI-32).
 func (s *Service) DiscardDraft(ctx context.Context, id string) error {
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, _ string) error {
 		if p.Draft == nil {
 			return ErrNotFound
+		}
+		for i := range p.Revisions {
+			p.Revisions[i].Discarded = true
 		}
 		p.Draft = nil
 		return nil
@@ -330,7 +336,7 @@ func (s *Service) ResolveBaseline(ctx context.Context, id, action, by string) er
 }
 
 // StartPilot serves the tested draft to chosen people or clusters for a
-// while: both versions' answers are logged meanwhile, and may be rated.
+// while: both versions' answers are logged meanwhile, to compare.
 func (s *Service) StartPilot(ctx context.Context, id string, people, clusters []string, d time.Duration, by string) error {
 	if d <= 0 || d > MaxPilot {
 		return fmt.Errorf("%w: a pilot lasts between an hour and %d days", ErrInvalid, int(MaxPilot.Hours()/24))
@@ -371,18 +377,20 @@ func (s *Service) StopPilot(ctx context.Context, id string) error {
 // BackToDraft returns the draft to its first stage (Phase 12, wave 5,
 // AS-03): a pilot ends, its test no longer counts, and it takes a new
 // revision, so an approval asked for it no longer applies.
-func (s *Service) BackToDraft(ctx context.Context, id string) error {
+func (s *Service) BackToDraft(ctx context.Context, id, by string) error {
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, _ string) error {
 		if p.Draft == nil {
 			return ErrNotFound
 		}
 		p.Revs++
 		d := p.Draft
+		was := d.Rev
 		d.Rev, d.Stage, d.Test, d.Request = p.Revs, StageDraft, nil, 0
 		if d.Pilot != nil && s.opts.Now().Before(d.Pilot.Until) {
 			d.Pilot.Until = s.opts.Now().UTC()
 		}
 		d.Pilot = nil
+		p.addRevision(&Draft{Rev: d.Rev, House: d.House, Notes: d.Notes, Parts: d.Parts, By: by, At: s.opts.Now().UTC()}, fmt.Sprintf("draft %d sent back to its first stage", was))
 		return nil
 	})
 	return err
@@ -438,6 +446,14 @@ func (s *Service) ApplyLive(ctx context.Context, id string, rev int, by string) 
 // ApplyLiveWith is ApplyLive for a draft that goes live untested, with the
 // reason given, which its version shows (Phase 12.1); "" for a tested one.
 func (s *Service) ApplyLiveWith(ctx context.Context, id string, rev int, by, untested string) (Version, error) {
+	return s.ApplyLiveNoted(ctx, id, rev, by, untested, "")
+}
+
+// ApplyLiveNoted is ApplyLiveWith with a note its version adds to how it
+// went live: why no second SuperAdmin approved it (AI-34). The draft's
+// revisions since the last go-live are dropped; the draft itself is kept
+// as the version, with its revision and its test (AI-32).
+func (s *Service) ApplyLiveNoted(ctx context.Context, id string, rev int, by, untested, note string) (Version, error) {
 	var v Version
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, baseline string) error {
 		if p.Draft == nil || p.Draft.Rev != rev {
@@ -450,9 +466,18 @@ func (s *Service) ApplyLiveWith(ctx context.Context, id string, rev int, by, unt
 		if p.Draft.Restored > 0 {
 			why = fmt.Sprintf("restored version %d", p.Draft.Restored)
 		}
+		if note != "" {
+			why += "; " + note
+		}
 		p.setParts(p.Draft.Parts, s.builtIn(id))
-		v = p.goLive(p.Draft.House, p.Draft.Notes, baseline, by, why, s.opts.Now())
-		p.Draft = nil
+		p.goLive(p.Draft.House, p.Draft.Notes, baseline, by, why, s.opts.Now())
+		last := &p.Versions[len(p.Versions)-1]
+		last.Rev = p.Draft.Rev
+		if t := p.Draft.Test; t != nil && t.Rev == p.Draft.Rev {
+			last.Test = briefOf(t)
+		}
+		v = *last
+		p.Draft, p.Revisions = nil, nil
 		return nil
 	})
 	return v, err
@@ -469,6 +494,7 @@ func (s *Service) Restore(ctx context.Context, id string, n int, by string) erro
 		v := p.Versions[i]
 		p.Revs++
 		p.Draft = &Draft{Rev: p.Revs, House: v.House, Notes: v.Notes, Stage: StageDraft, By: by, At: s.opts.Now().UTC(), Restored: n, Parts: cloneParts(v.Parts)}
+		p.addRevision(p.Draft, fmt.Sprintf("restored version %d", n))
 		return nil
 	})
 	return err
@@ -585,14 +611,18 @@ func trimQuestions(ps *Prompts) bool {
 // limit in the ConfigMap's layout.
 const promptsBudget = 440 << 10
 
-// prune keeps the instructions within their budget: the oldest versions
-// not in force go first, then the details of old test runs.
+// prune keeps the instructions within their budget: the oldest drafts
+// kept to compare go first, then the oldest versions not in force, then
+// the details of old test runs.
 func prune(ps *Prompts) {
 	size := func() int {
 		b, _ := json.Marshal(ps)
 		return len(b)
 	}
 	for size() > promptsBudget {
+		if dropRevision(ps) {
+			continue
+		}
 		var most *AgentPrompt
 		for _, p := range ps.Agents {
 			if p != nil && len(p.Versions) > 1 && (most == nil || len(p.Versions) > len(most.Versions)) {
@@ -620,4 +650,25 @@ func prune(ps *Prompts) {
 			return
 		}
 	}
+}
+
+// dropRevision drops the oldest draft kept to compare of the agent that
+// keeps the most, never the draft now; false when there is none.
+func dropRevision(ps *Prompts) bool {
+	var most *AgentPrompt
+	at := -1
+	for _, p := range ps.Agents {
+		if p == nil {
+			continue
+		}
+		i := slices.IndexFunc(p.Revisions, func(r Revision) bool { return p.Draft == nil || r.Rev != p.Draft.Rev })
+		if i >= 0 && (most == nil || len(p.Revisions) > len(most.Revisions)) {
+			most, at = p, i
+		}
+	}
+	if most == nil {
+		return false
+	}
+	most.Revisions = slices.Delete(most.Revisions, at, at+1)
+	return true
 }

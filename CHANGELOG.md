@@ -37,6 +37,8 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **Make live untested** (AI-23): a SuperAdmin may put a draft not yet tested live, giving a reason (required, at most 300 characters); a second SuperAdmin approves it as any other where there is one, and the version, the request and the audit log say it went live untested and why. `POST /api/v1/ai/agents/{id}/live` takes `{"untested": true, "reason": "…"}`.
 - **Test cases run in parallel** (AI-25): a test run runs four cases at once, each case's state shown as it changes, the results still in the order of the cases. A spending cap reached during the run stops new cases from starting and ends the run failed at that case with the cap's words; *Stop* cancels every case in flight.
 - **The pilot's history in a dialog** (AI-27): the answers logged during an agent's pilots open from *Show pilot history (N)* in the drawer's Pilot step, newest first, 25 at a time with *Show more*, instead of a list in the drawer.
+- **History of an agent's instructions** (AI-32): the drawer's *History* opens a dialog with every version that went live (the latest fifty, ten before) and every draft saved since the last went live, each whole with who and when, how it came to be and its test's result; any two compare field by field (house instructions, each part, the notes of each cluster) in the diff Helm › History shows, and a version once live restores from there. A draft that goes live drops the drafts before it and is kept as its version; a discarded draft stays, marked, until then. `GET /api/v1/ai/agents/{id}/history` and `GET /api/v1/ai/agents/{id}/history/{live|draft}/{n}`.
+- **An approval says what it approves** (AI-35): an agent's go-live request on Approvals shows the agent (a link to its drawer), the draft, tested or untested with the reason, its test's result, who asked and when, and the draft's diff against the version in force; a change of environment or a new SuperAdmin says what changes.
 
 ### Fixed
 
@@ -60,6 +62,10 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 
 ### Changed
 
+- **Make live untested off production needs no second approval** (AI-34): where the console's own cluster is staging, development or other, an untested draft goes live at once, still a SuperAdmin's with a reason; its version and the audit log say why no second approval was needed. On production, or with the environment not known, it waits as before.
+- **The test dialog** (AI-30): *Stop* shows only while the run has something left to stop; a *Close* button closes the dialog.
+- **The agent drawer's actions** (AI-31): *Show results* (or *Show tests*), *History* and *Discard the draft* are buttons beside *Save draft*.
+- **Jobs say what starts them** (AI-33): "Jobs start agents on schedule or events", not "with nobody at the screen".
 - **Sherlock moves your screen only when its answer is done** (SR-18): the views it opens during an answer are checked then and made together, in order, once the whole answer is there. An answer you stop, or one that fails, leaves the view as it was and offers **Show in 221B** instead.
 - **Each kind of work has one agent that does it** (SR-20, PM-D1 to PM-D6). Sherlock is the front desk: it answers what a look answers, moves the screen and writes the answer, and hands the rest to its owner: why something fails to the Troubleshooter (the Troubleshoot buttons' reports too), the commands of a change to the Change planner, a review to the Auditor (the Audit button's too), a node's operating system to the Host doctor. It passes their findings on as they stand. The Troubleshooter now holds the troubleshooting manual and says what must change in words; the commands come from the Change planner, so a diagnosis with a fix asks two agents in a row and takes longer. Only the agent asked first hands work over. A hand-over carries more (4,000 bytes of task, 12,000 of context) and the person's question and view go with it. When an agent is off or cannot be asked, Sherlock does that kind of work itself, as before, and says so. An edited Sherlock core is kept as it is. The agents' instructions say this in few words: each agent's are about as long as before the change (the Troubleshooter's longer by the manual it took over), and Sherlock's are about half of what they were (9,406 bytes from 17,505).
 - **Every agent's instructions say only what it learns nowhere else** (PM-D7): not what its tools' descriptions or the engine already say. Sherlock's are 3,511 bytes (17,505 before Phase 12.1's records), the other agents' 2,800 to 4,200.
@@ -71,6 +77,10 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **A case's analysis says what it ruled out** (PM-J5), and an analysis asked again is given what people wrote on the case; an RCA's draft also gives the timeline, the detection and the impact (PM-J6).
 - **Validation rules** (PM-R1, PM-R2): ten more for the alert diagnosis, fifteen more for the nightly audit, three RBAC rules reworded. A rule added in the console under an id that now ships becomes that built-in rule, with the console's words as its edit.
 - **Automation's script rules are said once** (PM-J9), in the Automation screen's tasks and in the two agents' cores alike, with new ones: a copy before a file changes, a check after, timeouts, versions compared part by part.
+
+### Removed
+
+- **Rating the pilot's answers** (AI-29): *Good* and *Poor* are gone from the pilot history, with `POST /api/v1/ai/pilot/{n}/rate`; ratings kept before are ignored.
 
 ## 0.12.0 (2026-11-11)
 

@@ -67,7 +67,7 @@ export function JobsSettings() {
     <section style={{ display: 'flex', flexDirection: 'column', gap: 18 }} aria-label="Jobs" data-testid="jobs-settings">
       <Unsaved when={changed} what="Settings › Jobs" />
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Jobs start agents with nobody at the screen, in{' '}
+        Jobs start agents on schedule or events, in{' '}
         <a className="rk-link" href="#/aiops/jobs">
           AIOps › Jobs
         </a>
