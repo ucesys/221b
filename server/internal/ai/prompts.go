@@ -80,9 +80,21 @@ var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->\n?`)
 func Core(id string, viewChanges bool) string {
 	common := promptFile("common")
 	if id == Sherlock {
-		return sherlock.FrontDesk(viewChanges, watson.Commands()) + "\n\n" + common + "\n\n" + promptFile("sherlock")
+		return sherlock.FrontDesk(viewChanges) + "\n\n" + common + "\n\n" + promptFile("sherlock")
 	}
-	return promptFile(id) + "\n\n" + common + "\n\n" + watson.Commands() + "\n\n" + sherlock.ClusterTextRule
+	core := promptFile(id) + "\n\n" + common
+	if GivesCommands(id) {
+		core += "\n\n" + watson.Commands()
+	}
+	return core + "\n\n" + sherlock.ClusterTextRule
+}
+
+// GivesCommands says whether an agent may give Watson's commands, and so
+// is told what Watson runs: the Change planner, whose work they are, and
+// the Troubleshooter and the Auditor, who give them when no Change planner
+// can be asked. Sherlock is told in its own text.
+func GivesCommands(id string) bool {
+	return id == ChangePlanner || id == Troubleshooter || id == Auditor
 }
 
 // OwnLanes are the kinds of work Sherlock does itself with a roster: each
@@ -98,7 +110,7 @@ func OwnLanes(roster []sherlock.RosterEntry) sherlock.Lanes {
 // OwnWork is the part of Sherlock's instructions for the work it does
 // itself with a roster, "" when every owner can be asked.
 func OwnWork(roster []sherlock.RosterEntry) string {
-	return sherlock.OwnWork(OwnLanes(roster), len(roster) > 0)
+	return sherlock.OwnWork(OwnLanes(roster), len(roster) > 0, watson.Commands())
 }
 
 // --- AI settings, round 2 (Phase 12, wave 5) ---
