@@ -5,6 +5,16 @@ import { aiHref } from '../lib/router'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
+/** The settings this page changes; the company is General's and the targets SLA's. */
+const OWN = ['matchThreshold', 'ratePerHour', 'retentionDays', 'duplicateHours', 'bumpP2At', 'bumpP1At', 'reopenDays', 'fixedDays', 'needInfoDays', 'webhook'] as const
+
+/** This page's fields of draft over the settings as they are now, so a save never puts back what another page changed since. */
+function withOwn(now: Settings, draft: Settings): Settings {
+  const out = { ...now }
+  for (const k of OWN) (out as Record<string, unknown>)[k] = draft[k]
+  return out
+}
+
 /**
  * The issue service's settings (Phase 12, IS-29), for SuperAdmins: the
  * match threshold, the timers and the webhook. The targets are Administration › AI ›
@@ -40,7 +50,7 @@ export function IssueSettings({ open }: { open: boolean }) {
     setError('')
     setNote('')
     try {
-      const s = await saveIssueSettings(draft)
+      const s = await saveIssueSettings(withOwn(await fetchIssueSettings(), draft))
       setSaved(s)
       setDraft(s)
       setNote('Saved.')

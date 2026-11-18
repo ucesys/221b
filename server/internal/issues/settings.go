@@ -45,6 +45,16 @@ type Settings struct {
 	BumpP1At int `json:"bumpP1At"`
 	// Webhook is told of changes, with summaries only (IS-30).
 	Webhook Webhook `json:"webhook"`
+	// ReportURL and StatusPage are what was saved here before 0.12.1:
+	// kept as stored, never read, shown or changed.
+	ReportURL  string `json:"reportURL,omitempty"`
+	StatusPage string `json:"statusPage,omitempty"`
+}
+
+// shown is the settings without what is kept unread.
+func (s Settings) shown() Settings {
+	s.ReportURL, s.StatusPage = "", ""
+	return s
 }
 
 // Webhook is the outgoing notification: generic JSON with a text field a

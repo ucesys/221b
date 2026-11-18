@@ -47,6 +47,21 @@ describe('Administration › AI › Issues', () => {
     expect(sent.company).toBe('Example IT')
   })
 
+  it('saves only its own fields over the settings as they are now: the company and targets changed elsewhere meanwhile stay', async () => {
+    vi.mocked(api.saveIssueSettings).mockImplementation(async (s) => s)
+    render(<IssueSettings open />)
+    const threshold = await screen.findByLabelText('Link to a known issue at')
+    // General and SLA save after this page loaded.
+    vi.mocked(api.fetchIssueSettings).mockResolvedValue({ ...settings, company: 'New IT', targets: { P1: { responseMinutes: 5, resolveMinutes: 60 } } })
+    fireEvent.change(threshold, { target: { value: '70' } })
+    fireEvent.click(screen.getByTestId('issue-settings-save'))
+    await waitFor(() => expect(api.saveIssueSettings).toHaveBeenCalled())
+    const sent = vi.mocked(api.saveIssueSettings).mock.calls[0]![0]
+    expect(sent.matchThreshold).toBe(70)
+    expect(sent.company).toBe('New IT')
+    expect(sent.targets).toEqual({ P1: { responseMinutes: 5, resolveMinutes: 60 } })
+  })
+
   it('has no company, status page, report page address, API tokens or Confluence any more (0.12.1)', async () => {
     render(<IssueSettings open />)
     await screen.findByLabelText('Link to a known issue at')
