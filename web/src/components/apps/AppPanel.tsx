@@ -41,6 +41,7 @@ import { ImageCheckNote, NewerImageNotice } from './NewerImages'
 import { RevisionActions } from './revisionActions'
 import { SelfReleaseCallout, ValuesOriginNote } from './SelfRelease'
 import { useUnsaved } from '../../lib/unsaved'
+import { CredentialPicker } from '../CredentialPicker'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
 export type AppTab = (typeof APP_TABS)[number]
@@ -549,7 +550,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
 /**
  * The application's source, edited in place and saved when a field is
  * left (HA-05, HA-11): the repository, the chart's path, the branch or
- * tag, a token for a private repository, and whether to make the
+ * tag, the credential for a private repository (0.12.1, CR-10), and whether to make the
  * namespace at install. A release the console did not install gets its
  * record here.
  */
@@ -666,7 +667,11 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const [path, setPath] = useState(draft?.path ?? app?.source.path ?? '')
   const [ref, setRef] = useState(draft?.ref ?? app?.source.ref ?? '')
   const [refKind, setRefKind] = useState<RefKind>(draft?.refKind ?? app?.source.refKind ?? 'branch')
-  const [token, setToken] = useState('')
+  // The credential, by id: the saved one, or none; null on a release with
+  // no record yet, until the picker or the person chooses (CR-10).
+  const savedCred = app?.credential ?? ''
+  const [cred, setCred] = useState<string | null>(app ? savedCred : null)
+  const legacyToken = !!app?.hasToken && !app.credMigrated
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
   useUnsaved(state === 'dirty', 'the release’s source')
@@ -689,21 +694,22 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     setRef(app.source.ref)
     setRefKind(app.source.refKind)
     setCreateNs(app.createNamespace ?? false)
+    setCred(app.credential ?? '')
   }, [app])
   // What is typed now, for a save that starts after a repository look-over
   // finished (the blur's closure would be stale).
-  const latest = useRef({ repo, path, ref, refKind, token, createNs })
+  const latest = useRef({ repo, path, ref, refKind, cred, createNs })
   useEffect(() => {
-    latest.current = { repo, path, ref, refKind, token, createNs }
-  }, [repo, path, ref, refKind, token, createNs])
-  const dirty = (createNsNow: boolean, tok: string) => {
+    latest.current = { repo, path, ref, refKind, cred, createNs }
+  }, [repo, path, ref, refKind, cred, createNs])
+  const dirty = (createNsNow: boolean, c: string | null) => {
     const l = latest.current
-    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
+    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || (c !== null && c !== savedCred)
   }
   // pressed: Save or Enter, which reports a missing field; quiet: after a
   // look-over, which saves only what is complete.
-  const save = (createNsNow = latest.current.createNs, tok = latest.current.token, pressed = false, quiet = false) => {
-    if (!canChange || !dirty(createNsNow, tok)) return
+  const save = (createNsNow = latest.current.createNs, c = latest.current.cred, pressed = false, quiet = false) => {
+    if (!canChange || !dirty(createNsNow, c)) return
     const l = latest.current
     if (!l.repo.trim() || !l.ref.trim()) {
       if (quiet) return
@@ -714,7 +720,15 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     }
     setState('saving')
     setError('')
-    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, token: tok || undefined, createNamespace: createNsNow }
+    if (c === null) {
+      if (quiet) return
+      setState('error')
+      setError('Not saved: several credentials cover this repository; choose one.')
+      return
+    }
+    // A record of before 0.12.1 keeps its own token until a credential is chosen.
+    const sendCred = c !== savedCred || !legacyToken
+    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, ...(sendCred ? { credential: c } : {}), createNamespace: createNsNow }
     // One save after another: two fields left in quick succession must not
     // race; and an answer marks the card clean only when nothing was typed
     // since it went out.
@@ -724,10 +738,9 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       .then((r) => {
         if (seq.current === mine) {
           setState('saved')
-          setToken('')
           writeDraft(key, null)
         }
-        onResult(r, !isCard(r) && r.tokenRemoved ? 'Source saved; the token saved for the old repository was removed' : saved ? 'Source saved' : 'Source set')
+        onResult(r, !isCard(r) && r.credentialRemoved ? 'Source saved; its credential does not cover the new repository and was let go' : saved ? 'Source saved' : 'Source set')
       })
       .catch((e: unknown) => {
         if (seq.current === mine) {
@@ -749,7 +762,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     const url = latest.current.repo.trim()
     if (!canChange || !url || (look?.repo === url && look.state !== 'error') || (saved && url === saved.repo && latest.current.path.trim())) return Promise.resolve()
     setLook({ repo: url, state: 'busy', text: 'Looking over the repository…' })
-    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.token || undefined)
+    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.cred || undefined)
       .then((d) => {
         const chart = d.charts[0]
         const filled: string[] = []
@@ -898,19 +911,24 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(
-          app?.hasToken && repo.trim() !== app.source.repo
-            ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)'
-            : app?.hasToken
-              ? 'GitHub token (one is saved; paste a new one to replace it)'
-              : 'GitHub token (for a private repository; kept in the console, never shown again)',
-          token,
-          setToken,
-          app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional',
-          'app-src-token',
-          'password',
-          3,
-        )}
+        <div style={{ gridColumn: 'span 3', minWidth: 0, fontSize: 11.5, fontWeight: 600 }}>
+          <CredentialPicker
+            use="git"
+            address={repo}
+            value={cred}
+            disabled={!canChange}
+            label={legacyToken && cred === savedCred ? 'Credential (the token kept before 0.12.1 is used until one is chosen)' : 'Credential (for a private repository)'}
+            onChange={(v) => {
+              setCred(v)
+              latest.current = { ...latest.current, cred: v }
+              if (v !== null && v !== savedCred) {
+                edited()
+                save(undefined, v)
+              }
+            }}
+            testId="app-src-credential"
+          />
+        </div>
       </div>
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>

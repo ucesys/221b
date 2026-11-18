@@ -1,37 +1,38 @@
 import { useCallback, useEffect, useState } from 'react'
-import { deleteHelmRepo, fetchHelmRepos, retestHelmRepo, saveHelmRepo, testHelmRepo, type HelmRepository, type HelmRepositoryInput, type RepoAuth, type RepoTest } from '../../api/apps'
+import { deleteHelmRepo, fetchHelmRepos, retestHelmRepo, saveHelmRepo, testHelmRepo, type HelmRepository, type HelmRepositoryInput, type RepoTest } from '../../api/apps'
+import { fetchCredentials } from '../../api/credentials'
 import { fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { CredentialPicker } from '../CredentialPicker'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 const KIND: Record<HelmRepository['kind'], string> = { helm: 'Helm repository', oci: 'OCI registry' }
 
-/** How a repository is signed in to, in words. */
-function authText(r: HelmRepository): string {
-  if (r.auth === 'basic') return `User ${r.username ?? ''} and a password${r.hasSecret ? '' : ' (not given)'}`
-  if (r.auth === 'token') return `A token${r.username ? ` for ${r.username}` : ''}${r.hasSecret ? '' : ' (not given)'}`
-  return 'None'
+/** How a repository signs in, in words: its credential by name (CR-11), or its own of before 0.12.1. */
+function authText(r: HelmRepository, names: Record<string, string>): string {
+  if (r.credential) return names[r.credential] ?? 'A credential'
+  if (!r.credMigrated && r.auth === 'basic') return `User ${r.username ?? ''} and a password, kept before 0.12.1`
+  if (!r.credMigrated && r.auth === 'token') return 'A token kept before 0.12.1'
+  return 'None (public)'
 }
 
-/** A repository as the editor holds it. */
+/** A repository as the editor holds it: its credential by id, null until chosen. */
 interface Draft {
   name: string
   kind: 'helm' | 'oci'
   url: string
-  auth: RepoAuth
-  username: string
-  secret: string
+  credential: string | null
 }
 
-const blank: Draft = { name: '', kind: 'helm', url: '', auth: 'none', username: '', secret: '' }
+const blank: Draft = { name: '', kind: 'helm', url: '', credential: null }
 
 /**
  * Settings › Applications (Phase 12, wave 5, HR-02, HR-03): the Helm
  * repositories and OCI registries applications install charts from
  * besides git. A SuperAdmin adds, changes, tests and removes them; those
- * who manage applications see the list. A password or token is written
- * and never shown again: the list says whether one is kept.
+ * who manage applications see the list. Each names a credential of
+ * Settings › Credentials (0.12.1, CR-11), chosen by name.
  */
 export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void }) {
   const [list, setList] = useState<HelmRepository[] | null>(null)
@@ -40,6 +41,14 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
   const [editing, setEditing] = useState<{ draft: Draft; saved?: HelmRepository } | null>(null)
   const [removing, setRemoving] = useState<HelmRepository | null>(null)
   const [testing, setTesting] = useState('')
+  // The credentials' names, for the list (anyone who reads it may read them).
+  const [names, setNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    fetchCredentials().then(
+      (v) => setNames(Object.fromEntries((v.credentials ?? []).map((c) => [c.id, c.name]))),
+      () => undefined,
+    )
+  }, [list])
   const load = useCallback(() => {
     fetchHelmRepos().then(
       (v) => {
@@ -84,7 +93,7 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640, fontSize: 13 }} data-testid="helm-repos-table">
             <thead>
               <tr>
-                {['Name', 'Kind', 'Address', 'Sign-in', 'Last test', ''].map((h, i) => (
+                {['Name', 'Kind', 'Address', 'Credential', 'Last test', ''].map((h, i) => (
                   <th key={i} style={th}>
                     {h}
                   </th>
@@ -101,7 +110,9 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
                   <td style={{ ...td, overflowWrap: 'anywhere' }} className="rk-mono">
                     {r.url}
                   </td>
-                  <td style={td}>{authText(r)}</td>
+                  <td style={td} data-testid="helm-repo-credential">
+                    {authText(r, names)}
+                  </td>
                   <td style={td} data-testid="helm-repo-tested">
                     {r.testedAt ? (
                       <span title={r.tested} style={{ color: r.testOk ? undefined : 'var(--err)' }}>
@@ -120,7 +131,7 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
                         <button
                           className="rk-btn"
                           data-size="sm"
-                          onClick={() => setEditing({ saved: r, draft: { name: r.name, kind: r.kind, url: r.url, auth: r.auth, username: r.username ?? '', secret: '' } })}
+                          onClick={() => setEditing({ saved: r, draft: { name: r.name, kind: r.kind, url: r.url, credential: r.credMigrated || r.credential ? (r.credential ?? '') : null } })}
                           data-testid="helm-repo-edit"
                         >
                           Edit
@@ -174,13 +185,9 @@ const th: React.CSSProperties = { fontSize: 12, color: 'var(--fg2)', fontWeight:
 const td: React.CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', verticalAlign: 'top' }
 const fieldLabel: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }
 
-/** The input a draft sends: the secret only when one was typed, or to remove it with sign-in none. */
-function inputOf(d: Draft, saved?: HelmRepository): HelmRepositoryInput {
-  const input: HelmRepositoryInput = { kind: d.kind, url: d.url.trim(), auth: d.auth }
-  if (d.auth !== 'none') input.username = d.username.trim()
-  if (d.secret) input.secret = d.secret
-  else if (d.auth === 'none' && saved?.hasSecret) input.secret = ''
-  return input
+/** The input a draft sends: its kind, address and credential. */
+function inputOf(d: Draft): HelmRepositoryInput {
+  return { kind: d.kind, url: d.url.trim(), ...(d.credential ? { credential: d.credential } : {}) }
 }
 
 /** Adds or changes a repository, with Test before or after saving (HR-03). */
@@ -193,12 +200,11 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
     setD((x) => ({ ...x, ...p }))
     setTest(null)
   }
-  const moved = !!saved && saved.hasSecret && d.url.trim() !== saved.url
   const save = async () => {
     setBusy(true)
     setError('')
     try {
-      onSaved(await saveHelmRepo(d.name.trim(), inputOf(d, saved)))
+      onSaved(await saveHelmRepo(d.name.trim(), inputOf(d)))
     } catch (e) {
       setError(errorText(e))
       setBusy(false)
@@ -208,14 +214,15 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
     setBusy(true)
     setError('')
     try {
-      setTest(await testHelmRepo({ ...inputOf(d, saved), ...(saved ? { name: saved.name } : {}) }))
+      setTest(await testHelmRepo({ ...inputOf(d), ...(saved ? { name: saved.name } : {}) }))
     } catch (e) {
       setError(errorText(e))
     } finally {
       setBusy(false)
     }
   }
-  const ready = d.name.trim() !== '' && d.url.trim() !== '' && (d.auth === 'none' || ((d.auth !== 'basic' || d.username.trim() !== '') && (d.secret !== '' || (!!saved?.hasSecret && !moved))))
+  // Several credentials covering the address: one must be chosen (CR-10).
+  const ready = d.name.trim() !== '' && d.url.trim() !== '' && d.credential !== null
   return (
     <div className="rk-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="helm-repo-editor">
       <strong style={{ fontSize: 13.5 }}>{saved ? `Change ${saved.name}` : 'Add a repository'}</strong>
@@ -246,46 +253,16 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
           </span>
           <span className="rk-fhint">{d.kind === 'oci' ? 'oci:// with the registry and the path the charts are under; it signs in to every chart under it.' : 'The https:// address of the repository, where its index.yaml is.'}</span>
         </label>
-        <div style={fieldLabel}>
-          Sign-in
-          <div className="rk-seg" role="group" aria-label="Sign-in" style={{ alignSelf: 'flex-start' }}>
-            {(
-              [
-                ['none', 'None'],
-                ['basic', 'User and password'],
-                ['token', 'Token'],
-              ] as const
-            ).map(([k, l]) => (
-              <button key={k} type="button" aria-pressed={d.auth === k} onClick={() => set({ auth: k })} data-testid={`helm-repo-auth-${k}`}>
-                {l}
-              </button>
-            ))}
-          </div>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <CredentialPicker
+            use="helm"
+            address={d.url.trim() && !d.url.includes('://') ? `${d.kind === 'oci' ? 'oci' : 'https'}://${d.url.trim()}` : d.url}
+            value={d.credential}
+            onChange={(v) => set({ credential: v })}
+            label="Credential (user and password, or a token sent as Basic or Bearer; an OCI registry exchanges it for its own token)"
+            testId="helm-repo-credential-picker"
+          />
         </div>
-        {d.auth !== 'none' && (
-          <label style={fieldLabel}>
-            User name{d.auth === 'token' ? ' (optional; some registries want one with the token)' : ''}
-            <span className="rk-field">
-              <input value={d.username} autoComplete="off" onChange={(e) => set({ username: e.target.value })} data-testid="helm-repo-username" />
-            </span>
-          </label>
-        )}
-        {d.auth !== 'none' && (
-          <label style={fieldLabel}>
-            {d.auth === 'basic' ? 'Password' : 'Token'}
-            <span className="rk-field">
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={d.secret}
-                onChange={(e) => set({ secret: e.target.value })}
-                placeholder={saved?.hasSecret && !moved ? '•••••••• kept; type to replace' : ''}
-                data-testid="helm-repo-secret"
-              />
-            </span>
-            <span className="rk-fhint">{moved ? 'The address changed: give it again, as the kept one belongs to the old address.' : 'Kept in a Secret, never shown again, never in a backup.'}</span>
-          </label>
-        )}
       </div>
       {test && (
         <p className="rk-t" data-tone={test.ok ? 'ok' : 'err'} style={{ margin: 0, fontSize: 12.5 }} data-testid="helm-repo-test-result">
@@ -329,7 +306,7 @@ function RemoveRepo({ repo, onCancel, onRemoved }: { repo: HelmRepository; onCan
   }
   return (
     <ConfirmDialog title={`Remove ${repo.name}?`} confirm="Remove" danger busy={busy} error={error} onCancel={onCancel} onConfirm={() => void remove()}>
-      <p style={{ margin: 0 }}>Its {repo.hasSecret ? 'password or token is deleted with it. ' : ''}Applications installed from it stay as they are; their next deploy says the repository is gone, until it is added again.</p>
+      <p style={{ margin: 0 }}>Applications installed from it stay as they are; their next deploy says the repository is gone, until it is added again. {repo.credential ? 'Its credential stays in Settings › Credentials.' : ''}</p>
     </ConfirmDialog>
   )
 }
