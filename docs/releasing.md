@@ -55,7 +55,7 @@ The image (the chart is the same, as `ghcr.io/ucesys/charts/221b:0.12.1`):
 
 ```sh
 cosign verify ghcr.io/ucesys/221b:0.12.1 \
-  --certificate-identity-regexp '^https://github.com/ucesys/221b/\.github/workflows/ci\.yml@refs/tags/v0\.12\.0$' \
+  --certificate-identity-regexp '^https://github.com/ucesys/221b/\.github/workflows/ci\.yml@refs/tags/v0\.12\.1$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh attestation verify oci://ghcr.io/ucesys/221b:0.12.1 --repo ucesys/221b                   # provenance
 gh attestation verify oci://ghcr.io/ucesys/221b:0.12.1 --repo ucesys/221b --predicate-type https://spdx.dev/Document/v2.3   # the SBOM
@@ -65,7 +65,7 @@ For the chart, the identity is `release.yml` instead of `ci.yml`. The `221b` com
 
 ```sh
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/ucesys/221b/\.github/workflows/release\.yml@refs/tags/v0\.12\.0$' \
+  --certificate-identity-regexp '^https://github.com/ucesys/221b/\.github/workflows/release\.yml@refs/tags/v0\.12\.1$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify 221b-linux-amd64 --repo ucesys/221b
