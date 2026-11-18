@@ -428,6 +428,11 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 		return Credential{}, invalid("a credential of another kind needs its secret: give it")
 	}
 	next = keep(c.Kind, next)
+	// The host key is written and never read back (CR-02): not given, an
+	// SSH key keeps its own.
+	if c.Kind == KindSSH && old.Kind == KindSSH && strings.TrimSpace(c.HostKey) == "" {
+		c.HostKey = old.HostKey
+	}
 	if err := c.Check(next); err != nil {
 		return Credential{}, err
 	}

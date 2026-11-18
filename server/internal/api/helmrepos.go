@@ -103,7 +103,8 @@ type helmReposView struct {
 	Migration *apps.GitMigration `json:"migration,omitempty"`
 }
 
-// repoView is a repository with what names it (RP-02, RP-06).
+// repoView is a repository with what names it (RP-02, RP-06), for a
+// SuperAdmin; empty for others (CR-06).
 type repoView struct {
 	apps.Repository
 	UsedBy []string `json:"usedBy"`
@@ -138,15 +139,20 @@ func (s *Server) getHelmRepos(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	users, err := s.opts.Repos.Users(r.Context())
-	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
-		return
-	}
 	view := helmReposView{Repositories: make([]repoView, 0, len(list)), MayEdit: s.isSuperAdmin(r)}
+	var users map[string][]string
+	if view.MayEdit {
+		if users, err = s.opts.Repos.Users(r.Context()); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
 	for _, x := range list {
-		v := repoView{Repository: x, UsedBy: append([]string{}, users[x.Name]...)}
+		v := repoView{Repository: x, UsedBy: []string{}}
 		if view.MayEdit {
+			// What uses each is a SuperAdmin's to see: it names
+			// applications in namespaces others may not open (CR-06).
+			v.UsedBy = append(v.UsedBy, users[x.Name]...)
 			v.Pinned = s.opts.Repos.PinOf(r.Context(), x)
 		}
 		view.Repositories = append(view.Repositories, v)

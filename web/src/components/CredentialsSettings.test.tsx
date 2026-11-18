@@ -14,7 +14,9 @@ describe('Administration › Credentials', () => {
   let migration: Record<string, unknown> | undefined
   let removeAnswer: Response | null = null
   let testAnswer: Record<string, unknown> | null = null
+  let mayEdit = true
   beforeEach(() => {
+    mayEdit = true
     Element.prototype.scrollTo = () => {}
     calls.length = 0
     removeAnswer = null
@@ -45,7 +47,7 @@ describe('Administration › Credentials', () => {
       if (String(url).endsWith('/test') && testAnswer) return new Response(JSON.stringify(testAnswer))
       if (String(url).endsWith('/test'))
         return new Response(JSON.stringify({ at: '2026-11-17T10:00:00Z', ok: false, status: 401, text: 'Sent an Authorization header with Bearer to github.com; it answered 401 Unauthorized.', suggest: 'basic' }))
-      return new Response(JSON.stringify({ credentials: list, mayEdit: true, ...(migration ? { migration } : {}) }))
+      return new Response(JSON.stringify({ credentials: list, mayEdit, ...(migration ? { migration } : {}) }))
     })
   })
   afterEach(() => {
@@ -157,6 +159,74 @@ describe('Administration › Credentials', () => {
     expect(dialog.textContent).toContain('It is used by app 221b/k8s-console')
     fireEvent.click(within(dialog).getByTestId('confirm-ok'))
     await waitFor(() => expect(dialog.textContent).toContain('choose another credential there first'))
+  })
+
+  // CR-06: what uses a credential is a SuperAdmin's to see.
+  it('shows others the names, kinds and endpoints, without Used by', async () => {
+    mayEdit = false
+    migration = undefined
+    list = [{ id: 'cr-1', name: 'GitHub', kind: 'token', endpoint: 'https://github.com/ucesys', usedBy: [] }]
+    render(<CredentialsSettings />)
+    const row = await screen.findByTestId('credential-row')
+    expect(row.textContent).toContain('https://github.com/ucesys')
+    expect(within(row).queryByTestId('credential-used-by')).toBeNull()
+    expect(screen.getByTestId('credentials-table').textContent).not.toContain('Used by')
+    expect(screen.queryByTestId('credential-add')).toBeNull()
+  })
+
+  // CR-04: an OAuth2 client's token host is said beside its endpoint.
+  it('says where an OAuth2 client’s secret goes besides its endpoint', async () => {
+    list = [{ id: 'cr-3', name: 'API', kind: 'oauth2', endpoint: 'https://api.example.com', tokenURL: 'https://auth.example.org/token', tokenHost: 'auth.example.org', clientId: 'me', usedBy: [] }]
+    render(<CredentialsSettings />)
+    const row = await screen.findByTestId('credential-row')
+    expect(within(row).getByTestId('credential-token-host').textContent).toBe('token from auth.example.org')
+    expect(screen.getByTestId('credentials-settings').textContent).toContain('an OAuth2 client’s secret to its token URL')
+  })
+
+  // CR-02: an SSH key's host key is shown by its type, fingerprint and the
+  // key cut short; a change without it keeps it, a new SSH key needs it.
+  it('shows an SSH key’s host key by its fingerprint and keeps it when not given', async () => {
+    migration = undefined
+    list = [
+      {
+        id: 'cr-4',
+        name: 'Deploy key',
+        kind: 'ssh',
+        endpoint: 'ssh://github.com/ucesys',
+        set: ['privateKey'],
+        hostKeyInfo: { type: 'ssh-ed25519', fingerprint: 'SHA256:abcDEF123', short: 'ssh-ed25519 AAAAC3NzaC1l…Qx7v9a2E' },
+        usedBy: [],
+      },
+    ]
+    render(<CredentialsSettings />)
+    fireEvent.click(await screen.findByTestId('credential-edit'))
+    const drawer = screen.getByTestId('credential-drawer')
+    expect(within(drawer).getByTestId('credential-host-key-short').textContent).toBe('ssh-ed25519 AAAAC3NzaC1l…Qx7v9a2E')
+    expect(within(drawer).getByTestId('credential-host-key-fingerprint').textContent).toBe('SHA256:abcDEF123')
+    expect((within(drawer).getByTestId('credential-host-key') as HTMLTextAreaElement).value).toBe('')
+    fireEvent.change(within(drawer).getByTestId('credential-name'), { target: { value: 'Deploy key (ro)' } })
+    fireEvent.click(within(drawer).getByTestId('credential-save'))
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === 'PUT' && c.url === '/api/v1/credentials/cr-4')?.body
+      expect(put).toMatchObject({ name: 'Deploy key (ro)', kind: 'ssh' })
+      expect(put).not.toHaveProperty('hostKey')
+    })
+  })
+
+  it('needs the host key of a new SSH key', async () => {
+    list = []
+    migration = undefined
+    render(<CredentialsSettings />)
+    fireEvent.click(await screen.findByTestId('credential-add'))
+    const drawer = screen.getByTestId('credential-drawer')
+    fireEvent.change(within(drawer).getByTestId('credential-name'), { target: { value: 'Deploy key' } })
+    fireEvent.change(within(drawer).getByTestId('credential-kind'), { target: { value: 'ssh' } })
+    fireEvent.change(within(drawer).getByTestId('credential-endpoint'), { target: { value: 'git@github.com:ucesys' } })
+    fireEvent.change(within(drawer).getByTestId('credential-secret-privateKey'), { target: { value: '-----BEGIN OPENSSH PRIVATE KEY-----' } })
+    expect(within(drawer).queryByTestId('credential-host-key-kept')).toBeNull()
+    expect(within(drawer).getByTestId('credential-save')).toHaveProperty('disabled', true)
+    fireEvent.change(within(drawer).getByTestId('credential-host-key'), { target: { value: 'github.com ssh-ed25519 AAAA' } })
+    expect(within(drawer).getByTestId('credential-save')).toHaveProperty('disabled', false)
   })
 
   it('says an expiry in words', () => {

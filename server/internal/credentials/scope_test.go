@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -279,5 +280,45 @@ func TestTheCredentialsSecretStaysUnderItsBound(t *testing.T) {
 	}
 	if _, err := s.Create(ctx, Credential{Name: "fits again", Kind: KindToken, Endpoint: "https://example.com"}, Secret{Token: big}, "ann"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// CR-04's second exception: an OAuth2 client's secret goes to its token
+// URL, on whatever host, and nowhere else: a redirect from there is not
+// followed with it.
+func TestTheClientSecretGoesToTheTokenURLOnly(t *testing.T) {
+	var mu sync.Mutex
+	var elsewhere []string
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		_, sec, _ := r.BasicAuth()
+		mu.Lock()
+		elsewhere = append(elsewhere, sec+r.PostForm.Get("client_secret"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"stolen","token_type":"Bearer"}`))
+	}))
+	defer other.Close()
+	auth := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/token", http.StatusTemporaryRedirect)
+	}))
+	defer auth.Close()
+	s, _ := newService(t, auth.Client())
+	c, err := s.Create(ctx, Credential{Name: "api", Kind: KindOAuth2, Endpoint: "https://api.example", TokenURL: auth.URL + "/token", ClientID: "console"}, Secret{ClientSecret: "client-secret-1"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Resolve(ctx, c.ID, UseHTTP, "https://api.example/x"); err == nil {
+		t.Fatal("a token came through a redirect")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(elsewhere) > 0 {
+		t.Fatalf("the redirect was followed: %q", elsewhere)
+	}
+	for _, bad := range []string{"http://auth.example/token", "https://auth.example/a/../token", "https://auth.example/a%2Ftoken", "https://u:p@auth.example/token"} {
+		if _, err := s.Create(ctx, Credential{Name: "x", Kind: KindOAuth2, Endpoint: "https://api.example", TokenURL: bad, ClientID: "console"}, Secret{ClientSecret: "client-secret-1"}, "ann"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", bad, err)
+		}
 	}
 }

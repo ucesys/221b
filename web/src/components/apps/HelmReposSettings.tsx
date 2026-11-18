@@ -138,7 +138,7 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640, fontSize: 13 }} data-testid="helm-repos-table">
             <thead>
               <tr>
-                {['Name', 'Kind', 'Address', 'Credential', 'Used by', 'Last test', ''].map((h, i) => (
+                {['Name', 'Kind', 'Address', 'Credential', ...(mayEdit ? ['Used by'] : []), 'Last test', ''].map((h, i) => (
                   <th key={i} style={th}>
                     {h}
                   </th>
@@ -159,9 +159,11 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
                   <td style={td} data-testid="helm-repo-credential">
                     {authText(r, names)}
                   </td>
-                  <td style={{ ...td, fontSize: 12.5 }} data-testid="helm-repo-used-by">
-                    {(r.usedBy ?? []).length ? r.usedBy!.join(', ') : <span style={{ color: 'var(--fg3)' }}>Nothing</span>}
-                  </td>
+                  {mayEdit && (
+                    <td style={{ ...td, fontSize: 12.5 }} data-testid="helm-repo-used-by">
+                      {(r.usedBy ?? []).length ? r.usedBy!.join(', ') : <span style={{ color: 'var(--fg3)' }}>Nothing</span>}
+                    </td>
+                  )}
                   <td style={td} data-testid="helm-repo-tested">
                     {r.testedAt ? (
                       <span title={r.tested} style={{ color: r.testOk ? undefined : 'var(--err)' }}>

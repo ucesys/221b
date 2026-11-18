@@ -12,6 +12,7 @@ package credentials
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -388,9 +389,11 @@ func (c *Credential) Check(sec Secret) error {
 		}
 	case KindOAuth2:
 		c.TokenURL, c.ClientID, c.Scope = strings.TrimSpace(c.TokenURL), strings.TrimSpace(c.ClientID), strings.TrimSpace(c.Scope)
+		// The one address besides the endpoint the credential goes to
+		// (CR-04): the client secret is posted there, and only there.
 		u, err := url.Parse(c.TokenURL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-			return invalid("the token URL is an https:// address")
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || oddPath(u) {
+			return invalid("the token URL is an https:// address, as it is (no . or .. segment, no encoded / or \\)")
 		}
 		if c.ClientID == "" || len(c.ClientID) > 400 || !oneLine.MatchString(c.ClientID) {
 			return invalid("give the client id")
@@ -650,6 +653,32 @@ func (c Credential) Covers(target string) bool {
 }
 
 // ---------- keys ----------
+
+// HostKeyInfo is an SSH credential's host key as it is shown (CR-02): its
+// type, its SHA-256 fingerprint and the key cut short, enough to tell
+// which key it is; the key itself is written and never read back.
+type HostKeyInfo struct {
+	Type        string `json:"type"`
+	Fingerprint string `json:"fingerprint"`
+	Short       string `json:"short"`
+}
+
+// HostKeyInfo is the host key as shown, nil for none.
+func (c Credential) HostKeyInfo() *HostKeyInfo {
+	if c.Kind != KindSSH || strings.TrimSpace(c.HostKey) == "" {
+		return nil
+	}
+	k, err := ParseHostKey(c.HostKey)
+	if err != nil {
+		return nil
+	}
+	b := base64.StdEncoding.EncodeToString(k.Marshal())
+	short := b
+	if len(b) > 24 {
+		short = b[:12] + "…" + b[len(b)-8:]
+	}
+	return &HostKeyInfo{Type: k.Type(), Fingerprint: ssh.FingerprintSHA256(k), Short: k.Type() + " " + short}
+}
 
 // ParseHostKey reads a host key as a known_hosts line or an
 // authorized_keys line (ssh-ed25519 AAAA…).

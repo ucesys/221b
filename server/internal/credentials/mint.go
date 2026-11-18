@@ -160,7 +160,11 @@ func (s *Service) oauth2Token(ctx context.Context, c Credential, sec Secret) (st
 	if c.Scope != "" {
 		cfg.Scopes = strings.Fields(c.Scope)
 	}
-	ctx = context.WithValue(ctx, oauth2.HTTPClient, s.clientFor(c))
+	// The client secret goes to the token URL alone: a redirect is not
+	// followed (CR-04).
+	hc := *s.clientFor(c)
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, &hc)
 	tok, err := cfg.Token(ctx)
 	if err != nil {
 		var re *oauth2.RetrieveError
