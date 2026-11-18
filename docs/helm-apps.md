@@ -22,7 +22,7 @@ Out, for now:
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git, within limits on what is sent, unpacked and written out (HA-04) | The image has no git; nothing touches disk; a token for a private repository stays on the server, and on its repository: a change of repository removes it |
+| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git, within limits on what is sent, unpacked and written out (HA-04) | The image has no git; nothing touches disk; a private repository is fetched with a credential of Settings › Credentials chosen by name (0.12.1, CR-11), sent only under its endpoint: a change of repository it does not cover lets it go |
 | Who deploys | Watson, as the person: `helm install\|upgrade\|uninstall … --git --path --ref [--tag] --app`; the card pins the commit and the values, and the run deploys those or refuses | The dry run, the card, the two-person rule, the audit log and the output are the ones every change has (ADR-66, ADR-68) |
 | What the console keeps | A record per application in a Secret of its namespace, beside the connections | Survives restarts and replicas; the release itself stays Helm's |
 | Drift | Each object of the manifest read as the person and compared with what the manifest sets; kept two minutes | Catches changes by hand without caching anything, and without showing values |
@@ -81,20 +81,28 @@ When a fetch fails on the way to the repository (the host refuses the connection
 | --- | --- |
 | `GET apps` | The records of this cluster the person may see, with their last drift check |
 | `POST apps` | Creates a record and submits `helm install` |
-| `POST apps/refs` | Lists a repository's branches and tags for the dialog |
+| `POST apps/refs` | Lists a repository's branches and tags for the dialog, with the `credential` chosen there |
 | `GET apps/{ns}/{name}` | One record |
-| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or token; with `upgrade`, submits `helm upgrade [--install]`. Another repository without a token removes the saved one, and `tokenRemoved` says so |
+| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or `credential` (an id of Settings › Credentials, `""` for none); with `upgrade`, submits `helm upgrade [--install]`. Another repository the credential does not cover lets it go, and `credentialRemoved` says so |
 | `POST apps/{ns}/{name}/upgrade` | Submits `helm upgrade`, moving the ref first when given |
 | `DELETE apps/{ns}/{name}` | Submits `helm uninstall`; `?record=1` forgets the source only |
 | `GET apps/{ns}/{name}/drift` | Compares the cluster with the manifest, as the person (`?refresh=1` asks again) |
-| `GET apps/{ns}/{name}/refs` | The repository's refs, the newer tags, whether the branch moved, with the saved token |
-| `GET apps/{ns}/{name}/inspect` | The charts and values files in the repository at its ref, with the saved token |
+| `GET apps/{ns}/{name}/refs` | The repository's refs, the newer tags, whether the branch moved, with the application's credential |
+| `GET apps/{ns}/{name}/inspect` | The charts and values files in the repository at its ref, with the application's credential |
 | `GET apps/{ns}/{name}/revisions` | The release's revisions |
 | `GET apps/{ns}/{name}/diff?from=N&to=M` or `?to=source[&ref=&refKind=]` | A unified diff |
 | `GET apps/{ns}/{name}/images?revision=N` | The images a revision runs, with `checks`: by image, whether a newer one is published (HA-22) |
 | `GET helm/newer-images` | The releases the person may see with a newer image, by `namespace/name`; `enabled` false when Settings turned the check off, `pending` the images still being asked about (HA-22) |
 
-Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and what uses its token or values (`inspect`, `refs`, a diff with the source on either side), needs the role and Kubernetes' leave in the namespace (list and create Secrets), asked before the record is read (HA-02).
+Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and what uses its credential or values (`inspect`, `refs`, a diff with the source on either side), needs the role and Kubernetes' leave in the namespace (list and create Secrets), asked before the record is read (HA-02).
+
+## Credentials (0.12.1)
+
+An application's git repository, and a Helm repository or OCI registry of Settings › Applications, sign in with a credential of **Settings › Credentials** (CR-01 to CR-14), chosen by name: the picker offers those that serve the use and cover the address, preselects the only one, and makes you choose among several; *None (public)* is always there. A git repository takes a token sent as Basic (`x-access-token` for GitHub, `oauth2` for GitLab) or Bearer, a user and password, a GitHub App (the console mints its installation tokens) or an OAuth2 client; a Helm repository or OCI registry a user and password, or a token sent as Basic or Bearer (a registry exchanges it at its token service, as Helm does). The credential is sent only to addresses under its endpoint; the record keeps its id, never the secret.
+
+Watson's typed `helm install|upgrade NAME --git URL …` fetches with `--credential NAME` when given, else with the application's own credential when a record is kept for that repository, else with the one credential that covers the repository; when several do, it refuses and asks for `--credential`.
+
+Before 0.12.1 an application kept a token of its own, and a repository its own password or token. The upgrade made credentials of them (docs/upgrading.md, 0.12.1); a record not moved yet keeps using its own until it is, and the Setup card says so.
 
 ## Open questions
 
