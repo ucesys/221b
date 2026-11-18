@@ -110,13 +110,14 @@ func TestEmailIsOnOnlyAfterATestOfTheSettingsAsTheyStand(t *testing.T) {
 	if v, err := s.Save(ctx, in, sam); err != nil || !v.On {
 		t.Fatalf("saved again: %+v %v", v, err)
 	}
-	// Any field changed turns it off.
+	// Any field changed turns it off (a change of server, port or security
+	// with the password typed again).
 	for _, change := range []func(*Input){
-		func(i *Input) { i.Port = 2525 },
-		func(i *Input) { i.Security = "tls" },
+		func(i *Input) { i.Port, i.Password = 2525, pw },
+		func(i *Input) { i.Security, i.Password = "tls", pw },
 		func(i *Input) { i.Username = "other" },
 		func(i *Input) { i.From = "ops@example.com" },
-		func(i *Input) { i.Host = "mail.example.com" },
+		func(i *Input) { i.Host, i.Password = "mail.example.com", pw },
 		func(i *Input) { i.Password = "a-new-one" },
 	} {
 		x := in
@@ -136,7 +137,7 @@ func TestEmailIsOnOnlyAfterATestOfTheSettingsAsTheyStand(t *testing.T) {
 	}
 	// A failed test says why, without the password, and leaves it off.
 	cap.Fail = errors.New("535 authentication failed for a-new-one")
-	in.Port = 587
+	in.Port, in.Password = 587, "a-new-one"
 	if _, err := s.Save(ctx, in, sam); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +159,62 @@ func TestEmailIsOnOnlyAfterATestOfTheSettingsAsTheyStand(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the audit log lacks %q: %s", want, out.String())
 		}
+	}
+}
+
+// The kept password goes only to the server it was typed for: a change of
+// server, port or security without the password typed again is refused,
+// and keeps the settings and the password as they were; typing it again,
+// or forgetting it, is saved.
+func TestTheKeptPasswordStaysWithItsServer(t *testing.T) {
+	s, cap, _ := setup(t)
+	ctx := context.Background()
+	in := Input{Host: "smtp.example.com", Security: "starttls", Username: "221b", From: "221b@example.com", Password: pw}
+	if _, err := s.Save(ctx, in, sam); err != nil {
+		t.Fatal(err)
+	}
+	in.Password = ""
+	for _, change := range []func(*Input){
+		func(i *Input) { i.Host = "smtp.elsewhere.example" },
+		func(i *Input) { i.Port = 2525 },
+		func(i *Input) { i.Security = "tls" },
+	} {
+		x := in
+		change(&x)
+		_, err := s.Save(ctx, x, sam)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "type the password again") {
+			t.Fatalf("%+v: %v", x, err)
+		}
+	}
+	if v, err := s.Settings(ctx); err != nil || v.Host != "smtp.example.com" || v.Port != 587 || !v.PasswordSet {
+		t.Fatalf("changed by a refused save: %+v %v", v, err)
+	}
+	// The same server with the usual port spelt out keeps it.
+	same := in
+	same.Port = 587
+	if _, err := s.Save(ctx, same, sam); err != nil {
+		t.Fatalf("same server: %v", err)
+	}
+	// Typed again: saved, and the test goes to the new server with it.
+	moved := in
+	moved.Host, moved.Password = "smtp.elsewhere.example", "the-new-servers"
+	if v, err := s.Save(ctx, moved, sam); err != nil || v.Host != "smtp.elsewhere.example" || !v.PasswordSet {
+		t.Fatalf("typed again: %+v %v", v, err)
+	}
+	if _, err := s.Test(ctx, "", sam); err != nil {
+		t.Fatal(err)
+	}
+	if sent := cap.Sent(); len(sent) != 1 || sent[0].Server != "smtp.elsewhere.example:587" {
+		t.Fatalf("the test: %+v", sent)
+	}
+	if srv, _, err := s.server(ctx); err != nil || srv.Password != "the-new-servers" {
+		t.Fatalf("the password kept: %v", err)
+	}
+	// Forgotten: saved, with no password.
+	back := in
+	back.Username, back.ClearPassword = "", true
+	if v, err := s.Save(ctx, back, sam); err != nil || v.Host != "smtp.example.com" || v.PasswordSet {
+		t.Fatalf("forgotten: %+v %v", v, err)
 	}
 }
 

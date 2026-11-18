@@ -143,6 +143,11 @@ export function EmailSettings({ mail, busy: saving }: { mail: MailForm; busy: bo
   }
   const busy = saving || testing
   const sec = SECURITIES.find((s) => s.id === draft.security)!
+  // The kept password goes only to the server it was typed for: another
+  // server, port or security takes it typed again (or forgotten).
+  const kept = saved.passwordSet && !draft.clearPassword && !draft.password
+  const moved = draft.host.trim().toLowerCase() !== saved.host || port !== (saved.port || DEFAULT_PORTS[saved.security]) || draft.security !== saved.security
+  const typeAgain = kept && draft.host.trim() !== '' && moved
   const field = { display: 'flex', flexDirection: 'column', gap: 4 } as const
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="email-settings">
@@ -191,7 +196,7 @@ export function EmailSettings({ mail, busy: saving }: { mail: MailForm; busy: bo
           <input className="rk-field" value={draft.username} onChange={(e) => set({ username: e.target.value })} autoComplete="off" disabled={busy || draft.security === 'none'} data-testid="email-username" />
         </label>
         <label style={{ ...field, flex: '1 1 220px' }}>
-          <span className="rk-flabel">Password {saved.passwordSet && !draft.clearPassword ? '(set; type to replace it)' : ''}</span>
+          <span className="rk-flabel">Password {typeAgain ? '(type it again for the new server)' : saved.passwordSet && !draft.clearPassword ? '(set; type to replace it)' : ''}</span>
           <input
             className="rk-field"
             type="password"
@@ -209,6 +214,11 @@ export function EmailSettings({ mail, busy: saving }: { mail: MailForm; busy: bo
           </button>
         )}
       </div>
+      {typeAgain && (
+        <span className="rk-t" data-tone="warn" role="status" style={{ marginTop: -8, fontSize: 12.5 }} data-testid="email-password-again">
+          The server, port or security changed: the password kept is not sent to another server. Type it again for the new one, or forget it.
+        </span>
+      )}
       <span className="rk-fhint" style={{ marginTop: -8 }}>
         The password is kept {saved.inSecret ? 'in a Secret' : 'in memory, until the console restarts'}, never shown again, logged or backed up. It is sent only over TLS.
       </span>

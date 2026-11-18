@@ -89,6 +89,25 @@ describe('Settings › Email (EM-01 to EM-04)', () => {
     expect(vi.mocked(api.saveMail).mock.calls[0]![0]).not.toHaveProperty('password')
   })
 
+  it('asks for the password again when the server, port or security changes', async () => {
+    vi.mocked(api.fetchMail).mockResolvedValue(saved)
+    vi.mocked(api.saveMail).mockRejectedValue(new Error('not valid: the server, port or security changed: type the password again for the new server, or forget it'))
+    render(<Email />)
+    await screen.findByText(/Configured, not tested/)
+    expect(screen.queryByTestId('email-password-again')).toBeNull()
+    fireEvent.change(screen.getByTestId('email-port'), { target: { value: '587' } })
+    expect(screen.queryByTestId('email-password-again')).toBeNull()
+    fireEvent.change(screen.getByTestId('email-host'), { target: { value: 'smtp.elsewhere.example' } })
+    expect(screen.getByTestId('email-password-again').textContent).toContain('Type it again for the new one')
+    fireEvent.click(screen.getByTestId('email-save'))
+    await screen.findByText(/type the password again for the new server/)
+    fireEvent.change(screen.getByTestId('email-password'), { target: { value: 'the-new-one' } })
+    expect(screen.queryByTestId('email-password-again')).toBeNull()
+    fireEvent.change(screen.getByTestId('email-password'), { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('email-forget-password'))
+    expect(screen.queryByTestId('email-password-again')).toBeNull()
+  })
+
   it('says what the server refused', async () => {
     vi.mocked(api.saveMail).mockRejectedValue(new Error('not valid: the server is a host name or an IP address'))
     render(<Email />)
