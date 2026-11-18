@@ -786,6 +786,7 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	knowledgeStored = l
 	w.knowledgeSvc = svc
 	w.creds.Register(svc.Uses)
+	w.wireKnowledgeRepositories(svc) // Settings › Repositories (0.12.1, RP-03)
 	// A report no known issue explains is checked against the live
 	// sources too (0.12.1, KN-43).
 	if w.issueSvc != nil {

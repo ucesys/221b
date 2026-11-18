@@ -261,6 +261,9 @@ type Service struct {
 	// cmStore is the ConfigMap store, when the chart made its ConfigMap.
 	cmStore *ConfigMapStore
 
+	// gitRepos are Settings › Repositories' git repositories (RP-03).
+	gitRepos gitRepos
+
 	// open makes a store from typed settings (tests).
 	open func(StoreSettings, Creds) (Store, error)
 	// dial connects a source's test to its address (tests; nil is a

@@ -360,13 +360,22 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 		return in, false
 	}
 	if in.Source != nil {
-		src, err := apps.Normalize(*in.Source)
+		// --- Settings › Repositories (0.12.1, RP-03): a git source names
+		// a repository of the list, whose address and credential it
+		// takes; an address typed that the list has is recorded as it.
+		src, err := s.listedGit(r.Context(), &in)
+		if err == nil {
+			src, err = apps.Normalize(src)
+		}
+		if err == nil && src.Kind == "" && src.Repository == "" {
+			src, err = s.matchListedGit(r.Context(), src, &in)
+		}
 		// --- Helm repositories (Phase 12, wave 5): a repository's chart
 		// takes its address from the repositories the console knows, and
 		// their credentials, never a token of its own (HR-01).
 		if err == nil && src.FromRepository() {
 			if src, err = s.opts.Repos.Resolve(r.Context(), src); err == nil && in.Credential != nil && *in.Credential != "" {
-				err = errors.New("a repository's chart is fetched with the repository's credential, chosen in Settings › Applications: choose none here")
+				err = errors.New("a repository's chart is fetched with the repository's credential, chosen in Settings › Repositories: choose none here")
 			}
 		}
 		if err == nil {
@@ -404,6 +413,46 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 		in.ValuesFile = &f
 	}
 	return in, true
+}
+
+// listedGit fills in a git source that names a repository of Settings ›
+// Repositories: its address, and its credential as the one chosen.
+func (s *Server) listedGit(ctx context.Context, in *appInput) (apps.Source, error) {
+	src := *in.Source
+	if src.Kind != "" && src.Kind != apps.KindGit || strings.TrimSpace(src.Repository) == "" {
+		return src, nil
+	}
+	src.Repository = strings.TrimSpace(src.Repository)
+	src, repo, err := s.opts.Repos.ResolveGit(ctx, src)
+	if err != nil {
+		return src, errors.New(strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+	}
+	if in.Credential != nil && *in.Credential != repo.Credential {
+		return src, fmt.Errorf("%s is fetched with its own credential, chosen in Settings › Repositories: send none here", repo.Name)
+	}
+	cred := repo.Credential
+	in.Credential = &cred
+	return src, nil
+}
+
+// matchListedGit records the repository of Settings › Repositories at
+// the address typed (RP-04): the one there, or the one with the
+// credential chosen; an address the list does not have is kept as typed.
+func (s *Server) matchListedGit(ctx context.Context, src apps.Source, in *appInput) (apps.Source, error) {
+	list, err := s.opts.Repos.MatchGit(ctx, src.Repo)
+	if err != nil {
+		return src, err
+	}
+	if in.Credential != nil {
+		list = slices.DeleteFunc(list, func(x apps.Repository) bool { return x.Credential != *in.Credential })
+	}
+	if len(list) != 1 {
+		return src, nil
+	}
+	src.Repository = list[0].Name
+	cred := list[0].Credential
+	in.Credential = &cred
+	return src, nil
 }
 
 // validValuesFile says whether a values file names a YAML file in the
@@ -482,7 +531,12 @@ func appLine(verb, ns, name string, src apps.Source, extra ...string) (string, e
 		parts = append(parts, "-n", ns, "--app")
 		return strings.Join(append(parts, extra...), " "), nil
 	}
-	parts := []string{"helm", verb, name, "--git", src.Repo}
+	// A git repository of Settings › Repositories by its name (RP-04).
+	git := src.Repo
+	if src.Repository != "" {
+		git = src.Repository
+	}
+	parts := []string{"helm", verb, name, "--git", git}
 	if src.Path != "" {
 		parts = append(parts, "--path", "'"+src.Path+"'")
 	}

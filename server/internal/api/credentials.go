@@ -15,7 +15,7 @@ import (
 //
 // A SuperAdmin adds, changes, tests and removes the credentials; anyone
 // signed in reads their names, kinds, endpoints and uses, which the
-// pickers of the Helm tab, Settings › Applications and Settings ›
+// pickers of the Helm tab, Settings › Repositories and Settings ›
 // Knowledge offer. A secret is written and never read back: no answer
 // holds one, nor does the audit log.
 

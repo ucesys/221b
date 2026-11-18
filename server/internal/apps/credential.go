@@ -74,7 +74,9 @@ func CredentialUses(store Store) credentials.UsersFunc {
 		}
 		var out []credentials.Ref
 		for _, rec := range recs {
-			if rec.Credential != "" {
+			// One naming a git repository of Settings › Repositories uses
+			// the repository's (RP-03), which lists it.
+			if rec.Credential != "" && !(isGit(rec.Source) && rec.Source.Repository != "") {
 				out = append(out, credentials.Ref{Credential: rec.Credential, What: Label(rec), Where: "Helm › " + rec.Namespace + "/" + rec.Name + " › Source"})
 			}
 		}
@@ -91,7 +93,7 @@ func (r *Repos) CredentialUses(ctx context.Context) ([]credentials.Ref, error) {
 	var out []credentials.Ref
 	for _, x := range list {
 		if x.Credential != "" {
-			out = append(out, credentials.Ref{Credential: x.Credential, What: "Helm repository " + x.Name, Where: "Settings › Applications"})
+			out = append(out, credentials.Ref{Credential: x.Credential, What: KindWord(x.Kind) + " " + x.Name, Where: "Settings › Repositories"})
 		}
 	}
 	return out, nil

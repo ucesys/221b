@@ -40,7 +40,7 @@ func TestHelmRepositoriesBackup(t *testing.T) {
 	reg2 := backup.NewRegistry()
 	registerHelmReposBackup(reg2, into)
 	rep := reg2.Restore(ctx, f, map[string]bool{"helmRepositories": true}, &backup.Env{By: "bob"})
-	if rep.Restored["helmRepositories"] != 2 || len(rep.Secrets) != 1 || rep.Secrets[0].Name != "the password of the Helm repository private" || rep.Secrets[0].Where != "Settings › Applications › Repositories › private" {
+	if rep.Restored["helmRepositories"] != 2 || len(rep.Secrets) != 1 || rep.Secrets[0].Name != "the password of the Helm repository private" || rep.Secrets[0].Where != "Settings › Repositories › private" {
 		t.Fatalf("restored: %+v", rep)
 	}
 	got, _, err := into.Get(ctx, "private")

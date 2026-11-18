@@ -73,6 +73,10 @@
       "item": false,
       "search": false
     },
+    "repositories": {
+      "item": false,
+      "search": false
+    },
     "applications": {
       "item": false,
       "search": false

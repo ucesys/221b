@@ -85,7 +85,7 @@ var layout = map[string]map[string]kv.Limit{
 		api.SetupKey: {Bytes: 4 << 10},
 		// --- Helm repositories (Phase 12, wave 5): the chart repositories
 		// and OCI registries (their passwords and tokens are in a Secret).
-		apps.RepositoriesKey: {Bytes: apps.DefaultRepositoriesBytes, Hint: "remove chart repositories no longer used"},
+		apps.RepositoriesKey: {Bytes: apps.DefaultRepositoriesBytes, Hint: "remove repositories no longer used"},
 		sessions.HistoryKey:  {Bytes: 0},
 		audit.StoreKey:       {Bytes: 0},
 	},

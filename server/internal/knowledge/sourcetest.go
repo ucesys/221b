@@ -83,8 +83,14 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	if err := s.leads(); err != nil {
 		return SourceTest{}, err
 	}
+	// A git source naming a repository of Settings › Repositories is
+	// tested with its address and credential (RP-03).
+	x, err := s.fillRepo(ctx, x)
+	if err != nil {
+		return SourceTest{}, err
+	}
 	var have Creds
-	legacy := s.keepsOwnCredential(ctx, Source{ID: saved, Kind: x.Kind, Credential: x.Credential}, ch, saved == "")
+	legacy := s.keepsOwnCredential(ctx, Source{ID: saved, Kind: x.Kind, Credential: x.Credential, Repository: x.Repository}, ch, saved == "")
 	if saved != "" {
 		set, err := s.Settings(ctx)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,7 +31,7 @@ import (
 
 // appSource reads the source from the line: its --git flags, or the
 // repository chart after the release (Phase 12, wave 5, HR-07).
-func appSource(c *Command) (apps.Source, bool, error) {
+func appSource(ctx context.Context, c *Command, t Target) (apps.Source, bool, error) {
 	if len(c.Positionals) > 1 {
 		s, err := apps.ParseChartRef(c.Positionals[1], c.Flag("version"))
 		return s, true, err
@@ -42,8 +43,34 @@ func appSource(c *Command) (apps.Source, bool, error) {
 	if c.Has("tag") {
 		s.RefKind = apps.RefTag
 	}
+	// --- Settings › Repositories (0.12.1, RP-04): --git NAME is a git
+	// repository of the list, by its name; an address the list has is
+	// recorded as that repository (the one with --credential's
+	// credential when several are at it).
+	if name := strings.TrimSpace(s.Repo); name != "" && !strings.ContainsAny(name, "/:.") {
+		s.Repository = name
+		var err error
+		if s, _, err = t.Repos.ResolveGit(ctx, s); err != nil {
+			return s, true, fmt.Errorf("--git %s: %w (Settings › Repositories lists the git repositories by name; or give the address)", name, err)
+		}
+	}
 	s, err := apps.Normalize(s)
-	return s, true, err
+	if err != nil || s.Repository != "" {
+		return s, true, err
+	}
+	list, err := t.Repos.MatchGit(ctx, s.Repo)
+	if err != nil {
+		return s, true, err
+	}
+	if c.Has("credential") && t.Credentials != nil {
+		if cr, err := t.Credentials.ByName(ctx, c.Flag("credential")); err == nil {
+			list = slices.DeleteFunc(list, func(x apps.Repository) bool { return x.Credential != cr.ID })
+		}
+	}
+	if len(list) == 1 {
+		s.Repository = list[0].Name
+	}
+	return s, true, nil
 }
 
 // appPin is what an install or upgrade card showed: the source, the
@@ -137,7 +164,7 @@ type appChart struct {
 }
 
 func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*appChart, error) {
-	src, given, err := appSource(c)
+	src, given, err := appSource(ctx, c, t)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +214,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 			return nil, err
 		}
 	} else if c.Has("credential") {
-		return nil, errors.New("a repository's chart is fetched with its repository's credential (Settings › Applications): --credential goes with --git")
+		return nil, errors.New("a repository's chart is fetched with its repository's credential (Settings › Repositories): --credential goes with --git")
 	}
 	for _, set := range c.Flags["set"] {
 		a.params = append(a.params, set)
@@ -236,6 +263,29 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 // repository. Several that cover it are refused: Watson never guesses.
 func (a *appChart) gitAuth(ctx context.Context, c *Command, t Target, ns, name, legacy string) (apps.GitAuth, error) {
 	repo := a.src.Repo
+	// A git repository of Settings › Repositories is fetched with its own
+	// credential (RP-03).
+	if a.src.Repository != "" && t.Repos != nil {
+		if listed, err := t.Repos.Raw(ctx, a.src.Repository); err == nil && listed.Kind == apps.KindGit {
+			if c.Has("credential") {
+				if t.Credentials == nil {
+					return apps.GitAuth{}, errors.New("this console keeps no credentials")
+				}
+				cr, err := t.Credentials.ByName(ctx, c.Flag("credential"))
+				if err != nil {
+					return apps.GitAuth{}, err
+				}
+				if cr.ID != listed.Credential {
+					return apps.GitAuth{}, fmt.Errorf("%s is fetched with its own credential, chosen in Settings › Repositories: leave --credential out", listed.Name)
+				}
+			}
+			a.cred, a.credSet = listed.Credential, true
+			if listed.Credential == "" {
+				return apps.GitAuth{}, nil
+			}
+			return apps.CredentialAuth(ctx, t.Credentials, listed.Credential, listed.URL)
+		}
+	}
 	if c.Has("credential") {
 		if t.Credentials == nil {
 			return apps.GitAuth{}, errors.New("this console keeps no credentials")

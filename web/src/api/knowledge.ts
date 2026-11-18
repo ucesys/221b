@@ -34,6 +34,8 @@ export interface KnowledgeSource {
   branch?: string
   path?: string
   username?: string
+  /** A git source's repository of Settings › Repositories, by name (0.12.1, RP-03): url and credential are its own then. */
+  repository?: string
   /** A bucket of documents (KN-25): its name, the prefix read under, region, endpoint (empty for AWS), path-style, and an access key in the Secret or the pod's identity. */
   bucket?: string
   prefix?: string

@@ -1,9 +1,11 @@
 // Settings › Credentials (0.12.1, CR-01 to CR-14): a SuperAdmin adds a
-// credential whose secret never comes back; a knowledge source and an
-// application (its release's Setup card) pick it by name, the only one
-// that covers their repository preselected; while they use it, Settings ›
-// Credentials lists them under Used by and refuses to remove it, saying by
-// whom. Nothing here reaches the internet: the addresses do not resolve.
+// credential whose secret never comes back; a git repository of Settings ›
+// Repositories, added from a knowledge source's drawer, picks it by name,
+// the only one that covers its address preselected, and an application
+// (its release's Setup card) picks that repository (RP-03); while the
+// repository uses it, Settings › Credentials lists it under Used by and
+// refuses to remove it, saying by whom. Nothing here reaches the internet:
+// the addresses do not resolve.
 import { cluster, releaseRows, snapshot } from './cluster'
 import { expect, test } from './test'
 
@@ -11,6 +13,7 @@ const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const NAME = 'E2E git reader'
 const SECRET = 'e2e-git-token-never-shown-4b2f'
 const SOURCE = 'e2e-runbooks-repo'
+const REPO = 'e2e-runbooks'
 const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 // A release's Setup card is changed through Watson, which runs where Sherlock is on.
@@ -55,36 +58,49 @@ test('a credential is picked by a knowledge source and an application, and canno
     expect(list).not.toContain(SECRET)
     credId = (JSON.parse(list) as { credentials: { id: string; name: string }[] }).credentials.find((c) => c.name === NAME)!.id
 
-    // A knowledge source of a repository under it: preselected.
+    // A knowledge source's git repository, added from its drawer: the credential under it preselected.
     await page.goto('/#/admin/settings/knowledge')
     await page.getByTestId('knowledge-add').click()
     const source = page.getByTestId('knowledge-source-drawer')
     await source.getByTestId('knowledge-source-kind').selectOption('git')
     await source.getByTestId('knowledge-source-name').fill('E2E runbooks repo')
-    await source.getByTestId('knowledge-source-url').fill('https://git.e2e.invalid/org/runbooks.git')
-    await expect(source.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
+    await source.getByTestId('knowledge-source-repository-select').selectOption('__add')
+    const add = source.getByTestId('knowledge-source-repository-new')
+    await add.getByTestId('knowledge-source-repository-new-url').fill('https://git.e2e.invalid/org/runbooks.git')
+    await expect(add.getByTestId('knowledge-source-repository-new-name')).toHaveValue('runbooks')
+    await add.getByTestId('knowledge-source-repository-new-name').fill(REPO)
+    await expect(add.getByTestId('knowledge-source-repository-new-credential-select')).toHaveValue(credId)
+    await add.getByTestId('knowledge-source-repository-new-save').click()
+    await expect(source.getByTestId('knowledge-source-repository-select')).toHaveValue(REPO)
+    await expect(source.getByTestId('knowledge-source-repository-hint')).toContainText(`Fetched with ${NAME}`)
     await source.getByTestId('knowledge-source-save').click()
     await expect(page.locator(`[data-testid=knowledge-source][data-source=${SOURCE}]`)).toContainText(`credential ${NAME}`)
 
-    // An application's Setup card: the repository typed, the credential preselected, saved with it.
+    // An application's Setup card picks the same repository: fetched with its credential.
     await page.goto('/#/helm')
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
     const panel = page.getByTestId('app-panel')
-    await expect(panel.getByTestId('app-src-repo')).toBeEditable()
-    await panel.getByTestId('app-src-repo').fill('https://git.e2e.invalid/org/shop')
-    await expect(panel.getByTestId('app-src-credential-select')).toHaveValue(credId)
+    await expect(panel.getByTestId('app-src-repository-select')).toBeEnabled()
     await panel.getByTestId('app-src-ref').fill('main')
     await panel.getByTestId('app-src-ref').blur()
+    await panel.getByTestId('app-src-repository-select').selectOption(REPO)
+    await expect(panel.getByTestId('app-src-repository-hint')).toContainText(`Fetched with ${NAME}`)
     await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 15_000 })
     const app = await (await request.get(`/api/v1/apps/${r.namespace}/${r.name}`, { headers: SAME })).text()
+    expect(app).toContain(`"repository":"${REPO}"`)
     expect(app).toContain(`"credential":"${credId}"`)
     expect(app).not.toContain(SECRET)
 
-    // Used by both; not removed while it is, saying by whom.
+    // Settings › Repositories says what uses the repository.
+    await page.goto('/#/admin/settings/repositories')
+    const repoRow = page.locator(`[data-testid=helm-repo-row][data-repo="${REPO}"]`)
+    await expect(repoRow.getByTestId('helm-repo-used-by')).toContainText('knowledge source E2E runbooks repo')
+    await expect(repoRow.getByTestId('helm-repo-used-by')).toContainText(`application ${r.namespace}/${r.name}`)
+
+    // The credential is used by the repository; not removed while it is, saying by whom.
     await page.goto('/#/admin/settings/credentials')
-    await expect(row.getByTestId('credential-used-by')).toContainText('knowledge source E2E runbooks repo')
-    await expect(row.getByTestId('credential-used-by')).toContainText(`app ${r.namespace}/${r.name}`)
+    await expect(row.getByTestId('credential-used-by')).toContainText(`git repository ${REPO}`)
     await row.getByTestId('credential-remove').click()
     const confirm = page.getByTestId('confirm')
     await expect(confirm).toContainText('It is used by')
@@ -96,6 +112,7 @@ test('a credential is picked by a knowledge source and an application, and canno
   } finally {
     await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
     await request.delete(`/api/v1/knowledge/sources/${SOURCE}`, { headers: SAME })
+    await request.delete(`/api/v1/helm-repositories/${REPO}`, { headers: SAME })
     if (credId) expect((await request.delete(`/api/v1/credentials/${credId}`, { headers: SAME })).status()).toBe(204)
   }
 })

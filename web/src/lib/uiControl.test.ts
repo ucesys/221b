@@ -369,6 +369,12 @@ describe('Sherlock opens Administration and Settings pages the person may open (
     expect(window.location.hash).toBe('#/admin/logs/audit')
     open({ page: 'email' })
     expect(window.location.hash).toBe('#/admin/settings/email')
+    // Settings › Repositories (0.12.1, RP-01), and its old name.
+    expect(open({ page: 'repositories' }).label).toBe('Opened Settings › Repositories')
+    expect(window.location.hash).toBe('#/admin/settings/repositories')
+    open({ page: 'general' })
+    open({ page: 'applications' })
+    expect(window.location.hash).toBe('#/admin/settings/repositories')
     open({ page: 'providers', item: 'gateway' })
     expect(window.location.hash).toBe('#/admin/settings/providers/gateway')
     open({ page: 'roles', item: 'admin' })

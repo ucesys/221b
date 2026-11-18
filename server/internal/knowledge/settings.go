@@ -59,6 +59,10 @@ type Source struct {
 	Branch   string `json:"branch,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Username string `json:"username,omitempty"`
+	// Repository names the git repository of Settings › Repositories the
+	// source reads (0.12.1, RP-03): URL and Credential are the
+	// repository's then, read from the list (gitrepos.go).
+	Repository string `json:"repository,omitempty"`
 	// A bucket of documents (KN-25): its name, the prefix to read under
 	// ("" for all), its region, its endpoint ("" for AWS) and path-style
 	// addressing for MinIO or another S3-compatible store, and its
@@ -385,8 +389,18 @@ func (st StoreSettings) fingerprint() string {
 	return fmt.Sprintf("%+v", st)
 }
 
-// Settings reads the settings.
+// Settings reads the settings, the git sources that name a repository of
+// Settings › Repositories with its address and credential (RP-03).
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
+	set, err := s.rawSettings(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	return s.withRepos(ctx, set)
+}
+
+// rawSettings are the settings as kept.
+func (s *Service) rawSettings(ctx context.Context) (Settings, error) {
 	var set Settings
 	if _, err := load(ctx, s.kv, SettingsKey, &set); err != nil {
 		return Settings{}, err
@@ -465,6 +479,10 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	if err := s.leads(); err != nil {
 		return Source{}, err
 	}
+	x, err := s.fillRepo(ctx, x)
+	if err != nil {
+		return Source{}, err
+	}
 	x = x.normalized()
 	if err := x.Validate(); err != nil {
 		return Source{}, err
@@ -512,7 +530,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	// renamedOnly says an edit changed the name alone: its job is renamed,
 	// and the source is not read again for it.
 	renamedOnly := false
-	_, err := s.editSettings(ctx, func(set *Settings) error {
+	_, err = s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == x.ID })
 		switch {
 		case create && i >= 0:
@@ -581,7 +599,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 // Settings › Credentials: one typed with it, or, for a source not switched
 // yet edited without naming one, the one it keeps.
 func (s *Service) keepsOwnCredential(ctx context.Context, x Source, ch CredsChange, create bool) bool {
-	if x.Credential != "" || !signsIn(x.Kind) {
+	if x.Credential != "" || !signsIn(x.Kind) || x.namesRepo() {
 		return false
 	}
 	if !ch.none() {

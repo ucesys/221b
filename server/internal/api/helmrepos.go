@@ -17,18 +17,23 @@ import (
 // ADR-125) ---
 //
 // The chart repositories and OCI registries the console installs charts
-// from besides git: Settings › Applications lists them, with Test; a
+// from besides git: Settings › Repositories lists them, with Test; a
 // SuperAdmin adds, changes and removes them, and those who manage
 // applications (Admin, SuperAdmin) read the list, a repository's charts
 // and a chart's versions for the new application's form. Each signs in
 // with a credential of Settings › Credentials, named by id (0.12.1,
-// CR-11).
+// CR-11). Since 0.12.1 (RP-01 to RP-08) the list holds the git
+// repositories applications' Setup and Mycroft's git sources name too,
+// each with what uses it; one in use is not removed.
 
 // The audit log's actions of the repositories.
 const (
 	ActionHelmRepoSave   = "helmrepo.save"
 	ActionHelmRepoRemove = "helmrepo.remove"
 	ActionHelmRepoTest   = "helmrepo.test"
+	// ActionRepoMigration is the upgrade's list of git repositories
+	// dismissed (RP-05).
+	ActionRepoMigration = "helmrepo.migration"
 )
 
 func (s *Server) helmReposRoutes() {
@@ -39,14 +44,63 @@ func (s *Server) helmReposRoutes() {
 	s.handle("DELETE /api/v1/helm-repositories/{name}", "helm-repository-remove", s.deleteHelmRepo)
 	s.handle("POST /api/v1/helm-repositories/{name}/test", "helm-repository-retest", s.postHelmRepoRetest)
 	s.handle("GET /api/v1/helm-repositories/{name}/charts", "helm-repository-charts", s.getHelmRepoCharts)
+	s.handle("POST /api/v1/helm-repositories/migration/dismiss", "repository-migration-dismiss", s.postRepoMigrationDismiss)
+	s.handle("POST /api/v1/helm-repositories/{name}/rename", "repository-rename", s.postRepoRename)
+}
+
+// postRepoRename gives a repository a new name; what names it follows
+// (RP-05).
+func (s *Server) postRepoRename(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeRepo(w, r, &in) {
+		return
+	}
+	from := r.PathValue("name")
+	repo, err := s.opts.Repos.Rename(r.Context(), from, in.Name)
+	switch {
+	case errors.Is(err, apps.ErrNoRepository):
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	case errors.Is(err, apps.ErrInvalidRepo):
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+		return
+	case err != nil && repo.Name == "":
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	detail := repoWord(repo.Kind) + " renamed from " + from
+	if err != nil {
+		detail += "; " + err.Error()
+	}
+	s.record(r, ActionHelmRepoSave, repo.Name, detail)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	b, _ := json.Marshal(repo)
+	writeJSON(w, r, b)
 }
 
 // helmReposView is the list, with what the person may do.
 type helmReposView struct {
-	Repositories []apps.Repository `json:"repositories"`
+	Repositories []repoView `json:"repositories"`
 	// MayEdit says the person may add, change and remove them: a
 	// SuperAdmin.
 	MayEdit bool `json:"mayEdit"`
+	// Migration is what the upgrade made of the git addresses typed
+	// before 0.12.1, until a SuperAdmin dismisses it (RP-05).
+	Migration *apps.GitMigration `json:"migration,omitempty"`
+}
+
+// repoView is a repository with what names it (RP-02, RP-06).
+type repoView struct {
+	apps.Repository
+	UsedBy []string `json:"usedBy"`
 }
 
 // mayReadRepos lets through those who manage applications, and
@@ -75,8 +129,35 @@ func (s *Server) getHelmRepos(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	b, _ := json.Marshal(helmReposView{Repositories: list, MayEdit: s.isSuperAdmin(r)})
+	users, err := s.opts.Repos.Users(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	view := helmReposView{Repositories: make([]repoView, 0, len(list)), MayEdit: s.isSuperAdmin(r)}
+	for _, x := range list {
+		view.Repositories = append(view.Repositories, repoView{Repository: x, UsedBy: append([]string{}, users[x.Name]...)})
+	}
+	if view.MayEdit {
+		if m, err := s.opts.Repos.Migration(r.Context()); err == nil && !m.Dismissed && (len(m.Created) > 0 || len(m.Notes) > 0) {
+			view.Migration = &m
+		}
+	}
+	b, _ := json.Marshal(view)
 	writeJSON(w, r, b)
+}
+
+// postRepoMigrationDismiss hides the list of what the upgrade made.
+func (s *Server) postRepoMigrationDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	if err := s.opts.Repos.DismissMigration(r.Context()); err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.record(r, ActionRepoMigration, "repositories", "the list of git repositories made at the upgrade dismissed")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func decodeRepo(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -118,7 +199,20 @@ func (s *Server) repoAudit(r *http.Request, repo apps.Repository) string {
 	if repo.Credential != "" && s.opts.Credentials != nil {
 		cred = s.credentialLabel(r.Context(), repo.Credential)
 	}
-	return repo.Kind + " " + repo.URL + ", credential " + cred
+	out := repo.Kind + " " + repo.URL + ", credential " + cred
+	if repo.DefaultBranch != "" {
+		out += ", default branch " + repo.DefaultBranch
+	}
+	return out
+}
+
+// repoWord names a repository's kind in the audit log: "chart
+// repository" as before, "git repository".
+func repoWord(kind string) string {
+	if kind == apps.KindGit {
+		return "git repository"
+	}
+	return "chart repository"
 }
 
 func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +243,7 @@ func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
 	if created {
 		verb = "added"
 	}
-	s.record(r, ActionHelmRepoSave, repo.Name, "chart repository "+verb+": "+s.repoAudit(r, repo))
+	s.record(r, ActionHelmRepoSave, repo.Name, repoWord(repo.Kind)+" "+verb+": "+s.repoAudit(r, repo))
 	b, _ := json.Marshal(repo)
 	writeJSON(w, r, b)
 }
@@ -167,11 +261,16 @@ func (s *Server) deleteHelmRepo(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.opts.Repos.Delete(r.Context(), name)
 	}
+	if errors.Is(err, apps.ErrInUse) {
+		s.recordOutcome(r, ActionHelmRepoRemove, name, repoWord(old.Kind)+" not removed: "+strings.TrimPrefix(err.Error(), apps.ErrInUse.Error()+": "), audit.OutcomeDenied)
+		jsonError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), apps.ErrInUse.Error()+": "))
+		return
+	}
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.record(r, ActionHelmRepoRemove, name, "chart repository removed: "+s.repoAudit(r, old))
+	s.record(r, ActionHelmRepoRemove, name, repoWord(old.Kind)+" removed: "+s.repoAudit(r, old))
 	w.WriteHeader(http.StatusNoContent)
 }
 

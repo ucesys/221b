@@ -238,7 +238,8 @@ func (s *Service) Uses(ctx context.Context) ([]credentials.Ref, error) {
 	}
 	var out []credentials.Ref
 	for _, x := range set.Sources {
-		if x.Credential != "" {
+		// One naming a git repository uses the repository's, which lists it.
+		if x.Credential != "" && !x.namesRepo() {
 			out = append(out, credentials.Ref{Credential: x.Credential, What: "knowledge source " + x.Name, Where: "Settings › Knowledge › Sources"})
 		}
 	}
