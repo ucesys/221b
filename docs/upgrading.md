@@ -54,7 +54,7 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, and from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## 0.12.1 (2026-11-17)
+## 0.12.1 (2026-11-18)
 
 - **New chart values, both optional:** `apps.allowedHosts` (empty: no limit) limits the hosts git sources, Helm repositories and OCI registries are fetched from; the chart now also sets `SELF_RELEASE`, so the console knows the release that runs it.
 - **Behind an Ingress or another proxy**, list it under `auth.trustedProxies`; until then the log warns and Administration says so (nothing else changes).

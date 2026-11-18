@@ -2,7 +2,7 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## 0.12.1 (2026-11-17)
+## 0.12.1 (2026-11-18)
 
 Phase 12.1: the agents' and jobs' instructions after a review against open-source prompts (`docs/phase-12.1-prompts.md`, PM-C1 to PM-S1), and who does what among the agents (PM-D1 to PM-D7).
 
