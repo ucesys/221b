@@ -52,8 +52,11 @@ type Options struct {
 	// ToolDefs are the toolbox's tool definitions, for a test's recorded
 	// tools.
 	ToolDefs func() []sherlock.ToolDef
-	Now      func() time.Time
-	Logger   *slog.Logger
+	// Context is the process's: every test run ends with it, whatever
+	// started the run.
+	Context context.Context
+	Now     func() time.Time
+	Logger  *slog.Logger
 }
 
 // Service is the console's agents.

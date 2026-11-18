@@ -469,6 +469,13 @@ func (s *Service) claim(ctx context.Context, id string, o TestOptions) (context.
 		return nil, nil, ErrNotFound
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	if s.opts.Context != nil {
+		// A run outlives its request, not the process: shutdown stops it
+		// as a Stop does.
+		release := context.AfterFunc(s.opts.Context, cancel)
+		stop := cancel
+		cancel = func() { release(); stop() }
+	}
 	lr := &liveRun{cancel: cancel, run: TestRun{At: s.opts.Now().UTC(), By: o.By, State: RunRunning}}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -546,6 +553,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 				s.publish(id, run)
 				continue
 			}
+			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "replay", Cluster: t.Cluster}, Text: t.Question, Cluster: t.Cluster, Tools: newRecorded(defs, t.Tools), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, t.Question)
 			rr := ReplayResult{Question: clip(t.Question, 300), Cluster: t.Cluster, Before: clip(t.Answer, 800), After: clip(res.Text, 800), CostUSD: res.CostUSD}
@@ -654,6 +662,7 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 		go func(i int, c TestCase, a sherlock.Agent, cluster string) {
 			defer wg.Done()
 			defer func() { <-slots }()
+			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "test", Cluster: cluster}, Text: c.Question, Cluster: cluster, Tools: newRecorded(defs, c.Recorded), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, c.Question)
 			cr := s.check(ctx, a, c, res)
@@ -689,6 +698,15 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 		run.State, run.Error, run.StoppedAt = RunStopped, "stopped", at
 	}
 	show()
+}
+
+// capsNow gives a the spending caps in force now: a run is long, and a
+// cap an administrator lowers during it holds for what starts after.
+func (s *Service) capsNow(ctx context.Context, a *sherlock.Agent) {
+	snap := s.read(ctx)
+	set := s.settingsOf(snap, a.ID)
+	a.Caps = sherlock.Caps{DailyUSD: set.DailyUSD, MonthlyUSD: set.MonthlyUSD}
+	a.ProviderCaps = snap.providers.Limits[a.Provider]
 }
 
 // TestProgress is the agent's test run for the test dialog (Phase 12.1):
@@ -743,6 +761,17 @@ func (s *Service) StopTests(id string) error {
 	}
 	lr.cancel()
 	return nil
+}
+
+// StopAllTests stops every test run in flight on this replica, as one
+// that loses the lead does: the runs are the leader's, and the next leader
+// could neither see nor stop them.
+func (s *Service) StopAllTests() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, lr := range s.runs {
+		lr.cancel()
+	}
 }
 
 var reLink = regexp.MustCompile(`\(221b://[^)\s]+\)`)
@@ -820,6 +849,7 @@ func (s *Service) check(ctx context.Context, a sherlock.Agent, c TestCase, res s
 		var got []bool
 		graded := false
 		if res.Err == nil {
+			s.capsNow(ctx, &a)
 			g, cost, err := s.grade(ctx, a, res.Text, c.Expect.Points)
 			cr.CostUSD += cost
 			if err != nil {
@@ -873,6 +903,9 @@ var reJSON = regexp.MustCompile(`(?s)\{.*\}`)
 // grade asks a second model call which points an answer makes, with the
 // agent's own model, charged to it.
 func (s *Service) grade(ctx context.Context, a sherlock.Agent, answer string, points []string) ([]bool, float64, error) {
+	if err := s.engine.CapsErr(ctx, &a); err != nil {
+		return nil, 0, err
+	}
 	var b strings.Builder
 	b.WriteString("<answer>\n" + answer + "\n</answer>\n<points>\n")
 	for i, p := range points {

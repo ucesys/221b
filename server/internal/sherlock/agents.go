@@ -497,6 +497,10 @@ func (s *Service) capsErr(ctx context.Context, a *Agent) error {
 	return CheckAll(s.opts.Settings().Caps, s.opts.Ledger.Now(ctx), a)
 }
 
+// CapsErr says whether the caps are reached, for a model call made outside
+// a run, as a test's grading is.
+func (s *Service) CapsErr(ctx context.Context, a *Agent) error { return s.capsErr(ctx, a) }
+
 // runTool runs one call of the agents' own tools; handOver runs a
 // hand-over.
 func (s *Service) runAgentTool(ctx context.Context, a *Agent, q Question, r *run, call Block) ToolResult {
