@@ -1003,8 +1003,9 @@ func (s *Server) postAILive(w http.ResponseWriter, r *http.Request) {
 }
 
 // localProduction says whether the console's own cluster (the connection
-// "local") is production, for the untested go-live (AI-34). One whose
-// environment is not known counts as production.
+// "local") is production, for the untested go-live (AI-34). Only one
+// chosen as staging or development is not; other, or not known, counts
+// as production.
 func (s *Server) localProduction() bool {
 	if s.opts.Clusters == nil {
 		return true
@@ -1014,7 +1015,7 @@ func (s *Server) localProduction() bool {
 		return true
 	}
 	switch sum.Env {
-	case clusters.EnvStaging, clusters.EnvDevelopment, clusters.EnvOther:
+	case clusters.EnvStaging, clusters.EnvDevelopment:
 		return false
 	}
 	return true

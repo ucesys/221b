@@ -37,6 +37,9 @@ type Exclusion struct {
 	Pattern string `json:"pattern"`
 	// Under is a Confluence page and its children.
 	Under bool `json:"under,omitempty"`
+	// Item says Pattern is one item's id, matched as it is: a page whose
+	// id ends in / or holds a * is that page alone.
+	Item bool `json:"item,omitempty"`
 	// Title is the item's title, when it is one.
 	Title  string    `json:"title,omitempty"`
 	Reason string    `json:"reason,omitempty"`
@@ -60,6 +63,8 @@ func (e Exclusion) matches(kind, id string, ancestors []string) bool {
 	switch {
 	case e.Pattern == "":
 		return false
+	case e.Item:
+		return id == e.Pattern
 	case kind == SourceConfluence:
 		return id == e.Pattern || e.Under && slices.Contains(ancestors, e.Pattern)
 	case strings.Contains(e.Pattern, "*"):
@@ -257,7 +262,7 @@ func (s *Service) Exclude(ctx context.Context, c Caller, source string, in Exclu
 	e := Exclusion{Pattern: strings.TrimSpace(in.Pattern), Under: in.Under, Reason: strings.TrimSpace(in.Reason), By: c.label(), At: s.o.Now().UTC()}
 	if in.Item != "" {
 		// One item; with Under, a Confluence page and its children.
-		e.Pattern = in.Item
+		e.Pattern, e.Item = in.Item, !in.Under
 	}
 	switch {
 	case e.Pattern == "" || len(e.Pattern) > 2000 || !utf8.ValidString(e.Pattern):
@@ -393,6 +398,43 @@ func (s *Service) emptyExcluded(ctx context.Context, x Source, e Exclusion) (int
 		s.o.Logger.Warn("reading the wiki after an exclusion failed", "err", err)
 	}
 	return n, s.pageBriefs(drawn), nil
+}
+
+// keepExcluded applies the exclusions in force to a manifest about to be
+// written, and to the excerpts written with it (KN-45): a sync writes the
+// manifest it read at its start, so an item excluded while it ran would
+// come back. Each item an exclusion covers is gone, its excerpt emptied
+// instead of written; had says an excerpt is in the wiki. manifestMu is
+// held.
+func keepExcluded(set Settings, m *Manifest, writes []Change, had func(path string) bool) []Change {
+	for _, x := range set.Sources {
+		if len(x.Excluded) == 0 || !excludable(x.Kind) {
+			continue
+		}
+		parents := parentsOf(m, x.ID, nil)
+		for _, st := range m.bySource(x.ID) {
+			if _, ok := matchExclusion(x.Kind, x.Excluded, st.ID, ancestorsOf(st.ID, parents)); !ok {
+				continue
+			}
+			key := itemKey(x.ID, st.ID)
+			p := excerptPath(key)
+			written := false
+			writes = slices.DeleteFunc(writes, func(c Change) bool {
+				written = written || c.Path == p
+				return c.Path == p
+			})
+			if st.Gone && st.Hash == "" && !written {
+				continue
+			}
+			st.Gone = true
+			st.Hash, st.Version = "", ""
+			if written || had(p) {
+				b, _ := json.Marshal(Excerpt{Key: key, Chunks: []string{}})
+				writes = append(writes, Change{Path: p, Body: b})
+			}
+		}
+	}
+	return writes
 }
 
 // pageBriefs are pages by path, with their titles where the wiki has

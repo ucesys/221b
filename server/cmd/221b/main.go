@@ -269,10 +269,15 @@ func run(args []string) error {
 	w.activity.OnChange(func(active bool) {
 		if active {
 			w.handler.CheckRolesSoon()
-		} else if w.autoEngine != nil {
-			// Runs live on the leader: one that loses the lead stops its
-			// runs, so the next leader never meets one still going.
+			return
+		}
+		// Runs live on the leader: one that loses the lead stops its
+		// runs, so the next leader never meets one still going.
+		if w.autoEngine != nil {
 			w.autoEngine.StopAll("the console running it lost the lead and stopped it; nodes mid-script were stopped, and nothing was retried")
+		}
+		if w.aiSvc.Service != nil {
+			w.aiSvc.StopAllTests()
 		}
 	})
 	srv := &http.Server{

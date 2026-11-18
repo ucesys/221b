@@ -257,7 +257,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 			if err == nil && len(x.Excluded) > 0 && excludable(x.Kind) {
 				parents := parentsOf(m, x.ID, items)
 				items = slices.DeleteFunc(items, func(it Item) bool {
-					_, ok := matchExclusion(x.Kind, x.Excluded, it.ID, ancestorsOf(it.ID, parents))
+					_, ok := matchExclusion(x.Kind, x.Excluded, it.ID, append(ancestorsOf(it.ID, parents), it.Ancestors...))
 					return ok
 				})
 			}
@@ -424,6 +424,11 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	s.mu.RLock()
 	m.Retired = maps.Clone(s.manifest.Retired)
 	s.mu.RUnlock()
+	// So are the items excluded while it ran (KN-45).
+	if cur, err := s.rawSettings(ctx); err == nil {
+		writes = keepExcluded(cur, m, writes, func(p string) bool { _, ok := files[p]; return ok })
+		changed = slices.DeleteFunc(changed, func(ri readItem) bool { return m.Items[ri.key] != nil && m.Items[ri.key].Gone })
+	}
 	m.Updated = now
 	writes = append(writes, Change{Path: ManifestPath, Body: m.encode()})
 	if err := store.Write(ctx, writes, fmt.Sprintf("Mycroft read %d changed items (%s)", len(changed), req.By)); err != nil {

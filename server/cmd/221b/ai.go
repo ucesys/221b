@@ -71,7 +71,7 @@ func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secret
 	out.Service = ai.New(ai.Options{
 		Backend: backend, Settings: o.shared, Keys: o.keys, KeyBackend: keyBackend,
 		ChartProvider: o.chartProvider, ProviderLocked: cfg.SherlockLockProvider, DefaultURL: cfg.SherlockAPIURL,
-		HTTP: &http.Client{Timeout: 5 * time.Minute}, Baselines: baselines, ToolDefs: sherlocktools.Defs, Logger: o.log,
+		HTTP: &http.Client{Timeout: 5 * time.Minute}, Baselines: baselines, ToolDefs: sherlocktools.Defs, Context: ctx, Logger: o.log,
 	})
 	mctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

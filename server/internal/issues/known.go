@@ -601,7 +601,7 @@ func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return st.settings(), nil
+	return st.settings().shown(), nil
 }
 
 // SaveSettings replaces the settings (IS-29), for an administrator.
@@ -613,9 +613,13 @@ func (s *Service) SaveSettings(ctx context.Context, c Caller, set Settings) (Set
 	if err := set.Validate(); err != nil {
 		return Settings{}, err
 	}
+	set = set.shown()
 	err := s.update(ctx, func(st *state, ch *change) (int, error) {
 		before := st.settings()
-		st.config.Settings = &set
+		// What was saved before 0.12.1 is kept as it is.
+		kept := set
+		kept.ReportURL, kept.StatusPage = before.ReportURL, before.StatusPage
+		st.config.Settings = &kept
 		ch.audit(AuditRecord{Action: ActionSettings, Who: c.Person, Target: "issue settings", Detail: settingsChanges(before, set), From: c.From})
 		return saveConfig, nil
 	})

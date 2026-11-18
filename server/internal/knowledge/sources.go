@@ -30,6 +30,10 @@ type Item struct {
 	// Type is what people added (AddText, AddDocument), and Parent a
 	// Confluence page's parent (KN-45).
 	Type, Parent string
+	// Ancestors are a Confluence page's ancestors as Confluence lists
+	// them, where it does: an exclusion of a page and its children
+	// covers a grandchild whose parent was never read.
+	Ancestors []string
 }
 
 // reader reads one source.
@@ -162,7 +166,7 @@ func (r *confluenceReader) List(ctx context.Context, since time.Time) ([]Item, b
 	}
 	out := make([]Item, 0, len(pages))
 	for _, p := range pages {
-		out = append(out, Item{ID: p.ID, Title: p.Title, Version: strconv.Itoa(p.Version), Modified: p.Modified, URL: p.URL, Parent: p.ParentID})
+		out = append(out, Item{ID: p.ID, Title: p.Title, Version: strconv.Itoa(p.Version), Modified: p.Modified, URL: p.URL, Parent: p.ParentID, Ancestors: p.Ancestors})
 	}
 	return out, since.IsZero(), nil
 }

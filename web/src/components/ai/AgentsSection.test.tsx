@@ -269,6 +269,9 @@ describe('the agents’ helpers', () => {
     expect(stageIndex(instructions())).toBe(3)
     expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'draft', by: 'a', at: '' } }))).toBe(0)
     expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'test', by: 'a', at: '', test: { rev: 2, at: '', by: '', cases: 1, passed: 1, same: 0, costUSD: 0, estimate: 0 } } }))).toBe(1)
+    // Only a run that ran every case to the end tests the draft.
+    expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'draft', by: 'a', at: '', test: { rev: 2, at: '', by: '', cases: 1, passed: 1, same: 0, costUSD: 0, estimate: 0, state: 'stopped' } } }))).toBe(0)
+    expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'draft', by: 'a', at: '', test: { rev: 2, at: '', by: '', cases: 1, passed: 1, same: 0, costUSD: 0, estimate: 0, state: 'failed', error: 'cap' } } }))).toBe(0)
     const until = new Date(Date.now() + 3600_000).toISOString()
     expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'pilot', by: 'a', at: '', pilot: { started: '', until, by: '' }, test: { rev: 2, at: '', by: '', cases: 1, passed: 1, same: 0, costUSD: 0, estimate: 0 } } }))).toBe(2)
     expect(valuesYAML('troubleshooter', 'Line one.\n\nLine two.')).toBe('agents:\n  troubleshooter:\n    instructions: |\n      Line one.\n\n      Line two.\n')
@@ -358,6 +361,9 @@ describe('an agent’s built-in text, stages and context', () => {
     cleanup()
     vi.unstubAllGlobals()
   })
+  const setLocal = (env: string) => {
+    ov = { ...ov, clusters: ov.clusters.map((c) => (c.id === 'local' ? { ...c, env } : c)) }
+  }
 
   it('shows the built-in text pre-filled, saves an edit of it as a draft, resets it and compares it', async () => {
     render(<AgentsSection />)
@@ -451,6 +457,25 @@ describe('an agent’s built-in text, stages and context', () => {
     drawer = await screen.findByTestId('agent-drawer')
     await waitFor(() => expect((within(drawer).getByTestId('ins-live') as HTMLButtonElement).disabled).toBe(false))
     expect(within(drawer).queryByTestId('ins-live-untested')).toBeNull()
+    cleanup()
+    // A run stopped before every case ran leaves the draft untested; with
+    // the console's own cluster other, it waits for a second SuperAdmin.
+    setLocal('other')
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z', test: { ...test, state: 'stopped', error: 'stopped' } } })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.click(await within(drawer).findByTestId('ins-live-untested'))
+    expect((within(drawer).getByTestId('ins-live') as HTMLButtonElement).disabled).toBe(true)
+    expect(within(drawer).getByTestId('ins-test-incomplete').textContent).toContain('still untested')
+    expect(within(await screen.findByTestId('confirm')).queryByTestId('ins-untested-direct')).toBeNull()
+    cleanup()
+    setLocal('staging')
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.click(await within(drawer).findByTestId('ins-live-untested'))
+    expect(within(await screen.findByTestId('confirm')).getByTestId('ins-untested-direct').textContent).toContain('staging, not production')
   })
 
   it('opens the last test’s results in the test dialog, read-only, with the failures counted (Phase 12.1)', async () => {

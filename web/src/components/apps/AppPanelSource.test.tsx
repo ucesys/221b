@@ -67,6 +67,24 @@ describe('the Setup card’s git repository', () => {
     expect(put.body).toEqual({ source: { repo: 'https://git.example.com/mirror/221b', repository: 'mirror', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' }, createNamespace: false })
   })
 
+  it('keeps no user name or token of an address in the browser, and says so (0.12.1)', async () => {
+    const kept = 'https://ann:ghp_secret123@github.com/ucesys/221b?token=x#y'
+    card({ ...app, source: { ...app.source, repo: kept, repository: undefined, ref: '' } } as AppView)
+    fireEvent.change(screen.getByTestId('app-src-ref'), { target: { value: 'dev' } })
+    await waitFor(() => expect(Object.keys(sessionStorage).length).toBe(1))
+    const stored = Object.values(sessionStorage).join(' ')
+    expect(stored).not.toContain('ghp_secret123')
+    expect(stored).not.toContain('token=x')
+    expect(stored).toContain('https://github.com/ucesys/221b')
+    expect(screen.getByTestId('app-src-userinfo').textContent).toContain('not kept in this browser')
+    cleanup()
+    // Back on the page, the saved address is the one used.
+    card({ ...app, source: { ...app.source, repo: kept, repository: undefined, ref: '' } } as AppView)
+    fireEvent.click(screen.getByTestId('app-src-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toBeTruthy())
+    expect((calls.find((c) => c.method === 'PUT')!.body!.source as { repo: string }).repo).toBe(kept)
+  })
+
   it('says what a release of before 0.12.1 keeps until a repository is picked', async () => {
     card({ ...app, source: { ...app.source, repository: undefined } } as AppView)
     await waitFor(() => expect(screen.getByTestId('app-src-repository-hint').textContent).toContain('Kept as https://github.com/ucesys/221b: pick its repository'))

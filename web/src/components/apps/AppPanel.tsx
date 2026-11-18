@@ -653,9 +653,36 @@ function readDraft(key: string): SourceDraft | null {
     return null
   }
 }
+/**
+ * A repository address as a draft keeps it in the browser: without a user
+ * name, password or token, query or fragment, any of which may carry a
+ * secret. An address that is not a URL (git@host:path) is kept as it is.
+ */
+function draftAddress(repo: string): string {
+  try {
+    const u = new URL(repo.trim())
+    if (!u.username && !u.password && !u.search && !u.hash) return repo
+    u.username = ''
+    u.password = ''
+    u.search = ''
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return repo
+  }
+}
+/** Whether an address carries a user name or password (or token). */
+function hasUserinfo(repo: string): boolean {
+  try {
+    const u = new URL(repo.trim())
+    return !!(u.username || u.password)
+  } catch {
+    return false
+  }
+}
 function writeDraft(key: string, d: SourceDraft | null) {
   try {
-    if (d) sessionStorage.setItem(key, JSON.stringify(d))
+    if (d) sessionStorage.setItem(key, JSON.stringify({ ...d, repo: draftAddress(d.repo) }))
     else sessionStorage.removeItem(key)
   } catch {
     // Storage off: the draft lives only in the card.
@@ -666,7 +693,9 @@ function writeDraft(key: string, d: SourceDraft | null) {
 export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
   const key = draftKey(clusterId, row)
   const [draft] = useState(() => readDraft(key))
-  const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
+  // A draft keeps the address without its user name or token: the saved
+  // address is used again where the draft names it.
+  const [repo, setRepo] = useState(draft && app && draft.repo === draftAddress(app.source.repo) ? app.source.repo : (draft?.repo ?? app?.source.repo ?? ''))
   // --- Administration › Settings › Repositories (0.12.1, RP-03): the git repository of
   // the list, by name; its address and credential are its own, and the
   // release keeps its path and branch or tag.
@@ -936,6 +965,11 @@ export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { 
           </span>
         </label>
       </div>
+      {!gitRepo && hasUserinfo(repo) && (
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--err)' }} role="alert" data-testid="app-src-userinfo">
+          This address carries a user name or token, which is not kept in this browser: pick its repository above, whose credential holds the token.
+        </p>
+      )}
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
           {look.text}

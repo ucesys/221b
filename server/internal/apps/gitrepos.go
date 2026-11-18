@@ -626,17 +626,20 @@ func (r *Repos) MigrateGit(ctx context.Context, consumers []GitConsumer, by stri
 		sort.Strings(labels)
 		name, ok := have[[2]string{g.url, g.cred}]
 		if !ok {
-			name = migratedRepoName(g.url, taken)
-			repo := Repository{Name: name, Kind: KindGit, URL: g.url, Credential: g.cred, Auth: AuthNone, CredMigrated: true, SetBy: by, SetAt: now}
-			if err := r.put(ctx, repo); err != nil {
+			repo := Repository{Name: migratedRepoName(g.url, taken), Kind: KindGit, URL: g.url, Credential: g.cred, Auth: AuthNone, CredMigrated: true, SetBy: by, SetAt: now}
+			made, err := r.addMigrated(ctx, &repo)
+			if err != nil {
 				notes = append(notes, fmt.Sprintf("%s keep the address %s: no repository could be made of it (%v)", strings.Join(labels, ", "), g.url, strings.TrimPrefix(err.Error(), ErrInvalidRepo.Error()+": ")))
 				continue
 			}
+			name = repo.Name
 			taken[name] = true
 			have[[2]string{g.url, g.cred}] = name
-			created = append(created, GitMigrated{Name: name, URL: g.url, Credential: g.cred, From: labels})
-			if n := len(creds[g.url]); n > 1 {
-				notes = append(notes, fmt.Sprintf("%s is one of %d repositories made for %s: its users named different credentials", name, n, g.url))
+			if made {
+				created = append(created, GitMigrated{Name: name, URL: g.url, Credential: g.cred, From: labels})
+				if n := len(creds[g.url]); n > 1 {
+					notes = append(notes, fmt.Sprintf("%s is one of %d repositories made for %s: its users named different credentials", name, n, g.url))
+				}
 			}
 		}
 		for _, f := range g.users {
@@ -671,6 +674,38 @@ func (r *Repos) MigrateGit(ctx context.Context, consumers []GitConsumer, by stri
 		return nil
 	})
 	return created, err
+}
+
+// addMigrated adds a repository the migration made, checked against the
+// list as it is when written, not as it was read: another replica that led
+// meanwhile may have made one. One of the same address and credential is
+// used instead, and a name taken meanwhile is never overwritten but another
+// picked. repo's name is the one used; made says it was added.
+func (r *Repos) addMigrated(ctx context.Context, repo *Repository) (bool, error) {
+	want := repo.Name
+	made := false
+	err := r.update(ctx, func(rec *repoRecord) error {
+		repo.Name, made = want, false
+		taken := map[string]bool{}
+		for _, x := range rec.Repositories {
+			if x.Kind == KindGit && x.URL == repo.URL && x.Credential == repo.Credential {
+				repo.Name = x.Name
+				return nil
+			}
+			taken[x.Name] = true
+		}
+		if taken[repo.Name] {
+			repo.Name = migratedRepoName(repo.URL, taken)
+		}
+		if len(rec.Repositories) >= MaxRepositories {
+			return fmt.Errorf("%w: at most %d repositories; remove one first", ErrInvalidRepo, MaxRepositories)
+		}
+		rec.Repositories = append(rec.Repositories, *repo)
+		made = true
+		return nil
+	})
+	r.forget(repo.Name)
+	return made, err
 }
 
 // AppGitConsumer makes repositories of the applications' git addresses.

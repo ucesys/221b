@@ -83,6 +83,10 @@ type Page struct {
 	Modified time.Time `json:"modified,omitzero"`
 	Body     string    `json:"body,omitempty"`
 	URL      string    `json:"url,omitempty"`
+
+	// Ancestors are its ancestors' ids, where a listing gives them (Data
+	// Center's).
+	Ancestors []string `json:"ancestors,omitempty"`
 }
 
 // Error is Confluence's refusal.
@@ -347,6 +351,9 @@ func (c *Client) fromV1(p v1Content) Page {
 	}
 	if n := len(p.Ancestors); n > 0 {
 		out.ParentID = p.Ancestors[n-1].ID
+	}
+	for _, a := range p.Ancestors {
+		out.Ancestors = append(out.Ancestors, a.ID)
 	}
 	return out
 }
