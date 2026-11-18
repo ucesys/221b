@@ -76,7 +76,7 @@ func aiJSON(t *testing.T, c *http.Client, method, url, body string, want int, v 
 	}
 }
 
-// Settings › AI: providers with a credential that is never shown, a test
+// Administration › AI: providers with a credential that is never shown, a test
 // of each, agents moved between them, and only for a SuperAdmin.
 func TestAIProvidersAndAgentsAPI(t *testing.T) {
 	srv, ops, fake, _, _ := aiSetup(t)

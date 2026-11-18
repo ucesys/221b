@@ -44,7 +44,7 @@ describe('an approval says what it approves (AI-35)', () => {
   it('shows the agent, the draft, untested and why, its test, who asked, and its diff against the version in force', async () => {
     render(<AdminRequestDetail row={row()} />)
     expect(screen.getByTestId('approval-prompt-agent').textContent).toBe('Auditor')
-    expect(screen.getByTestId('approval-prompt-agent').getAttribute('href')).toContain('admin/settings/agents/auditor')
+    expect(screen.getByTestId('approval-prompt-agent').getAttribute('href')).toContain('admin/ai/agents/auditor')
     expect(screen.getByTestId('approval-prompt-how').textContent).toBe('untested, because: hotfix')
     await waitFor(() => expect(screen.getByTestId('approval-prompt-test').textContent).toContain('tested: 4 of 6 passed'))
     expect(screen.getByTestId('approval-prompt-rev').textContent).toContain('Draft 5, saved by ann')

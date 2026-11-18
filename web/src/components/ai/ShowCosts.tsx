@@ -3,7 +3,7 @@ import { saveShowCosts } from '../../api/settings'
 import { setShowCosts, useShowCosts } from '../../lib/costs'
 
 /**
- * Show costs (Phase 12, wave 6c, CF-40), in Settings › AI › Agents: a
+ * Show costs (Phase 12, wave 6c, CF-40), in Administration › AI › Agents: a
  * SuperAdmin's switch for everyone. Off, no dollar amount shows anywhere
  * but in the budget fields where budgets are set; the budgets still hold.
  * It is saved at once, and every console follows it.

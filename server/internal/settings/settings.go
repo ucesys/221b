@@ -64,7 +64,7 @@ type Settings struct {
 	ImageChecks *bool `json:"imageChecks,omitempty"`
 	// HideCosts hides every dollar amount from the console's pages for
 	// everyone, but the budgets where they are set (Phase 12, wave 6c,
-	// CF-40): a SuperAdmin's switch, Settings › AI › Show costs. The
+	// CF-40): a SuperAdmin's switch, Administration › AI › Agents › Show costs. The
 	// budgets are kept all the same. A State says it as showCosts.
 	HideCosts bool `json:"hideCosts,omitempty"`
 }

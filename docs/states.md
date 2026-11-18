@@ -26,11 +26,11 @@ stateDiagram-v2
     }
     New --> Closed: a person closes it with an outcome
     InProgress --> Closed: a person closes it with an outcome
-    Waiting --> Closed: timer, no answer for 5 days (Settings › Issues), as no action needed
+    Waiting --> Closed: timer, no answer for 5 days (Administration › AI › Issues), as no action needed
     InProgress --> Closed: an agent-found case below P1 whose applied fix a run of its job re-checked inside its scope and found gone: closed as fixed by the console (CF-30, CF-94)
     Closed --> New: reopened (a person with a reason, its reporter, or a run of its job finding it again, or re-checking it and finding it still there, after a fix: the fix did not hold, CF-30, CF-94)
     Closed --> InProgress: reopened the same ways, when it has an assignee
-    Closed --> [*]: an agent-found case is deleted after 90 days (Settings › Cases); a person's keeps its record, its text dropped after the retention
+    Closed --> [*]: an agent-found case is deleted after 90 days (Administration › AI › Cases); a person's keeps its record, its text dropped after the retention
 ```
 
 The outcomes of a close: Fixed (with Save fix, CF-50; an RCA at P0-P1),
@@ -203,7 +203,7 @@ stateDiagram-v2
 
 An exception covers one cluster, one object (or the cluster as a whole)
 and one validation rule (the agents' check id, or a finding's title made
-plain). An active exception that matched nothing for the days Settings ›
+plain). An active exception that matched nothing for the days Administration › AI ›
 Cases names is marked stale, a flag, not a state; it still applies until
 removed. Inactive is shown with why it is inactive; the API keeps the state
 `removed`.

@@ -114,8 +114,8 @@ function RefPicker({ refs, value, kind, onChange, id }: { refs: RepoRefs | null;
 // --- Helm repositories (Phase 12, wave 5, HR-05, HR-06) ---
 
 const KINDS: [SourceKind, string, string][] = [
-  ['git', 'Git repository', 'A chart in a git repository Settings › Repositories lists, at a branch or tag'],
-  ['helm', 'Helm repository', 'A chart of a Helm repository Settings › Repositories lists'],
+  ['git', 'Git repository', 'A chart in a git repository Administration › Settings › Repositories lists, at a branch or tag'],
+  ['helm', 'Helm repository', 'A chart of a Helm repository Administration › Settings › Repositories lists'],
   ['oci', 'OCI registry', 'A chart in an OCI registry: oci://registry/path/chart'],
 ]
 
@@ -207,7 +207,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [versions, setVersions] = useState<string[]>([])
   const [chartNote, setChartNote] = useState<{ state: 'busy' | 'done' | 'error'; text: string } | null>(null)
   const repoKind = kind === 'helm' || kind === 'oci'
-  // --- Settings › Repositories (0.12.1, RP-03): the git repository of
+  // --- Administration › Settings › Repositories (0.12.1, RP-03): the git repository of
   // the list, by name, whose address and credential the chart is fetched
   // with; the application keeps its branch, tag and path.
   const [gitRepo, setGitRepo] = useState(app && !fromRepository(app.source) ? (app.source.repository ?? '') : '')
@@ -423,7 +423,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
-  // A git chart comes from a repository Settings › Repositories lists (RP-03).
+  // A git chart comes from a repository Administration › Settings › Repositories lists (RP-03).
   const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : gitRepo !== '' && repo.trim() !== '' && ref.trim() !== ''
   const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && sourceReady : mode === 'source' ? sourceReady : mode === 'switch' ? ref.trim() !== '' : true)
   // A release whose chart comes from a repository moves between versions, not branches.
@@ -507,7 +507,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             <>
               <Field
                 label="Helm repository"
-                hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Repositories' : 'As Settings › Repositories lists them'}
+                hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Repositories' : 'As Administration › Settings › Repositories lists them'}
               >
                 <label className="rk-field">
                   <select value={repository} onChange={(e) => (setRepository(e.target.value), setChart(''), setRef(''), setVersions([]))} data-testid="app-repository">
@@ -537,7 +537,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             </>
           )}
           {(mode === 'create' || mode === 'source') && kind === 'oci' && (
-            <Field label="Chart" hint="oci:// with the registry, the path and the chart; an OCI registry Settings › Repositories lists signs in for it" wide>
+            <Field label="Chart" hint="oci:// with the registry, the path and the chart; an OCI registry Administration › Settings › Repositories lists signs in for it" wide>
               <label className="rk-field">
                 <input className="rk-mono" value={chart} onChange={(e) => (setChart(e.target.value), setVersions([]))} onBlur={loadVersions} placeholder="oci://registry.example.com/charts/app" data-testid="app-oci" />
               </label>
@@ -564,7 +564,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           )}
           {(mode === 'create' || mode === 'source') && kind === 'git' && (
             <>
-              <Field label="Repository" hint="A git repository of Settings › Repositories; the application keeps its own path and branch or tag" wide>
+              <Field label="Repository" hint="A git repository of Administration › Settings › Repositories; the application keeps its own path and branch or tag" wide>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                   <div style={{ flex: '1 1 320px', minWidth: 0 }}>
                     <GitRepoPicker

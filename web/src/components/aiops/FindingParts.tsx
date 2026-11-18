@@ -51,7 +51,7 @@ export const ROUTING: Record<FindingRouting, { label: string; tone: string; hint
   excepted: { label: 'Excepted', tone: 'muted', hint: 'Left out by an accepted exception' },
   reopened: { label: 'Reopened', tone: 'err', hint: 'The fix did not hold: the case is open again' },
   regression: { label: 'Regression', tone: 'err', hint: 'Back after a fix: a new case marked a regression' },
-  capped: { label: 'Capped', tone: 'muted', hint: 'Over the run’s limit of new cases (Settings › Cases)' },
+  capped: { label: 'Capped', tone: 'muted', hint: 'Over the run’s limit of new cases (Administration › AI › Cases)' },
   invalid: { label: 'Not valid', tone: 'muted', hint: 'Its validation rule or object was not valid: not routed' },
   // --- A job's lowest priority (Phase 12, wave 6c, CF-33) ---
   ignored: { label: 'Ignored', tone: 'muted', hint: 'Below the job’s lowest priority: it opened no case' },

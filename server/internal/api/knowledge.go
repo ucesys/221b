@@ -44,7 +44,7 @@ func (s *Server) knowledgeCaller(r *http.Request) (knowledge.Caller, bool) {
 	return c, true
 }
 
-// knowledgeSummary is Settings › AI's line on Mycroft's knowledge.
+// knowledgeSummary is Administration › AI's line on Mycroft's knowledge.
 func (s *Server) knowledgeSummary() string {
 	k := s.opts.Knowledge
 	if k == nil {

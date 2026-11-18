@@ -458,7 +458,7 @@ components:
           type: object
           description: "Operators only; absent for a case without an SLA clock (an agent-found case below P1)"
           properties:
-            target: { type: object, properties: { responseMinutes: { type: integer }, resolveMinutes: { type: integer } }, description: The priority's targets (Settings › SLA) }
+            target: { type: object, properties: { responseMinutes: { type: integer }, resolveMinutes: { type: integer } }, description: The priority's targets (Administration › AI › SLA) }
             responseDue: { type: string, format: date-time }
             resolveDue: { type: string, format: date-time }
             responseLate: { type: boolean }
@@ -558,11 +558,11 @@ components:
     Settings:
       type: object
       properties:
-        company: { type: string, description: "The report page's header; set in Settings › General since 0.12.1 (IS-32)" }
+        company: { type: string, description: "The report page's header; set in Administration › Settings › General since 0.12.1 (IS-32)" }
         matchThreshold: { type: integer, minimum: 1, maximum: 100, default: 80 }
         targets:
           type: object
-          description: 'By priority, "0" to "4" (Settings › SLA in the console)'
+          description: 'By priority, "0" to "4" (Administration › AI › SLA in the console)'
           additionalProperties: { type: object, properties: { responseMinutes: { type: integer }, resolveMinutes: { type: integer } } }
         retentionDays: { type: integer, default: 365 }
         ratePerHour: { type: integer, default: 10 }

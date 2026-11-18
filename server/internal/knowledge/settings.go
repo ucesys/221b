@@ -32,7 +32,7 @@ const (
 // ConsoleSourceID is the console's own source, there from the start.
 const ConsoleSourceID = "console"
 
-// AddedSourceID is the source of what people add in Mycroft (Settings ›
+// AddedSourceID is the source of what people add in Mycroft (Administration › AI ›
 // Knowledge's Added in Mycroft card, MY-11):
 // notes, web pages read from an address, and documents (MY-04); a source
 // of uploaded documents, there from the start.
@@ -59,7 +59,7 @@ type Source struct {
 	Branch   string `json:"branch,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Username string `json:"username,omitempty"`
-	// Repository names the git repository of Settings › Repositories the
+	// Repository names the git repository of Administration › Settings › Repositories the
 	// source reads (0.12.1, RP-03): URL and Credential are the
 	// repository's then, read from the list (gitrepos.go).
 	Repository string `json:"repository,omitempty"`
@@ -97,12 +97,12 @@ type Source struct {
 	CAPEM   string    `json:"caPEM,omitempty"`
 	Added   time.Time `json:"added,omitzero"`
 	AddedBy string    `json:"addedBy,omitempty"`
-	// Credential is the credential of Settings › Credentials a Confluence
+	// Credential is the credential of Administration › Credentials a Confluence
 	// space, repository, bucket, web site or live source signs in with, by
 	// id; "" is none, or a bucket's pod identity (0.12.1, CR-11).
 	Credential string `json:"credential,omitempty"`
 	// CredMigrated says the source names its credential: the one it kept
-	// in the knowledge Secret before 0.12.1 was moved to Settings ›
+	// in the knowledge Secret before 0.12.1 was moved to Administration ›
 	// Credentials, or it had none (CR-12). Its Auth and Username, and that
 	// kept credential, are not read again.
 	CredMigrated bool `json:"credMigrated,omitempty"`
@@ -191,7 +191,7 @@ func (s Settings) withDefaults() Settings {
 		s.Sources = append(s.Sources, Source{ID: "documents", Name: "Uploaded documents", Kind: SourceUpload})
 	}
 	// --- Mycroft tab (Phase 12, wave 5) ---
-	// What people add in Settings › Knowledge's Added in Mycroft card (MY-04, MY-11).
+	// What people add in Administration › AI › Knowledge's Added in Mycroft card (MY-04, MY-11).
 	if !slices.ContainsFunc(s.Sources, func(x Source) bool { return x.ID == AddedSourceID }) {
 		s.Sources = append(s.Sources, Source{ID: AddedSourceID, Name: "Added in Mycroft", Kind: SourceUpload})
 	}
@@ -390,7 +390,7 @@ func (st StoreSettings) fingerprint() string {
 }
 
 // Settings reads the settings, the git sources that name a repository of
-// Settings › Repositories with its address and credential (RP-03).
+// Administration › Settings › Repositories with its address and credential (RP-03).
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	set, err := s.rawSettings(ctx)
 	if err != nil {
@@ -596,7 +596,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 
 // keepsOwnCredential says a source saved keeps a credential of its own in
 // the knowledge Secret, as before 0.12.1, rather than naming one of
-// Settings › Credentials: one typed with it, or, for a source not switched
+// Administration › Credentials: one typed with it, or, for a source not switched
 // yet edited without naming one, the one it keeps.
 func (s *Service) keepsOwnCredential(ctx context.Context, x Source, ch CredsChange, create bool) bool {
 	if x.Credential != "" || !signsIn(x.Kind) || x.namesRepo() {

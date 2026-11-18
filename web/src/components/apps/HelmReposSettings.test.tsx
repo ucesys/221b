@@ -2,11 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HelmReposSettings } from './HelmReposSettings'
 
-// Settings › Repositories (0.12.1, RP-01 to RP-06; Settings › Applications
-// before, HR-02) with Settings › Credentials (CR-11): a repository names a
+// Administration › Settings › Repositories (0.12.1, RP-01 to RP-06; Settings › Applications
+// before, HR-02) with Administration › Credentials (CR-11): a repository names a
 // credential, chosen by name, and keeps no secret; git repositories are
 // listed beside the chart repositories, each with what uses it.
-describe('Settings › Repositories', () => {
+describe('Administration › Settings › Repositories', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let migration: Record<string, unknown> | undefined
   beforeEach(() => {

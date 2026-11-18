@@ -112,7 +112,7 @@ var (
 	// ErrNotLeader is work only the leader does, asked of another replica.
 	ErrNotLeader = errors.New("only the console that leads does this")
 	// ErrNoStore is work that needs the wiki's store before one is set.
-	ErrNoStore = errors.New("choose where the wiki is kept first, in Settings › Knowledge")
+	ErrNoStore = errors.New("choose where the wiki is kept first, in Administration › AI › Knowledge")
 	// ErrBusy is a sync asked for while one runs.
 	ErrBusy = errors.New("a sync is running")
 	// ErrConflict is a request another came before (KN-24): one waits
@@ -177,7 +177,7 @@ type Options struct {
 	// Secrets keeps the credentials, one key each, in the Secret
 	// <release>-knowledge; nil keeps them in memory.
 	Secrets SecretStore
-	// Credentials are Settings › Credentials, which the sources name
+	// Credentials are Administration › Credentials, which the sources name
 	// (0.12.1, CR-11); nil is none.
 	Credentials *credentials.Service
 	// Dir is where the local copy of the wiki, and the source
@@ -261,7 +261,7 @@ type Service struct {
 	// cmStore is the ConfigMap store, when the chart made its ConfigMap.
 	cmStore *ConfigMapStore
 
-	// gitRepos are Settings › Repositories' git repositories (RP-03).
+	// gitRepos are Administration › Settings › Repositories' git repositories (RP-03).
 	gitRepos gitRepos
 
 	// open makes a store from typed settings (tests).

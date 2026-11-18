@@ -1231,9 +1231,9 @@ func (s *Service) SaveSLA(ctx context.Context, targets map[string]issues.Target,
 	return out.Targets, nil
 }
 
-// ---------- Settings › Cases (CF-19) ----------
+// ---------- Administration › AI › Cases (CF-19) ----------
 
-// Settings are Settings › Cases, with the counter.
+// Settings are Administration › AI › Cases, with the counter.
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	rec, err := s.loadRecord(ctx)
 	if err != nil {
@@ -1244,10 +1244,10 @@ func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	return out, nil
 }
 
-// SaveSettings changes Settings › Cases; a SuperAdmin's.
+// SaveSettings changes Administration › AI › Cases; a SuperAdmin's.
 func (s *Service) SaveSettings(ctx context.Context, in Settings, c Caller) (Settings, error) {
 	if !c.Admin {
-		return Settings{}, fmt.Errorf("%w: only a SuperAdmin changes Settings › Cases", ErrDenied)
+		return Settings{}, fmt.Errorf("%w: only a SuperAdmin changes Administration › AI › Cases", ErrDenied)
 	}
 	in.DuplicatesOfAgentCases = 0
 	if err := in.Validate(); err != nil {
@@ -1267,7 +1267,7 @@ func (s *Service) SaveSettings(ctx context.Context, in Settings, c Caller) (Sett
 		return Settings{}, err
 	}
 	s.record(audit.Event{Action: ActionSettings, Who: who(c.Person), Target: "cases settings", From: c.From, Outcome: audit.OutcomeOK,
-		Detail: fmt.Sprintf("Settings › Cases: keep closed agent-found cases %d → %d days, look back %d → %d days, exceptions stale after %d → %d days, %d → %d exceptions per agent, %d → %d new cases per run, a case for a critical alert after %s → %s",
+		Detail: fmt.Sprintf("Administration › AI › Cases: keep closed agent-found cases %d → %d days, look back %d → %d days, exceptions stale after %d → %d days, %d → %d exceptions per agent, %d → %d new cases per run, a case for a critical alert after %s → %s",
 			before.KeepAgentClosedDays, in.KeepAgentClosedDays, before.LookBackDays, in.LookBackDays, before.ExceptionStaleDays, in.ExceptionStaleDays, before.ExceptionsPerAgent, in.ExceptionsPerAgent, before.NewCasesPerRun, in.NewCasesPerRun,
 			afterWords(before.AlertAfter()), afterWords(in.AlertAfter()))})
 	return s.Settings(ctx)

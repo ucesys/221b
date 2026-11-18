@@ -1005,7 +1005,7 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 			}
 			// Created with a password nobody knows; the backup's, when its
 			// key opens it, replaces it (ADR-137).
-			name, where := "the password of the user "+u.Username, "Administration › Users › "+u.Username+" › Set password"
+			name, where := "the password of the user "+u.Username, "Administration › Auth › Users › "+u.Username+" › Set password"
 			hash, err := env.Open(u.Password, name, where)
 			switch {
 			case err != nil:

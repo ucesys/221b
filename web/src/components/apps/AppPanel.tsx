@@ -638,7 +638,7 @@ function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clu
 /** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
 interface SourceDraft {
   repo: string
-  /** The git repository of Settings › Repositories picked, by name (RP-03). */
+  /** The git repository of Administration › Settings › Repositories picked, by name (RP-03). */
   repository?: string
   path: string
   ref: string
@@ -667,7 +667,7 @@ export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { 
   const key = draftKey(clusterId, row)
   const [draft] = useState(() => readDraft(key))
   const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
-  // --- Settings › Repositories (0.12.1, RP-03): the git repository of
+  // --- Administration › Settings › Repositories (0.12.1, RP-03): the git repository of
   // the list, by name; its address and credential are its own, and the
   // release keeps its path and branch or tag.
   const [gitRepo, setGitRepo] = useState(draft?.repository ?? app?.source.repository ?? '')
@@ -897,7 +897,7 @@ export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
         <div style={{ gridColumn: 'span 4', minWidth: 0 }}>
           <GitRepoPicker
-            label="Repository (Settings › Repositories)"
+            label="Repository (Administration › Settings › Repositories)"
             value={gitRepo}
             keptAddress={gitRepo ? undefined : repo || undefined}
             disabled={!canChange}

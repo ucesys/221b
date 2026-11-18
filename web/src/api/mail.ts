@@ -32,7 +32,7 @@ export interface MailSettings {
   lastTest?: MailTest
   updated?: string
   updatedBy?: string
-  /** The console's address the links start with: Settings › Watson's. */
+  /** The console's address the links start with: Administration › Settings › Watson's. */
   link: string
   /** How the last email went on this replica. */
   lastSent?: { at: string; error?: string }

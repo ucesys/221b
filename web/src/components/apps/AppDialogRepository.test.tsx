@@ -4,7 +4,7 @@ import { LiveContext, LiveStore } from '../../api/live'
 import { AppDialog } from './AppDialog'
 
 // The new application's git repository (0.12.1, RP-03): picked from
-// Settings › Repositories, whose address and credential it is fetched
+// Administration › Settings › Repositories, whose address and credential it is fetched
 // with; the application sends the repository's name with its own path and
 // branch, never a credential or a token. A SuperAdmin adds one inline;
 // the others pick from the list.

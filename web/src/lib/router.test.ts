@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adminHref, apiPath, aiopsHref, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
+import { adminHref, aiHref, authHref, settingsHref, apiPath, aiopsHref, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
 import { aiopsItemOf } from './aiopsItem'
 
 describe('routes', () => {
@@ -63,16 +63,39 @@ describe('clusters in routes', () => {
 })
 
 describe('the Administration area', () => {
-  it('reads its pages, with or without a cluster', () => {
+  it('reads its tabs and pages, with or without a cluster (CU-18)', () => {
     expect(parseHash('#/admin')).toMatchObject({ view: 'admin', cluster: 'local', path: [] })
-    expect(parseHash('#/admin/roles/admin')).toMatchObject({ view: 'admin', path: ['roles', 'admin'] })
-    expect(parseHash('#/c/dev/admin/permissions')).toMatchObject({ view: 'admin', cluster: 'dev', path: ['permissions'] })
+    expect(parseHash('#/admin/auth/roles/admin')).toMatchObject({ view: 'admin', path: ['auth', 'roles', 'admin'] })
+    expect(parseHash('#/c/dev/admin/auth/permissions')).toMatchObject({ view: 'admin', cluster: 'dev', path: ['auth', 'permissions'] })
+    expect(parseHash('#/admin/ai/agents/sherlock').path).toEqual(['ai', 'agents', 'sherlock'])
+    expect(parseHash('#/admin/ai/knowledge/added').path).toEqual(['ai', 'knowledge', 'added'])
+    expect(parseHash('#/admin/credentials').path).toEqual(['credentials'])
     expect(parseHash('#/admin/settings/watson').path).toEqual(['settings', 'watson'])
+    expect(parseHash('#/admin/settings/repositories').path).toEqual(['settings', 'repositories'])
+    expect(parseHash('#/admin/backup').path).toEqual(['backup'])
+  })
+
+  it('leads every address of before to its page now, with the item (CU-19)', () => {
+    expect(parseHash('#/admin/roles').path).toEqual(['auth', 'roles'])
+    expect(parseHash('#/c/dev/admin/roles/admin')).toMatchObject({ cluster: 'dev', path: ['auth', 'roles', 'admin'] })
+    expect(parseHash('#/admin/permissions/viewer?role=viewer')).toMatchObject({ path: ['auth', 'permissions', 'viewer'] })
+    expect(parseHash('#/admin/users/bob').path).toEqual(['auth', 'users', 'bob'])
+    for (const p of ['providers', 'agents', 'limits', 'knowledge', 'sla', 'issues', 'cases', 'jobs']) expect(parseHash(`#/admin/settings/${p}`).path).toEqual(['ai', p])
+    expect(parseHash('#/admin/settings/agents/sherlock').path).toEqual(['ai', 'agents', 'sherlock'])
+    expect(parseHash('#/admin/settings/providers/anthropic').path).toEqual(['ai', 'providers', 'anthropic'])
+    expect(parseHash('#/admin/settings/knowledge/added').path).toEqual(['ai', 'knowledge', 'added'])
+    expect(parseHash('#/admin/settings/sherlock').path).toEqual(['ai', 'agents'])
+    expect(parseHash('#/admin/settings/credentials').path).toEqual(['credentials'])
+    expect(parseHash('#/admin/settings/email').path).toEqual(['settings', 'general', 'email'])
+    expect(parseHash('#/admin/settings/apps').path).toEqual(['settings', 'repositories'])
+    expect(parseHash('#/admin/settings/start').path).toEqual(['settings', 'start'])
+    expect(parseHash('#/admin/settings').path).toEqual(['settings'])
   })
 
   it('sends an old settings link to the page under Administration (RB-47)', () => {
     expect(parseHash('#/settings')).toMatchObject({ view: 'admin', path: ['settings'] })
-    expect(parseHash('#/settings/sherlock')).toMatchObject({ view: 'admin', path: ['settings', 'sherlock'] })
+    expect(parseHash('#/settings/sherlock')).toMatchObject({ view: 'admin', path: ['ai', 'agents'] })
+    expect(parseHash('#/settings/watson')).toMatchObject({ view: 'admin', path: ['settings', 'watson'] })
   })
 
   it('sends an old Sessions or Audit log link to Logs', () => {
@@ -81,12 +104,20 @@ describe('the Administration area', () => {
   })
 
   it('builds links and keeps the page when a parameter changes', () => {
-    expect(adminHref('roles')).toBe('#/admin/roles')
-    expect(adminHref('users', ['bob'])).toBe('#/admin/users/bob')
-    expect(adminHref('permissions', [], 'dev')).toBe('#/c/dev/admin/permissions')
-    expect(adminHref('users', [], 'local', { q: 'ldap' })).toBe('#/admin/users?q=ldap')
-    expect(withParams(parseHash('#/admin/users/bob?q=a'), { q: 'b' })).toBe('#/admin/users/bob?q=b')
-    expect(withParams(parseHash('#/c/dev/admin/roles'), { x: '1' })).toBe('#/c/dev/admin/roles?x=1')
+    expect(adminHref('auth')).toBe('#/admin/auth')
+    expect(authHref('roles')).toBe('#/admin/auth/roles')
+    expect(authHref('users', ['bob'])).toBe('#/admin/auth/users/bob')
+    expect(authHref('permissions', [], 'dev')).toBe('#/c/dev/admin/auth/permissions')
+    expect(authHref('users', [], 'local', { q: 'ldap' })).toBe('#/admin/auth/users?q=ldap')
+    expect(aiHref('agents', ['sherlock'])).toBe('#/admin/ai/agents/sherlock')
+    expect(aiHref('limits', [], 'dev')).toBe('#/c/dev/admin/ai/limits')
+    expect(adminHref('credentials')).toBe('#/admin/credentials')
+    expect(settingsHref('repositories')).toBe('#/admin/settings/repositories')
+    expect(withParams(parseHash('#/admin/auth/users/bob?q=a'), { q: 'b' })).toBe('#/admin/auth/users/bob?q=b')
+    expect(withParams(parseHash('#/c/dev/admin/auth/roles'), { x: '1' })).toBe('#/c/dev/admin/auth/roles?x=1')
+    // The address of before, as it is now: what the page puts in the bar.
+    expect(withParams(parseHash('#/admin/users/bob?q=a'), {})).toBe('#/admin/auth/users/bob?q=a')
+    expect(withParams(parseHash('#/c/dev/admin/settings/agents/sherlock'), {})).toBe('#/c/dev/admin/ai/agents/sherlock')
   })
 })
 
@@ -114,8 +145,8 @@ describe('the AIOps area (CS-01, CS-06)', () => {
     expect(parseHash('#/aiops/knowledge/apps/shop')).toMatchObject({ path: ['mycroft', 'wiki', 'apps', 'shop'] })
     // Mycroft's own tabs (Phase 12, wave 5, MY-01): exceptions left the wiki.
     expect(parseHash('#/aiops/knowledge/exceptions/EX-3')).toMatchObject({ view: 'aiops', path: ['mycroft', 'exceptions', 'EX-3'] })
-    // Add moved to Settings › Knowledge (MY-11).
-    expect(parseHash('#/aiops/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['settings', 'knowledge', 'added'] })
+    // Add moved to Administration › AI › Knowledge (MY-11).
+    expect(parseHash('#/aiops/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['ai', 'knowledge', 'added'] })
     // The Wiki's Sources view is Mycroft's Sources sub-tab (0.12.1).
     expect(parseHash('#/aiops/mycroft/wiki/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'sources'] })
     expect(parseHash('#/aiops/knowledge/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'sources'] })

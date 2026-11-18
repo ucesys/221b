@@ -465,7 +465,7 @@ export interface Similar {
   recentFixed: SimilarCase[]
 }
 
-/** Settings › Cases: how long things are kept and how much a run may do. */
+/** Administration › AI › Cases: how long things are kept and how much a run may do. */
 export interface CasesSettings {
   keepAgentClosedDays: number
   lookBackDays: number

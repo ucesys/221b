@@ -13,7 +13,7 @@ import (
 // key, or a placeholder, never in clear. A restore adds the credentials
 // missing, by id, and keeps the ones the console has; one whose secret
 // the backup's key does not open comes back without it, listed to be
-// given again in Settings › Credentials.
+// given again in Administration › Credentials.
 
 // BackupEntry is one credential in a backup.
 type BackupEntry struct {
@@ -68,10 +68,10 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 		}
 		var sec Secret
 		if len(e.Set) > 0 || e.Secret != "" {
-			v, err := open(e.Secret, "the secret of the credential "+e.Name, "Settings › Credentials › "+e.Name)
+			v, err := open(e.Secret, "the secret of the credential "+e.Name, "Administration › Credentials › "+e.Name)
 			if err == nil && v != "" {
 				if json.Unmarshal([]byte(v), &sec) != nil {
-					note("credential %s: its secret in the backup cannot be read; give it again in Settings › Credentials", e.Name)
+					note("credential %s: its secret in the backup cannot be read; give it again in Administration › Credentials", e.Name)
 					sec = Secret{}
 				}
 			}

@@ -13,7 +13,7 @@ const EDITORS: [string, string][] = [
 ]
 
 /**
- * Settings › Jobs (Phase 12, JB-04, JB-07): who may edit jobs besides a
+ * Administration › AI › Jobs (Phase 12, JB-04, JB-07): who may edit jobs besides a
  * SuperAdmin, and the read-only role agents on their own read the
  * clusters with (Viewer by default), for SuperAdmins.
  */
@@ -65,7 +65,7 @@ export function JobsSettings() {
   const changed = JSON.stringify({ e: [...editors].sort(), r: role, g: draft.readerGroup ?? '' }) !== JSON.stringify({ e: [...(saved.editors ?? [])].sort(), r: saved.readerRole ?? 'viewer', g: saved.readerGroup ?? '' })
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 18 }} aria-label="Jobs" data-testid="jobs-settings">
-      <Unsaved when={changed} what="Settings › Jobs" />
+      <Unsaved when={changed} what="Administration › AI › Jobs" />
       <p className="rk-fhint" style={{ margin: 0 }}>
         Jobs start agents on schedule or events, in{' '}
         <a className="rk-link" href="#/aiops/jobs">

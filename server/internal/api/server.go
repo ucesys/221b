@@ -165,7 +165,7 @@ type Options struct {
 	// SherlockKeys holds the Claude API key.
 	SherlockKeys *sherlock.Keys
 	// AI is the agents (Phase 12): providers, agents, their instructions,
-	// tests and pilots; nil leaves Settings › AI out.
+	// tests and pilots; nil leaves Administration › AI out.
 	AI *ai.Service
 	// Watson runs kubectl and helm commands (Phase 6); nil leaves it out.
 	Watson *watson.Service
@@ -251,7 +251,7 @@ type Options struct {
 	// Repos are the chart repositories and OCI registries applications
 	// install from besides git (HR-01); nil is git alone.
 	Repos *apps.Repos
-	// Credentials are Settings › Credentials (0.12.1, CR-01): nil leaves
+	// Credentials are Administration › Credentials (0.12.1, CR-01): nil leaves
 	// the page out, and applications fetch without one.
 	Credentials *credentials.Service
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
@@ -1114,7 +1114,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Show costs is a SuperAdmin's, on its own route (CF-40).
 	if in.HideCosts {
-		jsonError(w, http.StatusBadRequest, "Show costs is changed in Settings › AI, by a SuperAdmin")
+		jsonError(w, http.StatusBadRequest, "Show costs is changed in Administration › AI › Agents, by a SuperAdmin")
 		return
 	}
 	// Sherlock's and Watson's settings change on their own routes, which

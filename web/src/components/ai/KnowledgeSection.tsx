@@ -28,7 +28,7 @@ import {
   type StoreSettings,
 } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
 import { CredentialPicker } from '../CredentialPicker'
 import { GitRepoPicker } from '../apps/GitRepoPicker'
@@ -96,7 +96,7 @@ function credLine(v: KnowledgeView, s: KnowledgeSource, names: Record<string, st
 }
 
 /**
- * Settings › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources
+ * Administration › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources
  * with how each was last read, and where its wiki is kept. Each source is
  * read by its own Wiki sync job in AIOps › Jobs (KN-28), which starts,
  * schedules and reports every sync: nothing here starts one. Sources are
@@ -325,7 +325,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
         <StaleDays v={v} run={run} busy={busy} />
         <HookToken set={v.hook} run={run} busy={busy} />
         <Row label="Mycroft’s model" hint="Its model, budget and instructions">
-          <a className="rk-link" href={adminHref('settings', ['agents'])} data-testid="knowledge-model-link">
+          <a className="rk-link" href={aiHref('agents')} data-testid="knowledge-model-link">
             Mycroft, under Agents
           </a>
         </Row>
@@ -669,10 +669,10 @@ function SourceDrawer({
   onRemove?: () => void
 }) {
   const [s, setS] = useState<KnowledgeSource>(seed ?? { id: '', name: '', kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
-  // The credential of Settings › Credentials, by id (CR-10, CR-11): the
+  // The credential of Administration › Credentials, by id (CR-10, CR-11): the
   // saved one, or none; null on a new source until chosen.
   const [cred, setCred] = useState<string | null>(seed ? (seed.credential ?? (seed.kind === 's3' && seed.credentials === 'identity' ? IDENTITY : '')) : null)
-  // --- Settings › Repositories (0.12.1, RP-03): a git source picks a git
+  // --- Administration › Settings › Repositories (0.12.1, RP-03): a git source picks a git
   // repository of the list, whose address and credential it reads with;
   // the branch and the directory stay its own.
   const [gitRepo, setGitRepo] = useState(seed?.repository ?? '')

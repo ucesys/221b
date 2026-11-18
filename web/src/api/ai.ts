@@ -1,5 +1,5 @@
 // The AI agents (Phase 12): providers, agents, their instructions on the way
-// from a draft to live, test cases and pilots. Settings › AI, for SuperAdmins.
+// from a draft to live, test cases and pilots. Administration › AI, for SuperAdmins.
 
 import { SherlockError, type SherlockModel, type SherlockProvider } from './sherlock'
 import { unauthorized } from './auth'

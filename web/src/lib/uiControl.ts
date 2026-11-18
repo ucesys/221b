@@ -10,11 +10,32 @@
 import actionsFile from '../../../server/internal/sherlock/ui_actions.json'
 import { AC_RES, AC_VERBS } from './rbac'
 import { parsePeek, peekParam, type Peek } from './peek'
-import { adminHref, aiopsHref, clusterHref, clusterPageHref, currentRoute, LOCAL, navigate, onRouteChange, parseHash, TABS, withParams, type AdminPage, type Route, type Tab } from './router'
+import {
+  adminHref,
+  aiHref,
+  aiopsHref,
+  authHref,
+  clusterHref,
+  clusterPageHref,
+  currentRoute,
+  LOCAL,
+  navigate,
+  onRouteChange,
+  parseHash,
+  settingsHref,
+  TABS,
+  withParams,
+  type AdminPage,
+  type AIPage,
+  type AuthPage,
+  type Route,
+  type SettingsPage,
+  type Tab,
+} from './router'
 import { OBJECT_KINDS } from './sherlock'
 import { drive, isDriving, onUserChange, queueQuery, setHighlight, tableHandle, tableHandles, type TableHandle } from './tables'
 import { hasUnsaved, unsavedWhat } from './unsaved'
-import { isSuperAdmin, pagesFor, seesAddedInMycroft } from './adminAccess'
+import { authPagesFor, isSuperAdmin, pagesFor, seesAddedInMycroft } from './adminAccess'
 import type { Me } from '../api/types'
 import type { SortState } from './table'
 import { currentAIOpsItem, type AIOpsItem } from './aiopsItem'
@@ -776,8 +797,10 @@ type AdminAccess = 'all' | 'signed' | 'super' | 'knowledge'
 
 interface AdminViewPage {
   label: string
-  /** The Administration page it is on, for the role check; none for home and connection. */
+  /** The Administration tab it is on, for the role check; none for home and connection. */
   area?: AdminPage
+  /** Auth's page it is, for the role check. */
+  auth?: AuthPage
   access: AdminAccess
   /** Its address in the cluster the person is on, with the item open. */
   hash: (cluster: string, item: string) => string
@@ -786,50 +809,60 @@ interface AdminViewPage {
   table?: string
 }
 
+const item = (path: string[], it: string) => [...path, ...(it ? [it] : [])]
+const auth =
+  (page: AuthPage) =>
+  (cluster: string, it: string): string =>
+    authHref(page, item([], it), cluster)
+const ai =
+  (page: AIPage) =>
+  (cluster: string, it: string): string =>
+    aiHref(page, item([], it), cluster)
 const settings =
-  (section: string) =>
-  (cluster: string, item: string): string =>
-    adminHref('settings', section ? [section, ...(item ? [item] : [])] : [], cluster)
+  (page: SettingsPage, ...path: string[]) =>
+  (cluster: string): string =>
+    settingsHref(page, path, cluster)
 const admin =
   (page: AdminPage, ...path: string[]) =>
-  (cluster: string, item: string): string =>
-    adminHref(page, [...path, ...(item ? [item] : [])], cluster)
+  (cluster: string, it: string): string =>
+    adminHref(page, item(path, it), cluster)
 
 /**
  * The pages view_admin opens (SR-12), each in the cluster the person is on
- * so the conversation stays with them: Administration's pages and Settings'
- * sections, as their own links address them, and the home and connection
- * pages. The server's description names the same ids (testdata/ui_admin.json).
+ * so the conversation stays with them: Administration's pages (CU-18:
+ * Auth's, AI's, Credentials, Settings', Logs', Toolbox and Backup), as
+ * their own links address them, and the home and connection pages. The
+ * server's description names the same ids (testdata/ui_admin.json).
  */
 export const ADMIN_VIEW_PAGES: Record<string, AdminViewPage> = {
   home: { label: 'the home page', access: 'all', hash: () => '#/' },
   connection: { label: 'this cluster’s connection page', access: 'all', hash: (c) => clusterPageHref(c) },
-  roles: { label: 'Administration › Roles', area: 'roles', access: 'signed', hash: admin('roles'), item: true, table: 'admin-roles' },
-  permissions: { label: 'Administration › Permissions', area: 'permissions', access: 'signed', hash: admin('permissions'), item: true, table: 'admin-permissions' },
-  users: { label: 'Administration › Users', area: 'users', access: 'super', hash: admin('users'), item: true, table: 'admin-users' },
+  roles: { label: 'Administration › Auth › Roles', area: 'auth', auth: 'roles', access: 'signed', hash: auth('roles'), item: true, table: 'admin-roles' },
+  permissions: { label: 'Administration › Auth › Permissions', area: 'auth', auth: 'permissions', access: 'signed', hash: auth('permissions'), item: true, table: 'admin-permissions' },
+  users: { label: 'Administration › Auth › Users', area: 'auth', auth: 'users', access: 'super', hash: auth('users'), item: true, table: 'admin-users' },
   toolbox: { label: 'Administration › Toolbox', area: 'toolbox', access: 'super', hash: admin('toolbox') },
   sessions: { label: 'Administration › Logs › Sessions', area: 'logs', access: 'super', hash: admin('logs', 'sessions') },
   'audit-log': { label: 'Administration › Logs › Audit log', area: 'logs', access: 'super', hash: admin('logs', 'audit') },
   backup: { label: 'Administration › Backup', area: 'backup', access: 'super', hash: admin('backup') },
-  'getting-started': { label: 'Settings › Getting started', area: 'settings', access: 'super', hash: settings('start') },
-  general: { label: 'Settings › General', area: 'settings', access: 'super', hash: settings('') },
-  // --- Settings › Credentials (0.12.1, CR-01) ---
-  credentials: { label: 'Settings › Credentials', area: 'settings', access: 'super', hash: settings('credentials') },
-  providers: { label: 'Settings › Providers', area: 'settings', access: 'super', hash: settings('providers'), item: true },
-  agents: { label: 'Settings › Agents', area: 'settings', access: 'super', hash: settings('agents'), item: true },
-  limits: { label: 'Settings › Limits', area: 'settings', access: 'super', hash: settings('limits') },
-  knowledge: { label: 'Settings › Knowledge', area: 'settings', access: 'knowledge', hash: settings('knowledge') },
-  watson: { label: 'Settings › Watson', area: 'settings', access: 'super', hash: settings('watson') },
-  'notification-channels': { label: 'Settings › Watson, with its notification channels', area: 'settings', access: 'super', hash: settings('watson') },
-  // --- Settings › Repositories (0.12.1, RP-01): applications is its old name.
-  repositories: { label: 'Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
-  applications: { label: 'Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
-  sla: { label: 'Settings › SLA', area: 'settings', access: 'super', hash: settings('sla') },
-  issues: { label: 'Settings › Issues', area: 'settings', access: 'super', hash: settings('issues') },
-  'case-settings': { label: 'Settings › Cases', area: 'settings', access: 'super', hash: settings('cases') },
-  // Email is a section of General since 0.12.1; its old address leads there.
-  email: { label: 'Settings › General, at its Email section', area: 'settings', access: 'super', hash: settings('email') },
-  'jobs-settings': { label: 'Settings › Jobs', area: 'settings', access: 'super', hash: settings('jobs') },
+  'getting-started': { label: 'Administration › Settings › Getting started', area: 'settings', access: 'super', hash: settings('start') },
+  general: { label: 'Administration › Settings › General', area: 'settings', access: 'super', hash: settings('general') },
+  // --- Administration › Credentials (0.12.1, CR-01; a tab since CU-18) ---
+  credentials: { label: 'Administration › Credentials', area: 'credentials', access: 'super', hash: admin('credentials') },
+  providers: { label: 'Administration › AI › Providers', area: 'ai', access: 'super', hash: ai('providers'), item: true },
+  agents: { label: 'Administration › AI › Agents', area: 'ai', access: 'super', hash: ai('agents'), item: true },
+  limits: { label: 'Administration › AI › Limits', area: 'ai', access: 'super', hash: ai('limits') },
+  knowledge: { label: 'Administration › AI › Knowledge', area: 'ai', access: 'knowledge', hash: ai('knowledge') },
+  watson: { label: 'Administration › Settings › Watson', area: 'settings', access: 'super', hash: settings('watson') },
+  'notification-channels': { label: 'Administration › Settings › Watson, with its notification channels', area: 'settings', access: 'super', hash: settings('watson') },
+  // --- Administration › Settings › Repositories (0.12.1, RP-01): applications is its old name.
+  repositories: { label: 'Administration › Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
+  applications: { label: 'Administration › Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
+  sla: { label: 'Administration › AI › SLA', area: 'ai', access: 'super', hash: ai('sla') },
+  issues: { label: 'Administration › AI › Issues', area: 'ai', access: 'super', hash: ai('issues') },
+  'case-settings': { label: 'Administration › AI › Cases', area: 'ai', access: 'super', hash: ai('cases') },
+  // Email is a section of General since 0.12.1; its address scrolls to it.
+  email: { label: 'Administration › Settings › General, at its Email section', area: 'settings', access: 'super', hash: settings('general', 'email') },
+  'jobs-settings': { label: 'Administration › AI › Jobs', area: 'ai', access: 'super', hash: ai('jobs') },
 }
 
 let me: Me | null = null
@@ -843,9 +876,9 @@ export function setUIMe(m: Me | null): void {
 function adminRefusal(page: AdminViewPage): string | null {
   if (page.access === 'all') return null
   if (!me) return 'Who is signed in is not known in this window yet, so the page was not opened. Say what you found in words.'
-  if (me.mode === 'none' && page.area !== 'permissions') return `Sign-in is off on this console, so Administration shows Permissions alone: ${page.label} was not opened. Say what you found in words.`
+  if (me.mode === 'none' && page.auth !== 'permissions') return `Sign-in is off on this console, so Administration shows Permissions alone: ${page.label} was not opened. Say what you found in words.`
   if (page.access === 'signed') return null
-  if (page.access === 'knowledge' ? seesAddedInMycroft(me) : isSuperAdmin(me) && pagesFor(me).includes(page.area!)) return null
+  if (page.access === 'knowledge' ? seesAddedInMycroft(me) : isSuperAdmin(me) && pagesFor(me).includes(page.area!) && (!page.auth || authPagesFor(me).includes(page.auth))) return null
   return `${page.label} is for SuperAdmins, and this person’s role does not open it: it was not opened. Say so, and answer in words.`
 }
 

@@ -20,7 +20,7 @@ func (g *guide) Open(context.Context) bool { return g.open.Load() }
 
 func (g *guide) Status(context.Context) string {
 	g.reads.Add(1)
-	return "Getting started, as the console is now: 4 of 9 steps done, 0 dismissed, 5 open.\n\nNext: step 5 of 9, Knowledge: connect Mycroft's sources. Open it with [Administration › Settings › Knowledge](#/admin/settings/knowledge)."
+	return "Getting started, as the console is now: 4 of 9 steps done, 0 dismissed, 5 open.\n\nNext: step 5 of 9, Knowledge: connect Mycroft's sources. Open it with [Administration › AI › Knowledge](#/admin/ai/knowledge)."
 }
 
 // The setup skill (GS-07): Sherlock's, for a SuperAdmin, while a step is

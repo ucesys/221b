@@ -22,7 +22,7 @@ interface Props {
 }
 
 /**
- * A git repository of Settings › Repositories (0.12.1, RP-03), picked by
+ * A git repository of Administration › Settings › Repositories (0.12.1, RP-03), picked by
  * name for an application's Setup, a new application or a Mycroft git
  * source, which keep their own branch, tag and path. A SuperAdmin adds one
  * here with "Add a repository…" (its name, address, credential and
@@ -96,12 +96,12 @@ export function GitRepoPicker({ value, onChange, keptAddress, disabled, label, t
         {error
           ? error
           : chosen
-            ? `${chosen.credential ? `Fetched with ${names[chosen.credential] ?? 'its credential'}` : 'Public: no credential'}${chosen.defaultBranch ? ` · default branch ${chosen.defaultBranch}` : ''} · its address and credential change in Settings › Repositories`
+            ? `${chosen.credential ? `Fetched with ${names[chosen.credential] ?? 'its credential'}` : 'Public: no credential'}${chosen.defaultBranch ? ` · default branch ${chosen.defaultBranch}` : ''} · its address and credential change in Administration › Settings › Repositories`
             : keptAddress && !value
               ? `Kept as ${keptAddress}: pick its repository`
               : list && list.length === 0 && !mayEdit
-                ? 'None listed yet: a SuperAdmin adds them in Settings › Repositories'
-                : 'As Settings › Repositories lists them'}
+                ? 'None listed yet: a SuperAdmin adds them in Administration › Settings › Repositories'
+                : 'As Administration › Settings › Repositories lists them'}
       </span>
       {adding && (
         <AddGitRepo

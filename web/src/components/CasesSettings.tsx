@@ -1,4 +1,4 @@
-// Settings › Cases (Phase 12, wave 6): how long closed agent-found cases
+// Administration › AI › Cases (Phase 12, wave 6): how long closed agent-found cases
 // are kept, how far back New Case looks for cases closed lately, when an
 // exception is stale, how many exceptions an agent is told about, and how
 // many new cases one run may open; after how many minutes a critical alert

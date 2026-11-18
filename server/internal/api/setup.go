@@ -115,19 +115,19 @@ type setupDef struct {
 var setupDefs = []setupDef{
 	{"signin", "Sign-in: local users, or OIDC or LDAP",
 		"Everyone signs in first: roles, approvals and the audit log all name a person, and nothing that needs one (SSH, Automation, Secret values) runs without sign-in.",
-		"#/admin/users", "Administration › Users", "local users are added with Add user; OIDC and LDAP are set in the chart (auth.mode)", "docs/getting-started.md#1-sign-in"},
+		"#/admin/auth/users", "Administration › Auth › Users", "local users are added with Add user; OIDC and LDAP are set in the chart (auth.mode)", "docs/getting-started.md#1-sign-in"},
 	{"clusters", "Clusters: connect the clusters to manage",
 		"Every later step works on the clusters the console knows, so they come before what reads them.",
 		"#/home", "Home › Clusters", "Add a cluster, then paste its token or kubeconfig in the dialog", "docs/getting-started.md#2-clusters"},
 	{"provider", "AI provider and default model",
 		"The agents need a model before they can answer; the provider's key is typed on the screen into a Kubernetes Secret, never into a chat.",
-		"#/admin/settings/providers", "Administration › Settings › Providers", "the default provider's credential field and its default model", "docs/getting-started.md#3-ai-provider-and-default-model"},
+		"#/admin/ai/providers", "Administration › AI › Providers", "the default provider's credential field and its default model", "docs/getting-started.md#3-ai-provider-and-default-model"},
 	{"agents", "Agents: turn them on, set budgets",
 		"With a provider working, turning agents on and giving each a budget decides who answers and what it may cost.",
-		"#/admin/settings/agents", "Administration › Settings › Agents", "each agent's switch, model and daily and monthly budget; the total and each provider's spending limits are on Settings › Limits", "docs/getting-started.md#4-agents"},
+		"#/admin/ai/agents", "Administration › AI › Agents", "each agent's switch, model and daily and monthly budget; the total and each provider's spending limits are on Administration › AI › Limits", "docs/getting-started.md#4-agents"},
 	{"knowledge", "Knowledge: connect Mycroft's sources",
 		"Mycroft reads your Confluence spaces, runbooks and documents into a wiki the agents cite, and proposes the hosts and fleets they list, so it comes before fleets and hosts.",
-		"#/admin/settings/knowledge", "Administration › Settings › Knowledge", "where the wiki is kept, then Add source; a source's token goes in its own field", "docs/getting-started.md#5-knowledge"},
+		"#/admin/ai/knowledge", "Administration › AI › Knowledge", "where the wiki is kept, then Add source; a source's token goes in its own field", "docs/getting-started.md#5-knowledge"},
 	{"jobs", "Jobs and notifications, in Cases",
 		"Jobs run agents on their own, read only (the nightly audit, an alert's diagnosis), and notifications tell people what waits for them in Cases.",
 		"#/aiops/jobs", "AIOps › Jobs, and Administration › Settings › Watson for the notification channels", "a job's switch and budget; a channel's webhook address is typed in its own field", "docs/getting-started.md#6-jobs-and-notifications"},
@@ -321,10 +321,10 @@ func (s *Server) setupProvider(ctx context.Context, _ setupRecord) (bool, string
 		}
 		model := v.DefaultModel
 		if p.NeedsKey && !p.Key.Set && !p.KeylessOK {
-			return false, fmt.Sprintf("The default provider, %s, has no credential yet: type it into its field in Settings › Providers.", p.Name)
+			return false, fmt.Sprintf("The default provider, %s, has no credential yet: type it into its field in Administration › AI › Providers.", p.Name)
 		}
 		if model == "" {
-			return false, fmt.Sprintf("The default provider, %s, has no default model: pick one in Settings › Providers.", p.Name)
+			return false, fmt.Sprintf("The default provider, %s, has no default model: pick one in Administration › AI › Providers.", p.Name)
 		}
 		if p.KeylessOK {
 			return true, fmt.Sprintf("The default provider, %s, answered its test without a credential; its default model is %s.", p.Name, model)

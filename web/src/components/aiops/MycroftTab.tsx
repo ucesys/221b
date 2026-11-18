@@ -1,7 +1,7 @@
 // AIOps › Mycroft (Phase 12, wave 5, MY-01, ADR-118): what the console
 // knows and what people decided, in sub-tabs. Wiki is Mycroft's wiki (its
 // pages and the drafts to review) at #/aiops/mycroft/wiki[/...]; it has no
-// Add: notes and documents are added in Settings › Knowledge's Uploaded
+// Add: notes and documents are added in Administration › AI › Knowledge's Uploaded
 // documents section (MY-11, 0.12.1). Sources, since 0.12.1, is every item
 // the agents can draw on, with the exclusions, at #/aiops/mycroft/sources
 // (MycroftSources.tsx; the Wiki's old Sources view leads there). Known issues at

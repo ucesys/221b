@@ -35,7 +35,7 @@ type Cards interface {
 
 // Options configure the service.
 type Options struct {
-	// Backend keeps Settings › Cases, the checks seen and the analyses
+	// Backend keeps Administration › AI › Cases, the checks seen and the analyses
 	// under way: the casework ConfigMap; nil is memory.
 	Backend kv.Backend
 	// WorkBytes is the most the work on one case holds in its object,
@@ -239,7 +239,7 @@ type Caller struct {
 	// (issues.operatorRoles). Approve says they may approve proposed
 	// changes, which accepting or removing an exception asks (CF-03).
 	// Read says they may see the cases (a console-wide role, or one who
-	// may edit jobs). Admin (a SuperAdmin) sets the SLA and Settings ›
+	// may edit jobs). Admin (a SuperAdmin) sets the SLA and Administration › AI ›
 	// Cases.
 	Approver bool
 	Approve  bool

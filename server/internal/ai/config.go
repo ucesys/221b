@@ -103,7 +103,7 @@ type Providers struct {
 	DefaultWindow int           `json:"defaultWindow,omitempty"`
 	DefaultTested *ProviderTest `json:"defaultTested,omitempty"`
 	// DefaultID is the provider agents that name none use, made the
-	// default in Settings › Providers; "" is the default provider.
+	// default in Administration › AI › Providers; "" is the default provider.
 	DefaultID string `json:"defaultId,omitempty"`
 	// DefaultRemoved says the default provider (Sherlock's of before
 	// Phase 12) was removed, once another was made the default.

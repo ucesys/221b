@@ -1,9 +1,9 @@
-// Settings › Credentials (0.12.1, CR-01 to CR-14): a SuperAdmin adds a
-// credential whose secret never comes back; a git repository of Settings ›
+// Administration › Credentials (0.12.1, CR-01 to CR-14): a SuperAdmin adds a
+// credential whose secret never comes back; a git repository of Administration › Settings ›
 // Repositories, added from a knowledge source's drawer, picks it by name,
 // the only one that covers its address preselected, and an application
 // (its release's Setup card) picks that repository (RP-03); while the
-// repository uses it, Settings › Credentials lists it under Used by and
+// repository uses it, Administration › Credentials lists it under Used by and
 // refuses to remove it, saying by whom. Nothing here reaches the internet:
 // the addresses do not resolve.
 import { cluster, releaseRows, snapshot } from './cluster'
@@ -38,11 +38,11 @@ test('a credential is picked by a knowledge source and an application, and canno
   await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
   let credId = ''
   try {
-    // Added in Settings › Credentials: a token sent as Basic for x-access-token.
-    await page.goto('/#/admin/settings/credentials')
+    // Added in Administration › Credentials: a token sent as Basic for x-access-token.
+    await page.goto('/#/admin/credentials')
     const settings = page.getByTestId('credentials-settings')
     await expect(settings).toBeVisible()
-    await expect(page.locator('[data-testid=settings-section][data-section=credentials]')).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-admin-page=credentials]')).toHaveAttribute('aria-current', 'page')
     await settings.getByTestId('credential-add').click()
     const drawer = page.getByTestId('credential-drawer')
     await drawer.getByTestId('credential-name').fill(NAME)
@@ -59,7 +59,7 @@ test('a credential is picked by a knowledge source and an application, and canno
     credId = (JSON.parse(list) as { credentials: { id: string; name: string }[] }).credentials.find((c) => c.name === NAME)!.id
 
     // A knowledge source's git repository, added from its drawer: the credential under it preselected.
-    await page.goto('/#/admin/settings/knowledge')
+    await page.goto('/#/admin/ai/knowledge')
     await page.getByTestId('knowledge-add').click()
     const source = page.getByTestId('knowledge-source-drawer')
     await source.getByTestId('knowledge-source-kind').selectOption('git')
@@ -92,14 +92,14 @@ test('a credential is picked by a knowledge source and an application, and canno
     expect(app).toContain(`"credential":"${credId}"`)
     expect(app).not.toContain(SECRET)
 
-    // Settings › Repositories says what uses the repository.
+    // Administration › Settings › Repositories says what uses the repository.
     await page.goto('/#/admin/settings/repositories')
     const repoRow = page.locator(`[data-testid=helm-repo-row][data-repo="${REPO}"]`)
     await expect(repoRow.getByTestId('helm-repo-used-by')).toContainText('knowledge source E2E runbooks repo')
     await expect(repoRow.getByTestId('helm-repo-used-by')).toContainText(`application ${r.namespace}/${r.name}`)
 
     // The credential is used by the repository; not removed while it is, saying by whom.
-    await page.goto('/#/admin/settings/credentials')
+    await page.goto('/#/admin/credentials')
     await expect(row.getByTestId('credential-used-by')).toContainText(`git repository ${REPO}`)
     await row.getByTestId('credential-remove').click()
     const confirm = page.getByTestId('confirm')

@@ -114,7 +114,7 @@ type Config struct {
 	KnowledgeRefreshGit time.Duration
 	KnowledgeRefreshS3  time.Duration
 	// WikiConfigMap is the "namespace/name" of the ConfigMap the temporary
-	// wiki store keeps the wiki in (CF-57), used while Settings ›
+	// wiki store keeps the wiki in (CF-57), used while Administration › AI ›
 	// Knowledge names no store; empty leaves that store out.
 	WikiConfigMap string
 	// --- end of Watson cards.
@@ -262,7 +262,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.IssuesConfigMap, "issues-configmap", env("ISSUES_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the issue service's reports (every case, Phase 12 wave 5), known issues, services and settings in (empty: in memory)")
 	// --- Knowledge (Phase 12) ---
 	fs.StringVar(&c.KnowledgeConfigMap, "knowledge-configmap", env("KNOWLEDGE_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Mycroft's sources and drafts in (empty: in memory)")
-	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Settings › Knowledge names no store (empty: no such store; it will be removed)")
+	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Administration › AI › Knowledge names no store (empty: no such store; it will be removed)")
 	fs.StringVar(&c.KnowledgeDir, "knowledge-dir", env("KNOWLEDGE_DIR", ""), "directory for the wiki's local copy and the source repositories (empty: a temporary directory)")
 	fs.DurationVar(&c.KnowledgeRefreshGit, "knowledge-refresh-git", envDuration("KNOWLEDGE_REFRESH_GIT", 15*time.Minute), "how often the wiki's local copy is read again from a git repository, besides each push")
 	fs.DurationVar(&c.KnowledgeRefreshS3, "knowledge-refresh-s3", envDuration("KNOWLEDGE_REFRESH_S3", 5*time.Minute), "how often the wiki's local copy is read again from an S3 bucket")

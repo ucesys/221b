@@ -231,7 +231,7 @@ test('the Inbox takes most of a wide screen, with Columns and Export just above 
 })
 
 test('the bell stands for what waits in the Inbox, in every area, and opens it; the Inbox links to the alerts (CF-80, CF-81)', async ({ page }) => {
-  for (const hash of ['#/nodes', '#/scripts', '#/aiops/inbox', '#/admin/users']) {
+  for (const hash of ['#/nodes', '#/scripts', '#/aiops/inbox', '#/admin/auth/users']) {
     await page.goto('/' + hash)
     const bell = page.getByTestId('inbox-bell')
     await expect(bell).toBeVisible()

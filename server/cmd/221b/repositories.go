@@ -9,10 +9,10 @@ import (
 	"github.com/ucesys/221b/server/internal/knowledge"
 )
 
-// --- Settings › Repositories (0.12.1, RP-01 to RP-08) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-01 to RP-08) ---
 
 // wireGitRepositories has the applications read the git repositories
-// they name from Settings › Repositories, and list what names each.
+// they name from Administration › Settings › Repositories, and list what names each.
 func (w *wiring) wireGitRepositories() {
 	if w.helmRepos == nil || w.appStore == nil {
 		return

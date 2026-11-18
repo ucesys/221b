@@ -1194,9 +1194,9 @@ func setupReply(question string, round int, last string) (reply, bool) {
 		if next == "" {
 			return reply{text: []string{"Every step of Getting started is done or dismissed."}}, true
 		}
-		return reply{text: []string{"Next is " + next + " The other open steps are on Settings › Getting started. A password, key or token goes into its own field on that screen, never into this chat."}}, true
+		return reply{text: []string{"Next is " + next + " The other open steps are on Administration › Settings › Getting started. A password, key or token goes into its own field on that screen, never into this chat."}}, true
 	case strings.Contains(q, "token") && strings.Contains(q, "set it up"):
-		return reply{text: []string{"I will not take a token in the chat. Type it into the token field of the source on [Settings › Knowledge](#/admin/settings/knowledge), which keeps it in a Kubernetes Secret, and replace it if others could have seen it here."}}, true
+		return reply{text: []string{"I will not take a token in the chat. Type it into the token field of the source on [Administration › AI › Knowledge](#/admin/ai/knowledge), which keeps it in a Kubernetes Secret, and replace it if others could have seen it here."}}, true
 	case strings.Contains(q, "which model") && strings.Contains(q, "auditor"):
 		if round == 0 {
 			return reply{text: []string{"Asking the knowledge base."}, tool: "ask_knowledge", input: map[string]any{"question": "Which model should the Auditor use?"}}, true

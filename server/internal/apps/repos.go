@@ -5,8 +5,8 @@ package apps
 //
 // Charts come from Helm repositories and OCI registries as well as from
 // git (ADR-123). The repositories the console knows are a list that
-// SuperAdmins keep in Settings › Repositories: a name, the address, and
-// the credential of Settings › Credentials it signs in with (0.12.1,
+// SuperAdmins keep in Administration › Settings › Repositories: a name, the address, and
+// the credential of Administration › Credentials it signs in with (0.12.1,
 // CR-11). The list is a key of the settings ConfigMap. Before 0.12.1 each
 // password or token was a key of the Secret <release>-helm-repositories;
 // the upgrade made credentials of them (CR-12), and a repository it
@@ -88,7 +88,7 @@ var repoName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var ErrNoRepository = errors.New("no such chart repository")
 
 // Repository is a git repository, a Helm repository or an OCI registry
-// the console knows, as Settings › Repositories lists it (HR-02, RP-02).
+// the console knows, as Administration › Settings › Repositories lists it (HR-02, RP-02).
 type Repository struct {
 	Name string `json:"name"`
 	// Kind is git (a git repository over HTTPS, which applications' Setup
@@ -104,7 +104,7 @@ type Repository struct {
 	// DefaultBranch is a git repository's branch offered first; "" leaves
 	// it to the repository's HEAD.
 	DefaultBranch string `json:"defaultBranch,omitempty"`
-	// Credential is the credential of Settings › Credentials it signs in
+	// Credential is the credential of Administration › Credentials it signs in
 	// with, by id; "" is none (0.12.1, CR-11).
 	Credential string `json:"credential,omitempty"`
 	// CredMigrated says the repository names a credential, its own secret
@@ -128,7 +128,7 @@ type Repository struct {
 	SetAt    time.Time `json:"setAt,omitzero"`
 }
 
-// RepositoryInput is a repository as Settings › Repositories sends it:
+// RepositoryInput is a repository as Administration › Settings › Repositories sends it:
 // its kind, address and credential (CR-11).
 type RepositoryInput struct {
 	Kind          string `json:"kind"`
@@ -372,7 +372,7 @@ func (r *Repos) Get(ctx context.Context, name string) (Repository, string, error
 	}
 	i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == name })
 	if i < 0 {
-		return Repository{}, "", fmt.Errorf("%w %q: Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
+		return Repository{}, "", fmt.Errorf("%w %q: Administration › Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
 	}
 	repo := rec.Repositories[i]
 	if repo.CredMigrated {
@@ -402,7 +402,7 @@ func (r *Repos) Raw(ctx context.Context, name string) (Repository, error) {
 	}
 	i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == name })
 	if i < 0 {
-		return Repository{}, fmt.Errorf("%w %q: Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
+		return Repository{}, fmt.Errorf("%w %q: Administration › Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
 	}
 	return rec.Repositories[i], nil
 }
@@ -1301,7 +1301,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 	switch scheme {
 	case "basic":
 		if secret == "" {
-			return "", errors.New("the registry needs a user name and password: choose a credential for the repository in Settings › Repositories")
+			return "", errors.New("the registry needs a user name and password: choose a credential for the repository in Administration › Settings › Repositories")
 		}
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+secret)), nil
 	case "bearer":
@@ -1337,7 +1337,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 		defer res.Body.Close()
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 			if secret == "" {
-				return "", errors.New("the registry needs credentials: choose a credential for the repository in Settings › Repositories")
+				return "", errors.New("the registry needs credentials: choose a credential for the repository in Administration › Settings › Repositories")
 			}
 			return "", errors.New("the registry's token service refused the credentials")
 		}
@@ -1361,7 +1361,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 		return "Bearer " + tok.Token, nil
 	}
 	if secret == "" {
-		return "", errors.New("the registry needs credentials: choose a credential for the repository in Settings › Repositories")
+		return "", errors.New("the registry needs credentials: choose a credential for the repository in Administration › Settings › Repositories")
 	}
 	return "", errors.New("the registry refused the credentials")
 }
@@ -1424,7 +1424,7 @@ func statusError(res *http.Response, repo Repository) error {
 		return nil
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
 		if repo.Auth == AuthNone || repo.Auth == "" {
-			return errors.New("the repository needs credentials: choose a credential for it in Settings › Repositories")
+			return errors.New("the repository needs credentials: choose a credential for it in Administration › Settings › Repositories")
 		}
 		return errors.New("the repository refused the credentials")
 	case res.StatusCode == http.StatusNotFound:

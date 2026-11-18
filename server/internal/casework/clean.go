@@ -300,7 +300,7 @@ func (c *cleaner) renumberTargets(b kv.Backend) {
 	_, c.err = b.SaveKey(c.ctx, issues.ConfigKey, b2, version)
 }
 
-// keepSettings keeps Settings › Cases alone in their key: the analyses
+// keepSettings keeps Administration › AI › Cases alone in their key: the analyses
 // under way, the counter and the retention's day go.
 func (c *cleaner) keepSettings(b kv.Backend) {
 	if b == nil || c.err != nil {
@@ -318,7 +318,7 @@ func (c *cleaner) keepSettings(b kv.Backend) {
 	if len(rec.Analyzing) == 0 && rec.Duplicates == 0 && rec.Retained.IsZero() {
 		return
 	}
-	c.item(CleanItem{Object: "casework", Key: SettingsKey, What: "analyses under way and the counter of duplicates (Settings › Cases kept)", Count: len(rec.Analyzing) + rec.Duplicates})
+	c.item(CleanItem{Object: "casework", Key: SettingsKey, What: "analyses under way and the counter of duplicates (Administration › AI › Cases kept)", Count: len(rec.Analyzing) + rec.Duplicates})
 	if c.dry {
 		return
 	}

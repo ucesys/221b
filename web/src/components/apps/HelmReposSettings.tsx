@@ -29,13 +29,13 @@ interface Draft {
 const blank: Draft = { name: '', kind: 'git', url: '', credential: null, defaultBranch: '' }
 
 /**
- * Settings › Repositories (0.12.1, RP-01 to RP-08; Settings ›
+ * Administration › Settings › Repositories (0.12.1, RP-01 to RP-08; Settings ›
  * Applications before, HR-02, HR-03): the git repositories applications'
  * Setup and Mycroft's git sources name, and the Helm repositories and OCI
  * registries applications install charts from. A SuperAdmin adds,
  * changes, renames, tests and removes them (not one in use: Used by says
  * by whom); those who manage applications see the list. Each names a
- * credential of Settings › Credentials (CR-11), chosen by name. What the
+ * credential of Administration › Credentials (CR-11), chosen by name. What the
  * upgrade made of the git addresses typed before shows until dismissed.
  */
 export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void }) {
@@ -382,7 +382,7 @@ function RemoveRepo({ repo, onCancel, onRemoved }: { repo: HelmRepository; onCan
   return (
     <ConfirmDialog title={`Remove ${repo.name}?`} confirm="Remove" danger busy={busy} error={error} onCancel={onCancel} onConfirm={() => void remove()}>
       <p style={{ margin: 0 }}>
-        {users.length ? `It is used by ${users.join(', ')}: it stays while they name it; have them pick another repository first.` : 'Nothing names it now.'} {repo.credential ? 'Its credential stays in Settings › Credentials.' : ''}
+        {users.length ? `It is used by ${users.join(', ')}: it stays while they name it; have them pick another repository first.` : 'Nothing names it now.'} {repo.credential ? 'Its credential stays in Administration › Credentials.' : ''}
       </p>
     </ConfirmDialog>
   )

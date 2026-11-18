@@ -40,31 +40,42 @@ describe('Settings (0.12.1)', () => {
     vi.clearAllMocks()
   })
 
-  it('lists SLA first under AIOps, and no Email page of its own', () => {
+  it('lists Settings’ own pages, and no Email, Credentials or AI page among them (CU-18)', () => {
     render(<SettingsPanel route={parseHash('#/admin/settings')} settings={settings} refreshedAt={null} />)
-    const ids = screen.getAllByTestId('settings-section').map((a) => a.getAttribute('data-section'))
-    expect(ids.indexOf('sla')).toBe(ids.indexOf('issues') - 1)
-    expect(ids).not.toContain('email')
+    expect(screen.getAllByTestId('settings-section').map((a) => a.getAttribute('data-section'))).toEqual(['start', 'general', 'watson', 'repositories'])
+    expect(screen.getByRole('navigation', { name: 'Settings pages' })).toBeTruthy()
+  })
+
+  it('lists AI’s pages in two groups, Agents and AIOps, SLA first under AIOps (CU-15, CU-18)', () => {
+    render(<SettingsPanel route={parseHash('#/admin/ai/sla')} settings={settings} refreshedAt={null} />)
+    expect(screen.getAllByTestId('settings-group').map((g) => g.textContent)).toEqual(['Agents', 'AIOps'])
+    expect(screen.getAllByTestId('settings-section').map((a) => a.getAttribute('data-section'))).toEqual(['providers', 'agents', 'limits', 'knowledge', 'sla', 'issues', 'cases', 'jobs'])
+    expect(screen.getAllByTestId('settings-section').map((a) => a.getAttribute('href'))[1]).toBe('#/admin/ai/agents')
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('SLA')
+  })
+
+  it('opens each tab on its first page, Settings on General, and Credentials with no list (CU-18)', () => {
+    expect(sectionOf('ai', undefined)).toBe('providers')
+    expect(sectionOf('ai', 'general')).toBe('providers')
+    expect(sectionOf('settings', undefined)).toBe('general')
+    expect(sectionOf('settings', 'agents')).toBe('general')
+    expect(sectionOf('credentials', undefined)).toBe('credentials')
   })
 
   it('shows Email as a section of General, and the old address leads there', async () => {
-    expect(sectionOf('email')).toBe('general')
     window.history.replaceState(null, '', '#/admin/settings/email')
     render(<SettingsPanel route={parseHash('#/admin/settings/email')} settings={settings} refreshedAt={null} />)
     expect(await screen.findByTestId('email-host')).toBeTruthy()
     expect(screen.getByTestId('settings-email-section').textContent).toContain('SMTP server')
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('General')
-    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings'))
+    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings/general'))
   })
 
-  // Settings › Repositories (0.12.1, RP-01): Applications before; its old address leads there.
-  it('names Repositories, and the old address of Applications leads there', async () => {
-    expect(sectionOf('apps')).toBe('repositories')
-    window.history.replaceState(null, '', '#/admin/settings/apps')
+  // Administration › Settings › Repositories (0.12.1, RP-01): Applications before; its old address leads there.
+  it('names Repositories, and the old address of Applications leads there', () => {
     render(<SettingsPanel route={parseHash('#/admin/settings/apps')} settings={settings} refreshedAt={null} />)
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Repositories')
     expect(screen.getAllByTestId('settings-section').map((a) => a.getAttribute('data-section'))).not.toContain('apps')
-    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings/repositories'))
   })
 
   it('sets the company or IT name in General, kept in the issue settings with their other values', async () => {
@@ -138,18 +149,18 @@ describe('Settings (0.12.1)', () => {
     vi.mocked(issues.saveIssueSettings).mockImplementation(async (s) => s)
     render(<SettingsPanel route={parseHash('#/admin/settings')} settings={settings} refreshedAt={null} />)
     fireEvent.change(await screen.findByTestId('settings-company'), { target: { value: 'Acme IT' } })
-    const sla = () => screen.getAllByTestId('settings-section').find((a) => a.getAttribute('data-section') === 'sla')!
+    const sla = () => screen.getAllByTestId('settings-section').find((a) => a.getAttribute('data-section') === 'watson')!
     fireEvent.click(sla())
     const confirm = await screen.findByTestId('confirm')
     expect(confirm.textContent).toContain('Save or discard?')
-    expect(screen.getByTestId('leave-unsaved').textContent).toContain('Settings › General has changes not saved')
+    expect(screen.getByTestId('leave-unsaved').textContent).toContain('Administration › Settings › General has changes not saved')
     expect(window.location.hash).toBe('#/admin/settings')
     // Cancel stays; Save saves, then leaves.
     fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByTestId('confirm')).toBeNull()
     fireEvent.click(sla())
     fireEvent.click(await screen.findByTestId('leave-save'))
-    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings/sla'))
+    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings/watson'))
     expect(issues.saveIssueSettings).toHaveBeenCalledTimes(1)
   })
 
@@ -157,13 +168,13 @@ describe('Settings (0.12.1)', () => {
     render(<SettingsPanel route={parseHash('#/admin/settings')} settings={settings} refreshedAt={null} />)
     const field = await screen.findByTestId('settings-company')
     const to = (id: string) => screen.getAllByTestId('settings-section').find((a) => a.getAttribute('data-section') === id)!
-    fireEvent.click(to('jobs'))
-    expect(window.location.hash).toBe('#/admin/settings/jobs')
+    fireEvent.click(to('watson'))
+    expect(window.location.hash).toBe('#/admin/settings/watson')
     window.history.replaceState(null, '', '#/admin/settings')
     fireEvent.change(field, { target: { value: 'Acme IT' } })
-    fireEvent.click(to('jobs'))
+    fireEvent.click(to('watson'))
     fireEvent.click(await screen.findByTestId('confirm-ok'))
-    expect(window.location.hash).toBe('#/admin/settings/jobs')
+    expect(window.location.hash).toBe('#/admin/settings/watson')
     expect(issues.saveIssueSettings).not.toHaveBeenCalled()
   })
 })

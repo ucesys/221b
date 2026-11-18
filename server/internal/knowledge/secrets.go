@@ -87,7 +87,7 @@ type Creds struct {
 	Token           string `json:"token,omitempty"`
 	AccessKeyID     string `json:"accessKeyId,omitempty"`
 	SecretAccessKey string `json:"secretAccessKey,omitempty"`
-	// From a credential of Settings › Credentials (CR-11): a git token
+	// From a credential of Administration › Credentials (CR-11): a git token
 	// sent as Bearer, an access key's session token, how a web site's or
 	// live source's request is signed, and the values to scrub.
 	bearer       bool

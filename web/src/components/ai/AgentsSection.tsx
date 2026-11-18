@@ -8,16 +8,16 @@ import { LIMITS_HREF } from './LimitsSection'
 import { ShowCostsSection } from './ShowCosts'
 
 /**
- * Settings › AI › Agents (Phase 12): every agent with its purpose, model,
+ * Administration › AI › Agents (Phase 12): every agent with its purpose, model,
  * budget, clusters and where its instructions stand; one opens in a drawer
  * to change it. The spending limits, the total (Sherlock's caps of before)
- * and each provider's, are on Settings › Limits (AI-37).
+ * and each provider's, are on Administration › AI › Limits (AI-37).
  */
 export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) => void; initial?: string }) {
   const [ov, setOv] = useState<AIOverview | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(initial ?? null)
-  // An agent named in the address (#/admin/settings/agents/sherlock), as
+  // An agent named in the address (#/admin/ai/agents/sherlock), as
   // Sherlock's view_admin opens it (SR-12), opens its drawer.
   const [opened, setOpened] = useState(initial)
   if (initial !== opened) {
@@ -166,7 +166,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
       <p className="rk-fhint" style={{ margin: 0 }} data-testid="agents-limits-link">
         Spending limits are in{' '}
         <a className="rk-link" href={LIMITS_HREF}>
-          Settings › Limits
+          Administration › AI › Limits
         </a>
         .
       </p>

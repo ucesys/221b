@@ -57,12 +57,12 @@ const uploads = {
 /** A credential the pickers offer (0.12.1, CR-10). */
 const cred = (id: string, name: string, kind: string, endpoint: string) => ({ id, name, kind, endpoint })
 
-describe('Settings › Knowledge', () => {
+describe('Administration › AI › Knowledge', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let current = view()
   // The credentials each use offers, by use; and the list's names.
   let choices: Record<string, ReturnType<typeof cred>[]> = {}
-  /** The answers of Settings › Credentials, or null for another address. */
+  /** The answers of Administration › Credentials, or null for another address. */
   const credentialsAnswer = (url: string): Response | null => {
     if (url.startsWith('/api/v1/credentials/choices')) {
       const use = new URL(url, 'http://x').searchParams.get('use') ?? ''
@@ -121,7 +121,7 @@ describe('Settings › Knowledge', () => {
     expect(within(rows[1]!).getByText('1 page not followed')).toBeTruthy()
     await waitFor(() => expect(screen.getByTestId('uploads-section').textContent).toContain('Documents'))
     expect(screen.getByTestId('knowledge-store-cred').textContent).toContain('Token saved by Ann')
-    expect(screen.getByTestId('knowledge-model-link').getAttribute('href')).toContain('settings/agents')
+    expect(screen.getByTestId('knowledge-model-link').getAttribute('href')).toContain('admin/ai/agents')
   })
 
   it('adds a Confluence source naming its credential, which the only one that covers it preselects (CR-10)', async () => {
@@ -145,10 +145,10 @@ describe('Settings › Knowledge', () => {
     )
   })
 
-  // Settings › Repositories (0.12.1, RP-03): a git source picks a git
+  // Administration › Settings › Repositories (0.12.1, RP-03): a git source picks a git
   // repository of the list, and keeps its branch and directory; the
   // credential is the repository's, so no picker asks for one.
-  it('adds a git source picking a repository of Settings › Repositories', async () => {
+  it('adds a git source picking a repository of Administration › Settings › Repositories', async () => {
     render(<KnowledgeSection />)
     fireEvent.click(await screen.findByTestId('knowledge-add'))
     const drawer = screen.getByTestId('knowledge-source-drawer')

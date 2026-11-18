@@ -509,8 +509,8 @@ test('Approvals moved to AIOps › Inbox, where the old Administration link open
   const grid = page.getByRole('grid', { name: 'Inbox' })
   await expect(grid).toBeVisible()
   await expect(grid.getByRole('button', { name: 'Approve' })).toHaveCount(0)
-  await page.goto('/#/admin/roles')
-  await expect(page.locator('[data-admin-page=roles]')).toBeVisible()
+  await page.goto('/#/admin/auth/roles')
+  await expect(page.locator('[data-admin-page=auth]')).toBeVisible()
   await expect(page.locator('[data-admin-page=approvals]')).toHaveCount(0)
 })
 

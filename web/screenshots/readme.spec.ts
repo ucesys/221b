@@ -91,7 +91,7 @@ test('pod details', async () => {
   await shot('pod-details', `#/pods?peek=pod:${pod.namespace}/${pod.name}`, connected)
 })
 
-for (const [name, hash] of [['admin-roles', '#/admin/roles']] as const) {
+for (const [name, hash] of [['admin-roles', '#/admin/auth/roles']] as const) {
   test(name, async () => {
     await shot(name, hash)
   })
@@ -241,8 +241,8 @@ test('sherlock', async () => {
 })
 
 test('admin settings', async () => {
-  // Settings › Agents, with Sherlock on and its key saved by the test above.
-  await page.goto('/#/admin/settings/agents')
+  // Administration › AI › Agents, with Sherlock on and its key saved by the test above.
+  await page.goto('/#/admin/ai/agents')
   await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-testid=settings-section][data-section=agents]')).toBeVisible({ timeout: 20_000 })
   // The dock the test above opened would cover half the page. It comes a

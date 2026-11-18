@@ -31,7 +31,7 @@ type mailView struct {
 
 func (s *Server) mailAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if !s.isSuperAdmin(r) {
-		jsonError(w, http.StatusForbidden, "Only a SuperAdmin sets Settings › Email.")
+		jsonError(w, http.StatusForbidden, "Only a SuperAdmin sets Administration › Settings › General › Email.")
 		return false
 	}
 	return true

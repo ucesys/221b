@@ -3,7 +3,7 @@ import { fetchRoles, fetchUsers, useAdmin, type RoleRow, type Subject, type User
 import { ROLE_COLUMNS, roleTerms } from '../columns/admin'
 import { ROLE_NAME, SOURCE_NAME } from '../lib/admin'
 import { nWord } from '../lib/format'
-import { adminHref, clusterHref, navigate } from '../lib/router'
+import { clusterHref, navigate, authHref } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import type { AdminProps } from './AdminPage'
 import { isSuperAdmin } from './AdminPage'
@@ -127,7 +127,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
   const loaded = useAdmin(`roles:${name}`, (bg) => fetchRoles(name, bg), 30_000)
   const roles = useMemo(() => loaded.data?.roles ?? [], [loaded.data])
   const table = useTable<RoleRow>({ id: 'admin-roles', columns: ROLE_COLUMNS, rows: roles, terms: roleTerms, now, defaultSort: { col: 'role', dir: 'asc' } })
-  const selected = roles.find((r) => r.id === route.path[1]) ?? null
+  const selected = roles.find((r) => r.id === route.path[2]) ?? null
   const [adding, setAdding] = useState<{ group: string; users: UsersResponse } | null>(null)
 
   const addMember = async (group: string) => {
@@ -137,8 +137,8 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
       onToast(e instanceof Error ? e.message : String(e))
     }
   }
-  const open = (id: string) => navigate(adminHref('roles', route.path[1] === id ? [] : [id], name), true)
-  const close = () => navigate(adminHref('roles', [], name), true)
+  const open = (id: string) => navigate(authHref('roles', route.path[2] === id ? [] : [id], name), true)
+  const close = () => navigate(authHref('roles', [], name), true)
 
   if (loaded.error && !loaded.data) {
     return (
@@ -226,7 +226,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
               <List title="Can" items={selected.can} />
               <List title="Cannot" items={selected.cannot} />
             </div>
-            <a className="rk-link" href={adminHref('permissions', [], name, { role: selected.id })} data-testid="role-permissions">
+            <a className="rk-link" href={authHref('permissions', [], name, { role: selected.id })} data-testid="role-permissions">
               See every permission
             </a>
           </Card>

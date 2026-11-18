@@ -130,7 +130,7 @@ func TestAFullConfigMapStoreRefusesCF57(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := st.Write(ctx, []Change{{Path: "pages/system/b.md", Body: []byte(strings.Repeat("b", 1200))}, {Path: "pages/system/c.md", Body: []byte("c")}}, "")
-	if !errors.Is(err, ErrStoreFull) || !strings.Contains(err.Error(), "(2 KiB): move the wiki to Git or S3 in Settings › Knowledge") {
+	if !errors.Is(err, ErrStoreFull) || !strings.Contains(err.Error(), "(2 KiB): move the wiki to Git or S3 in Administration › AI › Knowledge") {
 		t.Fatalf("full: %v", err)
 	}
 	if err := st.Stage(ctx, "r-1", []Change{{Path: "pages/system/b.md", Body: []byte(strings.Repeat("b", 1200))}}, ""); !errors.Is(err, ErrStoreFull) {
@@ -154,7 +154,7 @@ func cmService(t *testing.T, f *fixture, cm kv.Backend, limit int) *Service {
 }
 
 // With the chart's ConfigMap and no store chosen, the wiki is kept in the
-// ConfigMap: Settings › Knowledge and the Wiki tab show it, a sync's run
+// ConfigMap: Administration › AI › Knowledge and the Wiki tab show it, a sync's run
 // is staged and published there. Without it, no store, as before; and the
 // ConfigMap store cannot be chosen.
 func TestTheConfigMapStoreIsTheDefaultCF57(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
-// --- Settings › Credentials (0.12.1, CR-01 to CR-14) ---
+// --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 // A SuperAdmin adds, changes, tests and removes credentials; anyone else
 // reads their names, kinds, endpoints and uses only. No answer, and no

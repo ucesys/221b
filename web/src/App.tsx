@@ -28,7 +28,7 @@ import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
-import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams } from './lib/router'
+import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams, aiHref } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
 import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, opensHere, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
@@ -335,7 +335,7 @@ function Shell() {
       installed: !!watson.status?.available,
       sherlockOn,
       admin: !!sherlock.status?.admin,
-      settingsHref: adminHref('settings', ['sherlock']),
+      settingsHref: aiHref('agents', ['sherlock']),
     }),
     send: (command: string, o: Send = {}) => {
       const away = popped

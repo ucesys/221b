@@ -1,7 +1,7 @@
 import type { RoleId } from '../api/admin'
 import type { BindingRow, RoleRow } from '../api/types'
 import { fmtAge, fmtTs, minutesSince } from '../lib/format'
-import { adminHref, href } from '../lib/router'
+import { href, authHref } from '../lib/router'
 import { listText, powersTone, purpose, SEV_ORDER, SEV_TEXT, SEV_TONE, SOURCE_SHORT, sourceText, type Grant, type ReviewItem, type WhoRow } from '../lib/rbac'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
@@ -191,7 +191,7 @@ export const ROLE_COLUMNS: ColumnDef<RoleView>[] = [
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <Mono text={r.name} tip={purpose(r) || r.name} dim={false} />
           {own && (
-            <a className="rk-tag" data-tone="info" href={adminHref('roles', own === 'nodes' ? [] : [own])} title="One of 221B's four roles, installed by its chart. Open it in Administration" data-testid="own-role">
+            <a className="rk-tag" data-tone="info" href={authHref('roles', own === 'nodes' ? [] : [own])} title="One of 221B's four roles, installed by its chart. Open it in Administration" data-testid="own-role">
               221B role
             </a>
           )}

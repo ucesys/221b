@@ -135,8 +135,8 @@ const (
 )
 
 // NoLive is what lookup_live_sources answers when no live source is set
-// up (Options.Live nil, or none in Settings › Knowledge).
-const NoLive = "No live source is set up (Settings › Knowledge, mode Live): there are no pages to look up. Answer from what the tools and ask_knowledge show."
+// up (Options.Live nil, or none in Administration › AI › Knowledge).
+const NoLive = "No live source is set up (Administration › AI › Knowledge, mode Live): there are no pages to look up. Answer from what the tools and ask_knowledge show."
 
 // LiveExcerpt is a part of a live page that bears on the words looked up.
 type LiveExcerpt struct {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
-import { adminHref } from '../lib/router'
+import { aiHref } from '../lib/router'
 import { NotificationChannels, useNotifyForm } from './NotificationChannels'
 import { SaveBar } from './SaveBar'
 import { StandingApprovals } from './StandingApprovals'
@@ -78,7 +78,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
         <ul className="rk-fhint" style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <li>
             Only on clusters where Sherlock is on: turn it on per cluster in{' '}
-            <a className="rk-link" href={adminHref('settings', ['agents'])}>
+            <a className="rk-link" href={aiHref('agents')}>
               Sherlock’s drawer under Agents
             </a>
             .
@@ -124,7 +124,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
           <StandingApprovals />
           <NotificationChannels form={notify} busy={busy} />
           <SaveBar
-            what="Settings › Watson"
+            what="Administration › Settings › Watson"
             changed={approvalsChanged || notify.changed}
             busy={busy}
             onSave={() => void save()}

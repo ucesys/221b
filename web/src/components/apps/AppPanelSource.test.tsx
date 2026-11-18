@@ -6,7 +6,7 @@ import type { AppRow } from '../../columns/apps'
 import { SourceCard } from './AppPanel'
 
 // A release's Setup (0.12.1, RP-03): its git repository is picked from
-// Settings › Repositories; the release keeps its path and branch or tag,
+// Administration › Settings › Repositories; the release keeps its path and branch or tag,
 // and sends the repository's name, never a credential.
 describe('the Setup card’s git repository', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []

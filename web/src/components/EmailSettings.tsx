@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DEFAULT_PORTS, fetchMail, saveMail, testMail, type MailInput, type MailSecurity, type MailSettings } from '../api/mail'
 import { fmtTs } from '../lib/format'
-import { adminHref } from '../lib/router'
+import { settingsHref } from '../lib/router'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -220,16 +220,16 @@ export function EmailSettings({ mail, busy: saving }: { mail: MailForm; busy: bo
         {saved.link ? (
           <>
             The links start with <span className="rk-mono">{saved.link}</span>, the console’s address in{' '}
-            <a className="rk-link" href={adminHref('settings', ['watson'])}>
-              Settings › Watson
+            <a className="rk-link" href={settingsHref('watson')}>
+              Administration › Settings › Watson
             </a>
             .
           </>
         ) : (
           <>
             The emails have no links until the console’s address is set in{' '}
-            <a className="rk-link" href={adminHref('settings', ['watson'])}>
-              Settings › Watson
+            <a className="rk-link" href={settingsHref('watson')}>
+              Administration › Settings › Watson
             </a>{' '}
             (its notifications).
           </>

@@ -24,7 +24,7 @@ export function SaveBar({
   error: string
   saved: string
   testId: string
-  /** What holds the changes, as Sherlock is told: "Settings › SLA". */
+  /** What holds the changes, as Sherlock is told: "Administration › AI › SLA". */
   what?: string
   /** The same Save, saying whether all was saved: offered by the prompt on leaving the page with changes (CU-16). */
   save?: () => Promise<boolean>

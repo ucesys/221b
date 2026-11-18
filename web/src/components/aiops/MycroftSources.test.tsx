@@ -111,7 +111,7 @@ describe('AIOps › Mycroft › Sources', () => {
     expect(within(rows[1]!).queryByTestId('sources-item-exclude')).toBeNull()
     expect(within(rows[1]!).getByTestId('sources-item-remove')).toBeTruthy()
     expect(screen.getByTestId('sources-count').textContent).toBe('1–3 of 3')
-    expect(screen.getByTestId('sources-settings-link').getAttribute('href')).toBe('#/admin/settings/knowledge')
+    expect(screen.getByTestId('sources-settings-link').getAttribute('href')).toBe('#/admin/ai/knowledge')
   })
 
   it('filters on the server by source, type, state and words, and pages', async () => {

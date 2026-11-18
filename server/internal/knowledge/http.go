@@ -163,7 +163,7 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 }
 
 // sourceInput is a source as its dialog sends it: it names its
-// credential of Settings › Credentials (0.12.1, CR-11), and sends none.
+// credential of Administration › Credentials (0.12.1, CR-11), and sends none.
 type sourceInput struct {
 	Source Source `json:"source"`
 }

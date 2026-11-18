@@ -30,7 +30,7 @@ const (
 	SLAPath   = "/api/v1/aiops/sla"
 	KnownPath = "/api/v1/aiops/known-open"
 	// SimilarPath is what New Case shows beside the form (CF-12);
-	// SettingsPath Settings › Cases (CF-19).
+	// SettingsPath Administration › AI › Cases (CF-19).
 	SimilarPath  = "/api/v1/aiops/similar"
 	SettingsPath = "/api/v1/aiops/settings"
 	// RulesPath is AIOps › Mycroft › Validation rules (ADR-138).

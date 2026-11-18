@@ -43,7 +43,7 @@ func appSource(ctx context.Context, c *Command, t Target) (apps.Source, bool, er
 	if c.Has("tag") {
 		s.RefKind = apps.RefTag
 	}
-	// --- Settings › Repositories (0.12.1, RP-04): --git NAME is a git
+	// --- Administration › Settings › Repositories (0.12.1, RP-04): --git NAME is a git
 	// repository of the list, by its name; an address the list has is
 	// recorded as that repository (the one with --credential's
 	// credential when several are at it).
@@ -51,7 +51,7 @@ func appSource(ctx context.Context, c *Command, t Target) (apps.Source, bool, er
 		s.Repository = name
 		var err error
 		if s, _, err = t.Repos.ResolveGit(ctx, s); err != nil {
-			return s, true, fmt.Errorf("--git %s: %w (Settings › Repositories lists the git repositories by name; or give the address)", name, err)
+			return s, true, fmt.Errorf("--git %s: %w (Administration › Settings › Repositories lists the git repositories by name; or give the address)", name, err)
 		}
 	}
 	s, err := apps.Normalize(s)
@@ -214,7 +214,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 			return nil, err
 		}
 	} else if c.Has("credential") {
-		return nil, errors.New("a repository's chart is fetched with its repository's credential (Settings › Repositories): --credential goes with --git")
+		return nil, errors.New("a repository's chart is fetched with its repository's credential (Administration › Settings › Repositories): --credential goes with --git")
 	}
 	for _, set := range c.Flags["set"] {
 		a.params = append(a.params, set)
@@ -263,7 +263,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 // repository. Several that cover it are refused: Watson never guesses.
 func (a *appChart) gitAuth(ctx context.Context, c *Command, t Target, ns, name, legacy string) (apps.GitAuth, error) {
 	repo := a.src.Repo
-	// A git repository of Settings › Repositories is fetched with its own
+	// A git repository of Administration › Settings › Repositories is fetched with its own
 	// credential (RP-03).
 	if a.src.Repository != "" && t.Repos != nil {
 		if listed, err := t.Repos.Raw(ctx, a.src.Repository); err == nil && listed.Kind == apps.KindGit {
@@ -276,7 +276,7 @@ func (a *appChart) gitAuth(ctx context.Context, c *Command, t Target, ns, name, 
 					return apps.GitAuth{}, err
 				}
 				if cr.ID != listed.Credential {
-					return apps.GitAuth{}, fmt.Errorf("%s is fetched with its own credential, chosen in Settings › Repositories: leave --credential out", listed.Name)
+					return apps.GitAuth{}, fmt.Errorf("%s is fetched with its own credential, chosen in Administration › Settings › Repositories: leave --credential out", listed.Name)
 				}
 			}
 			a.cred, a.credSet = listed.Credential, true

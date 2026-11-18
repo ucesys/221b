@@ -133,7 +133,7 @@ type SourceStatus struct {
 	LastFull time.Time `json:"lastFull,omitzero"`
 }
 
-// Status is the last syncs, as Settings › Knowledge shows them.
+// Status is the last syncs, as Administration › AI › Knowledge shows them.
 type Status struct {
 	Running bool                    `json:"running"`
 	Last    *SyncResult             `json:"last,omitempty"`

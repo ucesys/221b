@@ -44,7 +44,7 @@ func TestProviderLimitsStopTheAgentsOnIt(t *testing.T) {
 	// A provider's connection test counts as its spend.
 	w.engine.Ledger().AddFor(ctx, "", "second", 0.01, false)
 	var capErr *sherlock.ErrCap
-	if res := w.run(t, Auditor, "look"); !errors.As(res.Err, &capErr) || capErr.Provider != "Second" || !strings.Contains(res.Err.Error(), "Settings › Limits › Providers (Second)") {
+	if res := w.run(t, Auditor, "look"); !errors.As(res.Err, &capErr) || capErr.Provider != "Second" || !strings.Contains(res.Err.Error(), "Administration › AI › Limits › Providers (Second)") {
 		t.Fatalf("past the provider's limit: %v", res.Err)
 	}
 	// An agent on the default provider answers on.

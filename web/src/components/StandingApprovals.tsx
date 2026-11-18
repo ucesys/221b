@@ -82,7 +82,7 @@ function StandingForm({ init, busy, error, onSave, onCancel }: { init: Standing;
 
 /**
  * Standing approvals for agents' proposals (Phase 12, ADR-102), for a
- * SuperAdmin in Settings › Watson: a narrow class outside production that
+ * SuperAdmin in Administration › Settings › Watson: a narrow class outside production that
  * is approved as it arrives, at most so many an hour, as the SuperAdmin
  * who set it. The audit log names it on every card it approves.
  */

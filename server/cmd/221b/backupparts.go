@@ -54,7 +54,7 @@ func registerBackupParts(r *backup.Registry, agents *ai.Service, issueSvc *issue
 					if agents.KeysFor(c.id).Info().Set {
 						continue
 					}
-					name, where := "the credential of the AI provider "+c.name, "Settings › AI › Providers › "+c.name
+					name, where := "the credential of the AI provider "+c.name, "Administration › AI › Providers › "+c.name
 					key, _ := env.Open(c.sealed, name, where)
 					if key == "" {
 						continue
@@ -344,7 +344,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 	registerFixesBackup(backup.Default, w.fixesSvc)
 	registerLessonsBackup(backup.Default, w.lessonsSvc)  // Findings, exceptions and RCAs (Phase 12)
 	registerHelmReposBackup(backup.Default, w.helmRepos) // Helm repositories (Phase 12, wave 5)
-	registerCredentialsBackup(backup.Default, w.creds)   // Settings › Credentials (0.12.1)
+	registerCredentialsBackup(backup.Default, w.creds)   // Administration › Credentials (0.12.1)
 	// Case work (Phase 12): the cases in every backup.
 	registerCaseworkBackup(backup.Default, w.caseSvc)
 	w.backups = backups

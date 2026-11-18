@@ -1,8 +1,8 @@
 // Helm repositories and OCI registries (Phase 12, wave 5, HR-02 to HR-06):
-// Settings › Repositories (Applications before 0.12.1, RP-01) keeps them
+// Administration › Settings › Repositories (Applications before 0.12.1, RP-01) keeps them
 // with Test, and the git repositories applications' Setup picks (RP-02,
 // RP-03, RP-06), each naming a credential of
-// Settings › Credentials (0.12.1, CR-11), whose password is written there
+// Administration › Credentials (0.12.1, CR-11), whose password is written there
 // and never read back; the Helm tab's new application takes a chart of one,
 // or of an OCI registry, at a version. Nothing here reaches the internet:
 // the repository is at an address that does not resolve, so Test says it
@@ -41,7 +41,7 @@ test.afterAll(async ({ browser }) => {
   await page.close()
 })
 
-test('Settings › Repositories adds, tests, changes and removes a repository naming its credential, whose password is never read back (HR-02, HR-03, CR-11, RP-01)', async ({ page }) => {
+test('Administration › Settings › Repositories adds, tests, changes and removes a repository naming its credential, whose password is never read back (HR-02, HR-03, CR-11, RP-01)', async ({ page }) => {
   // The address of Settings › Applications leads here.
   await page.goto('/#/admin/settings/apps')
   await expect(page).toHaveURL(/#\/admin\/settings\/repositories$/)
@@ -97,7 +97,7 @@ test('a git repository is listed, picked by an application’s Setup, and not re
   const r = releaseRows(await snapshot(request, ['helm']))[0]!
   await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
   try {
-    // Listed in Settings › Repositories: a public git repository with its default branch.
+    // Listed in Administration › Settings › Repositories: a public git repository with its default branch.
     await page.goto('/#/admin/settings/repositories')
     const section = page.getByTestId('helm-repos-settings')
     await section.getByTestId('helm-repo-add').click()

@@ -27,7 +27,7 @@ import (
 // the lessons' RCAs (casework.Lessons) are given with SetFindings and
 // SetLessons by the packages that keep them.
 
-// openCasework opens the cases' work: Settings › Cases, the checks seen
+// openCasework opens the cases' work: Administration › AI › Cases, the checks seen
 // and the analyses under way in <release>-casework when the chart names
 // it, in memory otherwise; the work on each case beside it in the case's
 // own ConfigMap; the exceptions and RCAs (lessons) in the casework
@@ -70,13 +70,13 @@ func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, 
 
 // registerCaseworkBackup adds the cases to every backup (order 260): each
 // case's ConfigMap whole (the issue service's record and the work on it),
-// Settings › Cases and the check ids seen (CF-22).
+// Administration › AI › Cases and the check ids seen (CF-22).
 func registerCaseworkBackup(r *backup.Registry, svc *casework.Service) {
 	if svc == nil {
 		return
 	}
 	r.Register(backup.Part{Name: "casework", Label: "Cases", Order: 260,
-		How:     "are added where missing: each case's ConfigMap whole, its record, analyses, proposed changes, fix, RCA, history and drafts; a case here stays as it is; Settings › Cases are replaced",
+		How:     "are added where missing: each case's ConfigMap whole, its record, analyses, proposed changes, fix, RCA, history and drafts; a case here stays as it is; Administration › AI › Cases are replaced",
 		LeftOut: []string{"the cases' analysis runs (a history in the jobs' runs; analyze a case again for a new one)", "the analyses under way"},
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			x, err := svc.Export(ctx)
@@ -119,7 +119,7 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	}
 	caseSvc.SetCards(w.cardStore)
 	// Email about cases (EM-01 to EM-10): Settings › Email beside
-	// Settings › Cases, the people's addresses from the cases, the local
+	// Administration › AI › Cases, the people's addresses from the cases, the local
 	// accounts and the directory.
 	{
 		var mailBackend kv.Backend
@@ -163,7 +163,7 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	jobs.Register(caseSvc.HousekeepingKind())
 	// One flow for findings and cases (Phase 12, wave 6): each finding
 	// of a run becomes a case or joins one; its object is checked on its
-	// cluster; the exceptions go stale after Settings › Cases' days.
+	// cluster; the exceptions go stale after Administration › AI › Cases' days.
 	caseSvc.SetLessons(lessonsSvc)
 	lessonsSvc.SetStaleDays(caseSvc.StaleDays)
 	// Mycroft › Exceptions names each exception's cluster, and New

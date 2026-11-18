@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PermissionsResponse, RolesResponse, UsersResponse } from '../api/admin'
 import type { Me } from '../api/types'
 import { parseHash } from '../lib/router'
-import { AdminPageView, pagesFor } from './AdminPage'
+import { AdminPageView, authPagesFor, pagesFor } from './AdminPage'
 import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { UsersPage } from './UsersPage'
@@ -162,14 +162,64 @@ afterEach(() => {
 })
 
 describe('who is offered which page (RB-41, RB-31)', () => {
-  it('offers Roles and Permissions to everyone, Users and Settings to a SuperAdmin', () => {
-    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'toolbox', 'logs', 'settings', 'backup'])
-    expect(pagesFor(viewer)).toEqual(['roles', 'permissions'])
+  it('offers Auth with Roles and Permissions to everyone, Users and the other tabs to a SuperAdmin (CU-18)', () => {
+    expect(pagesFor(me())).toEqual(['auth', 'ai', 'credentials', 'settings', 'logs', 'toolbox', 'backup'])
+    expect(authPagesFor(me())).toEqual(['roles', 'permissions', 'users'])
+    expect(pagesFor(viewer)).toEqual(['auth'])
+    expect(authPagesFor(viewer)).toEqual(['roles', 'permissions'])
+    const admin = me({ admin: false, roles: ['admin'], user: { subject: 'carol', username: 'carol' } })
+    expect(pagesFor(admin)).toEqual(['auth'])
+    expect(authPagesFor(admin)).toEqual(['roles', 'permissions'])
     expect(pagesFor(null)).toEqual([])
+    expect(authPagesFor(null)).toEqual([])
   })
 
-  it('offers Permissions and Settings with sign-in off, where there are no users or roles to manage', () => {
-    expect(pagesFor(me({ mode: 'none', admin: false }))).toEqual(['permissions'])
+  it('offers Permissions alone with sign-in off, where there are no users or roles to manage', () => {
+    expect(pagesFor(me({ mode: 'none', admin: false }))).toEqual(['auth'])
+    expect(authPagesFor(me({ mode: 'none', admin: false }))).toEqual(['permissions'])
+  })
+
+  it('shows a SuperAdmin the seven tabs in order, and a Viewer Auth with Roles and Permissions (CU-18)', () => {
+    render(<AdminPageView {...common('#/admin/auth/roles', me())} settings={null} refreshedAt={null} />)
+    const tabs = () => [...document.querySelectorAll('[data-admin-page]')].map((a) => a.textContent)
+    expect(tabs()).toEqual(['Auth', 'AI', 'Credentials', 'Settings', 'Logs', 'Toolbox', 'Backup'])
+    expect(document.querySelector('[data-admin-page="auth"]')!.getAttribute('aria-current')).toBe('page')
+    expect(document.querySelector('[data-admin-page="ai"]')!.getAttribute('href')).toBe('#/admin/ai')
+    expect(document.querySelector('[data-admin-page="credentials"]')!.getAttribute('href')).toBe('#/admin/credentials')
+    expect(['auth-roles', 'auth-permissions', 'auth-users'].map((id) => !!screen.queryByTestId(id))).toEqual([true, true, true])
+    expect(screen.getByTestId('auth-roles').getAttribute('aria-pressed')).toBe('true')
+    cleanup()
+    render(<AdminPageView {...common('#/c/dev/admin/auth/permissions', viewer)} settings={null} refreshedAt={null} />)
+    expect(tabs()).toEqual(['Auth'])
+    expect(document.querySelector('[data-admin-page="auth"]')!.getAttribute('href')).toBe('#/c/dev/admin/auth/roles')
+    expect(screen.queryByTestId('auth-users')).toBeNull()
+    expect(screen.getByTestId('auth-permissions').getAttribute('aria-pressed')).toBe('true')
+    cleanup()
+    render(<AdminPageView {...common('#/admin', me({ mode: 'none', admin: false }))} settings={null} refreshedAt={null} />)
+    expect(tabs()).toEqual(['Auth'])
+    expect(screen.queryByTestId('auth-roles')).toBeNull()
+    expect(screen.getByTestId('admin-auth')).toBeTruthy()
+  })
+
+  it('puts the address of before in the bar as it is now (CU-19)', async () => {
+    window.history.replaceState(null, '', '#/admin/users/bob')
+    render(<AdminPageView {...common('#/admin/users/bob', me())} settings={null} refreshedAt={null} />)
+    await waitFor(() => expect(window.location.hash).toBe('#/admin/auth/users/bob'))
+    expect(screen.getByTestId('auth-users').getAttribute('aria-pressed')).toBe('true')
+    window.history.replaceState(null, '', '#/')
+  })
+
+  it('refuses a Viewer the AI, Credentials and Settings tabs', () => {
+    for (const [hash, label] of [
+      ['#/admin/ai/agents', 'AI'],
+      ['#/admin/credentials', 'Credentials'],
+      ['#/admin/settings/general', 'Settings'],
+    ]) {
+      render(<AdminPageView {...common(hash!, viewer)} settings={null} refreshedAt={null} />)
+      expect(screen.getByTestId('admin-refusal').textContent).toContain(`${label} is for SuperAdmins`)
+      expect(screen.queryByTestId('settings-page')).toBeNull()
+      cleanup()
+    }
   })
 
   // SEC-30: a proxy the console does not trust is named to SuperAdmins on every page of Administration.
@@ -187,14 +237,14 @@ describe('who is offered which page (RB-41, RB-31)', () => {
   })
 
   it('refuses a Viewer who opens Users, and says why', () => {
-    render(<AdminPageView {...common('#/admin/users', viewer)} settings={null} refreshedAt={null} />)
+    render(<AdminPageView {...common('#/admin/auth/users', viewer)} settings={null} refreshedAt={null} />)
     expect(screen.getByTestId('admin-refusal').textContent).toContain('Users is for SuperAdmins')
     expect(screen.queryByRole('link', { name: /^Users/ })).toBeNull()
     expect(calls).toHaveLength(0)
   })
 
-  // MY-11, 0.12.1: an Admin adds to Mycroft's wiki in Settings › Knowledge's Uploaded documents section, the rest of Settings closed.
-  it('shows an Admin Settings › Knowledge’s Uploaded documents section alone, and refuses a Viewer there', async () => {
+  // MY-11, 0.12.1: an Admin adds to Mycroft's wiki in AI › Knowledge's Uploaded documents section, the rest of AI closed.
+  it('shows an Admin AI › Knowledge’s Uploaded documents section alone, and refuses a Viewer there', async () => {
     const uploads = (mayAdd: boolean) => ({
       items: [],
       limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
@@ -206,7 +256,7 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     })
     serve((_m, url) => (url.endsWith('/knowledge/uploads') ? { body: uploads(true) } : {}))
     const admin = me({ admin: false, roles: ['admin'], user: { subject: 'carol', username: 'carol' } })
-    render(<AdminPageView {...common('#/admin/settings/knowledge/added', admin)} settings={null} refreshedAt={null} />)
+    render(<AdminPageView {...common('#/admin/ai/knowledge/added', admin)} settings={null} refreshedAt={null} />)
     expect(await screen.findByTestId('uploads-note-open')).toBeTruthy()
     expect(screen.getByTestId('admin-knowledge-added').textContent).toContain('is for SuperAdmins')
     expect(screen.queryByTestId('admin-refusal')).toBeNull()
@@ -215,11 +265,11 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     cleanup()
     serve((_m, url) => (url.endsWith('/knowledge/uploads') ? { body: uploads(false) } : {}))
     render(<AdminPageView {...common('#/admin/settings/knowledge', viewer)} settings={null} refreshedAt={null} />)
-    expect((await screen.findByTestId('admin-refusal')).textContent).toContain('Settings is for SuperAdmins')
+    expect((await screen.findByTestId('admin-refusal')).textContent).toContain('AI is for SuperAdmins')
     expect(screen.queryByTestId('uploads-section')).toBeNull()
     cleanup()
-    // Another section of Settings stays closed to an Admin.
-    render(<AdminPageView {...common('#/admin/settings/agents', admin)} settings={null} refreshedAt={null} />)
+    // Another page of AI stays closed to an Admin.
+    render(<AdminPageView {...common('#/admin/ai/agents', admin)} settings={null} refreshedAt={null} />)
     expect(screen.getByTestId('admin-refusal')).toBeTruthy()
   })
 })

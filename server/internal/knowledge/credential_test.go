@@ -10,7 +10,7 @@ import (
 
 // --- Credentials (0.12.1, CR-11, CR-12) ---
 
-// A source names a credential of Settings › Credentials, which must serve
+// A source names a credential of Administration › Credentials, which must serve
 // its kind and cover its address; it reads with it.
 func TestASourceReadsWithItsCredentialCR11(t *testing.T) {
 	f := newFixture(t)

@@ -84,7 +84,7 @@ func fetchSlot(ctx context.Context) (release func(), err error) {
 
 // GitAuth is how a git fetch signs in (CR-04): a user and a password or
 // token as Basic, or a token as Bearer; the zero value is anonymously.
-// It comes from a credential of Settings › Credentials, resolved for the
+// It comes from a credential of Administration › Credentials, resolved for the
 // repository's address (GitAuthOf).
 type GitAuth struct {
 	Username, Password string

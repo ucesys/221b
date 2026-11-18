@@ -8,7 +8,7 @@ import { expect, test } from './test'
 
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
-// The git repositories of Settings › Repositories the Setup cards and the
+// The git repositories of Administration › Settings › Repositories the Setup cards and the
 // new application pick (0.12.1, RP-03).
 const REPO = 'e2e-221b'
 const EXAMPLES = 'e2e-helm-examples'

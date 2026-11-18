@@ -1,4 +1,4 @@
-// Settings › Knowledge › Uploaded documents (0.12.1): the notes and the
+// Administration › AI › Knowledge › Uploaded documents (0.12.1): the notes and the
 // documents people give Mycroft, from the two built-in sources of uploads
 // (the SuperAdmins' uploaded documents and what was added in Mycroft), in
 // one place with two tabs. A note is a title and a text, kept as a Markdown
@@ -10,7 +10,7 @@
 // drew on it are not changed, and the dialog names them, with Review those
 // pages and Ask Mycroft to rewrite without it after. Admins see this
 // section alone on their Administration page (AdminPage.tsx); SuperAdmins
-// see it in Settings › Knowledge after the Sources. These are not sources
+// see it in Administration › AI › Knowledge after the Sources. These are not sources
 // to sync again, so they are not rows of the Sources table.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addKnowledge, fetchUploads, fileBase64, removeUpload, setSourceOn, wikiHref, type PageBrief, type UploadItem, type UploadsView } from '../../api/knowledge'
@@ -157,7 +157,7 @@ export function UploadedDocuments({ onToast, focus = false, fallback, after }: {
   const shown = useMemo(() => uploadsShown(v?.items ?? [], tab, filter), [v, tab, filter])
   if (fallback && (denied || (v && !v.mayAdd))) return <>{fallback}</>
   const count = (t: UploadTab) => (v?.items ?? []).filter((it) => it.type === t).length
-  const why = !v ? '' : !v.store ? 'No wiki is kept yet: a SuperAdmin chooses where in Administration › Settings › Knowledge.' : !v.mayAdd ? 'Admins and SuperAdmins add notes and documents.' : ''
+  const why = !v ? '' : !v.store ? 'No wiki is kept yet: a SuperAdmin chooses where in Administration › AI › Knowledge.' : !v.mayAdd ? 'Admins and SuperAdmins add notes and documents.' : ''
   return (
     <>
       <section ref={card} className="rk-card" style={{ padding: '12px 16px 16px', display: 'flex', flexDirection: 'column', gap: 12 }} aria-label="Uploaded documents" data-testid="uploads-section">

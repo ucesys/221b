@@ -20,7 +20,7 @@ import (
 // openMail opens Settings › Email: the settings in the casework ConfigMap
 // (mail.ConfigKey), the password in the Secret <release>-cases beside the
 // notification channels' addresses (memory without one), and the links
-// from Settings › Watson's console address.
+// from Administration › Settings › Watson's console address.
 func openMail(cfg config.Config, restCfg *rest.Config, backend kv.Backend, cardStore *cards.Store, auditLog *audit.Log, log *slog.Logger) *mail.Service {
 	var secrets mail.SecretStore
 	if cfg.ConnectionsSecrets != "" {

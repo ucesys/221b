@@ -20,7 +20,7 @@ import type { DraftRun, PageRequest } from '../../api/knowledge'
 import type { Suggestion } from '../../api/rules'
 import { INBOX_KINDS, inboxOrderKey, type InboxKind, type Who } from '../../lib/cases'
 import { fmtMinutes, fmtTs, minutesSince } from '../../lib/format'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 import type { ColumnDef, Term } from '../../lib/table'
 import { HeadPickBox, RowPickBox, RowPickSpace } from './InboxPicks'
 import { ObjectLink } from './ObjectLink'
@@ -595,7 +595,7 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
         )}
         {r.late && (
           // Which target passed, and where the targets are set (IN-05).
-          <a className="rk-tag" data-tone="err" href={adminHref('settings', ['sla'])} title={`${r.late}: the targets are in Settings › SLA`} data-testid="inbox-row-late">
+          <a className="rk-tag" data-tone="err" href={aiHref('sla')} title={`${r.late}: the targets are in Administration › AI › SLA`} data-testid="inbox-row-late">
             late
           </a>
         )}

@@ -22,7 +22,7 @@ import (
 // pauses the job. A source added or changed is read once at once, as a
 // run of its job; what people add or upload starts a run of theirs; a
 // push to a repository of runbooks starts a run of its. Every sync is a
-// run with its report, and Settings › Knowledge starts none.
+// run with its report, and Administration › AI › Knowledge starts none.
 
 // SyncJobPrefix starts the id of a source's Wiki sync job: the job, and
 // its kind, are "wiki-sync-<source id>".
@@ -159,7 +159,7 @@ func (s *Service) syncKind(x Source) jobs.Kind {
 			dir = ", directory " + x.Path
 		}
 		k.Does = "Reads the repository's documents every hour and on each push, and drafts the wiki's pages from what changed"
-		k.Reads = fmt.Sprintf("The repository %s, branch %s%s: its documents at the branch's head. A push, through the webhook of Settings › Knowledge, starts a run.%s", x.URL, x.Branch, dir, changed)
+		k.Reads = fmt.Sprintf("The repository %s, branch %s%s: its documents at the branch's head. A push, through the webhook of Administration › AI › Knowledge, starts a run.%s", x.URL, x.Branch, dir, changed)
 		k.Default = jobs.When{Schedule: &schedule.Spec{Kind: schedule.Hours, Every: 1, At: "00:00"}, Event: jobs.EventSource}
 		k.Events = []string{jobs.EventSource}
 	case SourceWeb:
@@ -197,10 +197,10 @@ func (s *Service) runSync(ctx context.Context, env *jobs.RunEnv, id string) (job
 	}
 	x, ok := set.source(id)
 	if !ok {
-		return jobs.Outcome{}, fmt.Errorf("the source %q is gone from Settings › Knowledge", id)
+		return jobs.Outcome{}, fmt.Errorf("the source %q is gone from Administration › AI › Knowledge", id)
 	}
 	if x.Off {
-		return jobs.Outcome{Report: x.Name + " is switched off in Settings › Knowledge: nothing was read."}, nil
+		return jobs.Outcome{Report: x.Name + " is switched off in Administration › AI › Knowledge: nothing was read."}, nil
 	}
 	// A Confluence space's scheduled runs read the pages edited since the
 	// last read, and every page on the first run of the night; every other
@@ -295,7 +295,7 @@ func syncFacts(r SyncResult, x Source) []jobs.Fact {
 		read = "The pages edited since the last read"
 	}
 	out := []jobs.Fact{
-		{Label: "Source", Text: fmt.Sprintf("%s (%s)", x.Name, sourceKindWords[x.Kind]), Href: "#/admin/settings/knowledge"},
+		{Label: "Source", Text: fmt.Sprintf("%s (%s)", x.Name, sourceKindWords[x.Kind]), Href: "#/admin/ai/knowledge"},
 		{Label: "Read", Text: read},
 		{Label: "Items read", Text: n(r.Read, "changed item", "changed items")},
 		{Label: "Unchanged", Text: n(r.Unchanged, "item", "items")},
