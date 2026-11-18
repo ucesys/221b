@@ -317,21 +317,71 @@ func TestExclusionPatterns(t *testing.T) {
 			t.Fatalf("%s %s %s: %v", c.kind, c.pattern, c.id, got)
 		}
 	}
-	for _, c := range []struct{ kind, id, want string }{
-		{SourceWeb, "/blog/2024/a.html", "/blog/2024/*"},
-		{SourceWeb, "/docs/", "/docs/*"},
-		{SourceWeb, "/a.html", ""},
-		{SourceGit, "docs/old/a.md", "docs/old/"},
-		{SourceGit, "a.md", ""},
-		{SourceS3, "archive/x.pdf", "archive/"},
-		{SourceConfluence, "100", "100"},
-	} {
-		if p, _, _ := UnderPattern(c.kind, c.id); p != c.want {
-			t.Fatalf("%s %s: %q", c.kind, c.id, p)
-		}
-	}
 	if p := parentsOf(newManifest(), "x", []Item{{ID: "3", Parent: "2"}, {ID: "2", Parent: "1"}}); !slices.Equal(ancestorsOf("3", p), []string{"2", "1"}) {
 		t.Fatalf("ancestors: %v", ancestorsOf("3", p))
+	}
+}
+
+// Mycroft › Sources shows an item's path relative to its source's root,
+// the source's name leading, and offers Exclude everything under … below
+// the root only, the pattern keeping the full id (KN-49).
+func TestPathsRelativeToTheSource(t *testing.T) {
+	s3 := Source{Name: "sandbox-knowledge", Kind: SourceS3, Bucket: "sandbox-knowledge", Prefix: "221b/"}
+	s3bare := Source{Name: "b", Kind: SourceS3, Prefix: "221b"}
+	s3all := Source{Name: "all", Kind: SourceS3}
+	git := Source{Name: "runbooks", Kind: SourceGit, Path: "/docs/"}
+	gitAll := Source{Name: "repo", Kind: SourceGit}
+	web := Source{Name: "Wiki", Kind: SourceWeb, URL: "https://wiki.example.com/docs/index.html"}
+	webDir := Source{Name: "Wiki", Kind: SourceWeb, URL: "https://wiki.example.com/docs/"}
+	webAll := Source{Name: "Site", Kind: SourceWeb, URL: "https://example.com"}
+	conf := Source{Name: "Ops", Kind: SourceConfluence}
+	for _, c := range []struct {
+		x                    Source
+		id, path, under, why string
+	}{
+		// A bucket: its prefix cut; nothing under the prefix itself.
+		{s3, "221b/docs/backup-windows.csv", "docs/backup-windows.csv", "221b/docs/", "sandbox-knowledge › docs/"},
+		{s3, "221b/docs/old/a.md", "docs/old/a.md", "221b/docs/old/", "sandbox-knowledge › docs/old/"},
+		{s3, "221b/runbook.md", "runbook.md", "", ""},
+		{s3bare, "221b/x/a.md", "x/a.md", "221b/x/", "b › x/"},
+		{s3bare, "221b/a.md", "a.md", "", ""},
+		{s3bare, "221b-notes.md", "221b-notes.md", "", ""},
+		{s3all, "archive/x.pdf", "archive/x.pdf", "archive/", "all › archive/"},
+		{s3all, "x.pdf", "x.pdf", "", ""},
+		// A repository: its path cut.
+		{git, "docs/old/a.md", "old/a.md", "docs/old/", "runbooks › old/"},
+		{git, "docs/a.md", "a.md", "", ""},
+		{gitAll, "docs/old/a.md", "docs/old/a.md", "docs/old/", "repo › docs/old/"},
+		{gitAll, "a.md", "a.md", "", ""},
+		// A web site: relative to its start address's directory, never
+		// the directory itself nor above it.
+		{web, "/docs/runbooks/backup", "/runbooks/backup", "/docs/runbooks/*", "Wiki › /runbooks/"},
+		{web, "/docs/runbooks/", "/runbooks/", "/docs/runbooks/*", "Wiki › /runbooks/"},
+		{web, "/docs/a.html?x=1", "/a.html?x=1", "", ""},
+		{web, "/docs/", "/", "", ""},
+		{webDir, "/docs/index.html", "/index.html", "", ""},
+		{webDir, "/about/team.html", "wiki.example.com/about/team.html", "/about/*", "Wiki › wiki.example.com/about/"},
+		{webDir, "/a.html", "wiki.example.com/a.html", "", ""},
+		{webAll, "/blog/2024/a.html", "/blog/2024/a.html", "/blog/2024/*", "Site › /blog/2024/"},
+		{webAll, "/a.html", "/a.html", "", ""},
+		// Confluence: by title, a page and its children.
+		{conf, "100", "", "100", "this page and its children"},
+	} {
+		if p := RelPath(c.x, c.id); p != c.path {
+			t.Errorf("%s %s: path %q, want %q", c.x.Name, c.id, p, c.path)
+		}
+		if p, _, w := UnderPattern(c.x, c.id); p != c.under || w != c.why {
+			t.Errorf("%s %s: under %q %q, want %q %q", c.x.Name, c.id, p, w, c.under, c.why)
+		}
+	}
+	if r := ruleOf(s3, Exclusion{Pattern: "221b/docs/"}); r != "sandbox-knowledge › docs/" {
+		t.Errorf("rule: %q", r)
+	}
+	if w := exclusionWords(webDir, Exclusion{Pattern: "/docs/old/*", By: "Ann"}); !strings.Contains(w, "(Wiki › /old/*)") {
+		t.Errorf("words: %q", w)
+	}
+	if r := ruleOf(s3, Exclusion{Pattern: "221b/a.md"}); r != "" {
+		t.Errorf("one item's rule: %q", r)
 	}
 }
 
@@ -471,8 +521,17 @@ func TestTheItemsArePagedAndFiltered(t *testing.T) {
 	w = serve(t, f.s, &admin, "GET", "items?q=runbook", "", nil)
 	p = ItemsPage{}
 	_ = json.Unmarshal(w.Body.Bytes(), &p)
-	if p.Total != 1 || p.Items[0].ID != "/docs/runbook.html" || !p.MayExclude || !p.Items[0].Excludable || p.Items[0].Under != "/docs/*" {
+	// Its path is relative to the start address; at the start address's
+	// directory nothing is offered under it (KN-49).
+	if p.Total != 1 || p.Items[0].ID != "/docs/runbook.html" || p.Items[0].Path != "/runbook.html" || !p.MayExclude || !p.Items[0].Excludable || p.Items[0].Under != "" || p.Items[0].UnderLabel != "" {
 		t.Fatalf("words: %+v", p)
+	}
+	// The words match the path as it is shown.
+	w = serve(t, f.s, &admin, "GET", "items?q=docs+site+%E2%80%BA+%2Frunbook", "", nil)
+	p = ItemsPage{}
+	_ = json.Unmarshal(w.Body.Bytes(), &p)
+	if p.Total != 1 || p.Items[0].ID != "/docs/runbook.html" {
+		t.Fatalf("the path shown: %+v", p)
 	}
 	w = serve(t, f.s, &admin, "GET", "items?state=live", "", nil)
 	p = ItemsPage{}

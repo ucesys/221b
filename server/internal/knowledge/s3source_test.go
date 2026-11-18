@@ -120,6 +120,18 @@ func TestABucketOfDocumentsKN25(t *testing.T) {
 		}
 	}
 
+	// Mycroft › Sources shows them under the prefix, with the source's
+	// name; an object directly under it offers nothing under it, a
+	// folder below it does, by its full key (KN-49).
+	its := itemsOf(t, f, ItemsQuery{Source: "docs"})
+	if db, hosts := its["ops/runbooks/db.md"], its["ops/hosts.csv"]; db.Path != "runbooks/db.md" || db.Under != "ops/runbooks/" || db.UnderLabel != "Ops bucket › runbooks/" ||
+		hosts.Path != "hosts.csv" || hosts.Under != "" || hosts.UnderLabel != "" {
+		t.Fatalf("the paths: %+v %+v", db, hosts)
+	}
+	if its := itemsOf(t, f, ItemsQuery{Q: "ops bucket › runbooks/db"}); len(its) != 1 {
+		t.Fatalf("found by the path shown: %+v", its)
+	}
+
 	// Nothing changed: the bucket is listed, nothing read or sent again,
 	// by Sync now or the job of the changes.
 	for _, full := range []bool{true, false} {
