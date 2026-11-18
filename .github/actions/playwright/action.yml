@@ -1,0 +1,57 @@
+# Installs one Playwright browser and the system packages it needs, keeping
+# both in the Actions cache. On 2026-11-18 the runner's Ubuntu mirror took 20
+# to 29 minutes for WebKit's packages, instead of about one, four times in a
+# row, and cancelled the release tag's browser tests. With the cache only
+# apt's index comes from the mirror; the packages come from the cache.
+#
+# The key names the runner image: its week's packages are what apt installs
+# there. A new image starts from the last one's downloads, and apt fetches
+# only what changed. Run `npm ci` in web/ first.
+name: Playwright browser
+description: Installs a Playwright browser and its system packages, cached.
+inputs:
+  browser:
+    description: chromium, firefox or webkit
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache key
+      id: key
+      shell: bash
+      env:
+        BROWSER: ${{ inputs.browser }}
+      run: |
+        version=$(node -p "require('./web/package-lock.json').packages['node_modules/playwright-core'].version")
+        prefix="playwright-$ImageOS-$BROWSER-$version-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix$ImageVersion" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - name: Keep apt's downloads where the cache finds them
+      shell: bash
+      run: |
+        dir="$HOME/.cache/playwright-apt"
+        mkdir -p "$dir/partial"
+        printf 'Dir::Cache::Archives "%s";\nAPT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$dir" |
+          sudo tee /etc/apt/apt.conf.d/99playwright-cache > /dev/null
+    - name: Install
+      shell: bash
+      working-directory: web
+      env:
+        BROWSER: ${{ inputs.browser }}
+      run: npx playwright install --with-deps "$BROWSER"
+    - name: Let the cache save apt's downloads
+      shell: bash
+      run: |
+        dir="$HOME/.cache/playwright-apt"
+        # Drop packages the mirror no longer has, so a cache carried over
+        # from older images does not grow without end.
+        sudo apt-get autoclean -qq || true
+        sudo rm -rf "$dir/lock" "$dir/partial"
+        sudo chown -R "$(id -u):$(id -g)" "$dir"
