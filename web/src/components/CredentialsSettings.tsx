@@ -6,12 +6,14 @@ import {
   dismissMigration,
   expiringSoon,
   fetchCredentials,
+  forgetCredentialCert,
   KIND_LABEL,
   METHOD_LABEL,
   saveCredential,
   sendsHTTP,
   sendText,
   testCredential,
+  trustCredentialCert,
   type Credential,
   type CredentialInput,
   type CredentialKind,
@@ -20,7 +22,9 @@ import {
   type CredentialsView,
   type SendMethod,
 } from '../api/credentials'
+import type { CertPin } from '../api/certificates'
 import { fmtTs } from '../lib/format'
+import { CertificateResult, PinnedCertNote } from './CertificateTrust'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Drawer } from './Drawer'
 
@@ -194,6 +198,7 @@ export function CredentialsSettings({ onToast }: { onToast?: (msg: string) => vo
           key={editing.saved?.id ?? 'new'}
           saved={editing.saved}
           onClose={() => setEditing(null)}
+          onChanged={load}
           onSaved={(c) => {
             setEditing(null)
             onToast?.(`${c.name} saved.`)
@@ -322,8 +327,9 @@ export function inputOf(d: Draft): CredentialInput {
 }
 
 /** Adds or changes a credential, in a drawer with its own Save; a saved one is tested from it (CR-05, CR-07). */
-function CredentialEditor({ saved, onClose, onSaved }: { saved?: Credential; onClose: () => void; onSaved: (c: Credential) => void }) {
+function CredentialEditor({ saved, onClose, onSaved, onChanged }: { saved?: Credential; onClose: () => void; onSaved: (c: Credential) => void; onChanged?: () => void }) {
   const [d, setD] = useState<Draft>(() => draftOf(saved))
+  const [pinned, setPinned] = useState<CertPin | undefined>(saved?.pinnedCert)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [target, setTarget] = useState('')
@@ -502,6 +508,20 @@ function CredentialEditor({ saved, onClose, onSaved }: { saved?: Credential; onC
         )}
         {area('Private CA (optional, PEM)', d.caPEM, (v) => set({ caPEM: v }), 'credential-ca', '-----BEGIN CERTIFICATE-----')}
       </div>
+      {saved && pinned && (
+        <div style={{ marginTop: 14 }}>
+          <PinnedCertNote
+            pinned={{ pin: pinned }}
+            mayForget
+            onForget={async () => {
+              await forgetCredentialCert(saved.id)
+              setPinned(undefined)
+              setTest(null)
+              onChanged?.()
+            }}
+          />
+        </div>
+      )}
       {saved && (
         <div className="rk-card" style={{ marginTop: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="credential-test-box">
           <strong style={{ fontSize: 13 }}>Test</strong>
@@ -522,6 +542,18 @@ function CredentialEditor({ saved, onClose, onSaved }: { saved?: Credential; onC
               {test.text}
               {test.suggest && ` Try Send as ${METHOD_LABEL[test.suggest]}.`}
             </p>
+          )}
+          {test?.certificate && (
+            <CertificateResult
+              key={test.at + test.certificate.sha256}
+              cert={test.certificate}
+              mayTrust
+              onTrust={async (sha256) => {
+                const r = await trustCredentialCert(saved.id, sha256, target.trim())
+                setPinned(r.pinnedCert)
+                onChanged?.()
+              }}
+            />
           )}
         </div>
       )}

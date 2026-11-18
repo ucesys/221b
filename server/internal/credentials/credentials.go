@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // The kinds of credential (CR-02).
@@ -99,6 +101,10 @@ type Test struct {
 	// for, after a 401.
 	Suggest string `json:"suggest,omitempty"`
 	By      string `json:"by,omitempty"`
+	// Certificate is the certificate the address presented, when it is
+	// not trusted or is the pinned one (CR-15): what Trust this
+	// certificate pins.
+	Certificate *certpin.Cert `json:"certificate,omitempty"`
 }
 
 // Credential is one credential without its secret part.
@@ -110,8 +116,11 @@ type Credential struct {
 	Description string    `json:"description,omitempty"`
 	Expires     time.Time `json:"expires,omitzero"`
 	// CAPEM is a private CA trusted for the endpoint's TLS.
-	CAPEM  string `json:"caPEM,omitempty"`
-	SendAs SendAs `json:"sendAs,omitzero"`
+	CAPEM string `json:"caPEM,omitempty"`
+	// PinnedCert is the endpoint's certificate a SuperAdmin trusted
+	// (CR-16): accepted when normal verification fails, and no other.
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
+	SendAs     SendAs       `json:"sendAs,omitzero"`
 	// The parts of a kind that are not secret: the user of a user and
 	// password, an access key's region, an SSH key's host key, a GitHub
 	// App's ids, an OAuth2 client's token URL, id and scope, a client

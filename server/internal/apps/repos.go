@@ -49,6 +49,7 @@ import (
 	"helm.sh/helm/v4/pkg/chart/loader/archive"
 	"sigs.k8s.io/yaml"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -120,6 +121,13 @@ type Repository struct {
 	// HasSecret says a password or token is kept; it never leaves the
 	// server.
 	HasSecret bool `json:"hasSecret"`
+	// PinnedCert is the repository's certificate a SuperAdmin trusted, for
+	// a repository without a credential (CR-16); a credential keeps its
+	// own.
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
+	// trust is what a fetch trusts, as Signed resolved it: the
+	// credential's private CA and pin, or the repository's pin.
+	trust certpin.Trust
 	// The last test (HR-03): when, whether it answered, and what it said.
 	TestedAt time.Time `json:"testedAt,omitzero"`
 	TestOK   bool      `json:"testOk,omitempty"`
@@ -149,6 +157,9 @@ type TestResult struct {
 	Text string `json:"text"`
 	// Charts counts a Helm repository's charts.
 	Charts int `json:"charts,omitempty"`
+	// Certificate is the certificate the repository presented, when it
+	// is not trusted or is the pinned one (CR-15).
+	Certificate *certpin.Cert `json:"certificate,omitempty"`
 }
 
 // ChartInfo is a chart a Helm repository's index lists.
@@ -413,6 +424,7 @@ func (r *Repos) Raw(ctx context.Context, name string) (Repository, error) {
 // service, as before), none without a credential.
 func (r *Repos) Signed(ctx context.Context, repo Repository) (Repository, string, error) {
 	repo.Auth, repo.Username, repo.HasSecret = AuthNone, "", false
+	repo.trust = repo.OwnTrust()
 	if repo.Credential == "" {
 		return repo, "", nil
 	}
@@ -423,6 +435,7 @@ func (r *Repos) Signed(ctx context.Context, repo Repository) (Repository, string
 	if err != nil {
 		return Repository{}, "", fmt.Errorf("%s's credential: %w", repo.Name, err)
 	}
+	repo.trust = use.Trust().Or(repo.trust)
 	if user, pass, ok := use.Basic(); ok {
 		repo.Auth, repo.Username, repo.HasSecret = AuthBasic, user, true
 		return repo, pass, nil
@@ -432,6 +445,12 @@ func (r *Repos) Signed(ctx context.Context, repo Repository) (Repository, string
 		return repo, tok, nil
 	}
 	return repo, "", nil
+}
+
+// OwnTrust is the repository's own pinned certificate (CR-16), for a
+// fetch.
+func (r Repository) OwnTrust() certpin.Trust {
+	return certpin.Trust{Pin: r.PinnedCert.Fingerprint()}
 }
 
 // CheckRepository checks a repository as typed and returns it cleaned:
@@ -516,6 +535,11 @@ func (r *Repos) Save(ctx context.Context, name string, in RepositoryInput, by st
 		}
 		if old.URL == repo.URL && old.Credential == repo.Credential && old.CredMigrated {
 			repo.TestedAt, repo.TestOK, repo.Tested = old.TestedAt, old.TestOK, old.Tested
+		}
+		// A pinned certificate is set by Trust alone, and kept while the
+		// address is the same (CR-16).
+		if old.URL == repo.URL {
+			repo.PinnedCert = old.PinnedCert
 		}
 	}
 	if err := r.put(ctx, repo); err != nil {
@@ -727,7 +751,7 @@ func (r *Repos) Fetch(ctx context.Context, src Source, token GitAuth) (*Checkout
 		if err != nil {
 			return nil, err
 		}
-		return Fetch(ctx, src, token)
+		return Fetch(ctx, src, r.gitTrust(ctx, src, token))
 	}
 	if r == nil {
 		return nil, errors.New("this console keeps no chart repositories")
@@ -761,7 +785,7 @@ func (r *Repos) FetchDigest(ctx context.Context, src Source, token GitAuth, dige
 		if err != nil {
 			return nil, err
 		}
-		return FetchCommit(ctx, src, token, digest)
+		return FetchCommit(ctx, src, r.gitTrust(ctx, src, token), digest)
 	}
 	co, err := r.Fetch(ctx, src, token)
 	if err != nil {
@@ -793,7 +817,7 @@ func (r *Repos) Refs(ctx context.Context, src Source, token GitAuth) (Refs, erro
 		if err != nil {
 			return Refs{}, err
 		}
-		return ListRefs(ctx, src.Repo, token)
+		return ListRefs(ctx, src.Repo, r.gitTrust(ctx, src, token))
 	}
 	versions, err := r.Versions(ctx, src)
 	if err != nil {
@@ -883,6 +907,12 @@ func (r *Repos) Charts(ctx context.Context, name string) ([]ChartInfo, error) {
 // Test asks a repository whether it answers, with its credentials (HR-03):
 // a Helm repository for its index, an OCI registry at /v2/.
 func (r *Repos) Test(ctx context.Context, repo Repository, secret string) TestResult {
+	res := r.test(ctx, repo, secret)
+	r.noteCertificate(ctx, repo, &res)
+	return res
+}
+
+func (r *Repos) test(ctx context.Context, repo Repository, secret string) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if repo.Kind == KindGit {
@@ -991,7 +1021,7 @@ func (r *Repos) helmGet(ctx context.Context, repo Repository, secret, target str
 	if refusedName(u.Hostname()) && !AllowLocalRepos {
 		return nil, errHostRefused
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1249,7 +1279,7 @@ func (r *Repos) ociGet(ctx context.Context, host, p, accept, scope string, repo 
 	// never travel in the clear.
 	target := "https://" + host + p
 	do := func(auth string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1323,7 +1353,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 			q.Set("scope", scope)
 		}
 		u.RawQuery = q.Encode()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, u.String(), nil)
 		if err != nil {
 			return "", err
 		}
@@ -1402,7 +1432,7 @@ var repoTransport http.RoundTripper
 func init() {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkConnect}).DialContext
-	repoTransport = allowedTransport{base}
+	repoTransport = allowedTransport{&certpin.ContextTransport{Base: base}}
 }
 
 // readCapped reads a body of at most limit bytes.

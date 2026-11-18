@@ -103,6 +103,9 @@ func (s *Service) test(ctx context.Context, c Credential, sec Secret, target str
 	default:
 		s.testHTTP(ctx, c, use, target, &t)
 	}
+	if c.Kind != KindSSH {
+		s.noteCertificate(ctx, use, target, &t)
+	}
 	t.Text = redact(t.Text, secrets)
 	return t
 }

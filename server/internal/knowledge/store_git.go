@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // GitStore keeps the wiki in a git repository: the approved pages on its
@@ -23,8 +25,8 @@ type GitStore struct {
 }
 
 // NewGitStore opens a repository for the wiki, cloned under dir.
-func NewGitStore(dir, url, branch, user, token, ca string) *GitStore {
-	return &GitStore{g: newRepo(repoDir(dir, "wiki", url, branch), url, branch, user, token, ca)}
+func NewGitStore(dir, url, branch, user, token string, trust certpin.Trust) *GitStore {
+	return &GitStore{g: newRepo(repoDir(dir, "wiki", url, branch), url, branch, user, token, trust)}
 }
 
 func (s *GitStore) Kind() string { return StoreGit }

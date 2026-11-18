@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   addSource,
   fetchKnowledge,
+  forgetSourceCert,
+  forgetStoreCert,
   LIVE_ADDRESS_LABEL,
   liveCheckText,
   moveStore,
@@ -17,6 +19,8 @@ import {
   syncJobId,
   testStore,
   testTypedSource,
+  trustSourceCert,
+  trustStoreCert,
   type KeysChange,
   type KnowledgeSource,
   type LiveAddress,
@@ -27,7 +31,9 @@ import {
   type StoreCheck,
   type StoreSettings,
 } from '../../api/knowledge'
+import type { PinnedWith, PresentedCert } from '../../api/certificates'
 import { fmtTs } from '../../lib/format'
+import { CertificateResult, PinnedCertNote } from '../CertificateTrust'
 import { aiHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
 import { CredentialPicker } from '../CredentialPicker'
@@ -335,6 +341,8 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
           seed={editing === 'new' ? null : editing}
           ownCredential={editing !== 'new' && !editing.credMigrated && !editing.credential && !!(v.creds[editing.id]?.token || v.creds[editing.id]?.accessKey)}
           identity={v.identity}
+          pinned={editing === 'new' ? undefined : v.pins?.[editing.id]}
+          onPinChanged={() => void reload()}
           onClose={() => setEditing(null)}
           onRemove={editing === 'new' || editing.kind === 'upload' || editing.kind === 'console' || editing.kind === 'fixes' ? undefined : () => void run(() => removeSource(editing.id), 'Source removed.').then(() => setEditing(null))}
           onSaved={(msg) => {
@@ -430,11 +438,12 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
   const [st, setSt] = useState<StoreSettings>(saved.kind ? saved : blankStore('git'))
   const [keys, setKeys] = useState<KeysChange>({})
   const [replace, setReplace] = useState(false)
-  const [check, setCheck] = useState<{ ok: boolean; check?: StoreCheck; error?: string } | null>(null)
+  const [check, setCheck] = useState<{ ok: boolean; check?: StoreCheck; error?: string; certificate?: PresentedCert } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const put = (p: Partial<StoreSettings>) => setSt((s) => ({ ...s, ...p }))
-  const changed = JSON.stringify(st) !== JSON.stringify(saved) || Object.keys(keys).length > 0
+  // The pinned certificate is Trust's and Forget's, not the form's (CR-16).
+  const changed = JSON.stringify({ ...st, pinnedCert: undefined }) !== JSON.stringify({ ...saved, pinnedCert: undefined }) || Object.keys(keys).length > 0
   const moving = !!saved.kind && (st.kind !== saved.kind || st.url !== saved.url || st.bucket !== saved.bucket || st.prefix !== saved.prefix || st.endpoint !== saved.endpoint)
   const act = async (fn: () => Promise<unknown>, msg: string) => {
     setBusy(true)
@@ -589,10 +598,41 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           </Row>
         </>
       )}
+      {saved.pinnedCert && st.kind === saved.kind && (
+        <div style={{ marginTop: 8 }}>
+          <PinnedCertNote
+            pinned={{ pin: saved.pinnedCert, with: 'store' }}
+            mayForget
+            onForget={async () => {
+              await forgetStoreCert()
+              setCheck(null)
+              onToast?.('The pinned certificate is forgotten.')
+              onSaved()
+            }}
+          />
+        </div>
+      )}
       {check && !check.ok && (
         <p className="rk-callout" data-tone="warn" role="alert" style={{ margin: '8px 0 0', fontSize: 12.5 }} data-testid="knowledge-store-test">
           {check.error}
         </p>
+      )}
+      {check?.certificate && (
+        <div style={{ marginTop: 8 }}>
+          <CertificateResult
+            cert={check.certificate}
+            mayTrust
+            onTrust={
+              changed
+                ? undefined
+                : async (sha256) => {
+                    await trustStoreCert(sha256)
+                    onSaved()
+                  }
+            }
+            unavailable="Save the store first: its certificate is trusted with it."
+          />
+        </div>
       )}
       {check?.ok && (
         <p className="rk-callout" data-tone={check.check?.warnings?.length ? 'warn' : 'info'} role="status" style={{ margin: '8px 0 0', fontSize: 12.5 }} data-testid="knowledge-store-test">
@@ -656,11 +696,16 @@ function SourceDrawer({
   seed,
   ownCredential = false,
   identity = false,
+  pinned,
+  onPinChanged,
   onClose,
   onSaved,
   onRemove,
 }: {
   seed: KnowledgeSource | null
+  /** The certificate pinned for it: its own, its credential's, its repository's (CR-19). */
+  pinned?: PinnedWith
+  onPinChanged?: () => void
   /** It keeps its own credential of before 0.12.1, used until one is chosen. */
   ownCredential?: boolean
   identity?: boolean
@@ -678,6 +723,7 @@ function SourceDrawer({
   const [gitRepo, setGitRepo] = useState(seed?.repository ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [pin, setPin] = useState<PinnedWith | undefined>(pinned)
   // Test's state (KN-26): running, or what it found; kept until a field
   // changes or Test runs again. gen counts the changes, so a test's answer
   // to values changed since is dropped.
@@ -927,6 +973,37 @@ function SourceDrawer({
                 >
                   {sourceTestText(test.r)}
                 </p>
+              )}
+              {test && !test.running && test.r.certificate && (
+                <CertificateResult
+                  cert={test.r.certificate}
+                  mayTrust
+                  onTrust={
+                    seed || (s.kind !== 'git' && cred && cred !== IDENTITY)
+                      ? async (sha256) => {
+                          setPin(await trustSourceCert(sha256, withCred(), seed?.id))
+                          onPinChanged?.()
+                        }
+                      : undefined
+                  }
+                  unavailable="Save the source first: without a credential, its certificate is trusted with the source."
+                />
+              )}
+              {pin && (
+                <PinnedCertNote
+                  pinned={pin}
+                  mayForget={!!seed && pin.with !== 'repository'}
+                  onForget={
+                    seed
+                      ? async () => {
+                          await forgetSourceCert(seed.id)
+                          setPin(undefined)
+                          setTest(null)
+                          onPinChanged?.()
+                        }
+                      : undefined
+                  }
+                />
               )}
               {test && !test.running && test.r.live && (
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="knowledge-source-live-results">

@@ -1,5 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
-import { deleteHelmRepo, dismissRepoMigration, fetchHelmRepos, renameHelmRepo, retestHelmRepo, saveHelmRepo, testHelmRepo, type HelmRepository, type HelmRepositoryInput, type RepoMigration, type RepoTest } from '../../api/apps'
+import {
+  deleteHelmRepo,
+  dismissRepoMigration,
+  fetchHelmRepos,
+  forgetRepoCert,
+  renameHelmRepo,
+  retestHelmRepo,
+  saveHelmRepo,
+  testHelmRepo,
+  trustRepoCert,
+  type HelmRepository,
+  type HelmRepositoryInput,
+  type RepoMigration,
+  type RepoTest,
+} from '../../api/apps'
+import type { PinnedWith } from '../../api/certificates'
+import { CertificateResult, PinnedCertNote } from '../CertificateTrust'
 import { fetchCredentials } from '../../api/credentials'
 import { fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -192,6 +208,7 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
           initial={editing.draft}
           saved={editing.saved}
           onCancel={() => setEditing(null)}
+          onPinChanged={load}
           onSaved={(r) => {
             setEditing(null)
             onToast?.(`${r.name} saved.`)
@@ -224,11 +241,15 @@ function inputOf(d: Draft): HelmRepositoryInput {
 }
 
 /** Adds or changes a repository, with Test before or after saving (HR-03). */
-function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; saved?: HelmRepository; onCancel: () => void; onSaved: (r: HelmRepository) => void }) {
+function RepoEditor({ initial, saved, onCancel, onSaved, onPinChanged }: { initial: Draft; saved?: HelmRepository; onCancel: () => void; onSaved: (r: HelmRepository) => void; onPinChanged?: () => void }) {
   const [d, setD] = useState<Draft>(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [test, setTest] = useState<RepoTest | null>(null)
+  const [pin, setPin] = useState<PinnedWith | undefined>(saved?.pinned)
+  // Trust pins the saved repository's certificate: the address and the
+  // credential as saved (CR-16).
+  const asSaved = !!saved && d.url.trim() === saved.url && (d.credential ?? '') === (saved.credential ?? '')
   const set = (p: Partial<Draft>) => {
     setD((x) => ({ ...x, ...p }))
     setTest(null)
@@ -338,6 +359,33 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
           />
         </div>
       </div>
+      {pin && saved && (
+        <PinnedCertNote
+          pinned={pin}
+          mayForget
+          onForget={async () => {
+            await forgetRepoCert(saved.name)
+            setPin(undefined)
+            setTest(null)
+            onPinChanged?.()
+          }}
+        />
+      )}
+      {test?.certificate && (
+        <CertificateResult
+          cert={test.certificate}
+          mayTrust
+          onTrust={
+            asSaved && saved
+              ? async (sha256) => {
+                  setPin(await trustRepoCert(saved.name, sha256))
+                  onPinChanged?.()
+                }
+              : undefined
+          }
+          unavailable="Save the repository first: its certificate is trusted with it, or with its credential."
+        />
+      )}
       {test && (
         <p className="rk-t" data-tone={test.ok ? 'ok' : 'err'} style={{ margin: 0, fontSize: 12.5 }} data-testid="helm-repo-test-result">
           {test.ok ? '✓ ' : '✗ '}

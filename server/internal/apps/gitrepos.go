@@ -313,6 +313,18 @@ func (r *Repos) gitSource(ctx context.Context, src Source) (Source, error) {
 	return src, nil
 }
 
+// gitTrust is token with the pinned certificate of the repository a git
+// source names, when its credential has none (CR-16).
+func (r *Repos) gitTrust(ctx context.Context, src Source, token GitAuth) GitAuth {
+	if r == nil || !isGit(src) || src.Repository == "" {
+		return token
+	}
+	if repo, err := r.Raw(ctx, src.Repository); err == nil && repo.Kind == KindGit && repo.URL == src.Repo {
+		token.Trust = token.Trust.Or(repo.OwnTrust())
+	}
+	return token
+}
+
 // ResolveGit fills in a git source naming a repository of Administration › Settings ›
 // Repositories (RP-03): its address, from the list; the repository is
 // returned for its credential and default branch.
@@ -368,6 +380,7 @@ func (r *Repos) testGit(ctx context.Context, repo Repository) TestResult {
 		}
 		auth = a
 	}
+	auth.Trust = auth.Trust.Or(repo.OwnTrust())
 	refs, err := ListRefs(ctx, repo.URL, auth)
 	if err != nil {
 		return TestResult{Text: err.Error()}

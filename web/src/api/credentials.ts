@@ -3,6 +3,7 @@
 // and never read back: no answer holds one, and the page keeps none.
 
 import { unauthorized } from './auth'
+import type { CertPin, PresentedCert } from './certificates'
 
 export type CredentialKind = 'token' | 'userpass' | 'accesskey' | 'ssh' | 'githubapp' | 'clientcert' | 'oauth2' | 'none'
 export type SendMethod = 'bearer' | 'basic' | 'header' | 'query' | 'cookie'
@@ -27,6 +28,8 @@ export interface CredentialTest {
   text: string
   suggest?: SendMethod
   by?: string
+  /** The certificate the address presented, when it is not trusted or is the pinned one (CR-15). */
+  certificate?: PresentedCert
 }
 
 export interface CredentialRef {
@@ -43,6 +46,8 @@ export interface Credential {
   description?: string
   expires?: string
   caPEM?: string
+  /** The endpoint's certificate a SuperAdmin trusted (CR-16); set by Trust only. */
+  pinnedCert?: CertPin
   sendAs?: SendAs
   username?: string
   region?: string
@@ -79,7 +84,7 @@ export interface CredentialSecret {
   keyPEM?: string
 }
 
-export type CredentialInput = Omit<Credential, 'id' | 'usedBy' | 'set' | 'lastTest' | 'created' | 'createdBy' | 'changed' | 'changedBy' | 'from' | 'expiring' | 'how'> & { secret?: CredentialSecret }
+export type CredentialInput = Omit<Credential, 'id' | 'usedBy' | 'set' | 'lastTest' | 'created' | 'createdBy' | 'changed' | 'changedBy' | 'from' | 'expiring' | 'how' | 'pinnedCert'> & { secret?: CredentialSecret }
 
 export interface Migration {
   at?: string
@@ -129,6 +134,10 @@ export const deleteCredential = (id: string) => req<void>('DELETE', `${base}/${e
 /** Tests a saved credential against its endpoint, or an address or name under it. */
 export const testCredential = (id: string, target: string) => req<CredentialTest>('POST', `${base}/${encodeURIComponent(id)}/test`, target ? { target } : {})
 export const dismissMigration = () => req<void>('POST', `${base}/migration/dismiss`)
+/** Trusts the certificate the address (target, as tested) presents, when it is the one a Test showed (CR-16). */
+export const trustCredentialCert = (id: string, sha256: string, target: string) => req<{ pinnedCert: CertPin; certificate: PresentedCert }>('POST', `${base}/${encodeURIComponent(id)}/trust`, { sha256, ...(target ? { target } : {}) })
+/** Lets the pinned certificate go (CR-19). */
+export const forgetCredentialCert = (id: string) => req<void>('DELETE', `${base}/${encodeURIComponent(id)}/trust`)
 
 export const KIND_LABEL: Record<CredentialKind, string> = {
   token: 'Token',

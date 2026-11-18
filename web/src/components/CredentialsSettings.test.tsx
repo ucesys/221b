@@ -6,16 +6,19 @@ import { CredentialsSettings, expiryText } from './CredentialsSettings'
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 const day = 86_400_000
+const FP = 'AB:CD:' + Array(30).fill('EF').join(':')
 
 describe('Administration › Credentials', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let list: Record<string, unknown>[] = []
   let migration: Record<string, unknown> | undefined
   let removeAnswer: Response | null = null
+  let testAnswer: Record<string, unknown> | null = null
   beforeEach(() => {
     Element.prototype.scrollTo = () => {}
     calls.length = 0
     removeAnswer = null
+    testAnswer = null
     migration = { created: [{ id: 'cr-1', name: 'github.com/ucesys (from app 221b/k8s-console)', from: ['app 221b/k8s-console'] }] }
     list = [
       {
@@ -38,6 +41,8 @@ describe('Administration › Credentials', () => {
       if (method === 'DELETE' && removeAnswer) return removeAnswer
       if (method === 'DELETE' || String(url).endsWith('/migration/dismiss')) return new Response(null, { status: 204 })
       if (method === 'POST' && String(url) === '/api/v1/credentials') return new Response(JSON.stringify({ ...(JSON.parse(String(init!.body)) as object), id: 'cr-2', usedBy: [] }), { status: 201 })
+      if (method === 'POST' && String(url).endsWith('/trust')) return new Response(JSON.stringify({ pinnedCert: { sha256: FP, subject: 'CN=git.corp.example', by: 'ann', at: '2026-11-18T09:00:00Z' } }))
+      if (String(url).endsWith('/test') && testAnswer) return new Response(JSON.stringify(testAnswer))
       if (String(url).endsWith('/test'))
         return new Response(JSON.stringify({ at: '2026-11-17T10:00:00Z', ok: false, status: 401, text: 'Sent an Authorization header with Bearer to github.com; it answered 401 Unauthorized.', suggest: 'basic' }))
       return new Response(JSON.stringify({ credentials: list, mayEdit: true, ...(migration ? { migration } : {}) }))
@@ -108,6 +113,40 @@ describe('Administration › Credentials', () => {
       expect(put).toMatchObject({ name: 'github.com/ucesys (from app 221b/k8s-console)', description: 'read only', sendAs: { method: 'basic', username: 'x-access-token' } })
       expect(put).not.toHaveProperty('secret')
     })
+  })
+
+  // CR-15, CR-16, CR-19: Test shows the certificate a server presented; a
+  // SuperAdmin trusts it, after confirming its fingerprint, and forgets it.
+  it('shows an untrusted certificate, trusts it and forgets it', async () => {
+    testAnswer = {
+      at: '2026-11-18T09:00:00Z',
+      ok: false,
+      text: 'Sent an Authorization header with Bearer to git.corp.example, which could not be reached: x509: certificate signed by unknown authority',
+      certificate: { subject: 'CN=git.corp.example', issuer: 'CN=git.corp.example', notBefore: '2026-01-01T00:00:00Z', notAfter: '2027-01-01T00:00:00Z', sha256: FP, selfSigned: true, trusted: false, trustable: true },
+    }
+    render(<CredentialsSettings />)
+    fireEvent.click(await screen.findByTestId('credential-edit'))
+    const drawer = screen.getByTestId('credential-drawer')
+    expect(within(drawer).queryByTestId('cert-pinned-note')).toBeNull()
+    fireEvent.change(within(drawer).getByTestId('credential-test-target'), { target: { value: 'https://git.corp.example/x.git' } })
+    fireEvent.click(within(drawer).getByTestId('credential-test-run'))
+    const cert = await within(drawer).findByTestId('cert-result')
+    expect(within(cert).getByTestId('cert-headline').textContent).toContain('self-signed')
+    expect(within(cert).getByTestId('cert-subject').textContent).toBe('CN=git.corp.example')
+    expect(within(cert).getByTestId('cert-sha256').textContent).toBe(FP)
+    expect(within(cert).getByTestId('cert-validity').textContent).toBe('2026-01-01 to 2027-01-01')
+    fireEvent.click(within(cert).getByTestId('cert-trust'))
+    const dialog = await screen.findByTestId('confirm')
+    expect(dialog.textContent).toContain(FP)
+    fireEvent.click(within(dialog).getByTestId('confirm-ok'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/credentials/cr-1/trust')?.body).toEqual({ sha256: FP, target: 'https://git.corp.example/x.git' }))
+    const note = await within(drawer).findByTestId('cert-pinned-note')
+    expect(within(note).getByTestId('cert-pinned-sha256').textContent).toContain(FP)
+    expect(note.textContent).toContain('trusted by ann')
+    fireEvent.click(within(note).getByTestId('cert-forget'))
+    fireEvent.click(within(await screen.findByTestId('confirm')).getByTestId('confirm-ok'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url === '/api/v1/credentials/cr-1/trust')).toBe(true))
+    await waitFor(() => expect(within(drawer).queryByTestId('cert-pinned-note')).toBeNull())
   })
 
   it('says by whom a credential in use is used, and the server’s refusal', async () => {

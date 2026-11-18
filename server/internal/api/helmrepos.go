@@ -11,6 +11,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 // --- Helm repositories (Phase 12, wave 5, HR-01 to HR-12, ADR-123 to
@@ -34,6 +35,9 @@ const (
 	// ActionRepoMigration is the upgrade's list of git repositories
 	// dismissed (RP-05).
 	ActionRepoMigration = "helmrepo.migration"
+	// A certificate trusted, or let go (CR-16, CR-19).
+	ActionHelmRepoTrust  = "helmrepo.trust"
+	ActionHelmRepoForget = "helmrepo.forget"
 )
 
 func (s *Server) helmReposRoutes() {
@@ -46,6 +50,8 @@ func (s *Server) helmReposRoutes() {
 	s.handle("GET /api/v1/helm-repositories/{name}/charts", "helm-repository-charts", s.getHelmRepoCharts)
 	s.handle("POST /api/v1/helm-repositories/migration/dismiss", "repository-migration-dismiss", s.postRepoMigrationDismiss)
 	s.handle("POST /api/v1/helm-repositories/{name}/rename", "repository-rename", s.postRepoRename)
+	s.handle("POST /api/v1/helm-repositories/{name}/trust", "repository-trust", s.postRepoTrust)
+	s.handle("DELETE /api/v1/helm-repositories/{name}/trust", "repository-forget", s.deleteRepoTrust)
 }
 
 // postRepoRename gives a repository a new name; what names it follows
@@ -101,6 +107,9 @@ type helmReposView struct {
 type repoView struct {
 	apps.Repository
 	UsedBy []string `json:"usedBy"`
+	// Pinned is the certificate pinned for it, its own or its
+	// credential's (CR-19), for a SuperAdmin.
+	Pinned *apps.Pinned `json:"pinned,omitempty"`
 }
 
 // mayReadRepos lets through those who manage applications, and
@@ -136,7 +145,11 @@ func (s *Server) getHelmRepos(w http.ResponseWriter, r *http.Request) {
 	}
 	view := helmReposView{Repositories: make([]repoView, 0, len(list)), MayEdit: s.isSuperAdmin(r)}
 	for _, x := range list {
-		view.Repositories = append(view.Repositories, repoView{Repository: x, UsedBy: append([]string{}, users[x.Name]...)})
+		v := repoView{Repository: x, UsedBy: append([]string{}, users[x.Name]...)}
+		if view.MayEdit {
+			v.Pinned = s.opts.Repos.PinOf(r.Context(), x)
+		}
+		view.Repositories = append(view.Repositories, v)
 	}
 	if view.MayEdit {
 		if m, err := s.opts.Repos.Migration(r.Context()); err == nil && !m.Dismissed && (len(m.Created) > 0 || len(m.Notes) > 0) {
@@ -300,6 +313,11 @@ func (s *Server) postHelmRepoTest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The saved repository's pinned certificate, while the address is the
+	// same (CR-16).
+	if saved, err := s.opts.Repos.Raw(r.Context(), in.Name); err == nil && saved.URL == repo.URL {
+		repo.PinnedCert = saved.PinnedCert
+	}
 	// The credential goes only to an address it covers (CR-04).
 	repo, secret, err := s.opts.Repos.Signed(r.Context(), repo)
 	if err != nil {
@@ -342,6 +360,67 @@ func (s *Server) answerRepoTest(w http.ResponseWriter, r *http.Request, repo app
 	s.recordOutcome(r, ActionHelmRepoTest, repo.Name, repo.Kind+" "+repo.URL+": "+res.Text, outcome)
 	b, _ := json.Marshal(res)
 	writeJSON(w, r, b)
+}
+
+// postRepoTrust pins the certificate a saved repository presents, when it
+// is the one its Test showed (CR-16).
+func (s *Server) postRepoTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	var in struct {
+		SHA256 string `json:"sha256"`
+	}
+	if !decodeRepo(w, r, &in) {
+		return
+	}
+	name := r.PathValue("name")
+	repo, p, err := s.opts.Repos.Trust(r.Context(), name, in.SHA256, repoBy(r))
+	if err != nil {
+		if !errors.Is(err, apps.ErrNoRepository) {
+			s.recordOutcome(r, ActionHelmRepoTrust, name, "certificate not trusted: "+strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "), audit.OutcomeFailed)
+		}
+		repoTrustFailed(w, err)
+		return
+	}
+	with := "the repository"
+	if p.With == "credential" {
+		with = "the credential " + p.CredentialName
+	}
+	s.record(r, ActionHelmRepoTrust, repo.Name, "certificate trusted with "+with+" for "+pinAudit(repo.URL, p.Pin))
+	b, _ := json.Marshal(p)
+	writeJSON(w, r, b)
+}
+
+// deleteRepoTrust lets a repository's pinned certificate go (CR-19).
+func (s *Server) deleteRepoTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	repo, p, err := s.opts.Repos.Forget(r.Context(), r.PathValue("name"))
+	if err != nil {
+		repoTrustFailed(w, err)
+		return
+	}
+	with := "the repository"
+	if p.With == "credential" {
+		with = "the credential " + p.CredentialName
+	}
+	s.record(r, ActionHelmRepoForget, repo.Name, "pinned certificate of "+with+" forgotten for "+pinAudit(repo.URL, p.Pin))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func repoTrustFailed(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, apps.ErrNoRepository):
+		jsonError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, apps.ErrInvalidRepo):
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+	case errors.Is(err, credentials.ErrNotSeen):
+		jsonError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), credentials.ErrNotSeen.Error()+": "))
+	default:
+		jsonError(w, http.StatusBadGateway, err.Error())
+	}
 }
 
 func (s *Server) getHelmRepoCharts(w http.ResponseWriter, r *http.Request) {

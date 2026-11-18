@@ -10,10 +10,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/scrub"
 )
 
@@ -44,6 +46,9 @@ type SourceTest struct {
 	SkippedWhy string   `json:"skippedWhy,omitempty"`
 	// Live is a live source's addresses, each read once (KN-42).
 	Live []LiveCheck `json:"live,omitempty"`
+	// Certificate is the certificate the source's address presented, when
+	// it is not trusted or is the pinned one (CR-15), also with an error.
+	Certificate *certpin.Cert `json:"certificate,omitempty"`
 }
 
 // testSample is how many items a Test names.
@@ -90,6 +95,9 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		return SourceTest{}, err
 	}
 	var have Creds
+	// A pinned certificate is the saved source's, while the address is the
+	// same (CR-16); the dialog cannot send one.
+	x.PinnedCert = nil
 	legacy := s.keepsOwnCredential(ctx, Source{ID: saved, Kind: x.Kind, Credential: x.Credential, Repository: x.Repository}, ch, saved == "")
 	if saved != "" {
 		set, err := s.Settings(ctx)
@@ -102,6 +110,9 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		}
 		if old.Kind != x.Kind {
 			return SourceTest{}, invalid("a source keeps its kind; add a new one instead")
+		}
+		if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {
+			x.PinnedCert = old.PinnedCert
 		}
 		if legacy {
 			if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
@@ -146,15 +157,23 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 // found, or what is wrong without a credential in it.
 func (s *Service) testSource(ctx context.Context, x Source, keys Creds) (SourceTest, error) {
 	if x.Kind == SourceLive {
-		return s.testLive(ctx, x, keys), nil
+		out := s.testLive(ctx, x, keys)
+		ok := true
+		for _, c := range out.Live {
+			ok = ok && c.OK
+		}
+		out.Certificate = s.certificateOf(ctx, x, ok)
+		return out, nil
 	}
 	out, err := s.listForTest(ctx, x, keys)
 	if err != nil {
+		cert := s.certificateOf(ctx, x, false)
 		if msg := scrub.Known(err.Error(), keys.secrets()); msg != err.Error() {
-			return SourceTest{}, errors.New(msg)
+			return SourceTest{Certificate: cert}, errors.New(msg)
 		}
-		return SourceTest{}, err
+		return SourceTest{Certificate: cert}, err
 	}
+	out.Certificate = s.certificateOf(ctx, x, true)
 	return out, nil
 }
 
@@ -263,7 +282,7 @@ func (s *Service) reach(ctx context.Context, x Source) error {
 	if u.Scheme != "https" {
 		return nil
 	}
-	tc := tls.Client(conn, &tls.Config{ServerName: u.Hostname(), RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12})
+	tc := tls.Client(conn, certpin.Config(&tls.Config{ServerName: u.Hostname(), RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12}, certpin.Trust{Pin: x.pin()}))
 	hctx, cancelTLS := context.WithTimeout(ctx, connectTimeout)
 	defer cancelTLS()
 	if err := tc.HandshakeContext(hctx); err != nil {
@@ -320,9 +339,12 @@ func tlsError(addr string, err error) error {
 	var invalidCert x509.CertificateInvalidError
 	var record tls.RecordHeaderError
 	var ne net.Error
+	var pinned *certpin.Error
 	switch {
+	case errors.As(err, &pinned):
+		return fmt.Errorf("%s: %v. Test shows the certificate it presents now: trust it if it is the server's new one.", addr, pinned)
 	case errors.As(err, &verify), errors.As(err, &unknown), errors.As(err, &host), errors.As(err, &invalidCert):
-		return fmt.Errorf("%s has a TLS certificate the console does not trust: set the private CA in this dialog, or check the address (%v).", addr, err)
+		return fmt.Errorf("%s has a TLS certificate the console does not trust: set the private CA in this dialog, trust the certificate shown, or check the address (%v).", addr, err)
 	case errors.As(err, &record):
 		return fmt.Errorf("%s does not answer in TLS: if it serves plain HTTP, the address starts with http://; otherwise check the port.", addr)
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():

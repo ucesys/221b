@@ -11,6 +11,8 @@ import (
 	"context"
 	"slices"
 	"sync"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // GitRepo is a git repository of Administration › Settings › Repositories as a source
@@ -18,6 +20,8 @@ import (
 type GitRepo struct {
 	URL        string
 	Credential string
+	// PinnedCert is the certificate pinned with the repository (CR-16).
+	PinnedCert *certpin.Pin
 }
 
 // GitReposFunc reads the git repositories of Administration › Settings › Repositories, by
@@ -65,6 +69,7 @@ func (s *Service) withRepos(ctx context.Context, set Settings) (Settings, error)
 	for i, x := range set.Sources {
 		if r, ok := m[x.Repository]; ok && x.namesRepo() {
 			set.Sources[i].URL, set.Sources[i].Credential, set.Sources[i].CredMigrated = r.URL, r.Credential, true
+			set.Sources[i].repoPin = r.PinnedCert
 		}
 	}
 	return set, nil
@@ -89,6 +94,7 @@ func (s *Service) fillRepo(ctx context.Context, x Source) (Source, error) {
 		return x, invalid("Administration › Settings › Repositories lists no git repository %q", x.Repository)
 	}
 	x.URL, x.Credential, x.CredMigrated = r.URL, r.Credential, true
+	x.repoPin = r.PinnedCert
 	return x, nil
 }
 

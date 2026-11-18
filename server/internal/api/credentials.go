@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
@@ -24,6 +25,9 @@ const (
 	ActionCredentialSave   = "credential.save"
 	ActionCredentialRemove = "credential.remove"
 	ActionCredentialTest   = "credential.test"
+	// A certificate trusted, or let go (CR-16, CR-19).
+	ActionCredentialTrust  = "credential.trust"
+	ActionCredentialForget = "credential.forget"
 )
 
 func (s *Server) credentialsRoutes() {
@@ -34,6 +38,8 @@ func (s *Server) credentialsRoutes() {
 	s.handle("PUT /api/v1/credentials/{id}", "credential-save", s.putCredential)
 	s.handle("DELETE /api/v1/credentials/{id}", "credential-remove", s.deleteCredential)
 	s.handle("POST /api/v1/credentials/{id}/test", "credential-test", s.postCredentialTest)
+	s.handle("POST /api/v1/credentials/{id}/trust", "credential-trust", s.postCredentialTrust)
+	s.handle("DELETE /api/v1/credentials/{id}/trust", "credential-forget", s.deleteCredentialTrust)
 }
 
 // credentialView is a credential as the page sees it: everything but the
@@ -154,7 +160,7 @@ func (s *Server) readCredential(w http.ResponseWriter, r *http.Request) (credent
 		return in, false
 	}
 	// What the page may not set: the server keeps these.
-	in.Set, in.LastTest, in.From = nil, nil, nil
+	in.Set, in.LastTest, in.From, in.PinnedCert = nil, nil, nil, nil
 	in.Created, in.Changed = time.Time{}, time.Time{}
 	in.CreatedBy, in.ChangedBy = "", ""
 	return in, true
@@ -169,6 +175,8 @@ func credentialFailed(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusBadRequest, msg)
 	case errors.Is(err, credentials.ErrNotFound):
 		jsonError(w, http.StatusNotFound, msg)
+	case errors.Is(err, credentials.ErrNotSeen):
+		jsonError(w, http.StatusConflict, msg)
 	case errors.Is(err, credentials.ErrInUse):
 		jsonError(w, http.StatusConflict, strings.TrimPrefix(msg, credentials.ErrInUse.Error()+": "))
 	default:
@@ -275,6 +283,82 @@ func (s *Server) postCredentialTest(w http.ResponseWriter, r *http.Request) {
 	s.recordOutcome(r, ActionCredentialTest, name, "credential tested against "+t.Target+": "+t.Text, outcome)
 	b, _ := json.Marshal(t)
 	writeJSON(w, r, b)
+}
+
+// pinAudit is a pinned certificate as the audit log names it.
+func pinAudit(host string, p *certpin.Pin) string {
+	if p == nil {
+		return host
+	}
+	out := host + ": SHA-256 " + p.SHA256
+	if p.Subject != "" {
+		out += ", subject " + p.Subject
+	}
+	if p.Issuer != "" {
+		out += ", issuer " + p.Issuer
+	}
+	if !p.NotAfter.IsZero() {
+		out += ", valid until " + p.NotAfter.Format(time.DateOnly)
+	}
+	return out
+}
+
+// trustInput is Trust this certificate: the fingerprint a Test showed and,
+// for a credential, the address it asked.
+type trustInput struct {
+	SHA256 string `json:"sha256"`
+	Target string `json:"target,omitempty"`
+}
+
+func decodeTrust(w http.ResponseWriter, r *http.Request) (trustInput, bool) {
+	var in trustInput
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
+		return in, false
+	}
+	return in, true
+}
+
+// postCredentialTrust pins the certificate the credential's address
+// presents, when it is the one its Test showed (CR-16).
+func (s *Server) postCredentialTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	in, ok := decodeTrust(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	c, cert, err := s.opts.Credentials.Trust(r.Context(), id, in.Target, in.SHA256, repoBy(r))
+	if err != nil {
+		name := id
+		if c, err := s.opts.Credentials.Get(r.Context(), id); err == nil {
+			name = c.Name
+		}
+		s.recordOutcome(r, ActionCredentialTrust, name, "certificate not trusted: "+strings.TrimPrefix(err.Error(), credentials.ErrInvalid.Error()+": "), audit.OutcomeFailed)
+		credentialFailed(w, err)
+		return
+	}
+	s.record(r, ActionCredentialTrust, c.Name, "certificate trusted for "+pinAudit(credentials.TestTarget(c, in.Target), c.PinnedCert))
+	b, _ := json.Marshal(map[string]any{"pinnedCert": c.PinnedCert, "certificate": cert})
+	writeJSON(w, r, b)
+}
+
+// deleteCredentialTrust lets the credential's pinned certificate go
+// (CR-19).
+func (s *Server) deleteCredentialTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	old, err := s.opts.Credentials.Forget(r.Context(), r.PathValue("id"))
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	s.record(r, ActionCredentialForget, old.Name, "pinned certificate forgotten for "+pinAudit(old.Endpoint, old.PinnedCert))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) postCredentialMigrationDismiss(w http.ResponseWriter, r *http.Request) {

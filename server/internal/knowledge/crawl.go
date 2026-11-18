@@ -2,7 +2,6 @@ package knowledge
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"html"
@@ -18,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/confluence"
 )
 
@@ -87,13 +87,12 @@ func (s *Service) crawlClient(site *url.URL, x *Source) *http.Client {
 		// sees the address connected to.
 		tr.Proxy = nil
 		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: guardedDial}).DialContext
-		if x != nil && (strings.TrimSpace(x.CAPEM) != "" || x.cert != nil) {
-			tr.TLSClientConfig = &tls.Config{RootCAs: s.rootsFor(*x), MinVersion: tls.VersionTLS12}
-			if x.cert != nil {
-				tr.TLSClientConfig.Certificates = []tls.Certificate{*x.cert}
-			}
-		}
 		base = tr
+	}
+	if x != nil {
+		// The private CA, the pinned certificate (CR-17), the client
+		// certificate.
+		base = certpin.Transport(base, x.trust(), x.cert)
 	}
 	return &http.Client{
 		Transport: base,

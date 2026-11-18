@@ -64,6 +64,11 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)
 	route("POST store/move", h.postStoreMove)
+	// Trust this certificate, and Forget (0.12.1, CR-16, CR-19).
+	route("POST sources/trust", h.postSourceTrust)
+	route("DELETE sources/{id}/trust", h.deleteSourceTrust)
+	route("POST store/trust", h.postStoreTrust)
+	route("DELETE store/trust", h.deleteStoreTrust)
 	route("PUT hook", h.putHook)
 	route("GET status", h.getStatus)
 	route("GET pages", h.getPages)
@@ -224,10 +229,20 @@ func (h *handler) postSourceOn(w http.ResponseWriter, r *http.Request, c Caller)
 func (h *handler) postSourceTest(w http.ResponseWriter, r *http.Request, c Caller) {
 	t, err := h.s.TestSource(r.Context(), c, r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusOK, failedTest(t, err))
 		return
 	}
 	writeJSON(w, http.StatusOK, testAnswer(t))
+}
+
+// failedTest is a Test's answer when it failed: the error, and the
+// certificate the address presented when it is not trusted (CR-15).
+func failedTest(t SourceTest, err error) map[string]any {
+	out := map[string]any{"ok": false, "error": err.Error()}
+	if t.Certificate != nil {
+		out["certificate"] = t.Certificate
+	}
+	return out
 }
 
 // testAnswer is a Test's answer: a live source is OK when every address
@@ -240,6 +255,9 @@ func testAnswer(t SourceTest) map[string]any {
 	out := map[string]any{"ok": ok, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy}
 	if t.Live != nil {
 		out["live"] = t.Live
+	}
+	if t.Certificate != nil {
+		out["certificate"] = t.Certificate
 	}
 	if !ok {
 		out["error"] = "not every address could be read"
@@ -265,7 +283,7 @@ func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c 
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusOK, failedTest(t, err))
 		return
 	}
 	writeJSON(w, http.StatusOK, testAnswer(t))
@@ -322,11 +340,58 @@ func (h *handler) postStoreTest(w http.ResponseWriter, r *http.Request, c Caller
 		fail(w, err)
 		return
 	}
+	out := map[string]any{"ok": true, "check": check}
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		out = map[string]any{"ok": false, "error": err.Error()}
+	}
+	if cert := h.s.StoreCertificate(r.Context(), c, in, err == nil); cert != nil {
+		out["certificate"] = cert
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) postSourceTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in TrustInput
+	if !decode(w, r, maxBody, &in) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "check": check})
+	p, err := h.s.TrustSource(r.Context(), c, in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *handler) deleteSourceTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	if err := h.s.ForgetSource(r.Context(), c, r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"forgotten": true})
+}
+
+func (h *handler) postStoreTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		SHA256 string `json:"sha256"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	p, err := h.s.TrustStore(r.Context(), c, in.SHA256)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *handler) deleteStoreTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	if err := h.s.ForgetStore(r.Context(), c); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"forgotten": true})
 }
 
 func (h *handler) postStoreMove(w http.ResponseWriter, r *http.Request, c Caller) {

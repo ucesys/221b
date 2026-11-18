@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/confluence"
 	"github.com/ucesys/221b/server/internal/s3"
 )
@@ -94,9 +95,13 @@ type Source struct {
 	// read reads them again.
 	MigratedFrom []string `json:"migratedFrom,omitempty"`
 	// CAPEM is a private CA for the source's TLS.
-	CAPEM   string    `json:"caPEM,omitempty"`
-	Added   time.Time `json:"added,omitzero"`
-	AddedBy string    `json:"addedBy,omitempty"`
+	CAPEM string `json:"caPEM,omitempty"`
+	// PinnedCert is the source's certificate a SuperAdmin trusted, for a
+	// source without a credential (CR-16); a source's credential keeps
+	// its own.
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
+	Added      time.Time    `json:"added,omitzero"`
+	AddedBy    string       `json:"addedBy,omitempty"`
 	// Credential is the credential of Administration › Credentials a Confluence
 	// space, repository, bucket, web site or live source signs in with, by
 	// id; "" is none, or a bucket's pod identity (0.12.1, CR-11).
@@ -109,7 +114,26 @@ type Source struct {
 	// cert is a web site's or live source's client certificate, from its
 	// credential, as it is read; never kept.
 	cert *tls.Certificate
+	// credPin and repoPin are the certificates pinned with its credential
+	// and with the repository it names, as it is read; never kept.
+	credPin string
+	repoPin *certpin.Pin
 }
+
+// pin is the certificate pinned for the source: its own, its
+// credential's, or its repository's.
+func (x Source) pin() string {
+	if p := x.PinnedCert.Fingerprint(); p != "" {
+		return p
+	}
+	if x.credPin != "" {
+		return x.credPin
+	}
+	return x.repoPin.Fingerprint()
+}
+
+// trust is what the source's TLS trusts besides the system's CAs.
+func (x Source) trust() certpin.Trust { return certpin.Trust{CAPEM: x.CAPEM, Pin: x.pin()} }
 
 // Store kinds.
 const (
@@ -150,6 +174,8 @@ type StoreSettings struct {
 	KMSKeyID    string `json:"kmsKeyId,omitempty"`
 	// CAPEM is a private CA for the store's TLS.
 	CAPEM string `json:"caPEM,omitempty"`
+	// PinnedCert is the store's certificate a SuperAdmin trusted (CR-16).
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
 	// RefreshMinutes is how often the local copy is read again; 0 is the
 	// default (15 for git, 5 for S3).
 	RefreshMinutes int       `json:"refreshMinutes,omitempty"`
@@ -365,6 +391,23 @@ func (st StoreSettings) Validate() error {
 	return nil
 }
 
+// trust is what the store's TLS trusts besides the system's CAs.
+func (st StoreSettings) trust() certpin.Trust {
+	return certpin.Trust{CAPEM: st.CAPEM, Pin: st.PinnedCert.Fingerprint()}
+}
+
+// addr is the address the store is reached at, as sourceAddr writes it;
+// nil for one it does not connect to.
+func (st StoreSettings) addr() *url.URL {
+	switch st.Kind {
+	case StoreGit:
+		return sourceAddr(Source{Kind: SourceGit, URL: st.URL})
+	case StoreS3:
+		return sourceAddr(Source{Kind: SourceS3, Endpoint: st.Endpoint, Region: st.Region, Bucket: st.Bucket, PathStyle: st.PathStyle})
+	}
+	return nil
+}
+
 // normalized trims what a person typed.
 func (st StoreSettings) normalized() StoreSettings {
 	st.URL, st.Endpoint, st.Bucket = strings.TrimSpace(st.URL), strings.TrimRight(strings.TrimSpace(st.Endpoint), "/"), strings.TrimSpace(st.Bucket)
@@ -385,8 +428,9 @@ func (st StoreSettings) normalized() StoreSettings {
 // fingerprint tells one store's settings from another's, credentials
 // apart, for when the client must be made again.
 func (st StoreSettings) fingerprint() string {
-	st.SavedBy, st.SavedAt = "", time.Time{}
-	return fmt.Sprintf("%+v", st)
+	pin := st.PinnedCert.Fingerprint()
+	st.SavedBy, st.SavedAt, st.PinnedCert = "", time.Time{}, nil
+	return fmt.Sprintf("%+v", st) + pin
 }
 
 // Settings reads the settings, the git sources that name a repository of
@@ -540,6 +584,9 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		case create && len(set.Sources) >= MaxSources:
 			return invalid("at most %d sources", MaxSources)
 		}
+		// A pinned certificate is set by Trust alone, and kept while the
+		// source is reached at the same address (CR-16).
+		x.PinnedCert = nil
 		if create {
 			x.Added, x.AddedBy = s.o.Now().UTC(), c.label()
 			// Exclusions are made in AIOps › Mycroft › Sources only.
@@ -553,6 +600,9 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 			x.Added, x.AddedBy = old.Added, old.AddedBy
 			// The dialog does not hold the exclusions: they stay as they are.
 			x.Excluded, x.MigratedFrom = old.Excluded, old.MigratedFrom
+			if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {
+				x.PinnedCert = old.PinnedCert
+			}
 			same := old
 			same.Name, same.CredMigrated = x.Name, x.CredMigrated
 			renamedOnly = reflect.DeepEqual(same, x) && ch.none()
