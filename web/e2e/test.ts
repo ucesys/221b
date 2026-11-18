@@ -32,12 +32,16 @@ export const test = base.extend({
   page: async ({ page }, run) => {
     await run(forDocument(page))
   },
+  // Only Firefox holds the load event back; WebKit and Chromium keep the
+  // pages hooks open waiting for it, as their specs expect.
   browser: [
-    async ({ browser }, run) => {
-      const newPage = browser.newPage.bind(browser)
-      browser.newPage = async (options) => forDocument(await newPage(options))
-      const newContext = browser.newContext.bind(browser)
-      browser.newContext = async (options) => pagesForDocument(await newContext(options))
+    async ({ browser, browserName }, run) => {
+      if (browserName === 'firefox') {
+        const newPage = browser.newPage.bind(browser)
+        browser.newPage = async (options) => forDocument(await newPage(options))
+        const newContext = browser.newContext.bind(browser)
+        browser.newContext = async (options) => pagesForDocument(await newContext(options))
+      }
       await run(browser)
     },
     { scope: 'worker' },
