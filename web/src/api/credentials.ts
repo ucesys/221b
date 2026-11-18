@@ -37,7 +37,14 @@ export interface CredentialRef {
   where?: string
 }
 
-/** A credential as the page sees it: never its secret. Others than SuperAdmins see id, name, kind, endpoint and usedBy only. */
+/** An SSH key's host key as shown (CR-02): its type, SHA-256 fingerprint and the key cut short; the key itself is never read back. */
+export interface HostKeyInfo {
+  type: string
+  fingerprint: string
+  short: string
+}
+
+/** A credential as the page sees it: never its secret, nor an SSH key's host key. Others than SuperAdmins see id, name, kind, endpoint and tokenHost only, and an empty usedBy (CR-06). */
 export interface Credential {
   id: string
   name: string
@@ -51,10 +58,14 @@ export interface Credential {
   sendAs?: SendAs
   username?: string
   region?: string
+  /** Sent to set or replace it; never read back (hostKeyInfo says which it is). */
   hostKey?: string
+  hostKeyInfo?: HostKeyInfo
   appId?: string
   installationId?: string
   tokenURL?: string
+  /** An OAuth2 client's token URL's host: where its secret goes besides the endpoint (CR-04). */
+  tokenHost?: string
   clientId?: string
   scope?: string
   certPEM?: string
@@ -84,7 +95,9 @@ export interface CredentialSecret {
   keyPEM?: string
 }
 
-export type CredentialInput = Omit<Credential, 'id' | 'usedBy' | 'set' | 'lastTest' | 'created' | 'createdBy' | 'changed' | 'changedBy' | 'from' | 'expiring' | 'how' | 'pinnedCert'> & { secret?: CredentialSecret }
+export type CredentialInput = Omit<Credential, 'id' | 'usedBy' | 'set' | 'lastTest' | 'created' | 'createdBy' | 'changed' | 'changedBy' | 'from' | 'expiring' | 'how' | 'pinnedCert' | 'hostKeyInfo' | 'tokenHost'> & {
+  secret?: CredentialSecret
+}
 
 export interface Migration {
   at?: string

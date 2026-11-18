@@ -11,8 +11,10 @@ const FP = Array(32).fill('AB').join(':')
 describe('Administration › Settings › Repositories', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let migration: Record<string, unknown> | undefined
+  let mayEdit = true
   beforeEach(() => {
     calls.length = 0
+    mayEdit = true
     migration = { created: [{ name: '221b', url: 'https://github.com/ucesys/221b', from: ['application 221b-github/221b-github', 'application 221b/k8s-console'] }], notes: [] }
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
@@ -41,7 +43,7 @@ describe('Administration › Settings › Repositories', () => {
             { name: 'old', kind: 'helm', url: 'https://old.example.com', auth: 'basic', username: 'u', hasSecret: true, usedBy: [] },
             { name: 'private', kind: 'oci', url: 'oci://ghcr.io/org', credential: 'cr-charts', credMigrated: true, usedBy: [] },
           ],
-          mayEdit: true,
+          mayEdit,
           migration,
         }),
       )
@@ -86,6 +88,15 @@ describe('Administration › Settings › Repositories', () => {
     fireEvent.click(within(banner).getByTestId('repos-migration-dismiss'))
     await waitFor(() => expect(screen.queryByTestId('repos-migration')).toBeNull())
     expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/helm-repositories/migration/dismiss')).toBe(true)
+  })
+
+  // CR-06: what uses a repository is a SuperAdmin's to see.
+  it('shows others the repositories without Used by', async () => {
+    mayEdit = false
+    render(<HelmReposSettings />)
+    const rows = await screen.findAllByTestId('helm-repo-row')
+    expect(within(rows[0]!).queryByTestId('helm-repo-used-by')).toBeNull()
+    expect(screen.getByTestId('helm-repos-table').textContent).not.toContain('Used by')
   })
 
   it('adds a git repository with its default branch, and renames one, keeping its kind', async () => {

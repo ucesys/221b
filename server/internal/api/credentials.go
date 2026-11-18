@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,11 +15,12 @@ import (
 
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 //
-// A SuperAdmin adds, changes, tests and removes the credentials; anyone
-// signed in reads their names, kinds, endpoints and uses, which the
-// pickers of the Helm tab, Administration › Settings › Repositories and Administration › AI ›
-// Knowledge offer. A secret is written and never read back: no answer
-// holds one, nor does the audit log.
+// A SuperAdmin adds, changes, tests and removes the credentials, and sees
+// what uses each; anyone signed in reads their names, kinds and endpoints,
+// which the pickers of the Helm tab, Administration › Settings ›
+// Repositories and Administration › AI › Knowledge offer. A secret is
+// written and never read back: no answer holds one, nor does the audit
+// log, nor an SSH key's host key, shown by its fingerprint.
 
 // The audit log's actions of the credentials.
 const (
@@ -43,10 +45,18 @@ func (s *Server) credentialsRoutes() {
 }
 
 // credentialView is a credential as the page sees it: everything but the
-// secret for a SuperAdmin, its name, kind, endpoint and uses for others.
+// secret and the host key for a SuperAdmin, with its uses; its name, kind
+// and endpoint for others.
 type credentialView struct {
 	credentials.Credential
+	// UsedBy is what uses it, for a SuperAdmin; empty for others (CR-06).
 	UsedBy []credentials.Ref `json:"usedBy"`
+	// HostKeyInfo is an SSH key's host key, by type, fingerprint and cut
+	// short (CR-02).
+	HostKeyInfo *credentials.HostKeyInfo `json:"hostKeyInfo,omitempty"`
+	// TokenHost is the host an OAuth2 client's secret goes to besides the
+	// endpoint (CR-04).
+	TokenHost string `json:"tokenHost,omitempty"`
 	// Expiring says it expires within 14 days, or has (CR-08).
 	Expiring bool `json:"expiring,omitempty"`
 	// How says how it signs in, in words.
@@ -62,30 +72,51 @@ type credentialsView struct {
 	Migration *credentials.Migration `json:"migration,omitempty"`
 }
 
+// credentialViewOf is a credential as a SuperAdmin sees it, with its
+// uses: never its secret, nor its host key.
+func (s *Server) credentialViewOf(c credentials.Credential, used []credentials.Ref) credentialView {
+	v := credentialView{Credential: c, UsedBy: used, How: credentials.Describe(c), Expiring: c.Expiring(s.opts.Now()), HostKeyInfo: c.HostKeyInfo(), TokenHost: tokenHost(c)}
+	v.Credential.HostKey = ""
+	if v.UsedBy == nil {
+		v.UsedBy = []credentials.Ref{}
+	}
+	return v
+}
+
+// tokenHost is the host of an OAuth2 client's token URL.
+func tokenHost(c credentials.Credential) string {
+	if c.Kind != credentials.KindOAuth2 {
+		return ""
+	}
+	if u, err := url.Parse(c.TokenURL); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
 func (s *Server) getCredentials(w http.ResponseWriter, r *http.Request) {
 	list, err := s.opts.Credentials.List(r.Context())
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	used, err := s.opts.Credentials.UsedBy(r.Context())
-	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
-		return
-	}
 	admin := s.isSuperAdmin(r)
-	now := s.opts.Now()
+	// What uses each is a SuperAdmin's to see: it names applications in
+	// namespaces others may not open (CR-06).
+	used := map[string][]credentials.Ref{}
+	if admin {
+		if used, err = s.opts.Credentials.UsedBy(r.Context()); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
 	out := credentialsView{Credentials: []credentialView{}, MayEdit: admin}
 	for _, c := range list {
-		v := credentialView{UsedBy: used[c.ID], How: credentials.Describe(c)}
-		if v.UsedBy == nil {
-			v.UsedBy = []credentials.Ref{}
-		}
+		var v credentialView
 		if admin {
-			v.Credential, v.Expiring = c, c.Expiring(now)
+			v = s.credentialViewOf(c, used[c.ID])
 		} else {
-			v.Credential = credentials.Credential{ID: c.ID, Name: c.Name, Kind: c.Kind, Endpoint: c.Endpoint}
-			v.How = ""
+			v = credentialView{Credential: credentials.Credential{ID: c.ID, Name: c.Name, Kind: c.Kind, Endpoint: c.Endpoint}, UsedBy: []credentials.Ref{}, TokenHost: tokenHost(c)}
 		}
 		out.Credentials = append(out.Credentials, v)
 	}
@@ -208,7 +239,7 @@ func (s *Server) postCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, ActionCredentialSave, c.Name, "credential added: "+credentialAudit(c))
-	b, _ := json.Marshal(credentialView{Credential: c, UsedBy: []credentials.Ref{}, How: credentials.Describe(c), Expiring: c.Expiring(s.opts.Now())})
+	b, _ := json.Marshal(s.credentialViewOf(c, nil))
 	writeJSONStatus(w, r, http.StatusCreated, b)
 }
 
@@ -233,11 +264,7 @@ func (s *Server) putCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(r, ActionCredentialSave, c.Name, detail)
 	used, _ := s.opts.Credentials.UsedBy(r.Context())
-	v := credentialView{Credential: c, UsedBy: used[c.ID], How: credentials.Describe(c), Expiring: c.Expiring(s.opts.Now())}
-	if v.UsedBy == nil {
-		v.UsedBy = []credentials.Ref{}
-	}
-	b, _ := json.Marshal(v)
+	b, _ := json.Marshal(s.credentialViewOf(c, used[c.ID]))
 	writeJSON(w, r, b)
 }
 

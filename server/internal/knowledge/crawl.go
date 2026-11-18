@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/confluence"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // --- Mycroft tab (Phase 12, wave 5, MY-06, ADR-119) ---
@@ -73,8 +75,9 @@ func guardedDial(network, address string, _ syscall.RawConn) error {
 // crawlClient is the crawl's HTTP client: the service's own in tests,
 // otherwise one whose dialer refuses the addresses above and trusts the
 // web site's private CA, if it has one (KN-44). Redirects are followed on
-// the same site only, five at most.
-func (s *Service) crawlClient(site *url.URL, x *Source) *http.Client {
+// the same site only, five at most, each signed again by auth, if at all
+// (resign).
+func (s *Service) crawlClient(site *url.URL, x *Source, auth func(*http.Request)) *http.Client {
 	var base http.RoundTripper
 	if s.o.CrawlHTTP != nil {
 		base = s.o.CrawlHTTP.Transport
@@ -104,9 +107,91 @@ func (s *Service) crawlClient(site *url.URL, x *Source) *http.Client {
 			if !sameSite(site, r.URL) {
 				return fmt.Errorf("it redirects to another site (%s)", r.URL.Host)
 			}
+			resign(r, auth)
 			return nil
 		},
 	}
+}
+
+// resign makes a redirect's request carry only what the crawl sends
+// itself, and the credential where auth signs it: the headers Go copies
+// from the first request (its Authorization, a credential's own header or
+// cookie, a Referer with the signed address) are dropped, so an address
+// on the same site but outside the credential's endpoint gets none of it
+// (CR-04).
+func resign(r *http.Request, auth func(*http.Request)) {
+	for k := range r.Header {
+		if k != "User-Agent" && k != "Accept" {
+			r.Header.Del(k)
+		}
+	}
+	if auth != nil {
+		auth(r)
+	}
+}
+
+// sign signs a request with auth and says which query parameters it set:
+// a credential sent in the query (CR-03) is in the request's address, and
+// never in where a page is said to be.
+func sign(req *http.Request, auth func(*http.Request)) (unsigned url.URL, keys []string) {
+	unsigned = *req.URL
+	if auth == nil {
+		return unsigned, nil
+	}
+	auth(req)
+	if req.URL.RawQuery != unsigned.RawQuery {
+		before, after := unsigned.Query(), req.URL.Query()
+		for k, v := range after {
+			if !slices.Equal(before[k], v) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return unsigned, keys
+}
+
+// urlSecrets are secret values as they may stand in an address too:
+// query-escaped and path-escaped, for scrubbing one.
+func urlSecrets(values []string) []string {
+	out := append([]string(nil), values...)
+	for _, v := range values {
+		for _, e := range []string{url.QueryEscape(v), url.PathEscape(v)} {
+			if e != v && !slices.Contains(out, e) {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// redactValues takes known secret values out of an address or a title,
+// and nothing else (scrub.Known also scrubs what looks like one, which
+// would change a page's id).
+func redactValues(s string, known []string) string {
+	for _, k := range known {
+		if len(k) >= 6 {
+			s = strings.ReplaceAll(s, k, scrub.Redacted)
+		}
+	}
+	return s
+}
+
+// landed is where an answer ended up, without what sign set: the address
+// asked as it was before it was signed, or, after a redirect, the one
+// redirected to without those query parameters.
+func landed(resp *http.Response, req *http.Request, unsigned url.URL, keys []string) *url.URL {
+	final := *resp.Request.URL
+	if final.String() == req.URL.String() {
+		return &unsigned
+	}
+	if len(keys) > 0 && final.RawQuery != "" {
+		q := final.Query()
+		for _, k := range keys {
+			q.Del(k)
+		}
+		final.RawQuery = q.Encode()
+	}
+	return &final
 }
 
 // sameSite says whether two addresses are of one site: scheme, host and
@@ -161,7 +246,7 @@ func (s *Service) crawlWith(ctx context.Context, raw string, depth, limit int, o
 		maxBytes = MaxCrawlBytes
 	}
 	res := crawlResult{start: start.String()}
-	hc := s.crawlClient(start, o.source)
+	hc := s.crawlClient(start, o.source, o.auth)
 	rules, err := readRobots(ctx, hc, start, o.auth)
 	if err != nil {
 		return res, err
@@ -274,9 +359,7 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int, auth
 	}
 	req.Header.Set("User-Agent", CrawlAgent+"/1.0 (+the 221B console's knowledge)")
 	req.Header.Set("Accept", "text/html, text/plain, text/markdown, application/pdf;q=0.8, */*;q=0.1")
-	if auth != nil {
-		auth(req)
-	}
+	unsigned, keys := sign(req, auth)
 	resp, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error
@@ -299,8 +382,8 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int, auth
 	if len(body) > limit {
 		return page, nil, fmt.Errorf("it is over %d MiB", max(limit>>20, 1))
 	}
-	// Where it ended up, after its redirects.
-	final := resp.Request.URL
+	// Where it ended up, after its redirects, without the credential.
+	final := landed(resp, req, unsigned, keys)
 	page.url, page.path = final.String(), final.EscapedPath()+queryOf(final)
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if ct == "" {

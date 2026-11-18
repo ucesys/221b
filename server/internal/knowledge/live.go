@@ -333,16 +333,19 @@ func (s *Service) LiveDocs(ctx context.Context, query string) ([]LiveDoc, []stri
 			}
 			docs, n, err := s.fetchLive(ctx, j.x, j.c, j.a, terms)
 			read.Add(int64(n))
+			// The source's own values too: a token its credential minted.
+			known := urlSecrets(append(j.c.secrets(), secrets...))
 			if err != nil {
-				errs[j.slot] = scrub.Known(j.x.Name+": "+j.a.URL+": "+err.Error(), secrets)
+				errs[j.slot] = scrub.Known(j.x.Name+": "+j.a.URL+": "+err.Error(), known)
 				return
 			}
 			for i := range docs {
 				docs[i].SourceID, docs[i].Source = j.x.ID, j.x.Name
 				for k, p := range docs[i].Parts {
-					docs[i].Parts[k] = scrub.Known(scrub.Text(p), secrets)
+					docs[i].Parts[k] = scrub.Known(scrub.Text(p), known)
 				}
-				docs[i].Title = scrub.Known(scrub.Text(docs[i].Title), secrets)
+				docs[i].Title = scrub.Known(scrub.Text(docs[i].Title), known)
+				docs[i].URL = scrub.Known(docs[i].URL, known)
 			}
 			s.live.put(key, liveEntry{docs: docs, bytes: n, at: s.o.Now()})
 			results[j.slot] = docs
@@ -404,8 +407,9 @@ func (s *Service) testLive(ctx context.Context, x Source, c Creds) SourceTest {
 // liveClient reads a live source's addresses: the crawl's own client in
 // tests, otherwise one that refuses loopback, link-local and multicast
 // addresses (guardedDial), trusts the source's private CA, goes straight
-// to the site, and follows redirects on the same site only.
-func (s *Service) liveClient(x Source, site *url.URL) *http.Client {
+// to the site, and follows redirects on the same site only, each signed
+// again by auth, if at all (resign).
+func (s *Service) liveClient(x Source, site *url.URL, auth func(*http.Request)) *http.Client {
 	var base http.RoundTripper
 	if s.o.CrawlHTTP != nil {
 		base = s.o.CrawlHTTP.Transport
@@ -431,6 +435,7 @@ func (s *Service) liveClient(x Source, site *url.URL) *http.Client {
 			if !sameSite(site, r.URL) {
 				return fmt.Errorf("it redirects to another site (%s), which is not read", r.URL.Host)
 			}
+			resign(r, auth)
 			return nil
 		},
 	}
@@ -444,7 +449,13 @@ func (s *Service) fetchLive(ctx context.Context, x Source, c Creds, a LiveAddres
 	}
 	ctx, cancel := context.WithTimeout(ctx, liveTimeout)
 	defer cancel()
-	hc := s.liveClient(x, u)
+	if c.covers != nil && !c.covers(a.URL) {
+		// The client certificate was resolved for the source's first
+		// address: an address its credential does not cover (changed
+		// since the source was saved) is read without it.
+		x.cert = nil
+	}
+	hc := s.liveClient(x, u, siteAuth(x, c))
 	switch a.Kind {
 	case LiveConfluenceSearch:
 		return liveSearch(ctx, hc, x, c, a, terms)
@@ -466,17 +477,9 @@ func liveGet(ctx context.Context, hc *http.Client, x Source, c Creds, raw, accep
 	}
 	req.Header.Set("User-Agent", CrawlAgent+"/1.0 (+the 221B console's live knowledge)")
 	req.Header.Set("Accept", accept)
-	switch {
-	case c.apply != nil:
-		// A credential signs only the addresses under its endpoint.
-		c.apply(req)
-	case x.Auth == LiveAuthBearer:
-		if c.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+c.Token)
-		}
-	case x.Auth == LiveAuthBasic:
-		req.SetBasicAuth(x.Username, c.Token)
-	}
+	// A credential signs only the addresses under its endpoint; where the
+	// page ended up is said without it.
+	unsigned, keys := sign(req, siteAuth(x, c))
 	resp, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error
@@ -490,10 +493,11 @@ func liveGet(ctx context.Context, hc *http.Client, x Source, c Creds, raw, accep
 	}
 	defer resp.Body.Close()
 	switch {
+	// The status by its code: its text is the site's, and goes to a model.
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, "", nil, false, fmt.Errorf("it refused the credential (%s)", resp.Status)
+		return nil, "", nil, false, fmt.Errorf("it refused the credential (%d %s)", resp.StatusCode, http.StatusText(resp.StatusCode))
 	case resp.StatusCode != http.StatusOK:
-		return nil, "", nil, false, fmt.Errorf("it answered %s", resp.Status)
+		return nil, "", nil, false, fmt.Errorf("it answered %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
@@ -507,7 +511,7 @@ func liveGet(ctx context.Context, hc *http.Client, x Source, c Creds, raw, accep
 	if ct == "" {
 		ct, _, _ = mime.ParseMediaType(http.DetectContentType(body))
 	}
-	return body, ct, resp.Request.URL, cut, nil
+	return body, ct, landed(resp, req, unsigned, keys), cut, nil
 }
 
 // livePage reads a web page as text.

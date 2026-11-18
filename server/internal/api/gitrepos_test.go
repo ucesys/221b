@@ -11,8 +11,10 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sim"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -35,7 +37,9 @@ func TestGitRepositoriesInSettingsRepositories(t *testing.T) {
 	repos.AddRenamer(apps.AppRepoRenamer(store))
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)
+	var opts *Options
 	srv, c, m, auditOut, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		opts = o
 		o.Apps, o.Repos, o.Credentials = store, repos, creds
 		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog(), CheckEvery: 50 * time.Millisecond, Apps: store, Repos: repos, Credentials: creds})
 	})
@@ -87,6 +91,14 @@ func TestGitRepositoriesInSettingsRepositories(t *testing.T) {
 	resp, body = send(t, c, http.MethodGet, base, "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"usedBy":["application team-b/pay"]`) || !strings.Contains(body, `"kind":"git"`) {
 		t.Fatalf("list: %s %s", resp.Status, body)
+	}
+	// An Admin reads the list, without what uses each (CR-06).
+	sess := auth.Session{ID: "s", User: auth.User{Subject: "bob", Username: "bob", Email: "bob@corp.example"}, Roles: []roles.ID{roles.Admin}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/helm-repositories", nil).WithContext(auth.WithSession(context.Background(), sess))
+	out := httptest.NewRecorder()
+	New(*opts).mux.ServeHTTP(out, req)
+	if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"name":"pay"`) || strings.Contains(out.Body.String(), "team-b/pay\"]") || !strings.Contains(out.Body.String(), `"usedBy":[]`) {
+		t.Fatalf("an Admin's list: %d %s", out.Code, out.Body.String())
 	}
 	if resp, body := send(t, c, http.MethodDelete, base+"/pay", ""); resp.StatusCode != http.StatusConflict || !strings.Contains(body, "application team-b/pay") {
 		t.Fatalf("remove in use: %s %s", resp.Status, body)

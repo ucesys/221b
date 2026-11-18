@@ -82,8 +82,8 @@ export function CredentialsSettings({ onToast }: { onToast?: (msg: string) => vo
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }} aria-label="Credentials" data-testid="credentials-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        The tokens, keys and certificates the console signs in with. Each is sent only to the addresses under its endpoint; applications, Helm repositories and Mycroft’s sources choose one by name. A secret is kept in a Kubernetes Secret
-        and never shown again.
+        The tokens, keys and certificates the console signs in with. Each is sent only to the addresses under its endpoint, with two exceptions: an OCI registry’s credential also goes to the token service the registry names, and an OAuth2
+        client’s secret to its token URL, shown beside its endpoint. Applications, Helm repositories and Mycroft’s sources choose one by name. A secret is kept in a Kubernetes Secret and never shown again.
       </p>
       {error && (
         <p className="rk-t" data-tone="err" style={{ margin: 0 }} data-testid="credentials-error">
@@ -127,7 +127,7 @@ export function CredentialsSettings({ onToast }: { onToast?: (msg: string) => vo
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 13 }} data-testid="credentials-table">
             <thead>
               <tr>
-                {['Name', 'Kind', 'Endpoint', 'Sent as', 'Used by', 'Last test', 'Changed', ''].map((h, i) => (
+                {['Name', 'Kind', 'Endpoint', 'Sent as', ...(mayEdit ? ['Used by'] : []), 'Last test', 'Changed', ''].map((h, i) => (
                   <th key={i} style={th}>
                     {h}
                   </th>
@@ -151,11 +151,18 @@ export function CredentialsSettings({ onToast }: { onToast?: (msg: string) => vo
                     <td style={td}>{KIND_LABEL[c.kind]}</td>
                     <td style={{ ...td, overflowWrap: 'anywhere' }} className="rk-mono">
                       {c.endpoint}
+                      {c.tokenHost && (
+                        <div className="rk-fhint" data-testid="credential-token-host">
+                          token from {c.tokenHost}
+                        </div>
+                      )}
                     </td>
                     <td style={td}>{c.how ? sendText(c) : '—'}</td>
-                    <td style={td} data-testid="credential-used-by">
-                      {c.usedBy.length === 0 ? <span style={{ color: 'var(--fg3)' }}>Nothing</span> : c.usedBy.map((u) => <div key={u.what + (u.where ?? '')}>{u.what}</div>)}
-                    </td>
+                    {mayEdit && (
+                      <td style={td} data-testid="credential-used-by">
+                        {c.usedBy.length === 0 ? <span style={{ color: 'var(--fg3)' }}>Nothing</span> : c.usedBy.map((u) => <div key={u.what + (u.where ?? '')}>{u.what}</div>)}
+                      </td>
+                    )}
                     <td style={td} data-testid="credential-tested">
                       {c.lastTest ? (
                         <span title={c.lastTest.text} style={{ color: c.lastTest.ok ? undefined : 'var(--err)' }}>
@@ -268,7 +275,8 @@ function draftOf(c?: Credential): Draft {
     cookie: sa.cookie ?? '',
     username: c?.username ?? '',
     region: c?.region ?? '',
-    hostKey: c?.hostKey ?? '',
+    // Written, never read back (CR-02): empty keeps the one saved.
+    hostKey: '',
     appId: c?.appId ?? '',
     installationId: c?.installationId ?? '',
     tokenURL: c?.tokenURL ?? '',
@@ -318,7 +326,7 @@ export function inputOf(d: Draft): CredentialInput {
   }
   if (d.kind === 'userpass') input.username = d.username.trim()
   if (d.kind === 'accesskey' && d.region.trim()) input.region = d.region.trim()
-  if (d.kind === 'ssh') input.hostKey = d.hostKey.trim()
+  if (d.kind === 'ssh' && d.hostKey.trim()) input.hostKey = d.hostKey.trim()
   if (d.kind === 'githubapp') Object.assign(input, { appId: d.appId.trim(), installationId: d.installationId.trim() })
   if (d.kind === 'oauth2') Object.assign(input, { tokenURL: d.tokenURL.trim(), clientId: d.clientId.trim(), scope: d.scope.trim() })
   if (d.kind === 'clientcert') input.certPEM = d.certPEM
@@ -339,7 +347,9 @@ function CredentialEditor({ saved, onClose, onSaved, onChanged }: { saved?: Cred
   const kindChanged = !!saved && d.kind !== saved.kind
   const parts = SECRET_PARTS[d.kind]
   const typed = parts.every((p) => p.optional || !!d.secret[p.key])
-  const ready = d.name.trim() !== '' && d.endpoint.trim() !== '' && (!saved || kindChanged ? typed || parts.length === 0 : true)
+  // A new SSH key, or one that becomes one, needs its host key; a saved one keeps its own.
+  const hostKeyKept = !!saved && saved.kind === 'ssh' && d.kind === 'ssh'
+  const ready = d.name.trim() !== '' && d.endpoint.trim() !== '' && (!saved || kindChanged ? typed || parts.length === 0 : true) && (d.kind !== 'ssh' || hostKeyKept || d.hostKey.trim() !== '')
   const save = async () => {
     setBusy(true)
     setError('')
@@ -432,12 +442,39 @@ function CredentialEditor({ saved, onClose, onSaved, onChanged }: { saved?: Cred
         )}
         {d.kind === 'oauth2' && (
           <>
-            <div style={{ gridColumn: '1 / -1' }}>{text('Token URL', d.tokenURL, (v) => set({ tokenURL: v }), 'credential-token-url', 'https://auth.example.com/oauth/token')}</div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              {text(
+                'Token URL',
+                d.tokenURL,
+                (v) => set({ tokenURL: v }),
+                'credential-token-url',
+                'https://auth.example.com/oauth/token',
+                'The client secret is posted here, on any host, and nowhere else: the one address besides the endpoint it goes to. A redirect is not followed.',
+              )}
+            </div>
             {text('Client ID', d.clientId, (v) => set({ clientId: v }), 'credential-client-id')}
             {text('Scope (optional)', d.scope, (v) => set({ scope: v }), 'credential-scope')}
           </>
         )}
-        {d.kind === 'ssh' && area('Host key (required: a known_hosts line, or ssh-keyscan HOST’s output)', d.hostKey, (v) => set({ hostKey: v }), 'credential-host-key', 'github.com ssh-ed25519 AAAA…')}
+        {d.kind === 'ssh' && hostKeyKept && saved?.hostKeyInfo && (
+          <div style={{ ...fieldLabel, gridColumn: '1 / -1' }} data-testid="credential-host-key-kept">
+            Host key in use
+            <span className="rk-mono" style={{ fontSize: 12 }} data-testid="credential-host-key-short">
+              {saved.hostKeyInfo.short}
+            </span>
+            <span className="rk-mono" style={{ fontSize: 12 }} data-testid="credential-host-key-fingerprint">
+              {saved.hostKeyInfo.fingerprint}
+            </span>
+          </div>
+        )}
+        {d.kind === 'ssh' &&
+          area(
+            hostKeyKept ? 'Replace the host key (optional: a known_hosts line, or ssh-keyscan HOST’s output)' : 'Host key (required: a known_hosts line, or ssh-keyscan HOST’s output)',
+            d.hostKey,
+            (v) => set({ hostKey: v }),
+            'credential-host-key',
+            hostKeyKept ? 'kept; paste to replace' : 'github.com ssh-ed25519 AAAA…',
+          )}
         {d.kind === 'clientcert' && area('Certificate (PEM)', d.certPEM, (v) => set({ certPEM: v }), 'credential-cert', '-----BEGIN CERTIFICATE-----')}
         {sendsHTTP(d.kind) && (
           <div style={{ ...fieldLabel, gridColumn: '1 / -1' }}>

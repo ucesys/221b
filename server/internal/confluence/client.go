@@ -179,6 +179,25 @@ func (c *Client) api(v2 bool, path string, q url.Values) string {
 	return u.String()
 }
 
+// onSite says an address is the site's: its scheme, host and port, and
+// at or under its path (a Data Center's context), with no . or ..
+// segment and no encoded / or \ to climb out of it.
+func (c *Client) onSite(u *url.URL) bool {
+	if !strings.EqualFold(u.Scheme, c.base.Scheme) || !strings.EqualFold(u.Host, c.base.Host) || u.User != nil {
+		return false
+	}
+	esc := strings.ToLower(u.EscapedPath())
+	if strings.Contains(esc, "%2f") || strings.Contains(esc, "%5c") || strings.Contains(u.Path, `\`) {
+		return false
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return c.base.Path == "" || u.Path == c.base.Path || strings.HasPrefix(u.Path, c.base.Path+"/")
+}
+
 // do sends a request, retrying 429 and 5xx, and decodes the answer into
 // out when given.
 func (c *Client) do(ctx context.Context, method, addr string, body, out any) error {
@@ -194,6 +213,11 @@ func (c *Client) do(ctx context.Context, method, addr string, body, out any) err
 		req, err := http.NewRequestWithContext(ctx, method, addr, bytes.NewReader(payload))
 		if err != nil {
 			return err
+		}
+		// The token goes to the site only: an address an answer gave
+		// (the next page's) elsewhere is not asked.
+		if !c.onSite(req.URL) {
+			return fmt.Errorf("Confluence pointed at %s, outside %s: not asked", req.URL.Redacted(), c.base.Redacted())
 		}
 		if body == nil {
 			req.Body, req.GetBody, req.ContentLength = http.NoBody, nil, 0

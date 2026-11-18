@@ -12,6 +12,7 @@ package credentials
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -388,9 +389,11 @@ func (c *Credential) Check(sec Secret) error {
 		}
 	case KindOAuth2:
 		c.TokenURL, c.ClientID, c.Scope = strings.TrimSpace(c.TokenURL), strings.TrimSpace(c.ClientID), strings.TrimSpace(c.Scope)
+		// The one address besides the endpoint the credential goes to
+		// (CR-04): the client secret is posted there, and only there.
 		u, err := url.Parse(c.TokenURL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-			return invalid("the token URL is an https:// address")
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || oddPath(u) {
+			return invalid("the token URL is an https:// address, as it is (no . or .. segment, no encoded / or \\)")
 		}
 		if c.ClientID == "" || len(c.ClientID) > 400 || !oneLine.MatchString(c.ClientID) {
 			return invalid("give the client id")
@@ -538,7 +541,7 @@ func (e Endpoint) String() string {
 	return s
 }
 
-var defaultPort = map[string]string{"https": "443", "http": "80", "ssh": "22", "oci": "443", "s3": "443"}
+var defaultPort = map[string]string{"https": "443", "http": "80", "ssh": "22", "oci": "443"}
 
 var scpLike = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):([^/][^:]*)$`)
 
@@ -570,9 +573,14 @@ func ParseEndpoint(raw string) (Endpoint, error) {
 		return Endpoint{}, invalid("%q is not an address such as https://github.com/org", strings.TrimPrefix(raw, "none://"))
 	}
 	switch scheme {
-	case "", "https", "http", "ssh", "oci", "s3":
+	case "", "https", "http", "ssh", "oci":
 	default:
-		return Endpoint{}, invalid("an endpoint is https://, http://, ssh://, oci:// or s3://, or a host without a scheme")
+		// A bucket's is its store's address and the bucket, as a bucket's
+		// use names it: https://s3.amazonaws.com/BUCKET.
+		return Endpoint{}, invalid("an endpoint is https://, http://, ssh:// or oci://, or a host without a scheme (a bucket's is https://s3.amazonaws.com/BUCKET, or its store's address and the bucket)")
+	}
+	if oddPath(u) {
+		return Endpoint{}, invalid("%q has a . or .. segment, or an encoded / or \\, in its path: give the address as it is", strings.TrimPrefix(raw, "none://"))
 	}
 	host := strings.ToLower(u.Hostname())
 	port := u.Port()
@@ -590,6 +598,23 @@ func ParseEndpoint(raw string) (Endpoint, error) {
 	p := strings.TrimRight(u.Path, "/")
 	p = strings.TrimSuffix(p, ".git")
 	return Endpoint{Scheme: scheme, Host: host, Path: p}, nil
+}
+
+// oddPath says a path could reach outside the endpoint's: a . or ..
+// segment (%2e%2e too), or an encoded / or \ (%2F, %5C) that a server
+// may read as a separator. Neither an endpoint nor an address it covers
+// has one.
+func oddPath(u *url.URL) bool {
+	esc := strings.ToLower(u.EscapedPath())
+	if strings.Contains(esc, "%2f") || strings.Contains(esc, "%5c") || strings.Contains(u.Path, `\`) {
+		return true
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // Covers says whether an address is under the endpoint: the same host
@@ -628,6 +653,32 @@ func (c Credential) Covers(target string) bool {
 }
 
 // ---------- keys ----------
+
+// HostKeyInfo is an SSH credential's host key as it is shown (CR-02): its
+// type, its SHA-256 fingerprint and the key cut short, enough to tell
+// which key it is; the key itself is written and never read back.
+type HostKeyInfo struct {
+	Type        string `json:"type"`
+	Fingerprint string `json:"fingerprint"`
+	Short       string `json:"short"`
+}
+
+// HostKeyInfo is the host key as shown, nil for none.
+func (c Credential) HostKeyInfo() *HostKeyInfo {
+	if c.Kind != KindSSH || strings.TrimSpace(c.HostKey) == "" {
+		return nil
+	}
+	k, err := ParseHostKey(c.HostKey)
+	if err != nil {
+		return nil
+	}
+	b := base64.StdEncoding.EncodeToString(k.Marshal())
+	short := b
+	if len(b) > 24 {
+		short = b[:12] + "…" + b[len(b)-8:]
+	}
+	return &HostKeyInfo{Type: k.Type(), Fingerprint: ssh.FingerprintSHA256(k), Short: k.Type() + " " + short}
+}
 
 // ParseHostKey reads a host key as a known_hosts line or an
 // authorized_keys line (ssh-ed25519 AAAA…).

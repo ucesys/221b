@@ -128,6 +128,9 @@ type Repository struct {
 	// trust is what a fetch trusts, as Signed resolved it: the
 	// credential's private CA and pin, or the repository's pin.
 	trust certpin.Trust
+	// use is the credential as Signed resolved it, nil for none: a file
+	// is signed only at an address under its endpoint (CR-04).
+	use *credentials.Use
 	// The last test (HR-03): when, whether it answered, and what it said.
 	TestedAt time.Time `json:"testedAt,omitzero"`
 	TestOK   bool      `json:"testOk,omitempty"`
@@ -436,6 +439,7 @@ func (r *Repos) Signed(ctx context.Context, repo Repository) (Repository, string
 		return Repository{}, "", fmt.Errorf("%s's credential: %w", repo.Name, err)
 	}
 	repo.trust = use.Trust().Or(repo.trust)
+	repo.use = use
 	if user, pass, ok := use.Basic(); ok {
 		repo.Auth, repo.Username, repo.HasSecret = AuthBasic, user, true
 		return repo, pass, nil
@@ -1012,7 +1016,8 @@ func (r *Repos) fetchIndex(ctx context.Context, repo Repository, secret string) 
 
 // helmGet reads a Helm repository's file: with its credentials when the
 // file is on the repository's own host, without them anywhere else (as
-// helm does unless told to pass them on).
+// helm does unless told to pass them on); a credential of Administration
+// › Credentials only under its endpoint (CR-04).
 func (r *Repos) helmGet(ctx context.Context, repo Repository, secret, target string, limit int64) ([]byte, error) {
 	u, err := url.Parse(target)
 	if err != nil || u.Host == "" || !(u.Scheme == "https" || AllowLocalRepos && u.Scheme == "http") {
@@ -1026,7 +1031,7 @@ func (r *Repos) helmGet(ctx context.Context, repo Repository, secret, target str
 		return nil, err
 	}
 	base, _ := url.Parse(repo.URL)
-	if base != nil && strings.EqualFold(base.Host, u.Host) {
+	if base != nil && strings.EqualFold(base.Host, u.Host) && (repo.use == nil || repo.use.Covers(target)) {
 		authorize(req, repo, secret)
 	}
 	res, err := r.o.Client.Do(req)

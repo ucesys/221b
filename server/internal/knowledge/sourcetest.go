@@ -114,7 +114,10 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {
 			x.PinnedCert = old.PinnedCert
 		}
-		if legacy {
+		// The credential the source keeps goes to its own address only:
+		// typed to another, the test signs in with what is typed, if
+		// anything.
+		if legacy && keptFor(old, x) {
 			if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
 				return SourceTest{}, err
 			}
@@ -351,4 +354,17 @@ func tlsError(addr string, err error) error {
 		return fmt.Errorf("%s took the connection but did not finish the TLS handshake within %d s. Check that this port serves HTTPS.", addr, int(connectTimeout/time.Second))
 	}
 	return fmt.Errorf("The TLS handshake with %s failed: %v. If it uses a private CA, set it in this dialog.", addr, err)
+}
+
+// keptFor says a source's own credential, of before 0.12.1, may go with
+// a test of the source as typed: its address is the saved one (a live
+// source's addresses are on the saved one's site).
+func keptFor(old, typed Source) bool {
+	if old.Kind == SourceLive {
+		site := oneSite(normalizedLive(old.Addresses))
+		return slices.Equal(old.Addresses, typed.Addresses) || site != "" && strings.EqualFold(site, oneSite(normalizedLive(typed.Addresses)))
+	}
+	norm := func(a string) string { return strings.TrimRight(strings.TrimSpace(a), "/") }
+	a := norm(credentialAddress(old))
+	return a != "" && a == norm(credentialAddress(typed))
 }

@@ -110,8 +110,15 @@ func (r *webReader) List(ctx context.Context, _ time.Time) ([]Item, bool, error)
 	}
 	r.pages = map[string]crawled{}
 	r.skipped, r.excluded = res.skipped, res.excluded
+	// No address or title holds the credential, even one a site wrote
+	// back into a redirect.
+	known := urlSecrets(r.c.secrets())
+	for i := range r.skipped {
+		r.skipped[i].URL = redactValues(r.skipped[i].URL, known)
+	}
 	out := make([]Item, 0, len(res.pages))
 	for _, p := range res.pages {
+		p.url, p.path, p.title = redactValues(p.url, known), redactValues(p.path, known), redactValues(p.title, known)
 		id := webItemID(p)
 		r.pages[id] = p
 		out = append(out, Item{ID: id, Title: p.title, Version: hashOf([]byte(p.title + "\x00" + p.text))[:16], URL: p.url})
