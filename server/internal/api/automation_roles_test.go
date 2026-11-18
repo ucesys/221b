@@ -50,10 +50,16 @@ func autoSetup(t *testing.T, who, env string) autoEnv {
 // lists, as source.deny reads it.
 func autoSetupDeny(t *testing.T, who, env string, deny map[string]bool) autoEnv {
 	t.Helper()
+	return autoSetupClock(t, who, env, deny, nil)
+}
+
+// autoSetupClock is autoSetupDeny with the store's clock.
+func autoSetupClock(t *testing.T, who, env string, deny map[string]bool, now func() time.Time) autoEnv {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
-	st := automation.NewStore(&kv.Memory{}, nil)
+	st := automation.NewStore(&kv.Memory{}, now)
 	eng := automation.NewEngine(automation.Options{Store: st, Exec: noExec{}})
 	srv, c, m, auditOut, local, store := multiSetupWith(t, who, deny, func(o *Options) {
 		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})

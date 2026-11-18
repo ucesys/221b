@@ -44,6 +44,9 @@ type WaitingRun struct {
 	By     Who       `json:"by"`
 	Person Person    `json:"person"`
 	At     time.Time `json:"at"`
+	// Method is how the asker signed in (local, ldap, oidc): a local
+	// account is checked again when the run is approved (FU-05a).
+	Method string `json:"method,omitempty"`
 	// Changed are the run's values that differ from what a node inherits;
 	// Impact what that means for the script, as for a variable change.
 	Changed []string     `json:"changed"`
@@ -51,7 +54,8 @@ type WaitingRun struct {
 	Note    string       `json:"note,omitempty"`
 	State   string       `json:"state"`
 	// DecidedBy, DecidedAt and Comment are the decision; Run is the run
-	// the approval started.
+	// the approval started. An expired request has no DecidedBy; its
+	// Comment says after how long it expired.
 	DecidedBy *Who       `json:"decidedBy,omitempty"`
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
 	Comment   string     `json:"comment,omitempty"`
@@ -139,6 +143,8 @@ func (st *Store) WaitingRunFor(ctx context.Context, cluster string, id int, who 
 			continue
 		}
 		switch {
+		case w.State == ChangeExpired:
+			return w, expiredErr(w)
 		case w.State != ChangeWaiting:
 			return w, fmt.Errorf("%w: run request %d is %s", ErrInvalid, id, w.State)
 		case who.Same(w.By):
@@ -167,6 +173,9 @@ func (st *Store) DecideWaitingRun(ctx context.Context, cluster string, id int, a
 			if w.ID != id || w.Cluster != cluster {
 				continue
 			}
+			if w.State == ChangeExpired {
+				return expiredErr(*w)
+			}
 			if w.State != ChangeWaiting {
 				return fmt.Errorf("%w: run request %d is %s", ErrInvalid, id, w.State)
 			}
@@ -182,6 +191,36 @@ func (st *Store) DecideWaitingRun(ctx context.Context, cluster string, id int, a
 			return nil
 		}
 		return ErrNotFound
+	})
+	return out, err
+}
+
+func expiredErr(w WaitingRun) error {
+	return fmt.Errorf("%w: run request %d %s; ask again", ErrInvalid, w.ID, w.Comment)
+}
+
+// ExpireWaitingRuns marks the run requests that waited longer than after
+// as expired (FU-05a), at the time they expired, with said ("expired
+// after 1 hour") as their comment, and returns them: they can no longer
+// be approved, only asked for again.
+func (st *Store) ExpireWaitingRuns(ctx context.Context, after time.Duration, said string) ([]WaitingRun, error) {
+	var out []WaitingRun
+	now := st.now().UTC()
+	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
+		out = nil
+		for i := range rec.Runs {
+			w := &rec.Runs[i]
+			if w.State != ChangeWaiting || now.Sub(w.At) < after {
+				continue
+			}
+			at := w.At.Add(after)
+			w.State, w.DecidedAt, w.Comment = ChangeExpired, &at, said
+			out = append(out, *w)
+		}
+		if len(out) == 0 {
+			return errNoChange
+		}
+		return nil
 	})
 	return out, err
 }

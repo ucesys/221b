@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
+import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, WAITING_RUN_CHOICES, WAITING_RUN_DEFAULT, waitText, type WatsonSettings as Settings } from '../api/watson'
 import { aiHref } from '../lib/router'
 import { NotificationChannels, useNotifyForm } from './NotificationChannels'
 import { SaveBar } from './SaveBar'
@@ -14,6 +14,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
   const [cfg, setCfg] = useState<Settings | null>(null)
   const [draft, setDraft] = useState(false)
   const [approveAll, setApproveAll] = useState(0)
+  const [waitingRun, setWaitingRun] = useState(WAITING_RUN_DEFAULT)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
@@ -26,6 +27,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
         setCfg(c)
         setDraft(c.twoPerson)
         setApproveAll(c.approveAllMinutes ?? 0)
+        setWaitingRun(c.waitingRunMinutes || WAITING_RUN_DEFAULT)
         setError('')
       })
       .catch((e: unknown) => {
@@ -37,7 +39,9 @@ export function WatsonSettings({ open }: { open: boolean }) {
   }, [open])
   // The notification channels are saved by the same bar (CU-16).
   const notify = useNotifyForm()
-  const approvalsChanged = !!cfg && (draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0))
+  const approvalsChanged = !!cfg && (draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0) || waitingRun !== (cfg.waitingRunMinutes || WAITING_RUN_DEFAULT))
+  // The choices, with a saved value that is not one of them.
+  const waitChoices = [...new Set<number>([...WAITING_RUN_CHOICES, cfg?.waitingRunMinutes || WAITING_RUN_DEFAULT])].sort((a, b) => a - b)
   // One Save for the page (CU-16): only the parts changed; a part that
   // fails keeps what was typed and is named, the other stays saved.
   const save = async (): Promise<boolean> => {
@@ -48,10 +52,11 @@ export function WatsonSettings({ open }: { open: boolean }) {
     const why = (e: unknown) => (e instanceof Error ? e.message : String(e))
     if (approvalsChanged) {
       try {
-        const c = await saveWatsonConfig({ twoPerson: draft, approveAllMinutes: approveAll })
+        const c = await saveWatsonConfig({ twoPerson: draft, approveAllMinutes: approveAll, waitingRunMinutes: waitingRun })
         setCfg(c)
         setDraft(c.twoPerson)
         setApproveAll(c.approveAllMinutes ?? 0)
+        setWaitingRun(c.waitingRunMinutes || WAITING_RUN_DEFAULT)
       } catch (e) {
         failed.push(`Approvals not saved: ${why(e)}`)
       }
@@ -99,6 +104,22 @@ export function WatsonSettings({ open }: { open: boolean }) {
               <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} data-testid="watson-two-person" />
               <span>A second person approves every change on clusters tagged production; nobody approves their own.</span>
             </label>
+            <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--fg)' }}>
+              <span>An Automation run whose own values need approval waits for up to</span>
+              <span className="rk-field" style={{ width: 150 }}>
+                <select value={waitingRun} onChange={(e) => setWaitingRun(Number(e.target.value))} data-testid="watson-waiting-run">
+                  {waitChoices.map((m) => (
+                    <option key={m} value={m}>
+                      {waitText(m)}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+            <p className="rk-fhint" style={{ margin: 0 }}>
+              After that it expires: it can no longer be approved, Approvals lists it as expired, and whoever asked asks again. Approving one made by a local account checks that the account is still an enabled SuperAdmin; a directory person
+              is not read again, so the wait is what bounds it.
+            </p>
           </section>
           <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Standing approvals">
             <h3 className="rk-h">Standing approvals</h3>
@@ -132,6 +153,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
             onUndo={() => {
               setDraft(cfg.twoPerson)
               setApproveAll(cfg.approveAllMinutes ?? 0)
+              setWaitingRun(cfg.waitingRunMinutes || WAITING_RUN_DEFAULT)
               notify.undo()
               setError('')
             }}

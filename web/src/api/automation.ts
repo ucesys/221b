@@ -492,7 +492,8 @@ export interface WaitingRun {
   changed: string[]
   impact: ImpactItem[]
   note?: string
-  state: 'waiting' | 'approved' | 'rejected'
+  /** Expired: nobody decided it within Settings › Watson's wait; it is asked for again (FU-05a). */
+  state: 'waiting' | 'approved' | 'rejected' | 'expired'
   decidedBy?: Who
   decidedAt?: string
   comment?: string
@@ -528,7 +529,8 @@ export const draftScript = (request: string, text: string, signal: AbortSignal) 
 /** One thing that waits, or waited, for an approval; Approved by and on name whoever decided it. */
 export interface ApprovalRow {
   kind: 'script' | 'change' | 'command' | 'admin' | 'run'
-  state: 'pending' | 'approved' | 'rejected' | 'revoked'
+  /** Expired: a run request nobody decided in time (FU-05a). */
+  state: 'pending' | 'approved' | 'rejected' | 'revoked' | 'expired'
   what: string
   cluster?: string
   clusterName?: string

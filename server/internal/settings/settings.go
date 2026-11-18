@@ -126,17 +126,40 @@ type Watson struct {
 	// give Watson: for that long, every card they could approve is
 	// approved as it is ready (R2-04). 0 offers none.
 	ApproveAllMinutes int `json:"approveAllMinutes,omitempty"`
+	// WaitingRunMinutes is how long an Automation run whose own values
+	// wait for approval may wait: after that it expires and is asked for
+	// again (FU-05a). 0 is DefaultWaitingRunMinutes.
+	WaitingRunMinutes int `json:"waitingRunMinutes,omitempty"`
 }
 
 // MaxApproveAll bounds a standing approval.
 const MaxApproveAll = 240
+
+// How long a run may wait for approval: an hour unless set, 5 minutes to
+// 7 days.
+const (
+	DefaultWaitingRunMinutes = 60
+	MinWaitingRunMinutes     = 5
+	MaxWaitingRunMinutes     = 7 * 24 * 60
+)
 
 // Validate reports what is wrong with Watson's settings.
 func (w Watson) Validate() error {
 	if w.ApproveAllMinutes < 0 || w.ApproveAllMinutes > MaxApproveAll {
 		return fmt.Errorf("approveAllMinutes must be between 0 and %d", MaxApproveAll)
 	}
+	if w.WaitingRunMinutes != 0 && (w.WaitingRunMinutes < MinWaitingRunMinutes || w.WaitingRunMinutes > MaxWaitingRunMinutes) {
+		return fmt.Errorf("a run waits for approval 5 minutes to 7 days (waitingRunMinutes %d to %d)", MinWaitingRunMinutes, MaxWaitingRunMinutes)
+	}
 	return nil
+}
+
+// WaitingRunFor is how long a run may wait for approval.
+func (w Watson) WaitingRunFor() time.Duration {
+	if w.WaitingRunMinutes == 0 {
+		return DefaultWaitingRunMinutes * time.Minute
+	}
+	return time.Duration(w.WaitingRunMinutes) * time.Minute
 }
 
 // WatsonOrDefault returns the Watson settings in force.

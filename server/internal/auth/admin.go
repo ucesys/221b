@@ -361,6 +361,15 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 	if in.Password != nil && !s.ownPassword(w, r, sess, in.CurrentPassword) {
 		return
 	}
+	alone := false
+	if in.Email != nil {
+		var held bool
+		if held, alone = s.emailMakesSuperAdmin(sess, name, *in.Email); held {
+			s.recordUser(r, sess, audit.ActionUserUpdate, name, "the new email is in the deployment's admin list, which would make the user a SuperAdmin without another SuperAdmin's approval", audit.OutcomeDenied)
+			fail(w, http.StatusConflict, "That email is in the deployment's admin list, so it would make "+name+" a SuperAdmin, which waits for another SuperAdmin's approval. Make them a SuperAdmin on their roles first (it waits for approval), or give another email.")
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	_, end, err := s.accounts.Update(ctx, name, Change{Name: in.Name, Email: in.Email, Password: in.Password, Disabled: in.Disabled})
@@ -379,12 +388,36 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 	if in.Name != nil || in.Email != nil {
 		what = append(what, "details changed")
 	}
+	if alone {
+		what = append(what, "made a SuperAdmin at once by the admin list: the only SuperAdmin, so nobody else could approve")
+	}
 	if end {
 		s.endSessions(name)
 		what = append(what, "sessions ended")
 	}
 	s.recordUser(r, sess, audit.ActionUserUpdate, name, strings.Join(what, ", "), audit.OutcomeOK)
 	writeJSON(w, http.StatusOK, s.row(name, sess))
+}
+
+// emailMakesSuperAdmin says whether a new email would make a local account
+// a SuperAdmin by the deployment's admin list: held when another
+// SuperAdmin could approve, which an email change cannot wait for, so it is
+// refused; alone when nobody else could, so it is made at once, as other
+// grants are.
+func (s *Service) emailMakesSuperAdmin(sess Session, name, email string) (held, alone bool) {
+	cur, ok := s.accounts.Find(name)
+	if !ok {
+		return false, false
+	}
+	after := cur
+	after.Email = strings.ToLower(strings.TrimSpace(email))
+	if s.accountAdmin(cur) || !s.accountAdmin(after) || s.cfg.TwoPerson == nil {
+		return false, false
+	}
+	if !s.OtherSuperAdmin(sess) {
+		return false, true
+	}
+	return true, false
 }
 
 // ownPassword checks the password a SuperAdmin gives to change someone's

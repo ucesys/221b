@@ -8,10 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -105,6 +108,9 @@ func (s *Server) waitForApproval(w http.ResponseWriter, r *http.Request, l launc
 		Nodes: in.Nodes, Targets: targets, Params: in.Params, Rollout: in.Rollout, Config: l.config.ID, Hooks: in.Hooks, RetryOf: l.retryOf, Request: in.Request,
 		By: automation.Who{Name: l.who.Name, User: l.who.User}, Person: automation.Person{User: l.who.Person.User, Groups: l.who.Person.Groups},
 		Changed: wt.Changed, Impact: wt.Impact, Note: wt.Note}
+	if sess, ok := auth.SessionFrom(r.Context()); ok {
+		wr.Method = sess.Method
+	}
 	saved, err := s.opts.AutomationStore.NewWaitingRun(r.Context(), wr)
 	if err != nil {
 		l.refuse(automationStatus(err), err.Error())
@@ -137,10 +143,58 @@ func (s *Server) postAutomationRunWeigh(w http.ResponseWriter, r *http.Request) 
 	s.startRun(w, r, in, 0, runMode{who: s.watsonWho(r), preview: true})
 }
 
+// waitingRunFor is how long a run may wait for approval (FU-05a).
+func (s *Server) waitingRunFor() time.Duration {
+	if s.opts.Settings == nil {
+		return settings.Watson{}.WaitingRunFor()
+	}
+	return s.opts.Settings.Current().WatsonOrDefault().WaitingRunFor()
+}
+
+// expireWaitingRuns marks the run requests that waited too long as
+// expired, and audits each as the console's own doing. The caller does
+// not hold waitingRunMu.
+func (s *Server) expireWaitingRuns(r *http.Request) {
+	if s.opts.AutomationStore == nil {
+		return
+	}
+	// Not while an approval is between its check and its record.
+	waitingRunMu.Lock()
+	defer waitingRunMu.Unlock()
+	after := s.waitingRunFor()
+	gone, err := s.opts.AutomationStore.ExpireWaitingRuns(r.Context(), after, "expired after "+waitText(after))
+	if err != nil {
+		s.opts.Logger.Warn("expiring the run requests failed", "err", err)
+		return
+	}
+	for _, wr := range gone {
+		if s.opts.Audit != nil {
+			s.opts.Audit.Record(audit.Event{Action: audit.ActionAutomationRun, Cluster: wr.Cluster, Target: wr.Script, Outcome: audit.OutcomeFailed,
+				Detail: fmt.Sprintf("run request %d %s without a decision: %s, asked for by %s", wr.ID, wr.Comment, wr.What(), wr.By.Name)})
+		}
+	}
+}
+
+// askerStands says why the person who asked for a run may no longer
+// start it, or "": a local account must still exist, be enabled and be a
+// SuperAdmin as the rules stand now. A directory or provider person
+// cannot be read again without their session; the expiry bounds them.
+func (s *Server) askerStands(wr automation.WaitingRun) string {
+	if wr.Method != "local" || wr.By.User == "" {
+		return ""
+	}
+	a, ok := s.opts.Auth.(interface{ LocalSuperAdmin(string) bool })
+	if !ok || a.LocalSuperAdmin(wr.By.User) {
+		return ""
+	}
+	return fmt.Sprintf("run request %d cannot start: %s is no longer an enabled SuperAdmin; reject it", wr.ID, wr.By.Name)
+}
+
 func (s *Server) getWaitingRuns(w http.ResponseWriter, r *http.Request) {
 	if !s.automationReady(w, r) {
 		return
 	}
+	s.expireWaitingRuns(r)
 	list, err := s.opts.AutomationStore.WaitingRuns(r.Context(), clusterID(r))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -177,6 +231,7 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cluster, me := r.Context(), clusterID(r), s.automationWho(r)
 	st := s.opts.AutomationStore
 	target := fmt.Sprintf("run request %d", id)
+	s.expireWaitingRuns(r)
 	if decision == "reject" {
 		wr, err := st.DecideWaitingRun(ctx, cluster, id, false, in.Comment, me, 0)
 		if err != nil {
@@ -194,6 +249,11 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.recordAutomation(r, audit.ActionAutomationRun, cluster, target, audit.OutcomeDenied, fmt.Sprintf("not approved: %v", err))
 		jsonError(w, automationStatus(err), err.Error())
+		return
+	}
+	if why := s.askerStands(wr); why != "" {
+		s.recordAutomation(r, audit.ActionAutomationRun, cluster, wr.Script, audit.OutcomeDenied, "not approved: "+why)
+		jsonError(w, http.StatusConflict, why)
 		return
 	}
 	asker := watson.Who{Name: wr.By.Name, User: wr.By.User, Person: kube.Person{User: wr.Person.User, Groups: wr.Person.Groups}}

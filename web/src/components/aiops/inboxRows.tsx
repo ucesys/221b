@@ -226,6 +226,7 @@ export const APPROVAL_STATE = {
   approved: { text: 'Approved', tone: 'ok' },
   rejected: { text: 'Rejected', tone: 'err' },
   revoked: { text: 'Revoked', tone: 'muted' },
+  expired: { text: 'Expired', tone: 'muted' },
 } as const
 
 /** A short, stable name for a text: an approval without an id of its own is found again by it. */

@@ -518,7 +518,8 @@ func Validate(in Input, password string) (Config, error) {
 }
 
 // Save saves Settings › Email: a password given replaces the one kept,
-// ClearPassword removes it. A change of anything that reaches the server
+// ClearPassword removes it. The kept one is not carried to another server,
+// port or security: those changes take the password typed again. A change of anything that reaches the server
 // turns email off until a test passes again (EM-02). Only whether the
 // password changed reaches the audit log.
 func (s *Service) Save(ctx context.Context, in Input, by Person) (View, error) {
@@ -538,6 +539,20 @@ func (s *Service) Save(ctx context.Context, in Input, by Person) (View, error) {
 	c, err := Validate(in, next)
 	if err != nil {
 		return View{}, err
+	}
+	if c.Host != "" && pw != "" && next == pw && in.Password == "" {
+		// The kept password goes only to the server it was typed for.
+		was, _, err := s.load(ctx)
+		if err != nil {
+			return View{}, err
+		}
+		wasSec := was.Security
+		if wasSec == "" {
+			wasSec = SecurityStartTLS
+		}
+		if was.Host != c.Host || keptPort(was.Port, wasSec) != c.Port || wasSec != c.Security {
+			return View{}, fmt.Errorf("%w: the server, port or security changed: type the password again for the new server, or forget it", ErrInvalid)
+		}
 	}
 	if c.Host == "" {
 		// Email off: the password goes with the server.
@@ -586,6 +601,14 @@ func (s *Service) Save(ctx context.Context, in Input, by Person) (View, error) {
 		s.record(audit.Event{Action: ActionSettings, Who: by.who(), From: by.From, Target: "email", Outcome: audit.OutcomeOK, Detail: detail})
 	}
 	return s.view(ctx, saved, next != ""), nil
+}
+
+// keptPort is the port kept, or the security's usual one when none is.
+func keptPort(p int, security string) int {
+	if p == 0 {
+		return DefaultPort(security)
+	}
+	return p
 }
 
 func portText(p int) string {

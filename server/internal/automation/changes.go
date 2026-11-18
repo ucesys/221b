@@ -18,6 +18,8 @@ const (
 	ChangeWaiting  = "waiting"
 	ChangeApproved = "approved"
 	ChangeRejected = "rejected"
+	// ChangeExpired is a run request nobody decided in time (FU-05a).
+	ChangeExpired  = "expired"
 	ChangeApplied  = "applied"
 	ImpactSafe     = "safe"
 	ImpactApproval = "approval"

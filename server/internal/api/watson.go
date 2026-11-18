@@ -722,7 +722,9 @@ func (s *Server) getWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.watsonAdmin(w, r) {
 		return
 	}
-	b, _ := json.Marshal(s.opts.Settings.Current().WatsonOrDefault())
+	cfg := s.opts.Settings.Current().WatsonOrDefault()
+	cfg.WaitingRunMinutes = int(cfg.WaitingRunFor() / time.Minute)
+	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
 }
 
@@ -739,6 +741,10 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
+		return
+	}
+	if err := in.Validate(); err != nil {
+		jsonError(w, http.StatusBadRequest, "The settings were not saved: "+err.Error())
 		return
 	}
 	before := s.opts.Settings.Current().WatsonOrDefault()
@@ -759,10 +765,31 @@ func watsonChange(a, b settings.Watson) string {
 	if a.ApproveAllMinutes != b.ApproveAllMinutes {
 		parts = append(parts, "standing approvals up to "+strconv.Itoa(b.ApproveAllMinutes)+" minutes")
 	}
+	if a.WaitingRunFor() != b.WaitingRunFor() {
+		parts = append(parts, "Automation runs waiting for approval expire after "+waitText(b.WaitingRunFor()))
+	}
 	if len(parts) == 0 {
 		return "no change"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// waitText is a wait in words: "1 hour", "90 minutes", "2 days".
+func waitText(d time.Duration) string {
+	m := int(d / time.Minute)
+	plural := func(n int, unit string) string {
+		if n == 1 {
+			return "1 " + unit
+		}
+		return strconv.Itoa(n) + " " + unit + "s"
+	}
+	switch {
+	case m >= 24*60 && m%(24*60) == 0:
+		return plural(m/(24*60), "day")
+	case m >= 60 && m%60 == 0:
+		return plural(m/60, "hour")
+	}
+	return plural(m, "minute")
 }
 
 // ActionWatsonSettings is the audit action of a change to Watson's settings.
