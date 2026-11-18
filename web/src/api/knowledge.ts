@@ -54,6 +54,10 @@ export interface KnowledgeSource {
   migratedFrom?: string[]
   added?: string
   addedBy?: string
+  /** The credential of Settings › Credentials it signs in with, by id (0.12.1, CR-11); none when absent, or a bucket's pod identity. */
+  credential?: string
+  /** It names its credential; before the upgrade moves it, the one kept in the knowledge Secret is used. */
+  credMigrated?: boolean
 }
 
 /** One address of a live source: a web page, a Confluence page, or a search of a Confluence space (its site, with /wiki for Cloud, and the space's key). */
@@ -339,16 +343,17 @@ const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
-export const addSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources', post(keys ? { source, keys } : { source, token }))
-export const saveSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify(keys ? { source, keys } : { source, token }) })
+/** Adds a source, naming its credential (CR-11): no secret goes with it. */
+export const addSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources', post({ source }))
+export const saveSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify({ source }) })
 export const removeSource = (id: string) => call<{ removed: boolean }>(base + 'sources/' + enc(id), { method: 'DELETE' })
 export const setSourceOn = (id: string, on: boolean) => call<{ on: boolean }>(base + 'sources/' + enc(id) + '/on', post({ on }))
 /**
  * Tests a source's values as typed in its dialog, before they are saved
- * (KN-26). saved is the id of the source being edited: a credential left
- * blank is its saved one, read on the server and never sent back.
+ * (KN-26), with the credential it names. saved is the id of the source
+ * being edited.
  */
-export const testTypedSource = (source: KnowledgeSource, token?: string, keys?: KeysChange, saved?: string) => call<SourceTestResult>(base + 'sources/test', post({ source, token, keys, saved }))
+export const testTypedSource = (source: KnowledgeSource, saved?: string) => call<SourceTestResult>(base + 'sources/test', post({ source, saved }))
 
 /** A source's Test, in words: what it reached, the first few items, and what is skipped; or what is wrong. */
 export function sourceTestText(r: SourceTestResult): string {

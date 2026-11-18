@@ -813,6 +813,8 @@ export const ADMIN_VIEW_PAGES: Record<string, AdminViewPage> = {
   backup: { label: 'Administration › Backup', area: 'backup', access: 'super', hash: admin('backup') },
   'getting-started': { label: 'Settings › Getting started', area: 'settings', access: 'super', hash: settings('start') },
   general: { label: 'Settings › General', area: 'settings', access: 'super', hash: settings('') },
+  // --- Settings › Credentials (0.12.1, CR-01) ---
+  credentials: { label: 'Settings › Credentials', area: 'settings', access: 'super', hash: settings('credentials') },
   providers: { label: 'Settings › Providers', area: 'settings', access: 'super', hash: settings('providers'), item: true },
   agents: { label: 'Settings › Agents', area: 'settings', access: 'super', hash: settings('agents'), item: true },
   limits: { label: 'Settings › Limits', area: 'settings', access: 'super', hash: settings('limits') },

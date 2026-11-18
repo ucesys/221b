@@ -17,12 +17,14 @@ import { ProvidersSection } from './ai/ProvidersSection'
 import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
+import { CredentialsSettings } from './CredentialsSettings' // Settings › Credentials (0.12.1)
+import { expiringSoon, fetchCredentials } from '../api/credentials'
 import { leftText, useSetup } from '../api/setup'
 import { LeaveSaveContext } from '../lib/leaveSave'
 import { hasUnsaved, unsavedWhat } from '../lib/unsaved'
 import { ConfirmDialog } from './ConfirmDialog'
 
-type Section = 'start' | 'general' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
+type Section = 'start' | 'general' | 'credentials' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
 
 interface SectionInfo {
   id: Section
@@ -39,6 +41,9 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
       { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
       // Email is a section of General since 0.12.1 (its old address leads there).
       { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts, email' },
+      // --- Settings › Credentials (0.12.1, CR-01): after General, as
+      // applications, repositories and Mycroft's sources all use them.
+      { id: 'credentials', label: 'Credentials', hint: 'Tokens and keys the console signs in with' },
     ],
   },
   {
@@ -139,6 +144,18 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
   const label = SECTIONS.find((s) => s.id === section)!.label
   // Getting started's hint says how many steps are left (Phase 12).
   const { view: setup } = useSetup(true)
+  // Credentials' hint says how many expire within 14 days (CR-08).
+  const [credsSoon, setCredsSoon] = useState(0)
+  useEffect(() => {
+    let stop = false
+    fetchCredentials().then(
+      (v) => !stop && setCredsSoon(expiringSoon(v.credentials ?? []).length),
+      () => undefined,
+    )
+    return () => {
+      stop = true
+    }
+  }, [section])
   return (
     <LeaveSaveContext.Provider value={leaveSave}>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
@@ -172,7 +189,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
                 }}
               >
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.id === 'credentials' && credsSoon > 0 ? `${credsSoon} ${credsSoon === 1 ? 'expires' : 'expire'} within 14 days` : s.hint}</span>
               </a>
             )),
           ])}
@@ -183,6 +200,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
           </h2>
           {section === 'start' && <GettingStartedSection onToast={onToast} />}
           {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
+          {section === 'credentials' && <CredentialsSettings onToast={onToast} />}
           {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
           {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
           {section === 'limits' && <LimitsSection onToast={onToast} />}

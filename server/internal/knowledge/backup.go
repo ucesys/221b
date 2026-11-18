@@ -45,7 +45,11 @@ func (s *Service) Export(ctx context.Context, seal Seal) (*BackupPart, error) {
 	out := &BackupPart{Settings: set, Credentials: map[string]string{}}
 	keys := []string{storeKey, hookKey}
 	for _, x := range set.Sources {
-		keys = append(keys, sourceKey(x.ID))
+		// A source that names its credential (CR-11) has it in the
+		// credentials' part.
+		if !x.CredMigrated {
+			keys = append(keys, sourceKey(x.ID))
+		}
 	}
 	for _, k := range keys {
 		c, err := s.creds(ctx, k)

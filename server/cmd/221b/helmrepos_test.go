@@ -19,7 +19,8 @@ func TestHelmRepositoriesBackup(t *testing.T) {
 	ctx := context.Background()
 	repos := apps.NewRepos(apps.RepoOptions{})
 	pw := "s3cret-value"
-	if _, _, err := repos.Save(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
+	// A repository of before 0.12.1, with its own password (CR-12).
+	if _, _, err := repos.RestoreLegacy(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repos.Save(ctx, "public", apps.RepositoryInput{Kind: apps.KindOCI, URL: "oci://registry.example.com/charts"}, "alice"); err != nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -78,10 +79,10 @@ func (s *Server) appsRoutes() {
 // appView is a record as the page sees it, with its last drift check.
 type appView struct {
 	apps.Record
-	// TokenRemoved says this change moved the application to another
-	// repository and the token saved for the old one went with it.
-	TokenRemoved bool        `json:"tokenRemoved,omitempty"`
-	Drift        *apps.Drift `json:"drift,omitempty"`
+	// CredentialRemoved says this change moved the application to a
+	// repository its credential does not cover, and it was let go.
+	CredentialRemoved bool        `json:"credentialRemoved,omitempty"`
+	Drift             *apps.Drift `json:"drift,omitempty"`
 	// DriftState sums the drift up: in sync, drifted, unknown, or "" when
 	// it was not checked yet.
 	DriftState string `json:"driftState,omitempty"`
@@ -323,10 +324,10 @@ type appInput struct {
 	Namespace string       `json:"namespace"`
 	Name      string       `json:"name"`
 	Source    *apps.Source `json:"source,omitempty"`
-	// Token is a credential for a private repository; "" with ClearToken
-	// removes the saved one.
-	Token           string   `json:"token,omitempty"`
-	ClearToken      bool     `json:"clearToken,omitempty"`
+	// Credential is the credential of Settings › Credentials a private
+	// git repository is fetched with, by id: "" is none, nil keeps it
+	// (CR-11).
+	Credential      *string  `json:"credential,omitempty"`
 	Values          *string  `json:"values,omitempty"`
 	Params          []string `json:"params,omitempty"`
 	CreateNamespace *bool    `json:"createNamespace,omitempty"`
@@ -364,12 +365,15 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 		// takes its address from the repositories the console knows, and
 		// their credentials, never a token of its own (HR-01).
 		if err == nil && src.FromRepository() {
-			if src, err = s.opts.Repos.Resolve(r.Context(), src); err == nil && in.Token != "" {
-				err = errors.New("a repository's chart is fetched with the repository's credentials, kept in Settings › Applications: send no token with it")
+			if src, err = s.opts.Repos.Resolve(r.Context(), src); err == nil && in.Credential != nil && *in.Credential != "" {
+				err = errors.New("a repository's chart is fetched with the repository's credential, chosen in Settings › Applications: choose none here")
 			}
 		}
 		if err == nil {
 			err = apps.CheckSourceHost(r.Context(), src.Repo)
+		}
+		if err == nil && !src.FromRepository() && in.Credential != nil {
+			err = s.checkAppCredential(r.Context(), *in.Credential, src.Repo)
 		}
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
@@ -538,17 +542,12 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var token *string
-	if old, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
+	if _, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
 		// A record whose install failed is replaced; one with a release
 		// is upgraded instead.
 		if _, deployed := views.BuildReleaseDetails(cl, in.Namespace, in.Name, s.opts.Now().UTC()); deployed {
 			jsonError(w, http.StatusConflict, "release "+in.Namespace+"/"+in.Name+" exists: upgrade it from its panel, or uninstall it first")
 			return
-		}
-		if !apps.SameRepo(old.Source, *in.Source) {
-			empty := ""
-			token = &empty
 		}
 	}
 	now := s.opts.Now().UTC()
@@ -562,14 +561,16 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.Token != "" {
-		token = &in.Token
+	// The record names its credential from the start (CR-11).
+	rec.CredMigrated = true
+	if in.Credential != nil && !rec.Source.FromRepository() {
+		rec.Credential = *in.Credential
 	}
-	if err := s.opts.Apps.Save(r.Context(), rec, token); err != nil {
+	if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params)))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" credential="+s.credentialLabel(r.Context(), rec.Credential)+" params="+strconv.Itoa(len(rec.Params)))
 	var extra []string
 	if rec.CreateNamespace {
 		extra = append(extra, "--create-namespace")
@@ -579,7 +580,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 
 // putApp changes what the console keeps: the source (which adopts a
 // release the console did not install, HA-11), the values, the
-// parameters or the token; with upgrade, it deploys the change too.
+// parameters or the credential; with upgrade, it deploys the change too.
 func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
 	if !ok {
@@ -624,11 +625,24 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sourceChanged := in.Source != nil && *in.Source != rec.Source
-	// A token belongs to its repository: moved to another one, the saved
-	// token is removed, and only one given with the change goes there.
-	tokenRemoved := in.Source != nil && rec.HasToken && !apps.SameRepo(rec.Source, *in.Source)
+	// A credential goes only to the addresses it covers: an application
+	// moved to a repository its credential does not cover lets it go
+	// (CR-04); a token of before 0.12.1 belongs to its repository alone.
+	credentialRemoved := false
+	oldSource := rec.Source
 	if in.Source != nil {
 		rec.Source = *in.Source
+	}
+	switch {
+	case in.Credential != nil:
+		rec.Credential, rec.CredMigrated = *in.Credential, true
+	case in.Source != nil && rec.Credential != "" && (rec.Source.FromRepository() || s.checkAppCredential(r.Context(), rec.Credential, rec.Source.Repo) != nil):
+		rec.Credential, credentialRemoved = "", true
+	case in.Source != nil && !rec.CredMigrated && rec.HasToken && !apps.SameRepo(oldSource, *in.Source):
+		rec.CredMigrated, credentialRemoved = true, true
+	}
+	if rec.Source.FromRepository() {
+		rec.Credential = ""
 	}
 	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -647,11 +661,12 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		// release is not behind it (round 2 review). A source saved again
 		// before any deploy is compared again.
 		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision, rec.SourceDiff = "", time.Time{}, "", "", 0, ""
-		tok := in.Token
-		if tok == "" && !in.ClearToken && !tokenRemoved {
-			tok = saved
+		auth, err := apps.AuthFor(r.Context(), s.opts.Credentials, rec, saved)
+		if err != nil {
+			rec.SourceDiff = "the repository could not be read: " + err.Error()
+		} else {
+			s.matchSource(r.Context(), c, who, &rec, auth)
 		}
-		s.matchSource(r.Context(), c, who, &rec, tok)
 	}
 	if in.Ref != "" {
 		src := rec.Source
@@ -663,28 +678,18 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		rec.Source = src
 	}
 	rec.Updated, rec.UpdatedBy = now, who.User
-	var token *string
-	if in.ClearToken || (tokenRemoved && in.Token == "") {
-		empty := ""
-		token = &empty
-	} else if in.Token != "" {
-		token = &in.Token
-	}
-	if err := s.opts.Apps.Save(r.Context(), rec, token); err != nil {
+	if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
 		appSaveFailed(w, err)
 		return
 	}
-	detail := "source=" + quoteDetail(rec.Source.String()) + " token=" + strconv.FormatBool(token != nil && *token != "") + " params=" + strconv.Itoa(len(rec.Params)) + " upgrade=" + strconv.FormatBool(in.Upgrade)
+	detail := "source=" + quoteDetail(rec.Source.String()) + " credential=" + s.credentialLabel(r.Context(), rec.Credential) + " params=" + strconv.Itoa(len(rec.Params)) + " upgrade=" + strconv.FormatBool(in.Upgrade)
 	if adopted != nil {
 		detail += " values_from_revision=" + strconv.Itoa(rec.AdoptedRevision)
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, detail)
 	if !in.Upgrade {
-		if token != nil {
-			rec.HasToken = *token != ""
-		}
 		v := s.viewOf(rec)
-		v.TokenRemoved = tokenRemoved && !rec.HasToken
+		v.CredentialRemoved = credentialRemoved
 		b, _ := json.Marshal(v)
 		writeJSON(w, r, b)
 		return
@@ -706,7 +711,7 @@ func appSaveFailed(w http.ResponseWriter, err error) {
 // it with the deployed revision; the same, the record takes the commit
 // and the revision, so the release is not behind the source. Any
 // trouble leaves the record as it is: behind, until a deploy.
-func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.Who, rec *apps.Record, token string) {
+func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.Who, rec *apps.Record, token apps.GitAuth) {
 	if c.Config == nil || s.opts.Watson == nil {
 		return
 	}
@@ -845,14 +850,15 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 }
 
 // postAppRefs lists a repository's branches and tags for the dialog
-// (HA-05), with the token typed there, which is not kept.
+// (HA-05), with the credential chosen there (CR-11).
 func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.appReady(w, r); !ok || !s.mayManageApps(w, r) {
 		return
 	}
 	var in struct {
-		Repo  string `json:"repo"`
-		Token string `json:"token,omitempty"`
+		Repo string `json:"repo"`
+		// Credential is the credential chosen in the dialog, by id.
+		Credential string `json:"credential,omitempty"`
 		// Kind, Repository and Chart name a repository's chart, whose
 		// versions are its tags (Phase 12, wave 5).
 		Kind       string `json:"kind,omitempty"`
@@ -873,7 +879,14 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 	if src.FromRepository() {
 		src.Ref = ""
 	}
-	refs, err := s.opts.Repos.Refs(r.Context(), src, in.Token)
+	auth := apps.GitAuth{}
+	if !src.FromRepository() {
+		if auth, err = apps.CredentialAuth(r.Context(), s.opts.Credentials, in.Credential, src.Repo); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	refs, err := s.opts.Repos.Refs(r.Context(), src, auth)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -886,11 +899,11 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 // postAppInspect fetches a repository at a ref (its default branch when
 // none is given) and says what charts it holds and what its README's
 // install example sets, for the new-application form to start from
-// (M-07). The token, when given, is used for the fetch and kept nowhere.
+// (M-07), with the credential chosen there (CR-11).
 // getAppInspect looks a kept application's repository over at its ref
-// (M-07), with the saved token: the charts and their values files, for
+// (M-07), with its credential: the charts and their values files, for
 // the Source card's choice of a second values file (R2-08). It uses the
-// saved token and answers with what the repository holds, so it is for
+// application's credential and answers with what the repository holds, so it is for
 // those who manage the application in its namespace.
 func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
 	c, _, ok := s.appReady(w, r)
@@ -910,7 +923,12 @@ func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	co, err := s.opts.Repos.Fetch(r.Context(), rec.Source, token)
+	auth, err := apps.AuthFor(r.Context(), s.opts.Credentials, rec, token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	co, err := s.opts.Repos.Fetch(r.Context(), rec.Source, auth)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -933,7 +951,8 @@ func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 		Repo    string `json:"repo"`
 		Ref     string `json:"ref,omitempty"`
 		RefKind string `json:"refKind,omitempty"`
-		Token   string `json:"token,omitempty"`
+		// Credential is the credential chosen in the dialog, by id.
+		Credential string `json:"credential,omitempty"`
 		// Kind, Repository and Chart name a repository's chart at Ref, its
 		// version, the newest when none (Phase 12, wave 5).
 		Kind       string `json:"kind,omitempty"`
@@ -952,7 +971,7 @@ func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		co, err := s.opts.Repos.Fetch(r.Context(), src, "")
+		co, err := s.opts.Repos.Fetch(r.Context(), src, apps.GitAuth{})
 		if errors.Is(err, apps.ErrNoRepository) {
 			jsonError(w, http.StatusNotFound, err.Error())
 			return
@@ -976,8 +995,13 @@ func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src.Ref, src.RefKind = strings.TrimSpace(in.Ref), in.RefKind
+	auth, err := apps.CredentialAuth(r.Context(), s.opts.Credentials, in.Credential, src.Repo)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if src.Ref == "" {
-		refs, err := apps.ListRefs(r.Context(), src.Repo, in.Token)
+		refs, err := apps.ListRefs(r.Context(), src.Repo, auth)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
@@ -991,7 +1015,7 @@ func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 	if src.RefKind == "" {
 		src.RefKind = apps.RefBranch
 	}
-	co, err := apps.Fetch(r.Context(), src, in.Token)
+	co, err := apps.Fetch(r.Context(), src, auth)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1023,7 +1047,7 @@ func (s *Server) getAppRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	// The refs are read with the saved token: those who manage the
+	// The refs are read with the application's credential: those who manage the
 	// application there use it.
 	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
@@ -1037,7 +1061,12 @@ func (s *Server) getAppRefs(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	refs, err := s.opts.Repos.Refs(r.Context(), rec.Source, token)
+	auth, err := apps.AuthFor(r.Context(), s.opts.Credentials, rec, token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	refs, err := s.opts.Repos.Refs(r.Context(), rec.Source, auth)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1258,14 +1287,14 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	q := r.URL.Query()
-	// The source is fetched with the saved token and rendered with the
+	// The source is fetched with the application's credential and rendered with the
 	// saved values: those who manage the application there use them.
 	if (q.Get("from") == "source" || q.Get("to") == "source") && !s.mayManageApp(w, r, ns) {
 		return
 	}
-	// The record and its token are read once, when a side is the source.
+	// The record and its credential are read once, when a side is the source.
 	var rec *apps.Record
-	var token string
+	var token apps.GitAuth
 	// side renders one side of the diff: a revision (the deployed one when
 	// unnamed), or the source at its saved branch or tag, or at the branch
 	// or tag named for that side (asked October 30, 2026: either side may
@@ -1289,7 +1318,12 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, http.StatusBadGateway, err.Error())
 				return "", "", false
 			}
-			rec, token = &got, tok
+			auth, err := apps.AuthFor(r.Context(), s.opts.Credentials, got, tok)
+			if err != nil {
+				jsonError(w, http.StatusBadGateway, err.Error())
+				return "", "", false
+			}
+			rec, token = &got, auth
 		}
 		src := rec.Source
 		if ref := q.Get(refQ); ref != "" {
@@ -1362,3 +1396,33 @@ func quoteDetail(s string) string { return strconv.Quote(s) }
 
 // releaseV1 is a release in the SDK's v1 format.
 type releaseV1 = release.Release
+
+// --- Credentials (0.12.1, CR-11) ---
+
+// checkAppCredential checks the credential an application names for its
+// git repository: it must serve git and cover the repository's address.
+func (s *Server) checkAppCredential(ctx context.Context, id, repo string) error {
+	if id == "" {
+		return nil
+	}
+	if s.opts.Credentials == nil {
+		return errors.New("this console keeps no credentials")
+	}
+	_, err := s.opts.Credentials.CheckChoice(ctx, id, credentials.UseGit, repo)
+	if err != nil {
+		return errors.New(strings.TrimPrefix(err.Error(), credentials.ErrInvalid.Error()+": "))
+	}
+	return nil
+}
+
+// credentialLabel names a credential for the audit log: its name, never
+// its secret; "none" for none.
+func (s *Server) credentialLabel(ctx context.Context, id string) string {
+	if id == "" {
+		return "none"
+	}
+	if c, err := s.opts.Credentials.Get(ctx, id); err == nil {
+		return quoteDetail(c.Name)
+	}
+	return id
+}

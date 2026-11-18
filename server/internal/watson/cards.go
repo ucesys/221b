@@ -73,7 +73,7 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 	if cl.Config == nil {
 		return out, errors.New("the cluster cannot be reached")
 	}
-	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, pin: &appPin{}}
+	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: &appPin{}}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	if err != nil {
 		return out, fmt.Errorf("cannot reach the cluster: %w", err)
@@ -93,7 +93,7 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 	default:
 		// What the card shows is read again as the person: what they may
 		// not see is left out, and the card says so.
-		asker := Target{Config: cl.Config, Person: *as, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Discovery: d, pin: &appPin{}}
+		asker := Target{Config: cl.Config, Person: *as, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, Discovery: d, pin: &appPin{}}
 		acs, err := clientsFor(ctx, asker)
 		if err != nil {
 			out.Impact = withAlert(alert, []string{"Watson could not read the cluster to work out the impact: " + err.Error()})

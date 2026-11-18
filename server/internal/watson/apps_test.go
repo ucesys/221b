@@ -142,9 +142,9 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	if code != 0 || !strings.Contains(out, "REVISION: 2") {
 		t.Fatalf("upgrade: exit %d\n%s", code, out)
 	}
-	// The saved token and values go to the saved repository, never another.
+	// The saved credential and values go to the saved repository, never another.
 	out, code = run("helm upgrade hello --git https://evil.invalid/x --ref main -n web --app --dry-run=client")
-	if code == 0 || !strings.Contains(out, "cannot take its token") {
+	if code == 0 || !strings.Contains(out, "cannot take its credential") {
 		t.Fatalf("another repository with --app: exit %d\n%s", code, out)
 	}
 
@@ -207,6 +207,8 @@ func TestADeployWithoutAppKeepsTheRecord(t *testing.T) {
 	rec.Fleet, rec.FleetLabel, rec.CreateNamespace = "gpu", "pool=gpu", true
 	rec.Commands = []apps.Command{{Name: "scale", Params: []string{"replicas=5"}}}
 	rec.Commit = "old"
+	// A record of before 0.12.1, with its own token (CR-12).
+	rec.CredMigrated = false
 	token := "the-saved-token"
 	if err := store.Save(ctx, rec, &token); err != nil {
 		t.Fatal(err)
@@ -228,15 +230,16 @@ func TestADeployWithoutAppKeepsTheRecord(t *testing.T) {
 		t.Fatal("the deploy lost the token")
 	}
 
-	// Moved to another repository, the token must not follow it there.
+	// Moved to another repository, the token must not follow it there:
+	// the record names no credential from then on (CR-11).
 	other := gitChart(t)
 	out, code := run("helm upgrade hello --git " + other + " --path charts/web --ref v1.0.0 --tag -n web")
-	if code != 0 || !strings.Contains(out, "token saved for the old one was removed") || strings.Contains(out, token) {
+	if code != 0 || !strings.Contains(out, "its credential for the old one no longer applies") || strings.Contains(out, token) {
 		t.Fatalf("another repository: %d %s", code, out)
 	}
 	got, tok, _ = store.Get(ctx, "local", "web", "hello")
-	if got.Source.Repo != other || tok != "" || got.Values != rec.Values {
-		t.Fatalf("after moving: %+v, token %q", got, tok)
+	if auth, err := apps.AuthFor(ctx, nil, got, tok); got.Source.Repo != other || err != nil || !auth.None() || !got.CredMigrated || got.Values != rec.Values {
+		t.Fatalf("after moving: %+v", got)
 	}
 }
 

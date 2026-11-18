@@ -65,7 +65,7 @@ func (s *Service) TestSource(ctx context.Context, c Caller, id string) (SourceTe
 	if !ok {
 		return SourceTest{}, wrapf(ErrNotFound, "no source %q", id)
 	}
-	keys, err := s.creds(ctx, sourceKey(x.ID))
+	x, keys, err := s.sourceAuth(ctx, x)
 	if err != nil {
 		return SourceTest{}, err
 	}
@@ -84,6 +84,7 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		return SourceTest{}, err
 	}
 	var have Creds
+	legacy := s.keepsOwnCredential(ctx, Source{ID: saved, Kind: x.Kind, Credential: x.Credential}, ch, saved == "")
 	if saved != "" {
 		set, err := s.Settings(ctx)
 		if err != nil {
@@ -96,8 +97,10 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		if old.Kind != x.Kind {
 			return SourceTest{}, invalid("a source keeps its kind; add a new one instead")
 		}
-		if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
-			return SourceTest{}, err
+		if legacy {
+			if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
+				return SourceTest{}, err
+			}
 		}
 	}
 	x = x.normalized()
@@ -106,17 +109,29 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	if x.Name == "" {
 		x.Name = "the new source"
 	}
+	// The dialog names the credential to test with (CR-11); typed keys
+	// are those of before 0.12.1 (the Go API).
+	x.CredMigrated = !legacy
 	if err := x.Validate(); err != nil {
 		return SourceTest{}, err
 	}
 	keys := ch.apply(have)
+	if !legacy {
+		if err := s.checkCredential(ctx, x); err != nil {
+			return SourceTest{}, err
+		}
+		var err error
+		if x, keys, err = s.sourceAuth(ctx, x); err != nil {
+			return SourceTest{}, err
+		}
+	}
 	switch {
 	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3 && x.Kind != SourceLive && x.Kind != SourceWeb:
 		return SourceTest{}, invalid("only a Confluence space, a git repository, an S3 bucket, a web site or a live source is tested")
 	case x.Kind == SourceConfluence && keys.Token == "":
-		return SourceTest{}, invalid("type the API token to test")
+		return SourceTest{}, invalid("choose the credential to test with")
 	case x.Kind == SourceS3 && x.Credentials == CredentialsKeys && (keys.AccessKeyID == "" || keys.SecretAccessKey == ""):
-		return SourceTest{}, invalid("give the access key's ID and secret to test, or use the pod's identity")
+		return SourceTest{}, invalid("choose the access key's credential to test with, or use the pod's identity")
 	}
 	return s.testSource(ctx, x, keys)
 }
@@ -129,13 +144,7 @@ func (s *Service) testSource(ctx context.Context, x Source, keys Creds) (SourceT
 	}
 	out, err := s.listForTest(ctx, x, keys)
 	if err != nil {
-		var secrets []string
-		for _, v := range []string{keys.Token, keys.AccessKeyID, keys.SecretAccessKey} {
-			if v != "" {
-				secrets = append(secrets, v)
-			}
-		}
-		if msg := scrub.Known(err.Error(), secrets); msg != err.Error() {
+		if msg := scrub.Known(err.Error(), keys.secrets()); msg != err.Error() {
 			return SourceTest{}, errors.New(msg)
 		}
 		return SourceTest{}, err

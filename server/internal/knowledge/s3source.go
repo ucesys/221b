@@ -65,9 +65,9 @@ func (s *Service) bucketReader(x Source, c Creds) (*s3Reader, error) {
 			return s.o.Identity.Credentials(ctx, x.Region)
 		}
 		if c.AccessKeyID == "" || c.SecretAccessKey == "" {
-			return awsv4.Credentials{}, invalid("no access key is saved for %s: give one, or use the pod's identity", x.Name)
+			return awsv4.Credentials{}, invalid("%s names no access key: choose its credential, or use the pod's identity", x.Name)
 		}
-		return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey}, nil
+		return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.sessionToken}, nil
 	}
 	hc := s.o.HTTP
 	if x.CAPEM != "" {
@@ -78,11 +78,7 @@ func (s *Service) bucketReader(x Source, c Creds) (*s3Reader, error) {
 		return nil, invalid("%v", err)
 	}
 	r := &s3Reader{c: client, bucket: x.Bucket, prefix: x.Prefix, identity: x.Credentials == CredentialsIdentity}
-	for _, v := range []string{c.AccessKeyID, c.SecretAccessKey} {
-		if v != "" {
-			r.secrets = append(r.secrets, v)
-		}
-	}
+	r.secrets = append(r.secrets, c.secrets()...)
 	return r, nil
 }
 

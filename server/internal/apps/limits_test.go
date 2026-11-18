@@ -67,7 +67,7 @@ func TestAFetchPastItsLimitsIsRefusedInPlainWords(t *testing.T) {
 	// Half a megabyte of one byte: small as sent, large unpacked.
 	dir, _ := localRepo(t, map[string]string{"a.txt": "a", "b.txt": "b", "big.bin": strings.Repeat("x", 512<<10)})
 	ctx := context.Background()
-	if _, err := apps.Fetch(ctx, master(dir), ""); err != nil {
+	if _, err := apps.Fetch(ctx, master(dir), apps.GitAuth{}); err != nil {
 		t.Fatalf("within the limits: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -82,7 +82,7 @@ func TestAFetchPastItsLimitsIsRefusedInPlainWords(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			withLimits(t, c.set)
-			_, err := apps.Fetch(ctx, master(dir), "")
+			_, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 			if !errors.Is(err, apps.ErrFetchLimit) || !strings.Contains(err.Error(), c.says) {
 				t.Fatalf("%v", err)
 			}
@@ -99,12 +99,12 @@ func TestACommitIsFetchedByItsIdWhileTheBranchHasMoved(t *testing.T) {
 	cfg.WriteString("[uploadpack]\n\tallowAnySHA1InWant = true\n")
 	cfg.Close()
 	ctx := context.Background()
-	first, err := apps.Fetch(ctx, master(dir), "")
+	first, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addCommit(t, dir, r, map[string]string{"f.txt": "second"})
-	co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit)
+	co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,15 +123,15 @@ func TestACommitIsFetchedByItsIdWhileTheBranchHasMoved(t *testing.T) {
 func TestACommitIsRefusedWhenTheServerCannotServeItAndTheBranchMoved(t *testing.T) {
 	dir, r := localRepo(t, map[string]string{"f.txt": "first"})
 	ctx := context.Background()
-	first, err := apps.Fetch(ctx, master(dir), "")
+	first, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit); err != nil || co.Commit != first.Commit {
+	if co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit); err != nil || co.Commit != first.Commit {
 		t.Fatalf("while the branch is there: %v", err)
 	}
 	addCommit(t, dir, r, map[string]string{"f.txt": "second"})
-	if co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit); err == nil || !strings.Contains(err.Error(), "moved") {
+	if co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit); err == nil || !strings.Contains(err.Error(), "moved") {
 		t.Fatalf("%+v %v", co, err)
 	}
 }
@@ -159,10 +159,10 @@ func TestAHostIsCheckedWhereItResolvesAndAgainAtEveryConnection(t *testing.T) {
 	if err := apps.CheckRepoHost(ctx, "https://name.invalid/x/y"); err != nil {
 		t.Errorf("a name that does not resolve now is left to the connection: %v", err)
 	}
-	if _, err := apps.ListRefs(ctx, "https://localhost:1/x/y", ""); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
+	if _, err := apps.ListRefs(ctx, "https://localhost:1/x/y", apps.GitAuth{}); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
 		t.Errorf("listing refs: %v", err)
 	}
-	if _, err := apps.Fetch(ctx, apps.Source{Repo: "https://127.0.0.1:1/x/y", Ref: "main", RefKind: apps.RefBranch}, ""); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
+	if _, err := apps.Fetch(ctx, apps.Source{Repo: "https://127.0.0.1:1/x/y", Ref: "main", RefKind: apps.RefBranch}, apps.GitAuth{}); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
 		t.Errorf("fetching: %v", err)
 	}
 }

@@ -44,7 +44,7 @@ func TestAnUpgradesRenderReadsNoSecretThroughLookup(t *testing.T) {
 		t.Fatalf("install: %s", out.String())
 	}
 	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.0.0", RefKind: apps.RefTag}
-	co, err := apps.Fetch(context.Background(), src, "")
+	co, err := apps.Fetch(context.Background(), src, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}

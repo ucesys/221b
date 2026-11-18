@@ -56,7 +56,12 @@ export interface AppRecord {
   sourceDiff?: string
   /** The release revision whose values (helm get values) the values file started from when the console adopted the release. */
   adoptedRevision?: number
+  /** A token of before 0.12.1 is kept with the record; it is used until the upgrade moves it to a credential. */
   hasToken?: boolean
+  /** The credential of Settings › Credentials the git repository is fetched with, by id; none when absent (0.12.1, CR-11). */
+  credential?: string
+  /** The record names its credential: a token of before 0.12.1 is no longer read. */
+  credMigrated?: boolean
   /** The application's own deploy commands: each a redeploy with its own parameters (asked October 30, 2026). */
   commands?: AppCommand[]
   createdBy?: string
@@ -98,8 +103,8 @@ export interface AppDrift {
 }
 
 export interface AppView extends AppRecord {
-  /** This change moved the application to another repository, and the token saved for the old one went with it. */
-  tokenRemoved?: boolean
+  /** This change moved the application to a repository its credential does not cover, and it was let go. */
+  credentialRemoved?: boolean
   drift?: AppDrift
   driftState?: 'in sync' | 'drifted' | 'unknown'
   /** The keys of the values file whose credentials show masked; a masked value saved as it is keeps what it hid. */
@@ -214,8 +219,8 @@ export interface AppInput {
   namespace?: string
   name?: string
   source?: AppSource
-  token?: string
-  clearToken?: boolean
+  /** The credential the git repository is fetched with, by id; "" for none. */
+  credential?: string
   values?: string
   params?: string[]
   createNamespace?: boolean
@@ -282,13 +287,13 @@ export function useApps(cluster: string, tick: number, version: number) {
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
 export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''), undefined, !refresh)
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
-/** A kept application's repository looked over at its ref, with the saved token (R2-08). */
+/** A kept application's repository looked over at its ref, with its credential (R2-08). */
 export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
 /** Looks over a repository for the new-application form: its charts and the README's install example (M-07). */
-export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) =>
-  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
+export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, credential?: string) =>
+  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(credential ? { credential } : {}) })
 
-export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
+export const fetchRepoRefs = (cluster: string, repo: string, credential = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), credential ? { repo, credential } : { repo })
 /** A repository chart looked over at a version (the newest when none): its values files, its version and digest (HR-05). */
 export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart' | 'ref'>) =>
   call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { kind: src.kind, ...(src.repo ? { repo: src.repo } : {}), ...(src.repository ? { repository: src.repository } : {}), chart: src.chart, ...(src.ref ? { ref: src.ref } : {}) })
@@ -302,10 +307,14 @@ export interface HelmRepository {
   name: string
   kind: 'helm' | 'oci'
   url: string
-  auth: RepoAuth
+  /** The credential of Settings › Credentials it signs in with, by id; none when absent (0.12.1, CR-11). */
+  credential?: string
+  /** It names its credential; before the upgrade moves it, auth, username and hasSecret are its own of before 0.12.1. */
+  credMigrated?: boolean
+  auth?: RepoAuth
   username?: string
-  /** A password or token is kept; it is never shown. */
-  hasSecret: boolean
+  /** A password or token of before 0.12.1 is kept; it is never shown. */
+  hasSecret?: boolean
   testedAt?: string
   testOk?: boolean
   tested?: string
@@ -316,10 +325,8 @@ export interface HelmRepository {
 export interface HelmRepositoryInput {
   kind: 'helm' | 'oci'
   url: string
-  auth?: RepoAuth
-  username?: string
-  /** A value replaces the kept one, "" removes it, missing keeps it. */
-  secret?: string
+  /** The credential it signs in with, by id; "" or missing for none. */
+  credential?: string
 }
 
 export interface RepoTest {
@@ -341,7 +348,7 @@ const repos = '/api/v1/helm-repositories'
 export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean }>('GET', repos)
 export const saveHelmRepo = (name: string, input: HelmRepositoryInput) => call<HelmRepository>('PUT', `${repos}/${encodeURIComponent(name)}`, input)
 export const deleteHelmRepo = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}`)
-/** Tests a repository as typed; a saved one's name with no secret given tests with the one kept. */
+/** Tests a repository as typed, with the credential chosen. */
 export const testHelmRepo = (input: HelmRepositoryInput & { name?: string }) => call<RepoTest>('POST', `${repos}/test`, input)
 /** Tests a saved repository and keeps what it found. */
 export const retestHelmRepo = (name: string) => call<RepoTest>('POST', `${repos}/${encodeURIComponent(name)}/test`)

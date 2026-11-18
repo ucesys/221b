@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -92,6 +93,18 @@ type Source struct {
 	CAPEM   string    `json:"caPEM,omitempty"`
 	Added   time.Time `json:"added,omitzero"`
 	AddedBy string    `json:"addedBy,omitempty"`
+	// Credential is the credential of Settings › Credentials a Confluence
+	// space, repository, bucket, web site or live source signs in with, by
+	// id; "" is none, or a bucket's pod identity (0.12.1, CR-11).
+	Credential string `json:"credential,omitempty"`
+	// CredMigrated says the source names its credential: the one it kept
+	// in the knowledge Secret before 0.12.1 was moved to Settings ›
+	// Credentials, or it had none (CR-12). Its Auth and Username, and that
+	// kept credential, are not read again.
+	CredMigrated bool `json:"credMigrated,omitempty"`
+	// cert is a web site's or live source's client certificate, from its
+	// credential, as it is read; never kept.
+	cert *tls.Certificate
 }
 
 // Store kinds.
@@ -241,7 +254,8 @@ func (x Source) Validate() error {
 		if x.Flavor != confluence.Cloud && x.Flavor != confluence.DataCenter {
 			return invalid("Confluence is cloud or datacenter")
 		}
-		if x.Flavor == confluence.Cloud && !strings.Contains(x.Email, "@") {
+		// A credential names the account's email (CR-11).
+		if x.Flavor == confluence.Cloud && !x.CredMigrated && !strings.Contains(x.Email, "@") {
 			return invalid("Confluence Cloud needs the email of the account the API token belongs to")
 		}
 		if !regexp.MustCompile(`^~?[A-Za-z0-9_]{1,255}$`).MatchString(x.Space) {
@@ -262,8 +276,14 @@ func (x Source) Validate() error {
 			return invalid("a bucket's credentials are an access key or the pod's identity")
 		}
 	case SourceLive:
+		if x.CredMigrated {
+			x.Auth, x.Username = "", ""
+		}
 		return x.validateLive()
 	case SourceWeb:
+		if x.CredMigrated {
+			x.Auth, x.Username = "", ""
+		}
 		return x.validateWeb()
 	case SourceUpload, SourceConsole, SourceFixes:
 	default:
@@ -448,13 +468,40 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	if err := x.Validate(); err != nil {
 		return Source{}, err
 	}
-	if x.Kind == SourceS3 && x.Credentials == CredentialsKeys {
-		have, err := s.creds(ctx, sourceKey(x.ID))
-		if err != nil {
-			return Source{}, err
+	if s.keepsOwnCredential(ctx, x, ch, create) {
+		// A credential of its own, kept in the knowledge Secret as before
+		// 0.12.1: typed through the Go API, or kept by a source the
+		// upgrade has not switched, edited without naming one. The
+		// upgrade moves it (CR-12).
+		x.CredMigrated = false
+		if x.Kind == SourceS3 && x.Credentials == CredentialsKeys {
+			have, err := s.creds(ctx, sourceKey(x.ID))
+			if err != nil {
+				return Source{}, err
+			}
+			if k := ch.apply(have); k.AccessKeyID == "" || k.SecretAccessKey == "" {
+				return Source{}, invalid("an access key is needed: give its ID and secret, or use the pod's identity")
+			}
 		}
-		if k := ch.apply(have); k.AccessKeyID == "" || k.SecretAccessKey == "" {
-			return Source{}, invalid("an access key is needed: give its ID and secret, or use the pod's identity")
+	} else {
+		// A source saved names its credential from then on (CR-11),
+		// checked against what it serves and the addresses it covers.
+		ch = CredsChange{}
+		x.CredMigrated = true
+		if !signsIn(x.Kind) {
+			x.Credential = ""
+		}
+		if x.Kind == SourceWeb || x.Kind == SourceLive {
+			x.Auth, x.Username = "", ""
+		}
+		if x.Kind == SourceS3 && x.Credentials == CredentialsKeys && x.Credential == "" {
+			return Source{}, invalid("choose the access key's credential, or use the pod's identity")
+		}
+		if x.Kind == SourceS3 && x.Credentials == CredentialsIdentity {
+			x.Credential = ""
+		}
+		if err := s.checkCredential(ctx, x); err != nil {
+			return Source{}, err
 		}
 	}
 	if create && (x.Kind == SourceConsole || x.Kind == SourceUpload || x.Kind == SourceFixes) {
@@ -488,7 +535,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 			// The dialog does not hold the exclusions: they stay as they are.
 			x.Excluded, x.MigratedFrom = old.Excluded, old.MigratedFrom
 			same := old
-			same.Name = x.Name
+			same.Name, same.CredMigrated = x.Name, x.CredMigrated
 			renamedOnly = reflect.DeepEqual(same, x) && ch.none()
 			set.Sources[i] = x
 		}
@@ -501,6 +548,9 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	detail := fmt.Sprintf("source %s (%s) %s", x.ID, x.Kind, map[bool]string{true: "added", false: "changed"}[create])
 	if x.Kind == SourceS3 {
 		detail += fmt.Sprintf(": the bucket %s under %q, credentials %s", x.Bucket, x.Prefix, x.Credentials)
+	}
+	if x.Credential != "" {
+		detail += "; credential " + x.Credential
 	}
 	if x.Kind == SourceLive {
 		detail += fmt.Sprintf(": live, %d addresses, never copied", len(x.Addresses))
@@ -523,6 +573,28 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: x.ID, Detail: detail, Outcome: audit.OutcomeOK, From: c.From})
 	s.sourceSaved(ctx, c, x, create, !renamedOnly)
 	return saved, nil
+}
+
+// keepsOwnCredential says a source saved keeps a credential of its own in
+// the knowledge Secret, as before 0.12.1, rather than naming one of
+// Settings › Credentials: one typed with it, or, for a source not switched
+// yet edited without naming one, the one it keeps.
+func (s *Service) keepsOwnCredential(ctx context.Context, x Source, ch CredsChange, create bool) bool {
+	if x.Credential != "" || !signsIn(x.Kind) {
+		return false
+	}
+	if !ch.none() {
+		return true
+	}
+	if create {
+		return false
+	}
+	set, err := s.Settings(ctx)
+	if err != nil {
+		return false
+	}
+	old, ok := set.source(x.ID)
+	return ok && !old.CredMigrated && old.Credential == ""
 }
 
 // firstRead reads a source just added, in the background, once the wiki

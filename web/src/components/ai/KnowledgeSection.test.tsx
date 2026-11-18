@@ -54,20 +54,51 @@ const uploads = {
   off: [],
 }
 
+/** A credential the pickers offer (0.12.1, CR-10). */
+const cred = (id: string, name: string, kind: string, endpoint: string) => ({ id, name, kind, endpoint })
+
 describe('Settings › Knowledge', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let current = view()
+  // The credentials each use offers, by use; and the list's names.
+  let choices: Record<string, ReturnType<typeof cred>[]> = {}
+  /** The answers of Settings › Credentials, or null for another address. */
+  const credentialsAnswer = (url: string): Response | null => {
+    if (url.startsWith('/api/v1/credentials/choices')) {
+      const use = new URL(url, 'http://x').searchParams.get('use') ?? ''
+      return new Response(JSON.stringify({ choices: choices[use] ?? [] }))
+    }
+    if (url === '/api/v1/credentials')
+      return new Response(
+        JSON.stringify({
+          credentials: Object.values(choices)
+            .flat()
+            .map((c) => ({ ...c, usedBy: [] })),
+          mayEdit: true,
+        }),
+      )
+    return null
+  }
   beforeEach(() => {
     Element.prototype.scrollTo = () => {}
     calls.length = 0
     current = view()
+    choices = {}
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      const c = credentialsAnswer(String(url))
+      if (c) return c
       if (String(url).endsWith('/sources') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'ops' }), { status: 201 })
       if (String(url).endsWith('/knowledge/uploads')) return new Response(JSON.stringify(uploads))
       return new Response(JSON.stringify(current))
     })
   })
+  /** The picker's select once its choices came. */
+  const picker = async (drawer: HTMLElement) => {
+    const sel = within(drawer).getByTestId('knowledge-source-credential-select') as HTMLSelectElement
+    await waitFor(() => expect(sel.disabled).toBe(false))
+    return sel
+  }
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
@@ -83,25 +114,27 @@ describe('Settings › Knowledge', () => {
     expect(screen.getByTestId('knowledge-model-link').getAttribute('href')).toContain('settings/agents')
   })
 
-  it('adds a Confluence source with its token, which never comes back', async () => {
+  it('adds a Confluence source naming its credential, which the only one that covers it preselects (CR-10)', async () => {
+    choices = { 'confluence-cloud': [cred('cr-ops', 'Ops Confluence', 'token', 'https://ops.atlassian.net')] }
     render(<KnowledgeSection />)
     fireEvent.click(await screen.findByTestId('knowledge-add'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
     fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Ops space' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-url'), { target: { value: 'https://ops.atlassian.net' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-email'), { target: { value: 'ann@example.com' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-space'), { target: { value: 'OPS' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-token'), { target: { value: 'read-only-token' } })
+    // No token or email of its own: the credential holds them.
+    expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
+    expect(within(drawer).queryByTestId('knowledge-source-email')).toBeNull()
+    await waitFor(() => expect((within(drawer).getByTestId('knowledge-source-credential-select') as HTMLSelectElement).value).toBe('cr-ops'))
+    expect(calls.find((c) => c.url.startsWith('/api/v1/credentials/choices'))?.url).toContain('use=confluence-cloud')
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({
-        source: { id: 'ops-space', name: 'Ops space', kind: 'confluence', flavor: 'cloud', baseURL: 'https://ops.atlassian.net', email: 'ann@example.com', space: 'OPS' },
-        token: 'read-only-token',
+        source: { id: 'ops-space', name: 'Ops space', kind: 'confluence', flavor: 'cloud', baseURL: 'https://ops.atlassian.net', email: '', space: 'OPS', credential: 'cr-ops' },
       }),
     )
   })
 
-  // --- A Wiki sync job per source (KN-28) ---
   it('starts no sync: each source links its Wiki sync job, and one line says where the syncs are', async () => {
     current = view({
       status: {
@@ -175,31 +208,41 @@ describe('Settings › Knowledge', () => {
   })
 
   // --- A bucket of documents (KN-25) ---
-  it('adds an S3 bucket of documents with a read-only access key, which never comes back', async () => {
+  it('adds an S3 bucket of documents with an access key credential for its endpoint and bucket', async () => {
+    choices = { s3: [cred('cr-docs', 'Docs key', 'accesskey', 'https://minio.example.internal/ops-docs')] }
     render(<KnowledgeSection />)
     fireEvent.click(await screen.findByTestId('knowledge-add'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
     fireEvent.change(within(drawer).getByTestId('knowledge-source-kind'), { target: { value: 's3' } })
-    expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
     fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Runbooks bucket' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-bucket'), { target: { value: 'ops-docs' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-prefix'), { target: { value: 'runbooks/' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-region'), { target: { value: 'eu-west-1' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-endpoint'), { target: { value: 'https://minio.example.internal' } })
     fireEvent.click(within(drawer).getByTestId('knowledge-source-pathstyle'))
-    expect((within(drawer).getByTestId('knowledge-source-secret') as HTMLInputElement).type).toBe('password')
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-akid'), { target: { value: 'AKIAREADONLY' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-secret'), { target: { value: 'bucket-secret' } })
+    expect(within(drawer).queryByTestId('knowledge-source-secret')).toBeNull()
+    await waitFor(() => expect((within(drawer).getByTestId('knowledge-source-credential-select') as HTMLSelectElement).value).toBe('cr-docs'))
+    expect(decodeURIComponent(calls.filter((c) => c.url.startsWith('/api/v1/credentials/choices')).at(-1)!.url)).toContain('address=https://minio.example.internal/ops-docs')
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({
-        source: { id: 'runbooks-bucket', name: 'Runbooks bucket', kind: 's3', bucket: 'ops-docs', prefix: 'runbooks/', region: 'eu-west-1', endpoint: 'https://minio.example.internal', pathStyle: true, credentials: 'keys' },
-        keys: { accessKeyId: 'AKIAREADONLY', secretAccessKey: 'bucket-secret' },
+        source: {
+          id: 'runbooks-bucket',
+          name: 'Runbooks bucket',
+          kind: 's3',
+          bucket: 'ops-docs',
+          prefix: 'runbooks/',
+          region: 'eu-west-1',
+          endpoint: 'https://minio.example.internal',
+          pathStyle: true,
+          credentials: 'keys',
+          credential: 'cr-docs',
+        },
       }),
     )
   })
 
-  it('reads a bucket by the pod’s identity, with no key to type', async () => {
+  it('reads a bucket by the pod’s identity, with no credential to choose', async () => {
     current = view({ identity: true })
     render(<KnowledgeSection />)
     fireEvent.click(await screen.findByTestId('knowledge-add'))
@@ -207,15 +250,13 @@ describe('Settings › Knowledge', () => {
     fireEvent.change(within(drawer).getByTestId('knowledge-source-kind'), { target: { value: 's3' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Docs' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-bucket'), { target: { value: 'docs' } })
-    const creds = within(drawer).getByTestId('knowledge-source-credentials') as HTMLSelectElement
-    expect([...creds.options].map((o) => o.text)).toEqual(['A read-only access key in a Secret', 'The pod’s identity'])
-    fireEvent.change(creds, { target: { value: 'identity' } })
-    expect(within(drawer).queryByTestId('knowledge-source-akid')).toBeNull()
-    expect(within(drawer).queryByTestId('knowledge-source-secret')).toBeNull()
+    const sel = await picker(drawer)
+    expect([...sel.options].map((o) => o.text)).toEqual(['None (public)', 'The pod’s identity'])
+    fireEvent.change(sel, { target: { value: '__identity' } })
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
     await waitFor(() => {
       const body = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body
-      expect(body).toMatchObject({ source: { kind: 's3', bucket: 'docs', credentials: 'identity' }, keys: {} })
+      expect(body).toMatchObject({ source: { kind: 's3', bucket: 'docs', credentials: 'identity', credential: '' } })
     })
   })
 
@@ -239,40 +280,40 @@ describe('Settings › Knowledge', () => {
     for (const id of ['knowledge-source-token', 'knowledge-source-test', 'knowledge-source-remove', 'knowledge-source-kind']) expect(within(drawer).queryByTestId(id)).toBeNull()
   })
 
-  it('lists a bucket with its key’s state and what it skipped; the row has no Test; the saved key is not sent again', async () => {
-    const bucket = { id: 'docs', name: 'Ops bucket', kind: 's3' as const, bucket: 'ops-docs', prefix: 'ops/', region: 'eu-west-1', credentials: 'keys' as const }
+  it('lists a bucket with its credential and what it skipped; the row has no Test; Edit keeps the credential', async () => {
+    choices = { s3: [cred('cr-docs', 'Docs key', 'accesskey', 'https://s3.amazonaws.com/ops-docs')] }
+    const bucket = { id: 'docs', name: 'Ops bucket', kind: 's3' as const, bucket: 'ops-docs', prefix: 'ops/', region: 'eu-west-1', credentials: 'keys' as const, credential: 'cr-docs', credMigrated: true }
     const base = view()
     current = view({
       settings: { ...base.settings, sources: [...base.settings.sources, bucket] },
-      creds: { ...base.creds, docs: { token: false, accessKey: true } },
       status: { ...base.status, sources: { ...base.status.sources, docs: { lastRead: '2026-11-05T01:00:00Z', items: 3, skipped: 2, skippedWhy: '1 not a kind Mycroft reads (.png); 1 over 20 MiB' } } },
     })
     render(<KnowledgeSection />)
     const row = (await screen.findAllByTestId('knowledge-source')).find((r) => r.dataset.source === 'docs')!
     expect(within(row).getByTestId('knowledge-source-bucket-line').textContent).toBe('s3://ops-docs/ops/')
-    expect(within(row).getByTestId('knowledge-source-creds').textContent).toBe('access key in a Secret')
+    await waitFor(() => expect(within(row).getByTestId('knowledge-source-creds').textContent).toBe('credential Docs key'))
     const state = within(row).getByTestId('knowledge-source-state')
     expect(state.textContent).toBe('Read · 3 items · 2 skipped')
     expect(state.getAttribute('title')).toBe('2 skipped: 1 not a kind Mycroft reads (.png); 1 over 20 MiB')
     // Test is in the dialog now (KN-26).
     expect(within(row).queryByTestId('knowledge-source-test')).toBeNull()
 
-    // Edited: the key is saved, so its fields start empty and nothing is sent unless typed.
     fireEvent.click(within(row).getByText('Edit…'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
-    expect((within(drawer).getByTestId('knowledge-source-secret') as HTMLInputElement).value).toBe('')
-    expect(drawer.textContent).toContain('Secret access key (saved; type to replace)')
+    expect((await picker(drawer)).value).toBe('cr-docs')
     fireEvent.change(within(drawer).getByTestId('knowledge-source-prefix'), { target: { value: 'ops/runbooks/' } })
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
-    await waitFor(() => expect(calls.find((c) => c.method === 'PUT' && c.url === '/api/v1/knowledge/sources/docs')?.body).toEqual({ source: { ...bucket, prefix: 'ops/runbooks/' }, keys: {} }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT' && c.url === '/api/v1/knowledge/sources/docs')?.body).toEqual({ source: { ...bucket, prefix: 'ops/runbooks/' } }))
   })
 
-  // --- Test in the source dialog (KN-26) ---
   it('tests a new source as typed in its dialog: Testing…, then what it reached, kept until a field changes', async () => {
     let answer: (r: Response) => void = () => {}
     render(<KnowledgeSection />)
+    choices = { s3: [cred('cr-minio', 'MinIO key', 'accesskey', 'https://minio.example.com:9000')] }
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      const c = credentialsAnswer(String(url))
+      if (c) return Promise.resolve(c)
       if (String(url).endsWith('/sources/test')) return new Promise<Response>((resolve) => (answer = resolve))
       return Promise.resolve(new Response(JSON.stringify(current)))
     })
@@ -282,15 +323,13 @@ describe('Settings › Knowledge', () => {
     fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Docs' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-bucket'), { target: { value: 'sim-docs' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-source-endpoint'), { target: { value: 'https://minio.example.com:9000' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-akid'), { target: { value: 'AKIATYPED' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-secret'), { target: { value: 'typed-secret' } })
+    await waitFor(() => expect((within(drawer).getByTestId('knowledge-source-credential-select') as HTMLSelectElement).value).toBe('cr-minio'))
     fireEvent.click(within(drawer).getByTestId('knowledge-source-test'))
     const result = () => within(drawer).getByTestId('knowledge-source-test-result')
     expect(result().textContent).toBe('Testing…')
     expect(within(drawer).getByTestId('knowledge-source-test')).toHaveProperty('disabled', true)
     expect(calls.find((c) => c.url === '/api/v1/knowledge/sources/test')?.body).toEqual({
-      source: { id: 'docs', name: 'Docs', kind: 's3', bucket: 'sim-docs', prefix: '', region: '', endpoint: 'https://minio.example.com:9000', pathStyle: false, credentials: 'keys' },
-      keys: { accessKeyId: 'AKIATYPED', secretAccessKey: 'typed-secret' },
+      source: { id: 'docs', name: 'Docs', kind: 's3', bucket: 'sim-docs', prefix: '', region: '', endpoint: 'https://minio.example.com:9000', pathStyle: false, credentials: 'keys', credential: 'cr-minio' },
     })
     answer(new Response(JSON.stringify({ ok: true, items: 2, sample: ['docs/a.md', 'docs/b.csv'], skipped: 1, skippedWhy: '1 not a kind Mycroft reads (.png)' })))
     await waitFor(() => expect(result().textContent).toBe('Reached: 2 items, e.g. docs/a.md, docs/b.csv. 1 skipped: 1 not a kind Mycroft reads (.png).'))
@@ -306,7 +345,7 @@ describe('Settings › Knowledge', () => {
     await waitFor(() => expect(result().dataset.state).toBe('error'))
     expect(result().getAttribute('data-tone')).toBe('err')
     expect(result().textContent).toContain('within 10 s')
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-secret'), { target: { value: 'typed-secret-2' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-prefix'), { target: { value: 'docs/' } })
     expect(within(drawer).queryByTestId('knowledge-source-test-result')).toBeNull()
 
     // An answer to values changed since it was asked is dropped.
@@ -317,24 +356,26 @@ describe('Settings › Knowledge', () => {
     expect(within(drawer).queryByTestId('knowledge-source-test-result')).toBeNull()
   })
 
-  it('tests a saved source with its saved credential: a blank token is not sent, the source’s id is', async () => {
+  it('tests a saved source with what it names: one of before 0.12.1 reads with its own credential until one is chosen, and the source’s id is sent', async () => {
     render(<KnowledgeSection />)
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      const c = credentialsAnswer(String(url))
+      if (c) return c
       if (String(url).endsWith('/sources/test')) return new Response(JSON.stringify({ ok: true, items: 1, sample: ['Runbook: restart'] }))
       return new Response(JSON.stringify(current))
     })
     const row = (await screen.findAllByTestId('knowledge-source')).find((r) => r.dataset.source === 'infra')!
+    expect(row.textContent).toContain('its own credential, kept before 0.12.1')
     fireEvent.click(within(row).getByText('Edit…'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
-    expect(drawer.textContent).toContain('a credential left blank is the saved one')
+    expect(within(drawer).getByTestId('knowledge-source-own-credential').textContent).toContain('kept before 0.12.1')
     fireEvent.click(within(drawer).getByTestId('knowledge-source-test'))
     await waitFor(() => expect(within(drawer).getByTestId('knowledge-source-test-result').textContent).toBe('Reached: 1 item, e.g. Runbook: restart.'))
     const body = calls.find((c) => c.url === '/api/v1/knowledge/sources/test')?.body
-    expect(body).toEqual({ source: view().settings.sources[1], saved: 'infra' })
+    expect(body).toEqual({ source: { ...view().settings.sources[1], credential: '' }, saved: 'infra' })
   })
 
-  // --- Uploaded documents and web sites (0.12.1) ---
   it('lists only what is synced or looked up: the uploads are the Uploaded documents section after the table, which focus scrolls to', async () => {
     const base = view()
     current = view({ settings: { ...base.settings, sources: [...base.settings.sources, { id: 'added', name: 'Added in Mycroft', kind: 'upload' }] } })
@@ -351,7 +392,8 @@ describe('Settings › Knowledge', () => {
     await waitFor(() => expect(scrolled).toHaveBeenCalled())
   })
 
-  it('adds a web site: its start address, link depth, page limit and sign-in, with the token apart', async () => {
+  it('adds a web site: its start address, link depth, page limit, and among several credentials the one chosen: never guessed', async () => {
+    choices = { http: [cred('cr-site', 'Docs reader', 'userpass', 'https://docs.example.com'), cred('cr-all', 'Example SSO', 'oauth2', 'https://docs.example.com')] }
     render(<KnowledgeSection />)
     fireEvent.click(await screen.findByTestId('knowledge-add'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
@@ -360,16 +402,15 @@ describe('Settings › Knowledge', () => {
     fireEvent.change(within(drawer).getByTestId('knowledge-web-url'), { target: { value: 'https://docs.example.com/' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-web-depth'), { target: { value: '2' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-web-pages'), { target: { value: '120' } })
-    // No sign-in: no token to type.
-    expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
-    fireEvent.change(within(drawer).getByTestId('knowledge-web-auth'), { target: { value: 'basic' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-web-user'), { target: { value: 'reader' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-token'), { target: { value: 's3cret' } })
+    expect(within(drawer).queryByTestId('knowledge-web-auth')).toBeNull()
+    await waitFor(() => expect(within(drawer).getByTestId('knowledge-source-credential-hint').textContent).toContain('2 credentials cover this address: choose one.'))
+    expect(within(drawer).getByTestId('knowledge-source-save')).toHaveProperty('disabled', true)
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-credential-select'), { target: { value: 'cr-site' } })
     expect(within(drawer).getByTestId('knowledge-source-test')).toBeTruthy()
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
     await waitFor(() => {
       const body = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body
-      expect(body).toEqual({ source: { id: 'vendor-docs', name: 'Vendor docs', kind: 'web', url: 'https://docs.example.com/', depth: 2, pages: 120, auth: 'basic', username: 'reader' }, token: 's3cret' })
+      expect(body).toEqual({ source: { id: 'vendor-docs', name: 'Vendor docs', kind: 'web', url: 'https://docs.example.com/', depth: 2, pages: 120, auth: '', credential: 'cr-site' } })
     })
   })
 
@@ -390,6 +431,8 @@ describe('Settings › Knowledge', () => {
     render(<KnowledgeSection />)
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      const c = credentialsAnswer(String(url))
+      if (c) return c
       if (String(url).endsWith('/sources/test'))
         return new Response(
           JSON.stringify({
@@ -405,12 +448,14 @@ describe('Settings › Knowledge', () => {
       if (String(url).endsWith('/sources') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'known-problems' }), { status: 201 })
       return new Response(JSON.stringify(current))
     })
+    choices = { http: [cred('cr-status', 'Status page', 'token', 'https://status.example.com')] }
     fireEvent.click(await screen.findByTestId('knowledge-add'))
     const drawer = screen.getByTestId('knowledge-source-drawer')
     fireEvent.change(within(drawer).getByTestId('knowledge-source-mode-select'), { target: { value: 'live' } })
     expect(within(drawer).queryByTestId('knowledge-source-kind')).toBeNull()
-    // No sign-in, no credential to type.
+    // No sign-in of its own: a credential is chosen.
     expect(within(drawer).queryByTestId('knowledge-source-token')).toBeNull()
+    expect(within(drawer).queryByTestId('knowledge-live-auth')).toBeNull()
     fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Known problems' } })
     fireEvent.change(within(drawer).getByTestId('knowledge-live-url'), { target: { value: 'https://status.example.com/' } })
     fireEvent.click(within(drawer).getByTestId('knowledge-live-add'))
@@ -421,10 +466,7 @@ describe('Settings › Knowledge', () => {
     fireEvent.change(within(rows[1]!).getByTestId('knowledge-live-space'), { target: { value: 'OPS' } })
     // A third, left empty, is not sent.
     fireEvent.click(within(drawer).getByTestId('knowledge-live-add'))
-    fireEvent.change(within(drawer).getByTestId('knowledge-live-auth'), { target: { value: 'basic' } })
-    fireEvent.change(within(drawer).getByTestId('knowledge-live-user'), { target: { value: 'ann@example.com' } })
-    expect(within(drawer).getByText('Password or API token')).toBeTruthy()
-    fireEvent.change(within(drawer).getByTestId('knowledge-source-token'), { target: { value: 'api-token-typed' } })
+    await waitFor(() => expect((within(drawer).getByTestId('knowledge-source-credential-select') as HTMLSelectElement).value).toBe('cr-status'))
     const source = {
       id: 'known-problems',
       name: 'Known problems',
@@ -433,18 +475,18 @@ describe('Settings › Knowledge', () => {
         { kind: 'page', url: 'https://status.example.com/' },
         { kind: 'confluenceSearch', url: 'https://example.atlassian.net/wiki', space: 'OPS' },
       ],
-      auth: 'basic',
-      username: 'ann@example.com',
+      auth: '',
+      credential: 'cr-status',
     }
     fireEvent.click(within(drawer).getByTestId('knowledge-source-test'))
     await waitFor(() => expect(within(drawer).getByTestId('knowledge-source-test-result').textContent).toBe('1 of 2 addresses read.'))
-    expect(calls.find((c) => c.url === '/api/v1/knowledge/sources/test')?.body).toEqual({ source, token: 'api-token-typed' })
+    expect(calls.find((c) => c.url === '/api/v1/knowledge/sources/test')?.body).toEqual({ source })
     const results = within(drawer).getByTestId('knowledge-source-live-results')
     expect(results.textContent).toContain('https://status.example.com/: OK · 12 KiB · All known problems')
     expect(results.textContent).toContain('https://example.atlassian.net/wiki: it refused the credential (401 Unauthorized)')
     expect(results.querySelectorAll('[data-state="error"]')).toHaveLength(1)
     fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
-    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({ source, token: 'api-token-typed' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({ source }))
   })
 
   it('lists a live source as Live, looked up when asked, with no Wiki sync job', async () => {

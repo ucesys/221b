@@ -49,6 +49,10 @@
       "item": true,
       "search": false
     },
+    "credentials": {
+      "item": false,
+      "search": false
+    },
     "agents": {
       "item": true,
       "search": false

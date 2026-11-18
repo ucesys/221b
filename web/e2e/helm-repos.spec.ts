@@ -1,6 +1,7 @@
 // Helm repositories and OCI registries (Phase 12, wave 5, HR-02 to HR-06):
-// Settings › Applications keeps them with Test, a password written and
-// never read back; the Helm tab's new application takes a chart of one,
+// Settings › Applications keeps them with Test, each naming a credential of
+// Settings › Credentials (0.12.1, CR-11), whose password is written there
+// and never read back; the Helm tab's new application takes a chart of one,
 // or of an OCI registry, at a version. Nothing here reaches the internet:
 // the repository is at an address that does not resolve, so Test says it
 // cannot be reached, and the new application's request is looked at in
@@ -13,11 +14,16 @@ test.describe.configure({ mode: 'serial' })
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 const NAME = 'e2e-charts'
+const CRED = 'e2e charts reader'
+let credId = ''
 
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   expect((await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })).status()).toBe(200)
+  const made = await page.request.post('/api/v1/credentials', { data: { name: CRED, kind: 'userpass', endpoint: 'https://charts.e2e.invalid', username: 'reader', secret: { password: 'e2e-password-not-to-be-seen' } }, headers: SAME })
+  expect(made.status()).toBe(201)
+  credId = ((await made.json()) as { id: string }).id
   await page.close()
 })
 
@@ -25,11 +31,12 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   await page.request.delete(`/api/v1/helm-repositories/${NAME}`, { headers: SAME })
+  await page.request.delete(`/api/v1/credentials/${credId}`, { headers: SAME })
   await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
   await page.close()
 })
 
-test('Settings › Applications adds, tests, changes and removes a repository; its password is never read back (HR-02, HR-03)', async ({ page }) => {
+test('Settings › Applications adds, tests, changes and removes a repository naming its credential, whose password is never read back (HR-02, HR-03, CR-11)', async ({ page }) => {
   await page.goto('/#/admin/settings/apps')
   const section = page.getByTestId('helm-repos-settings')
   await expect(section).toBeVisible()
@@ -38,39 +45,38 @@ test('Settings › Applications adds, tests, changes and removes a repository; i
   const editor = section.getByTestId('helm-repo-editor')
   await editor.getByTestId('helm-repo-name').fill(NAME)
   await editor.getByTestId('helm-repo-url').fill('https://charts.e2e.invalid/stable/index.yaml')
-  await editor.getByTestId('helm-repo-auth-basic').click()
-  await expect(editor.getByTestId('helm-repo-save')).toBeDisabled()
-  await editor.getByTestId('helm-repo-username').fill('reader')
-  await editor.getByTestId('helm-repo-secret').fill('e2e-password-not-to-be-seen')
+  // No password of its own: the one credential that covers it is preselected.
+  await expect(editor.getByTestId('helm-repo-secret')).toHaveCount(0)
+  await expect(editor.getByTestId('helm-repo-credential-picker-select')).toHaveValue(credId)
   // Test before saving: the address does not resolve.
   await editor.getByTestId('helm-repo-try').click()
   await expect(editor.getByTestId('helm-repo-test-result')).toHaveAttribute('data-tone', 'err')
   await editor.getByTestId('helm-repo-save').click()
   const row = section.locator(`[data-testid=helm-repo-row][data-repo="${NAME}"]`)
   await expect(row).toContainText('https://charts.e2e.invalid/stable')
-  await expect(row).toContainText('User reader and a password')
+  await expect(row.getByTestId('helm-repo-credential')).toHaveText(CRED)
   const list = await page.request.get('/api/v1/helm-repositories', { headers: SAME })
   const body = await list.text()
   expect(body).toContain(`"name":"${NAME}"`)
-  expect(body).toContain('"hasSecret":true')
+  expect(body).toContain(`"credential":"${credId}"`)
   expect(body).not.toContain('e2e-password-not-to-be-seen')
   // Tested from the list, the result is kept.
   await row.getByTestId('helm-repo-test').click()
   await expect(row.getByTestId('helm-repo-tested')).toContainText('Failed')
-  // Changed without the password, it keeps it; to an OCI registry, it asks for it again.
+  // Moved to an OCI registry its credential does not cover: said so, and refused until none or another is chosen.
   await row.getByTestId('helm-repo-edit').click()
-  await expect(editor.getByTestId('helm-repo-secret')).toHaveAttribute('placeholder', /kept/)
   await editor.getByTestId('helm-repo-kind-oci').click()
   await editor.getByTestId('helm-repo-url').fill('oci://registry.e2e.invalid/charts')
-  await expect(editor.getByTestId('helm-repo-save')).toBeDisabled()
-  await editor.getByTestId('helm-repo-auth-none').click()
+  await expect(editor.getByTestId('helm-repo-credential-picker-hint')).toContainText('does not cover')
+  await editor.getByTestId('helm-repo-credential-picker-select').selectOption('')
   await editor.getByTestId('helm-repo-save').click()
   await expect(row).toContainText('OCI registry')
-  await expect(row).toContainText('None')
+  await expect(row.getByTestId('helm-repo-credential')).toHaveText('None (public)')
   // Back to a Helm repository without credentials, for the next test.
   await row.getByTestId('helm-repo-edit').click()
   await editor.getByTestId('helm-repo-kind-helm').click()
   await editor.getByTestId('helm-repo-url').fill('https://charts.e2e.invalid/stable')
+  await editor.getByTestId('helm-repo-credential-picker-select').selectOption('')
   await editor.getByTestId('helm-repo-save').click()
   await expect(row).toContainText('Helm repository')
 })
@@ -90,7 +96,7 @@ test('the new application takes a Helm repository’s chart or an OCI registry�
   await dlg.getByTestId('app-name').fill('storefront')
   await dlg.getByTestId('app-kind-helm').click()
   await expect(dlg.getByTestId('app-repo')).toHaveCount(0)
-  await expect(dlg.getByTestId('app-token')).toHaveCount(0)
+  await expect(dlg.getByTestId('app-credential')).toHaveCount(0)
   await dlg.getByTestId('app-repository').selectOption(NAME)
   await dlg.getByTestId('app-chart').fill('shop')
   await dlg.getByTestId('app-version-text').fill('1.2.0')

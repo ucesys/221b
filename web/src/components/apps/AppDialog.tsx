@@ -25,6 +25,7 @@ import {
   type SourceKind,
 } from '../../api/apps'
 import { YamlEditor } from '../YamlEditor'
+import { CredentialPicker } from '../CredentialPicker'
 import { useLiveMeta } from '../../api/live'
 import type { WatsonItem } from '../../api/watson'
 import type { AppRow } from '../../columns/apps'
@@ -206,8 +207,12 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [versions, setVersions] = useState<string[]>([])
   const [chartNote, setChartNote] = useState<{ state: 'busy' | 'done' | 'error'; text: string } | null>(null)
   const repoKind = kind === 'helm' || kind === 'oci'
-  const [token, setToken] = useState('')
-  const [clearToken, setClearToken] = useState(false)
+  // --- Settings › Credentials (0.12.1, CR-10): the credential a git
+  // repository is fetched with, by id; null while not chosen (the only
+  // one that covers the repository is then preselected).
+  const [credential, setCredential] = useState<string | null>(app ? (app.credential ?? '') : null)
+  const credentialChosen = credential ?? ''
+  const legacyToken = !!app?.hasToken && !app.credMigrated
   const [values, setValues] = useState(app?.values ?? '')
   const [params, setParams] = useState((app?.params ?? []).join('\n'))
   const [createNs, setCreateNs] = useState(false)
@@ -258,7 +263,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     setInspected({ repo: url, state: 'busy' })
     // Only the answer to the last look counts: the URL may have changed since.
     const asked = ++inspecting.current
-    inspectRepo(cluster, url, ref.trim(), refKind, token || undefined)
+    inspectRepo(cluster, url, ref.trim(), refKind, credentialChosen || undefined)
       .then((d) => {
         if (asked !== inspecting.current) return
         setInspected({ repo: url, state: 'done', data: d })
@@ -339,7 +344,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const loadRefs = () => {
     setError('')
     setLoadingRefs(true)
-    fetchRepoRefs(cluster, repo, token)
+    fetchRepoRefs(cluster, repo, credentialChosen)
       .then((r) => {
         setRefs(r)
         if (!ref && r.default) {
@@ -376,7 +381,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           namespace: namespace.trim(),
           name: name.trim(),
           source: source(),
-          token: (!repoKind && token) || undefined,
+          ...(!repoKind ? { credential: credentialChosen } : {}),
           values,
           params: paramList(),
           createNamespace: createNs,
@@ -387,8 +392,9 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         break
       case 'source':
         input.source = source()
-        if (token && !repoKind) input.token = token
-        if (clearToken) input.clearToken = true
+        // The credential is sent once chosen; a record of before 0.12.1
+        // keeps its own token until one is.
+        if (!repoKind && credential !== null && (credential !== (app?.credential ?? '') || !legacyToken)) input.credential = credential
         if (deployNow) {
           input.upgrade = true
           input.install = true
@@ -421,7 +427,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
-  const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : repo.trim() !== '' && ref.trim() !== ''
+  // Several credentials covering the repository: one must be chosen (CR-10).
+  const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : repo.trim() !== '' && ref.trim() !== '' && credential !== null
   const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && sourceReady : mode === 'source' ? sourceReady : mode === 'switch' ? ref.trim() !== '' : true)
   // A release whose chart comes from a repository moves between versions, not branches.
   const appRepoKind = fromRepository(app?.source)
@@ -616,23 +623,10 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
                 </label>
               </Field>
               <Field
-                label="Token"
-                hint={
-                  app?.hasToken && repo.trim() !== app.source.repo
-                    ? 'The saved token is removed with the repository change; paste one for the new repository'
-                    : app?.hasToken
-                      ? 'A token is saved; paste a new one to replace it'
-                      : 'Only for a private repository; it is kept in the console and never shown again'
-                }
+                label="Credential"
+                hint={legacyToken && credential === (app?.credential ?? '') ? 'Fetched with the token kept before 0.12.1 until a credential is chosen here' : 'For a private repository: one of Settings › Credentials that covers it'}
               >
-                <label className="rk-field">
-                  <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={app?.hasToken ? '•••••••• saved' : 'optional'} data-testid="app-token" />
-                </label>
-                {app?.hasToken && (
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <input type="checkbox" checked={clearToken} onChange={(e) => setClearToken(e.target.checked)} /> Remove the saved token
-                  </label>
-                )}
+                <CredentialPicker use="git" address={repo} value={credential} onChange={setCredential} label="" testId="app-credential" />
               </Field>
             </>
           )}

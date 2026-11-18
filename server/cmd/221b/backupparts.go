@@ -344,6 +344,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 	registerFixesBackup(backup.Default, w.fixesSvc)
 	registerLessonsBackup(backup.Default, w.lessonsSvc)  // Findings, exceptions and RCAs (Phase 12)
 	registerHelmReposBackup(backup.Default, w.helmRepos) // Helm repositories (Phase 12, wave 5)
+	registerCredentialsBackup(backup.Default, w.creds)   // Settings › Credentials (0.12.1)
 	// Case work (Phase 12): the cases in every backup.
 	registerCaseworkBackup(backup.Default, w.caseSvc)
 	w.backups = backups

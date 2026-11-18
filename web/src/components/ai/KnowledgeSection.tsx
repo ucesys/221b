@@ -30,6 +30,8 @@ import {
 import { fmtTs } from '../../lib/format'
 import { adminHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
+import { CredentialPicker } from '../CredentialPicker'
+import { fetchCredentials, type CredentialUse } from '../../api/credentials'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { UploadedDocuments } from './UploadedDocuments'
@@ -64,12 +66,14 @@ function Text({ label, value, onChange, placeholder, testId, type, width }: { la
 function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone: string; title?: string } {
   if (s.off) return { text: 'Off', tone: 'muted' }
   // A live source is never read into the wiki: looked up when asked (KN-39).
-  if (s.kind === 'live') return s.auth && !v.creds[s.id]?.token ? { text: 'No token', tone: 'warn' } : { text: 'Looked up when asked', tone: 'ok' }
+  if (s.kind === 'live') return !s.credMigrated && s.auth && !v.creds[s.id]?.token ? { text: 'No token', tone: 'warn' } : { text: 'Looked up when asked', tone: 'ok' }
   const st = v.status.sources?.[s.id]
   if (st?.error) return { text: st.error, tone: 'err' }
-  if (s.kind === 'web' && s.auth && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
-  if (s.kind === 'confluence' && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
-  if (s.kind === 's3' && s.credentials !== 'identity' && !v.creds[s.id]?.accessKey) return { text: 'No access key', tone: 'warn' }
+  // A source names its credential (0.12.1, CR-11); one of before keeps its own until the upgrade moves it.
+  const own = !s.credMigrated && !s.credential
+  if (s.kind === 'web' && own && s.auth && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
+  if (s.kind === 'confluence' && (own ? !v.creds[s.id]?.token : !s.credential)) return { text: 'No credential', tone: 'warn' }
+  if (s.kind === 's3' && s.credentials !== 'identity' && (own ? !v.creds[s.id]?.accessKey : !s.credential)) return { text: 'No access key', tone: 'warn' }
   if (st?.reported) return { text: `${st.reported} ${st.reported === 1 ? 'page' : 'pages'} not followed`, tone: 'warn' }
   if (!st?.lastRead) return { text: 'Not read yet', tone: 'muted' }
   // A bucket's objects of other kinds, or too large, are skipped (KN-25).
@@ -77,10 +81,17 @@ function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone
   return { text: `Read · ${st.items} ${st.items === 1 ? 'item' : 'items'}`, tone: 'ok' }
 }
 
-/** A bucket source's credentials, as its row says them (KN-25). */
-function bucketCreds(v: KnowledgeView, s: KnowledgeSource): string {
+/** A bucket source's credentials, as its row says them (KN-25, CR-11). */
+function bucketCreds(v: KnowledgeView, s: KnowledgeSource, names: Record<string, string>): string {
   if (s.credentials === 'identity') return 'the pod’s identity'
-  return v.creds[s.id]?.accessKey ? 'access key in a Secret' : 'no access key'
+  return credLine(v, s, names)
+}
+
+/** A source's credential, as its row says it: by name (CR-11), or the one kept before 0.12.1. */
+function credLine(v: KnowledgeView, s: KnowledgeSource, names: Record<string, string>): string {
+  if (s.credential) return `credential ${names[s.credential] ?? s.credential}`
+  if (!s.credMigrated && (v.creds[s.id]?.token || v.creds[s.id]?.accessKey)) return 'its own credential, kept before 0.12.1'
+  return 'no credential'
 }
 
 /**
@@ -103,6 +114,14 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<KnowledgeSource | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
+  // The credentials' names, for the rows (CR-11).
+  const [credNames, setCredNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    fetchCredentials().then(
+      (c) => setCredNames(Object.fromEntries((c.credentials ?? []).map((x) => [x.id, x.name]))),
+      () => undefined,
+    )
+  }, [v])
   const reload = () =>
     fetchKnowledge()
       .then((x) => {
@@ -238,15 +257,15 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                       </td>
                       <td>
                         {SOURCE_KIND_LABEL[s.kind]}
-                        {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
+                        {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{credLine(v, s, credNames)}</div>}
                         {s.kind === 's3' && (
                           <div className="rk-fhint" data-testid="knowledge-source-creds">
-                            {bucketCreds(v, s)}
+                            {bucketCreds(v, s, credNames)}
                           </div>
                         )}
                         {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
                         {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
-                        {(s.kind === 'live' || s.kind === 'web') && <div className="rk-fhint">{!s.auth ? 'no sign-in' : v.creds[s.id]?.token ? 'credential in a Secret' : 'no credential'}</div>}
+                        {(s.kind === 'live' || s.kind === 'web') && <div className="rk-fhint">{!s.credential && (s.credMigrated || !s.auth) ? 'no sign-in' : credLine(v, s, credNames)}</div>}
                       </td>
                       <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
                         {sourceMode(s)}
@@ -312,8 +331,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
       {editing && (
         <SourceDrawer
           seed={editing === 'new' ? null : editing}
-          tokenSet={editing !== 'new' && !!v.creds[editing.id]?.token}
-          keySet={editing !== 'new' && !!v.creds[editing.id]?.accessKey}
+          ownCredential={editing !== 'new' && !editing.credMigrated && !editing.credential && !!(v.creds[editing.id]?.token || v.creds[editing.id]?.accessKey)}
           identity={v.identity}
           onClose={() => setEditing(null)}
           onRemove={editing === 'new' || editing.kind === 'upload' || editing.kind === 'console' || editing.kind === 'fixes' ? undefined : () => void run(() => removeSource(editing.id), 'Source removed.').then(() => setEditing(null))}
@@ -634,25 +652,24 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
 /** A source being added or changed. */
 function SourceDrawer({
   seed,
-  tokenSet,
-  keySet = false,
+  ownCredential = false,
   identity = false,
   onClose,
   onSaved,
   onRemove,
 }: {
   seed: KnowledgeSource | null
-  tokenSet: boolean
-  keySet?: boolean
+  /** It keeps its own credential of before 0.12.1, used until one is chosen. */
+  ownCredential?: boolean
   identity?: boolean
   onClose: () => void
   onSaved: (msg: string) => void
   onRemove?: () => void
 }) {
   const [s, setS] = useState<KnowledgeSource>(seed ?? { id: '', name: '', kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
-  const [token, setToken] = useState('')
-  // A bucket's access key (KN-25): typed here, sent once, never shown again.
-  const [keys, setKeys] = useState<KeysChange>({})
+  // The credential of Settings › Credentials, by id (CR-10, CR-11): the
+  // saved one, or none; null on a new source until chosen.
+  const [cred, setCred] = useState<string | null>(seed ? (seed.credential ?? (seed.kind === 's3' && seed.credentials === 'identity' ? IDENTITY : '')) : null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // Test's state (KN-26): running, or what it found; kept until a field
@@ -673,21 +690,24 @@ function SourceDrawer({
   // people upload or add are there from the start: only their name
   // changes here.
   const builtIn = s.kind === 'upload' || s.kind === 'console' || s.kind === 'fixes'
-  // Only what was typed is sent: the saved credential stays otherwise.
-  const typedKeys = (): KeysChange => {
-    const typed: KeysChange = {}
-    if (s.credentials !== 'identity' && keys.accessKeyId) typed.accessKeyId = keys.accessKeyId
-    if (s.credentials !== 'identity' && keys.secretAccessKey) typed.secretAccessKey = keys.secretAccessKey
-    return typed
+  // The source as sent: it names its credential, or a bucket the pod's identity.
+  const withCred = (): KnowledgeSource => {
+    const src: KnowledgeSource = { ...s, id }
+    if (s.kind === 'live') src.addresses = liveAddresses(s)
+    if (s.kind === 's3') {
+      src.credentials = cred === IDENTITY ? 'identity' : 'keys'
+      src.credential = cred === IDENTITY ? '' : (cred ?? '')
+    } else if (signsIn(s.kind)) src.credential = cred ?? ''
+    // The sign-in of before 0.12.1 is the credential's now.
+    if (s.kind === 'live' || s.kind === 'web') src.auth = ''
+    return src
   }
   const runTest = async () => {
     const mine = ++gen.current
     setTest({ running: true })
     let r: SourceTestResult
     try {
-      const src = { ...s, id }
-      if (s.kind === 'live') src.addresses = liveAddresses(s)
-      r = s.kind === 's3' ? await testTypedSource(src, undefined, typedKeys(), seed?.id) : await testTypedSource(src, token || undefined, undefined, seed?.id)
+      r = await testTypedSource(withCred(), seed?.id)
     } catch (e) {
       r = { ok: false, error: errorText(e) }
     }
@@ -697,13 +717,9 @@ function SourceDrawer({
     setBusy(true)
     setError('')
     try {
-      const src = { ...s, id }
-      if (s.kind === 'live') src.addresses = liveAddresses(s)
-      if (s.kind === 's3') {
-        if (seed) await saveSource(src, undefined, typedKeys())
-        else await addSource(src, undefined, typedKeys())
-      } else if (seed) await saveSource(src, token || undefined)
-      else await addSource(src, token || undefined)
+      const src = withCred()
+      if (seed) await saveSource(src)
+      else await addSource(src)
       onSaved(seed ? `${s.name} saved.` : `${s.name} added.`)
     } catch (e) {
       setError(errorText(e))
@@ -721,7 +737,7 @@ function SourceDrawer({
       testId="knowledge-source-drawer"
       footer={
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim()} onClick={() => void save()} data-testid="knowledge-source-save">
+          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim() || (signsIn(s.kind) && cred === null)} onClick={() => void save()} data-testid="knowledge-source-save">
             {seed ? 'Save' : 'Add source'}
           </button>
           <button className="rk-btn" onClick={onClose}>
@@ -799,7 +815,6 @@ function SourceDrawer({
               testId="knowledge-source-flavor"
             />
             <Text label="Address" value={s.baseURL ?? ''} onChange={(x) => put({ baseURL: x })} placeholder="https://example.atlassian.net" testId="knowledge-source-url" />
-            {s.flavor !== 'datacenter' && <Text label="Account email" value={s.email ?? ''} onChange={(x) => put({ email: x })} testId="knowledge-source-email" />}
             <Text label="Space key" value={s.space ?? ''} onChange={(x) => put({ space: x })} placeholder="INFRA" testId="knowledge-source-space" />
           </>
         )}
@@ -809,7 +824,6 @@ function SourceDrawer({
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Text label="Branch" value={s.branch ?? ''} onChange={(x) => put({ branch: x })} width={160} />
               <Text label="Directory (empty: all)" value={s.path ?? ''} onChange={(x) => put({ path: x })} width={200} />
-              <Text label="User" value={s.username ?? ''} onChange={(x) => put({ username: x })} placeholder="x-access-token" width={160} />
             </div>
           </>
         )}
@@ -826,41 +840,6 @@ function SourceDrawer({
               Path-style addresses (most S3-compatible stores)
             </label>
             <span className="rk-fhint">Mycroft reads Markdown, text, Word (.docx), PDF, HTML and CSV under the prefix, up to 20 MiB each and 1000 objects a read; anything else is skipped and counted.</span>
-            <Select
-              label="Credentials"
-              value={s.credentials ?? 'keys'}
-              options={[
-                ['keys', 'A read-only access key in a Secret'],
-                ['identity', identity ? 'The pod’s identity' : 'The pod’s identity (none found)'],
-              ]}
-              onChange={(x) => put({ credentials: x as 'keys' | 'identity' })}
-              testId="knowledge-source-credentials"
-            />
-            {s.credentials !== 'identity' && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Text
-                  label={keySet ? 'Access key ID (saved; type to replace)' : 'Access key ID'}
-                  value={keys.accessKeyId ?? ''}
-                  onChange={(x) => {
-                    setKeys({ ...keys, accessKeyId: x })
-                    changed()
-                  }}
-                  width={220}
-                  testId="knowledge-source-akid"
-                />
-                <Text
-                  label={keySet ? 'Secret access key (saved; type to replace)' : 'Secret access key'}
-                  type="password"
-                  value={keys.secretAccessKey ?? ''}
-                  onChange={(x) => {
-                    setKeys({ ...keys, secretAccessKey: x })
-                    changed()
-                  }}
-                  width={240}
-                  testId="knowledge-source-secret"
-                />
-              </div>
-            )}
           </>
         )}
         {s.kind === 'live' && <LiveFields s={s} put={put} />}
@@ -872,32 +851,34 @@ function SourceDrawer({
         )}
         {!builtIn && (
           <>
-            {s.kind !== 's3' && ((s.kind !== 'live' && s.kind !== 'web') || !!s.auth) && (
-              <Text
-                label={
-                  tokenSet
-                    ? 'Token (saved; type a new one to replace it)'
+            <CredentialPicker
+              use={sourceUse(s)}
+              address={sourceAddress(s)}
+              value={cred}
+              onChange={(v) => {
+                setCred(v)
+                changed()
+              }}
+              label={
+                s.kind === 's3'
+                  ? 'Credentials: a read-only access key, or the pod’s identity'
+                  : s.kind === 'confluence'
+                    ? s.flavor === 'datacenter'
+                      ? 'Credential: a personal access token sent as Bearer'
+                      : 'Credential: the account’s email and an API token, sent as Basic'
                     : s.kind === 'git'
-                      ? 'Token (read access)'
-                      : (s.kind === 'live' || s.kind === 'web') && s.auth === 'basic'
-                        ? 'Password or API token'
-                        : s.kind === 'live' || s.kind === 'web'
-                          ? 'Token'
-                          : 'API token (read-only)'
-                }
-                type="password"
-                value={token}
-                onChange={(x) => {
-                  setToken(x)
-                  changed()
-                }}
-                testId="knowledge-source-token"
-              />
+                      ? 'Credential: a token sent as Basic or Bearer'
+                      : 'Credential (any way of sending)'
+              }
+              extra={s.kind === 's3' ? [{ value: IDENTITY, label: identity ? 'The pod’s identity' : 'The pod’s identity (none found)' }] : []}
+              testId="knowledge-source-credential"
+            />
+            {ownCredential && cred === '' && (
+              <span className="rk-fhint" data-testid="knowledge-source-own-credential">
+                It reads with its own credential, kept before 0.12.1, until one is chosen here.
+              </span>
             )}
-            <span className="rk-fhint">
-              Kept in the Secret &lt;release&gt;-knowledge and never shown again{s.kind === 'live' ? ', sent only to the addresses’ own sites, never to a model' : s.kind === 'web' ? ', sent only to the site itself, never to a model' : ''}.
-              Use a read-only credential: Mycroft never writes to its sources.
-            </span>
+            <span className="rk-fhint">The credential is sent only to the addresses under its endpoint, never to a model{s.kind === 'live' ? ': each address is checked' : ''}. Use a read-only one: Mycroft never writes to its sources.</span>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
               Private CA (optional)
               <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
@@ -910,7 +891,7 @@ function SourceDrawer({
                   : s.kind === 'web'
                     ? 'Test reads the site as typed here and lists the pages Mycroft would read, without saving them'
                     : 'Test lists what Mycroft would read with the values typed here, without saving them'}
-                {seed ? '; a credential left blank is the saved one' : ''}.
+                .
               </span>
               {test?.running && (
                 <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
@@ -995,29 +976,31 @@ function LiveFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<Knowledge
           </button>
         )}
       </div>
-      <SignIn s={s} put={put} prefix="knowledge-live" />
     </>
   )
 }
 
-/** How a live source or a web site signs in: none, a bearer token, or a user with a password or API token; the credential is the drawer's token field. */
-function SignIn({ s, put, prefix }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void; prefix: string }) {
-  return (
-    <>
-      <Select
-        label="Sign-in"
-        value={s.auth ?? ''}
-        options={[
-          ['', 'None'],
-          ['bearer', 'Bearer token (Confluence Data Center: a personal access token)'],
-          ['basic', 'User and password or API token (Confluence Cloud: email and API token)'],
-        ]}
-        onChange={(x) => put({ auth: x as KnowledgeSource['auth'] })}
-        testId={`${prefix}-auth`}
-      />
-      {s.auth === 'basic' && <Text label="User (for Confluence Cloud, the account’s email)" value={s.username ?? ''} onChange={(x) => put({ username: x })} testId={`${prefix}-user`} />}
-    </>
-  )
+/** The select's value for a bucket read with the pod's identity. */
+const IDENTITY = '__identity'
+
+/** Whether a kind of source signs in with a credential (CR-11). */
+const signsIn = (k: KnowledgeSource['kind']) => k === 'confluence' || k === 'git' || k === 's3' || k === 'web' || k === 'live'
+
+/** What a source's credential is for: the picker offers only what serves it. */
+function sourceUse(s: KnowledgeSource): CredentialUse {
+  if (s.kind === 'git') return 'git'
+  if (s.kind === 's3') return 's3'
+  if (s.kind === 'confluence') return s.flavor === 'datacenter' ? 'confluence-dc' : 'confluence-cloud'
+  return 'http'
+}
+
+/** The address a source's credential must cover: its site, repository, bucket, start address, or first address. */
+export function sourceAddress(s: KnowledgeSource): string {
+  if (s.kind === 'confluence') return s.baseURL ?? ''
+  if (s.kind === 'git' || s.kind === 'web') return s.url ?? ''
+  if (s.kind === 's3') return s.bucket ? `${(s.endpoint ?? '').trim().replace(/\/+$/, '') || 'https://s3.amazonaws.com'}/${s.bucket}` : ''
+  if (s.kind === 'live') return s.addresses?.find((a) => a.url.trim())?.url ?? ''
+  return ''
 }
 
 /** The most pages a web site's read takes. */
@@ -1039,7 +1022,6 @@ function WebFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<KnowledgeS
         Only pages of the same site are read, one at a time; robots.txt and pages that ask not to be indexed are respected, and what is excluded in AIOps › Mycroft › Sources is neither read nor followed. The console reads the site from its
         pod: with the network policy on, its host must be listed under the chart’s knowledge.egressCIDRs.
       </span>
-      <SignIn s={s} put={put} prefix="knowledge-web" />
     </>
   )
 }

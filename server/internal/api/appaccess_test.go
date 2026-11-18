@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/sim"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -23,12 +25,20 @@ import (
 // are named in allow.
 func appsSetup(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, *apps.MemoryStore, *source) {
 	t.Helper()
+	srv, c, store, local, _ := appsSetupCreds(t, deny)
+	return srv, c, store, local
+}
+
+// appsSetupCreds is appsSetup with Settings › Credentials (CR-11).
+func appsSetupCreds(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, *apps.MemoryStore, *source, *credentials.Service) {
+	t.Helper()
 	store := apps.NewMemoryStore()
+	creds := credentials.New(credentials.Options{})
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)
 	srv, c, m, _, local, liveStore := multiSetupWith(t, "ops@corp.example", deny, func(o *Options) {
-		o.Apps = store
-		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog(), CheckEvery: 50 * time.Millisecond})
+		o.Apps, o.Credentials = store, creds
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog(), CheckEvery: 50 * time.Millisecond, Credentials: creds})
 	})
 	ctx := context.Background()
 	local.restCfg = &rest.Config{Host: simSrv.URL}
@@ -40,7 +50,7 @@ func appsSetup(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Clie
 	if err := store.Save(ctx, rec, &token); err != nil {
 		t.Fatal(err)
 	}
-	return srv, c, store, local
+	return srv, c, store, local, creds
 }
 
 // A person with a role somewhere, and no rights in team-b, gets the same
@@ -101,33 +111,58 @@ func TestWatsonsAppFlagAsksKubernetesForTheNamespace(t *testing.T) {
 	}
 }
 
-func TestMovingToAnotherRepositoryRemovesTheSavedToken(t *testing.T) {
-	srv, c, store, _ := appsSetup(t, nil)
+// An application names its credential (CR-11): one that covers its new
+// repository goes with it, one that does not is let go and said so, and
+// one that does not cover the repository named is refused.
+func TestMovingToAnotherRepositoryLetsItsCredentialGo(t *testing.T) {
+	srv, c, store, _, creds := appsSetupCreds(t, nil)
 	url := srv.URL + "/api/v1/apps/team-b/pay"
 	ctx := context.Background()
-	// The same repository keeps it, and says nothing.
+	// The same repository keeps the token of before 0.12.1, and says nothing.
 	resp, body := send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/pay","ref":"v2","refKind":"tag"}}`)
-	if resp.StatusCode != http.StatusOK || strings.Contains(body, "tokenRemoved") || !strings.Contains(body, `"hasToken":true`) {
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "credentialRemoved") || !strings.Contains(body, `"hasToken":true`) {
 		t.Fatalf("%s %s", resp.Status, body)
 	}
 	if _, tok, _ := store.Get(ctx, clusters.LocalID, "team-b", "pay"); tok != "saved-token" {
 		t.Fatalf("the same repository lost its token: %q", tok)
 	}
-	// Another one with a token of its own takes that.
-	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/moved","ref":"main"},"token":"new-token"}`)
-	if resp.StatusCode != http.StatusOK || strings.Contains(body, "tokenRemoved") {
+	team, err := creds.Create(ctx, credentials.Credential{Name: "team-b", Kind: credentials.KindToken, Endpoint: "https://git.invalid/team-b", SendAs: credentials.SendAs{Method: credentials.SendBasic, Username: "x-access-token"}}, credentials.Secret{Token: "team-token"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := creds.Create(ctx, credentials.Credential{Name: "other", Kind: credentials.KindToken, Endpoint: "https://elsewhere.example"}, credentials.Secret{Token: "x"}, "test")
+	// A credential that does not cover the repository is refused.
+	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/moved","ref":"main"},"credential":"`+other.ID+`"}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "is for https://elsewhere.example") {
 		t.Fatalf("%s %s", resp.Status, body)
 	}
-	if _, tok, _ := store.Get(ctx, clusters.LocalID, "team-b", "pay"); tok != "new-token" {
-		t.Fatalf("%q", tok)
-	}
-	// Another one without a token drops the saved one, and says so.
-	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/third","ref":"main"}}`)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"tokenRemoved":true`) || strings.Contains(body, `"hasToken"`) {
+	// Another repository with a credential that covers it takes that.
+	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/moved","ref":"main"},"credential":"`+team.ID+`"}`)
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "credentialRemoved") || strings.Contains(body, "team-token") {
 		t.Fatalf("%s %s", resp.Status, body)
 	}
-	if rec, tok, _ := store.Get(ctx, clusters.LocalID, "team-b", "pay"); tok != "" || rec.HasToken {
-		t.Fatalf("the token stayed: %q", tok)
+	if rec, _, _ := store.Get(ctx, clusters.LocalID, "team-b", "pay"); rec.Credential != team.ID || !rec.CredMigrated {
+		t.Fatalf("%+v", rec)
+	}
+	// One its credential does not cover lets it go, and says so.
+	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/other/third","ref":"main"}}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"credentialRemoved":true`) {
+		t.Fatalf("%s %s", resp.Status, body)
+	}
+	if rec, _, _ := store.Get(ctx, clusters.LocalID, "team-b", "pay"); rec.Credential != "" {
+		t.Fatalf("the credential stayed: %+v", rec)
+	}
+	// Its Used by names the application while it does.
+	resp, body = send(t, c, http.MethodPut, url, `{"source":{"repo":"https://git.invalid/team-b/pay","ref":"main"},"credential":"`+team.ID+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s %s", resp.Status, body)
+	}
+	used, _ := creds.UsedBy(ctx)
+	if len(used[team.ID]) != 1 || used[team.ID][0].What != "app team-b/pay" {
+		t.Fatalf("used by: %+v", used)
+	}
+	if _, err := creds.Delete(ctx, team.ID); !errors.Is(err, credentials.ErrInUse) {
+		t.Fatalf("deleted while used: %v", err)
 	}
 }
 
@@ -137,8 +172,10 @@ func TestAFailedInstallReplacedWithAnotherRepositoryLeavesTheTokenBehind(t *test
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("%s %s", resp.Status, body)
 	}
-	if _, tok, _ := store.Get(context.Background(), clusters.LocalID, "team-b", "pay"); tok != "" {
-		t.Fatalf("the token stayed: %q", tok)
+	// The record names no credential: the token kept before is not read.
+	rec, tok, _ := store.Get(context.Background(), clusters.LocalID, "team-b", "pay")
+	if auth, err := apps.AuthFor(context.Background(), nil, rec, tok); err != nil || !auth.None() || !rec.CredMigrated {
+		t.Fatalf("the token stayed in use: %+v %v", rec, err)
 	}
 }
 

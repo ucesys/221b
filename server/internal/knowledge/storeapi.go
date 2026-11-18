@@ -51,11 +51,14 @@ func (s *Service) GetView(ctx context.Context, c Caller) (View, error) {
 	v := View{Settings: set, Creds: map[string]CredState{}, Documents: map[string][]ItemState{}, Identity: s.o.Identity.Available(), Model: s.o.Model != nil, Console: s.o.Console != nil, ConfigMapStore: s.cmStore != nil}
 	v.Settings.Store.Kind = s.storeKind(set.Store)
 	for _, x := range set.Sources {
-		cr, err := s.creds(ctx, sourceKey(x.ID))
-		if err != nil {
-			return View{}, err
+		// A source that names its credential (CR-11) keeps none here.
+		if !x.CredMigrated {
+			cr, err := s.creds(ctx, sourceKey(x.ID))
+			if err != nil {
+				return View{}, err
+			}
+			v.Creds[x.ID] = cr.state()
 		}
-		v.Creds[x.ID] = cr.state()
 		if x.Kind == SourceUpload {
 			v.Documents[x.ID] = s.Documents(x.ID)
 		}

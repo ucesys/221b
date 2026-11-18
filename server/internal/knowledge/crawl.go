@@ -87,8 +87,11 @@ func (s *Service) crawlClient(site *url.URL, x *Source) *http.Client {
 		// sees the address connected to.
 		tr.Proxy = nil
 		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: guardedDial}).DialContext
-		if x != nil && strings.TrimSpace(x.CAPEM) != "" {
+		if x != nil && (strings.TrimSpace(x.CAPEM) != "" || x.cert != nil) {
 			tr.TLSClientConfig = &tls.Config{RootCAs: s.rootsFor(*x), MinVersion: tls.VersionTLS12}
+			if x.cert != nil {
+				tr.TLSClientConfig.Certificates = []tls.Certificate{*x.cert}
+			}
 		}
 		base = tr
 	}
