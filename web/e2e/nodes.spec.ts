@@ -317,8 +317,8 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(row).toHaveAttribute('aria-selected', 'true')
 
   // Status first, then taints and labels, the resources, then the system (the Actions section went on October 30, 2026: the Tools menu has cordon and drain).
-  const headings = await panel.locator('h3').allTextContents()
-  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'CPU', 'Memory', 'Pods', 'Taints', 'Labels', 'System', 'Facts', 'Variables'])
+  // Facts and Variables come once the console has answered for them.
+  await expect.poll(async () => (await panel.locator('h3').allTextContents()).filter((h) => h !== 'Problems')).toEqual(['Status', 'CPU', 'Memory', 'Pods', 'Taints', 'Labels', 'System', 'Facts', 'Variables'])
   await expect(panel.getByTestId('node-status')).toContainText(target.status)
   await expect(panel.getByTestId('node-status')).toContainText('worker')
   await expect(panel.getByRole('region', { name: 'Taints' })).toBeVisible()
