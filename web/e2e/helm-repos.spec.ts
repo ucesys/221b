@@ -48,7 +48,7 @@ test('Administration › Settings › Repositories adds, tests, changes and remo
   const section = page.getByTestId('helm-repos-settings')
   await expect(section).toBeVisible()
   await expect(page.locator('[data-testid=settings-section][data-section=repositories]')).toHaveAttribute('aria-current', 'page')
-  await expect(page.getByRole('heading', { level: 2 })).toHaveText('Repositories')
+  await expect(page.getByRole('heading', { level: 2, name: 'Repositories', exact: true })).toBeVisible()
   await section.getByTestId('helm-repo-add').click()
   const editor = section.getByTestId('helm-repo-editor')
   // A git repository first; this one is a Helm repository.
