@@ -53,9 +53,11 @@ type Source struct {
 	Path string `json:"path,omitempty"`
 	// Chart is a Helm repository's or an OCI registry's chart, by name.
 	Chart string `json:"chart,omitempty"`
-	// Repository names the repository of Settings › Applications the chart
+	// Repository names the repository of Settings › Repositories the chart
 	// comes from, whose credentials it is fetched with: always for a Helm
-	// repository, for an OCI registry when one covers its address.
+	// repository, for an OCI registry when one covers its address; for git,
+	// the git repository picked (0.12.1, RP-03), whose address and
+	// credential are read from the list, Repo being the address then.
 	Repository string `json:"repository,omitempty"`
 	// Ref is the branch or tag deployed, or the chart's version.
 	Ref string `json:"ref"`
@@ -120,30 +122,50 @@ func Normalize(s Source) (Source, error) {
 	default:
 		return s, fmt.Errorf("a source is git, helm (a chart repository) or oci (an OCI registry), not %q", s.Kind)
 	}
-	repo := strings.TrimSpace(s.Repo)
+	// A git repository of Settings › Repositories is named by its name
+	// (RP-03); its address is filled in from the list (Repos.ResolveGit).
+	s.Repository = strings.TrimSpace(s.Repository)
+	if s.Repository != "" && !repoName.MatchString(s.Repository) {
+		return s, fmt.Errorf("%q is not a repository's name", s.Repository)
+	}
+	repo, err := GitAddress(s.Repo)
+	if err != nil {
+		return s, err
+	}
+	s.Repo = repo
+	return normalizeRest(s)
+}
+
+// GitAddress cleans a git repository's address as typed and says what is
+// wrong with it: an HTTPS URL (github.com/org/app is completed) on a host
+// the console connects to, without a user, query or fragment, its host in
+// lower case and without a trailing slash or .git (RP-05: one address is
+// one repository).
+func GitAddress(raw string) (string, error) {
+	repo := strings.TrimSpace(raw)
 	if repo == "" {
-		return s, errors.New("name the repository, as https://github.com/org/app")
+		return "", errors.New("name the repository, as https://github.com/org/app")
 	}
 	if AllowLocalRepos && strings.HasPrefix(repo, "/") {
-		s.Repo = path.Clean(repo)
-		return normalizeRest(s)
+		return path.Clean(repo), nil
 	}
 	if !strings.Contains(repo, "://") {
 		repo = "https://" + repo
 	}
 	u, err := url.Parse(repo)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return s, errors.New("the repository must be an https:// URL without a user, query or fragment")
+		return "", errors.New("the repository must be an https:// URL without a user, query or fragment")
 	}
 	if refusedName(u.Hostname()) {
-		return s, errHostRefused
+		return "", errHostRefused
 	}
-	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git"), "/")
+	u.RawPath = ""
 	if u.Path == "" || u.Path == "/" {
-		return s, errors.New("the repository URL needs a path: https://github.com/org/app")
+		return "", errors.New("the repository URL needs a path: https://github.com/org/app")
 	}
-	s.Repo = u.String()
-	return normalizeRest(s)
+	return u.String(), nil
 }
 
 // normalizeRest checks the path, the ref and its kind.
@@ -269,7 +291,7 @@ func normalizeRepoChart(s Source) (Source, error) {
 	s.Chart = strings.TrimSpace(s.Chart)
 	s.Repository = strings.TrimSpace(s.Repository)
 	if s.Kind == KindHelm && s.Repository == "" {
-		return s, errors.New("name the chart repository, as Settings › Applications lists it")
+		return s, errors.New("name the chart repository, as Settings › Repositories lists it")
 	}
 	if s.Repository != "" && !repoName.MatchString(s.Repository) {
 		return s, fmt.Errorf("%q is not a repository's name", s.Repository)
@@ -293,7 +315,7 @@ func normalizeRepoChart(s Source) (Source, error) {
 }
 
 // ParseChartRef reads a chart as a helm line names it (HR-07): repo/chart,
-// a chart of a repository Settings › Applications lists, or
+// a chart of a repository Settings › Repositories lists, or
 // oci://registry/path/chart; version is --version, "" for the newest.
 func ParseChartRef(ref, version string) (Source, error) {
 	ref = strings.TrimSpace(ref)
@@ -306,7 +328,7 @@ func ParseChartRef(ref, version string) (Source, error) {
 	}
 	repo, chart, ok := strings.Cut(ref, "/")
 	if !ok || strings.Contains(chart, "/") || strings.Contains(ref, "://") {
-		return Source{}, fmt.Errorf("%q is not a chart: name it as repo/chart, with a repository Settings › Applications lists, or as oci://registry/path/chart (a chart in git is --git URL)", ref)
+		return Source{}, fmt.Errorf("%q is not a chart: name it as repo/chart, with a repository Settings › Repositories lists, or as oci://registry/path/chart (a chart in git is --git URL)", ref)
 	}
 	return Normalize(Source{Kind: KindHelm, Repository: repo, Chart: chart, Ref: version})
 }

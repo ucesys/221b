@@ -90,6 +90,16 @@ describe('Settings › Knowledge', () => {
       if (c) return c
       if (String(url).endsWith('/sources') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'ops' }), { status: 201 })
       if (String(url).endsWith('/knowledge/uploads')) return new Response(JSON.stringify(uploads))
+      if (String(url) === '/api/v1/helm-repositories')
+        return new Response(
+          JSON.stringify({
+            repositories: [
+              { name: 'runbooks', kind: 'git', url: 'https://git.example.com/ops/runbooks', defaultBranch: 'trunk', usedBy: [] },
+              { name: 'bitnami', kind: 'helm', url: 'https://charts.example.com', usedBy: [] },
+            ],
+            mayEdit: true,
+          }),
+        )
       return new Response(JSON.stringify(current))
     })
   })
@@ -131,6 +141,31 @@ describe('Settings › Knowledge', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toEqual({
         source: { id: 'ops-space', name: 'Ops space', kind: 'confluence', flavor: 'cloud', baseURL: 'https://ops.atlassian.net', email: '', space: 'OPS', credential: 'cr-ops' },
+      }),
+    )
+  })
+
+  // Settings › Repositories (0.12.1, RP-03): a git source picks a git
+  // repository of the list, and keeps its branch and directory; the
+  // credential is the repository's, so no picker asks for one.
+  it('adds a git source picking a repository of Settings › Repositories', async () => {
+    render(<KnowledgeSection />)
+    fireEvent.click(await screen.findByTestId('knowledge-add'))
+    const drawer = screen.getByTestId('knowledge-source-drawer')
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-kind'), { target: { value: 'git' } })
+    fireEvent.change(within(drawer).getByTestId('knowledge-source-name'), { target: { value: 'Runbooks' } })
+    expect(within(drawer).queryByTestId('knowledge-source-url')).toBeNull()
+    expect(within(drawer).queryByTestId('knowledge-source-credential')).toBeNull()
+    expect(within(drawer).getByTestId('knowledge-source-save')).toHaveProperty('disabled', true)
+    const sel = within(drawer).getByTestId('knowledge-source-repository-select') as HTMLSelectElement
+    await waitFor(() => expect(sel.disabled).toBe(false))
+    // Git repositories only, and Add for a SuperAdmin.
+    expect([...sel.options].map((o) => o.value)).toEqual(['', 'runbooks', '__add'])
+    fireEvent.change(sel, { target: { value: 'runbooks' } })
+    fireEvent.click(within(drawer).getByTestId('knowledge-source-save'))
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/knowledge/sources')?.body).toMatchObject({
+        source: { id: 'runbooks', name: 'Runbooks', kind: 'git', branch: 'trunk', url: 'https://git.example.com/ops/runbooks', repository: 'runbooks', credential: '' },
       }),
     )
   })

@@ -20,7 +20,7 @@ export interface AppSource {
   path?: string
   /** A Helm repository's or an OCI registry's chart, by name. */
   chart?: string
-  /** The repository of Settings › Applications the chart comes from. */
+  /** The repository of Settings › Repositories the chart comes from; for git, the git repository picked (0.12.1, RP-03), whose address repo is. */
   repository?: string
   /** The branch or tag, or the chart's version. */
   ref: string
@@ -302,11 +302,15 @@ export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'rep
 
 export type RepoAuth = 'none' | 'basic' | 'token'
 
-/** A Helm repository or an OCI registry the console knows, as Settings › Applications lists it. */
+/** A git repository, a Helm repository or an OCI registry the console knows, as Settings › Repositories lists it (0.12.1, RP-02). */
 export interface HelmRepository {
   name: string
-  kind: 'helm' | 'oci'
+  kind: 'git' | 'helm' | 'oci'
   url: string
+  /** A git repository's branch offered first; none leaves it to the repository. */
+  defaultBranch?: string
+  /** What names it: applications' Setup, Mycroft's sources (RP-06). */
+  usedBy?: string[]
   /** The credential of Settings › Credentials it signs in with, by id; none when absent (0.12.1, CR-11). */
   credential?: string
   /** It names its credential; before the upgrade moves it, auth, username and hasSecret are its own of before 0.12.1. */
@@ -323,10 +327,18 @@ export interface HelmRepository {
 }
 
 export interface HelmRepositoryInput {
-  kind: 'helm' | 'oci'
+  kind: 'git' | 'helm' | 'oci'
   url: string
   /** The credential it signs in with, by id; "" or missing for none. */
   credential?: string
+  defaultBranch?: string
+}
+
+/** What the upgrade to 0.12.1 made of the git addresses typed before (RP-05), until dismissed. */
+export interface RepoMigration {
+  at?: string
+  created?: { name: string; url: string; credential?: string; from: string[] }[]
+  notes?: string[]
 }
 
 export interface RepoTest {
@@ -345,7 +357,11 @@ export interface ChartInfo {
 }
 
 const repos = '/api/v1/helm-repositories'
-export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean }>('GET', repos)
+export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean; migration?: RepoMigration }>('GET', repos)
+/** Gives a repository a new name; what names it follows (RP-05). */
+export const renameHelmRepo = (name: string, to: string) => call<HelmRepository>('POST', `${repos}/${encodeURIComponent(name)}/rename`, { name: to })
+/** Hides the list of what the upgrade made. */
+export const dismissRepoMigration = () => call<void>('POST', `${repos}/migration/dismiss`)
 export const saveHelmRepo = (name: string, input: HelmRepositoryInput) => call<HelmRepository>('PUT', `${repos}/${encodeURIComponent(name)}`, input)
 export const deleteHelmRepo = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}`)
 /** Tests a repository as typed, with the credential chosen. */

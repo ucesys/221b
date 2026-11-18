@@ -60,7 +60,7 @@ apps:
     - registry.example.com:5443 # that port only
 ```
 
-With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Settings › Applications, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
+With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Settings › Repositories, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
 
 Fetching a chart takes the rights of managing applications. In Watson, `helm install` and `helm upgrade` with `--git` or a repository's chart, a dry run included, are for an Admin or SuperAdmin whom Kubernetes lets manage applications in the namespace, asked before anything is fetched.
 
@@ -98,11 +98,21 @@ Every `apps/…` route is served by the leader replica, where Watson runs. What 
 
 ## Credentials (0.12.1)
 
-An application's git repository, and a Helm repository or OCI registry of Settings › Applications, sign in with a credential of **Settings › Credentials** (CR-01 to CR-14), chosen by name: the picker offers those that serve the use and cover the address, preselects the only one, and makes you choose among several; *None (public)* is always there. A git repository takes a token sent as Basic (`x-access-token` for GitHub, `oauth2` for GitLab) or Bearer, a user and password, a GitHub App (the console mints its installation tokens) or an OAuth2 client; a Helm repository or OCI registry a user and password, or a token sent as Basic or Bearer (a registry exchanges it at its token service, as Helm does). The credential is sent only to addresses under its endpoint; the record keeps its id, never the secret.
+A git repository, a Helm repository or an OCI registry of Settings › Repositories signs in with a credential of **Settings › Credentials** (CR-01 to CR-14), chosen by name: the picker offers those that serve the use and cover the address, preselects the only one, and makes you choose among several; *None (public)* is always there. A git repository takes a token sent as Basic (`x-access-token` for GitHub, `oauth2` for GitLab) or Bearer, a user and password, a GitHub App (the console mints its installation tokens) or an OAuth2 client; a Helm repository or OCI registry a user and password, or a token sent as Basic or Bearer (a registry exchanges it at its token service, as Helm does). The credential is sent only to addresses under its endpoint; the record keeps its id, never the secret.
 
 Watson's typed `helm install|upgrade NAME --git URL …` fetches with `--credential NAME` when given, else with the application's own credential when a record is kept for that repository, else with the one credential that covers the repository; when several do, it refuses and asks for `--credential`.
 
 Before 0.12.1 an application kept a token of its own, and a repository its own password or token. The upgrade made credentials of them (docs/upgrading.md, 0.12.1); a record not moved yet keeps using its own until it is, and the Setup card says so.
+
+## Repositories (0.12.1)
+
+**Settings › Repositories** (RP-01 to RP-06; Settings › Applications before, whose address leads there) lists every repository applications and Mycroft's sources come from: git repositories, Helm repositories and OCI registries, each with a short name, its address, its credential (or *None (public)*), *Used by* and its last test; a git repository may have a default branch. SuperAdmins add, change, rename, test and remove them; those who manage applications see the list and pick from it.
+
+- **An application's git source names a repository.** The new application and a release's Setup card pick a git repository from the list (a SuperAdmin adds one inline with *Add a repository…*); the application keeps its own chart path and branch or tag. The record holds `source.repository` and, as before, the address, which is read from the repository each time: change the address or the credential once, on the repository, and every application that names it follows. A credential sent beside a listed repository is refused; an address sent without one that the list has is recorded as that repository.
+- **Mycroft's git sources** pick a repository the same way and keep their branch and directory.
+- **Watson** takes the name: `helm install NAME --git REPOSITORY --path P --ref R -n NS`, fetched with the repository's credential (`--credential` other than its own is refused). A full address still works; one the list has is recorded as its repository. The Helm tab's own lines name the repository.
+- **In use, not removed.** `DELETE /api/v1/helm-repositories/{name}` answers 409 naming the applications and sources that use it, and the audit log keeps the refusal.
+- **The upgrade** made one git repository for every address applications and git sources typed before 0.12.1, with the credential they used, and switched them to it (docs/upgrading.md); the page lists what it made, to be renamed (`POST /api/v1/helm-repositories/{name}/rename`, followed by what names it), until dismissed.
 
 ## Open questions
 

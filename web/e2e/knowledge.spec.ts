@@ -84,6 +84,35 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
 
 // A live source (0.12.1, KN-39): added with its address and a credential
 // whose bearer token never comes back; listed as Live, with no Wiki sync job.
+// Settings › Repositories (0.12.1, RP-03): a git source picks a git
+// repository of the list, keeps its own branch and directory, and the
+// repository says it uses it; it is not removed while it does.
+test('Settings › Knowledge takes a git source from a repository of Settings › Repositories', async ({ page }) => {
+  await page.goto('/#/admin/settings/knowledge')
+  const listed = await page.request.put('/api/v1/helm-repositories/e2e-handbook', { data: { kind: 'git', url: 'https://git.e2e.invalid/ops/handbook', defaultBranch: 'trunk' }, headers: SAME_ORIGIN })
+  expect(listed.status(), await listed.text()).toBe(200)
+  try {
+    await page.getByTestId('knowledge-add').click()
+    const drawer = page.getByTestId('knowledge-source-drawer')
+    await drawer.getByTestId('knowledge-source-kind').selectOption('git')
+    await drawer.getByTestId('knowledge-source-name').fill('E2E handbook')
+    // No address or credential of its own: the repository's.
+    await expect(drawer.getByTestId('knowledge-source-url')).toHaveCount(0)
+    await expect(drawer.getByTestId('knowledge-source-credential')).toHaveCount(0)
+    await drawer.getByTestId('knowledge-source-repository-select').selectOption('e2e-handbook')
+    await drawer.getByTestId('knowledge-source-save').click()
+    const row = page.locator('[data-testid=knowledge-source][data-source=e2e-handbook]')
+    await expect(row.getByTestId('knowledge-source-git-line')).toContainText('e2e-handbook · https://git.e2e.invalid/ops/handbook')
+    await expect(row.getByTestId('knowledge-source-git-line')).toContainText('@ trunk')
+    const repos = await (await page.request.get('/api/v1/helm-repositories', { headers: SAME_ORIGIN })).json()
+    expect((repos as { repositories: { name: string; usedBy: string[] }[] }).repositories.find((r) => r.name === 'e2e-handbook')?.usedBy).toEqual(['knowledge source E2E handbook'])
+    expect((await page.request.delete('/api/v1/helm-repositories/e2e-handbook', { headers: SAME_ORIGIN })).status()).toBe(409)
+  } finally {
+    await page.request.delete('/api/v1/knowledge/sources/e2e-handbook', { headers: SAME_ORIGIN })
+    await page.request.delete('/api/v1/helm-repositories/e2e-handbook', { headers: SAME_ORIGIN })
+  }
+})
+
 test('Settings › Knowledge takes a live source, listed as Live, never read into the wiki', async ({ page }) => {
   const LIVE_TOKEN = 'e2e-live-bearer-token-5c1d'
   await page.goto('/#/admin/settings/knowledge')

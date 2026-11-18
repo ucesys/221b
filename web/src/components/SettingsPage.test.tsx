@@ -57,6 +57,16 @@ describe('Settings (0.12.1)', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/admin/settings'))
   })
 
+  // Settings › Repositories (0.12.1, RP-01): Applications before; its old address leads there.
+  it('names Repositories, and the old address of Applications leads there', async () => {
+    expect(sectionOf('apps')).toBe('repositories')
+    window.history.replaceState(null, '', '#/admin/settings/apps')
+    render(<SettingsPanel route={parseHash('#/admin/settings/apps')} settings={settings} refreshedAt={null} />)
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Repositories')
+    expect(screen.getAllByTestId('settings-section').map((a) => a.getAttribute('data-section'))).not.toContain('apps')
+    await waitFor(() => expect(window.location.hash).toBe('#/admin/settings/repositories'))
+  })
+
   it('sets the company or IT name in General, kept in the issue settings with their other values', async () => {
     vi.mocked(settingsApi.saveSettings).mockResolvedValue(settings)
     vi.mocked(issues.saveIssueSettings).mockImplementation(async (s) => s)

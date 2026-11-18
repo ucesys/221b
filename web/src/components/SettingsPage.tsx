@@ -16,7 +16,7 @@ import { LimitsSection } from './ai/LimitsSection' // Limits (Phase 12.1, AI-37)
 import { ProvidersSection } from './ai/ProvidersSection'
 import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
-import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
+import { HelmReposSettings } from './apps/HelmReposSettings' // Settings › Repositories (0.12.1; Helm repositories, Phase 12, wave 5)
 import { CredentialsSettings } from './CredentialsSettings' // Settings › Credentials (0.12.1)
 import { expiringSoon, fetchCredentials } from '../api/credentials'
 import { leftText, useSetup } from '../api/setup'
@@ -24,7 +24,7 @@ import { LeaveSaveContext } from '../lib/leaveSave'
 import { hasUnsaved, unsavedWhat } from '../lib/unsaved'
 import { ConfirmDialog } from './ConfirmDialog'
 
-type Section = 'start' | 'general' | 'credentials' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
+type Section = 'start' | 'general' | 'credentials' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'repositories' | 'issues' | 'jobs' | 'sla' | 'cases'
 
 interface SectionInfo {
   id: Section
@@ -60,8 +60,9 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
     label: 'Changes',
     sections: [
       { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
-      // --- Helm repositories (Phase 12, wave 5) ---
-      { id: 'apps', label: 'Applications', hint: 'Helm repositories and OCI registries' },
+      // --- Settings › Repositories (0.12.1, RP-01): Applications before;
+      // its old address leads here.
+      { id: 'repositories', label: 'Repositories', hint: 'Git, Helm and OCI repositories applications and sources come from' },
     ],
   },
   {
@@ -87,6 +88,7 @@ const settingsHref = (section: Section) => adminHref('settings', section === 'ge
 export function sectionOf(asked: string | undefined): Section {
   if (asked === 'sherlock') return 'agents'
   if (asked === 'email') return 'general'
+  if (asked === 'apps') return 'repositories'
   return SECTIONS.find((s) => s.id === asked)?.id ?? 'general'
 }
 
@@ -120,6 +122,11 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
     document.getElementById('settings-email')?.scrollIntoView?.({ block: 'start' })
     navigate(settingsHref('general'), true)
   }, [askedEmail])
+  // Settings › Applications of before is Repositories (0.12.1, RP-01).
+  const askedApps = route.path[1] === 'apps'
+  useEffect(() => {
+    if (askedApps) navigate(settingsHref('repositories'), true)
+  }, [askedApps])
 
   // Leaving a page with changes not saved asks first (CU-16): Save (where
   // the page's Save can say it all went), Discard, or stay. Closing or
@@ -206,7 +213,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
           {section === 'limits' && <LimitsSection onToast={onToast} />}
           {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
           {section === 'watson' && <WatsonSettings open />}
-          {section === 'apps' && <HelmReposSettings onToast={onToast} />}
+          {section === 'repositories' && <HelmReposSettings onToast={onToast} />}
           {section === 'issues' && <IssueSettings open />}
           {section === 'jobs' && <JobsSettings />}
           {section === 'sla' && <SLASettings />}

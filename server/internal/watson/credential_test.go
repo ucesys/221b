@@ -27,7 +27,7 @@ func TestAGitSourcesCredentialIsChosenNotGuessed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", line, err)
 		}
-		src, _, err := appSource(c)
+		src, _, err := appSource(ctx, c, tg)
 		if err != nil {
 			t.Fatal(err)
 		}

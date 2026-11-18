@@ -31,6 +31,7 @@ import { fmtTs } from '../../lib/format'
 import { adminHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
 import { CredentialPicker } from '../CredentialPicker'
+import { GitRepoPicker } from '../apps/GitRepoPicker'
 import { fetchCredentials, type CredentialUse } from '../../api/credentials'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
@@ -226,7 +227,8 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                           </div>
                         )}
                         {s.kind === 'git' && (
-                          <div className="rk-fhint rk-mono">
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-git-line">
+                            {s.repository ? `${s.repository} · ` : ''}
                             {s.url}
                             {s.path ? ` /${s.path}` : ''} @ {s.branch}
                           </div>
@@ -670,6 +672,10 @@ function SourceDrawer({
   // The credential of Settings › Credentials, by id (CR-10, CR-11): the
   // saved one, or none; null on a new source until chosen.
   const [cred, setCred] = useState<string | null>(seed ? (seed.credential ?? (seed.kind === 's3' && seed.credentials === 'identity' ? IDENTITY : '')) : null)
+  // --- Settings › Repositories (0.12.1, RP-03): a git source picks a git
+  // repository of the list, whose address and credential it reads with;
+  // the branch and the directory stay its own.
+  const [gitRepo, setGitRepo] = useState(seed?.repository ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // Test's state (KN-26): running, or what it found; kept until a field
@@ -697,6 +703,9 @@ function SourceDrawer({
     if (s.kind === 's3') {
       src.credentials = cred === IDENTITY ? 'identity' : 'keys'
       src.credential = cred === IDENTITY ? '' : (cred ?? '')
+    } else if (s.kind === 'git') {
+      src.repository = gitRepo
+      src.credential = ''
     } else if (signsIn(s.kind)) src.credential = cred ?? ''
     // The sign-in of before 0.12.1 is the credential's now.
     if (s.kind === 'live' || s.kind === 'web') src.auth = ''
@@ -737,7 +746,7 @@ function SourceDrawer({
       testId="knowledge-source-drawer"
       footer={
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim() || (signsIn(s.kind) && cred === null)} onClick={() => void save()} data-testid="knowledge-source-save">
+          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim() || (s.kind === 'git' ? !gitRepo : signsIn(s.kind) && cred === null)} onClick={() => void save()} data-testid="knowledge-source-save">
             {seed ? 'Save' : 'Add source'}
           </button>
           <button className="rk-btn" onClick={onClose}>
@@ -820,7 +829,16 @@ function SourceDrawer({
         )}
         {s.kind === 'git' && (
           <>
-            <Text label="Repository address (HTTPS)" value={s.url ?? ''} onChange={(x) => put({ url: x })} placeholder="https://git.example.com/ops/runbooks.git" testId="knowledge-source-url" />
+            <GitRepoPicker
+              label="Repository"
+              value={gitRepo}
+              keptAddress={gitRepo ? undefined : s.url || undefined}
+              onChange={(r) => {
+                setGitRepo(r?.name ?? '')
+                put({ url: r?.url ?? '', repository: r?.name ?? '', ...(r?.defaultBranch && (!s.branch || s.branch === 'main') ? { branch: r.defaultBranch } : {}) })
+              }}
+              testId="knowledge-source-repository"
+            />
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Text label="Branch" value={s.branch ?? ''} onChange={(x) => put({ branch: x })} width={160} />
               <Text label="Directory (empty: all)" value={s.path ?? ''} onChange={(x) => put({ path: x })} width={200} />
@@ -851,29 +869,29 @@ function SourceDrawer({
         )}
         {!builtIn && (
           <>
-            <CredentialPicker
-              use={sourceUse(s)}
-              address={sourceAddress(s)}
-              value={cred}
-              onChange={(v) => {
-                setCred(v)
-                changed()
-              }}
-              label={
-                s.kind === 's3'
-                  ? 'Credentials: a read-only access key, or the pod’s identity'
-                  : s.kind === 'confluence'
-                    ? s.flavor === 'datacenter'
-                      ? 'Credential: a personal access token sent as Bearer'
-                      : 'Credential: the account’s email and an API token, sent as Basic'
-                    : s.kind === 'git'
-                      ? 'Credential: a token sent as Basic or Bearer'
+            {s.kind !== 'git' && (
+              <CredentialPicker
+                use={sourceUse(s)}
+                address={sourceAddress(s)}
+                value={cred}
+                onChange={(v) => {
+                  setCred(v)
+                  changed()
+                }}
+                label={
+                  s.kind === 's3'
+                    ? 'Credentials: a read-only access key, or the pod’s identity'
+                    : s.kind === 'confluence'
+                      ? s.flavor === 'datacenter'
+                        ? 'Credential: a personal access token sent as Bearer'
+                        : 'Credential: the account’s email and an API token, sent as Basic'
                       : 'Credential (any way of sending)'
-              }
-              extra={s.kind === 's3' ? [{ value: IDENTITY, label: identity ? 'The pod’s identity' : 'The pod’s identity (none found)' }] : []}
-              testId="knowledge-source-credential"
-            />
-            {ownCredential && cred === '' && (
+                }
+                extra={s.kind === 's3' ? [{ value: IDENTITY, label: identity ? 'The pod’s identity' : 'The pod’s identity (none found)' }] : []}
+                testId="knowledge-source-credential"
+              />
+            )}
+            {ownCredential && cred === '' && s.kind !== 'git' && (
               <span className="rk-fhint" data-testid="knowledge-source-own-credential">
                 It reads with its own credential, kept before 0.12.1, until one is chosen here.
               </span>

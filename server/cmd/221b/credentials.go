@@ -153,6 +153,14 @@ func (w *wiring) migrateCredentials(ctx context.Context) {
 		next = time.Now().Add(15 * time.Minute)
 		mctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		created, err := w.creds.Migrate(mctx, consumers, "the upgrade to 0.12.1")
+		// Then the git addresses become repositories of Settings ›
+		// Repositories (RP-05), with the credentials just made.
+		if err == nil {
+			if gerr := w.migrateGitRepositories(mctx); gerr != nil {
+				w.log.Warn("making repositories of the git addresses typed before 0.12.1 stopped; it runs again later", "err", gerr)
+				next = time.Now().Add(time.Minute)
+			}
+		}
 		cancel()
 		for _, c := range created {
 			w.log.Info("a credential was made of secrets kept before 0.12.1", "credential", c.Name, "from", strings.Join(c.From, ", "))

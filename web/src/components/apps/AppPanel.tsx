@@ -41,7 +41,7 @@ import { ImageCheckNote, NewerImageNotice } from './NewerImages'
 import { RevisionActions } from './revisionActions'
 import { SelfReleaseCallout, ValuesOriginNote } from './SelfRelease'
 import { useUnsaved } from '../../lib/unsaved'
-import { CredentialPicker } from '../CredentialPicker'
+import { GitRepoPicker } from './GitRepoPicker'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
 export type AppTab = (typeof APP_TABS)[number]
@@ -638,6 +638,8 @@ function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clu
 /** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
 interface SourceDraft {
   repo: string
+  /** The git repository of Settings › Repositories picked, by name (RP-03). */
+  repository?: string
   path: string
   ref: string
   refKind: RefKind
@@ -660,23 +662,20 @@ function writeDraft(key: string, d: SourceDraft | null) {
   }
 }
 
-function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
+/** The Setup card of a release from git (exported for its test). */
+export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
   const key = draftKey(clusterId, row)
   const [draft] = useState(() => readDraft(key))
   const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
+  // --- Settings › Repositories (0.12.1, RP-03): the git repository of
+  // the list, by name; its address and credential are its own, and the
+  // release keeps its path and branch or tag.
+  const [gitRepo, setGitRepo] = useState(draft?.repository ?? app?.source.repository ?? '')
   const [path, setPath] = useState(draft?.path ?? app?.source.path ?? '')
   const [ref, setRef] = useState(draft?.ref ?? app?.source.ref ?? '')
   const [refKind, setRefKind] = useState<RefKind>(draft?.refKind ?? app?.source.refKind ?? 'branch')
-  // The credential, by id: the saved one, or none; null on a release with
-  // no record yet, until the picker or the person chooses (CR-10).
-  const savedCred = app?.credential ?? ''
-  const [cred, setCred] = useState<string | null>(app ? savedCred : null)
-  const legacyToken = !!app?.hasToken && !app.credMigrated
-  // While the picker looks for the credentials that cover the repository,
-  // a save waits for its answer rather than taking "not chosen" for
-  // "several cover it".
-  const credLooking = useRef(false)
-  const credWaiting = useRef<{ createNs: boolean; pressed: boolean; quiet: boolean } | null>(null)
+  // The credential is the repository's: used to look the repository over.
+  const [cred, setCred] = useState(app?.credential ?? '')
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
   useUnsaved(state === 'dirty', 'the release’s source')
@@ -695,6 +694,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   useEffect(() => {
     if (stateRef.current !== 'saved' || !app) return
     setRepo(app.source.repo)
+    setGitRepo(app.source.repository ?? '')
     setPath(app.source.path ?? '')
     setRef(app.source.ref)
     setRefKind(app.source.refKind)
@@ -703,18 +703,20 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   }, [app])
   // What is typed now, for a save that starts after a repository look-over
   // finished (the blur's closure would be stale).
-  const latest = useRef({ repo, path, ref, refKind, cred, createNs })
+  const latest = useRef({ repo, gitRepo, path, ref, refKind, cred, createNs })
   useEffect(() => {
-    latest.current = { repo, path, ref, refKind, cred, createNs }
-  }, [repo, path, ref, refKind, cred, createNs])
-  const dirty = (createNsNow: boolean, c: string | null) => {
+    latest.current = { repo, gitRepo, path, ref, refKind, cred, createNs }
+  }, [repo, gitRepo, path, ref, refKind, cred, createNs])
+  const dirty = (createNsNow: boolean) => {
     const l = latest.current
-    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || (c !== null && c !== savedCred)
+    return (
+      !saved || l.repo.trim() !== saved.repo || l.gitRepo !== (saved.repository ?? '') || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false)
+    )
   }
   // pressed: Save or Enter, which reports a missing field; quiet: after a
   // look-over, which saves only what is complete.
-  const save = (createNsNow = latest.current.createNs, c = latest.current.cred, pressed = false, quiet = false) => {
-    if (!canChange || !dirty(createNsNow, c)) return
+  const save = (createNsNow = latest.current.createNs, pressed = false, quiet = false) => {
+    if (!canChange || !dirty(createNsNow)) return
     const l = latest.current
     if (!l.repo.trim() || !l.ref.trim()) {
       if (quiet) return
@@ -723,26 +725,12 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       setError(pressed ? 'Not saved: needs a repository and a branch or tag.' : 'Not saved yet: needs a repository and a branch or tag.')
       return
     }
-    if (c === null) {
-      if (credLooking.current) {
-        credWaiting.current = { createNs: createNsNow, pressed, quiet }
-        if (!quiet) {
-          setState('saving')
-          setError('')
-        }
-        return
-      }
-      if (quiet) return
-      setState('error')
-      setError('Not saved: several credentials cover this repository; choose one.')
-      return
-    }
-    credWaiting.current = null
     setState('saving')
     setError('')
-    // A record of before 0.12.1 keeps its own token until a credential is chosen.
-    const sendCred = c !== savedCred || !legacyToken
-    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, ...(sendCred ? { credential: c } : {}), createNamespace: createNsNow }
+    // The credential is the repository's (RP-03); an address kept before
+    // 0.12.1 that names no repository is sent as it is, and the server
+    // records the listed repository at it.
+    const input = { source: { repo: l.repo.trim(), ...(l.gitRepo ? { repository: l.gitRepo } : {}), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, createNamespace: createNsNow }
     // One save after another: two fields left in quick succession must not
     // race; and an answer marks the card clean only when nothing was typed
     // since it went out.
@@ -770,8 +758,8 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   // Every keystroke goes to the draft, so leaving the page loses nothing.
   useEffect(() => {
     if (state === 'saved' || state === 'saving') return
-    writeDraft(key, { repo, path, ref, refKind })
-  }, [key, state, repo, path, ref, refKind])
+    writeDraft(key, { repo, repository: gitRepo, path, ref, refKind })
+  }, [key, state, repo, gitRepo, path, ref, refKind])
   const lookOver = (): Promise<void> => {
     const url = latest.current.repo.trim()
     if (!canChange || !url || (look?.repo === url && look.state !== 'error') || (saved && url === saved.repo && latest.current.path.trim())) return Promise.resolve()
@@ -819,8 +807,8 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           value={value}
           readOnly={!canChange}
           onChange={(e) => (set(e.target.value), edited())}
-          onBlur={() => (testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, false, true)) : save())}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, true)) : save(undefined, undefined, true))}
+          onBlur={() => save()}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), save(undefined, true))}
           placeholder={placeholder}
           data-testid={testId}
         />
@@ -895,7 +883,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             <button
               className="rk-btn"
               data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined}
-              onClick={() => save(undefined, undefined, true)}
+              onClick={() => save(undefined, true)}
               disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')}
               style={{ height: 26 }}
               data-testid="app-src-save"
@@ -907,7 +895,29 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       }
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
-        {field('Repository (https:// git URL)', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 4)}
+        <div style={{ gridColumn: 'span 4', minWidth: 0 }}>
+          <GitRepoPicker
+            label="Repository (Settings › Repositories)"
+            value={gitRepo}
+            keptAddress={gitRepo ? undefined : repo || undefined}
+            disabled={!canChange}
+            onChange={(r) => {
+              setGitRepo(r?.name ?? '')
+              setRepo(r?.url ?? '')
+              setCred(r?.credential ?? '')
+              latest.current = { ...latest.current, gitRepo: r?.name ?? '', repo: r?.url ?? '', cred: r?.credential ?? '' }
+              if (r && !latest.current.ref.trim() && r.defaultBranch) {
+                setRef(r.defaultBranch)
+                setRefKind('branch')
+                latest.current = { ...latest.current, ref: r.defaultBranch, refKind: 'branch' }
+              }
+              edited()
+              // Picking it looks it over: the chart's path and the branch fill what is empty (M-07); then it saves what is complete.
+              if (r) void lookOver().then(() => save(undefined, false, true))
+            }}
+            testId="app-src-repository"
+          />
+        </div>
         {field('Chart path (empty for the root)', path, setPath, 'charts/app', 'app-src-path', 'text', 2)}
         <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: 'span 3' }}>
           {refKind === 'tag' ? 'Tag' : 'Branch'}
@@ -925,32 +935,6 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        <div style={{ gridColumn: 'span 3', minWidth: 0, fontSize: 11.5, fontWeight: 600 }}>
-          <CredentialPicker
-            use="git"
-            address={repo}
-            value={cred}
-            disabled={!canChange}
-            label={legacyToken && cred === savedCred ? 'Credential (the token kept before 0.12.1 is used until one is chosen)' : 'Credential (for a private repository)'}
-            onChange={(v) => {
-              setCred(v)
-              latest.current = { ...latest.current, cred: v }
-              if (v !== null && v !== savedCred) {
-                edited()
-                const w = credWaiting.current
-                save(w?.createNs, v, w?.pressed)
-              }
-            }}
-            onLooking={(l) => {
-              credLooking.current = l
-              const w = credWaiting.current
-              if (l || !w) return
-              credWaiting.current = null
-              save(w.createNs, latest.current.cred, w.pressed, w.quiet)
-            }}
-            testId="app-src-credential"
-          />
-        </div>
       </div>
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>

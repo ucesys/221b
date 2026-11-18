@@ -25,7 +25,7 @@ import {
   type SourceKind,
 } from '../../api/apps'
 import { YamlEditor } from '../YamlEditor'
-import { CredentialPicker } from '../CredentialPicker'
+import { GitRepoPicker } from './GitRepoPicker'
 import { useLiveMeta } from '../../api/live'
 import type { WatsonItem } from '../../api/watson'
 import type { AppRow } from '../../columns/apps'
@@ -114,8 +114,8 @@ function RefPicker({ refs, value, kind, onChange, id }: { refs: RepoRefs | null;
 // --- Helm repositories (Phase 12, wave 5, HR-05, HR-06) ---
 
 const KINDS: [SourceKind, string, string][] = [
-  ['git', 'Git repository', 'A chart in a git repository, at a branch or tag'],
-  ['helm', 'Helm repository', 'A chart of a Helm repository Settings › Applications lists'],
+  ['git', 'Git repository', 'A chart in a git repository Settings › Repositories lists, at a branch or tag'],
+  ['helm', 'Helm repository', 'A chart of a Helm repository Settings › Repositories lists'],
   ['oci', 'OCI registry', 'A chart in an OCI registry: oci://registry/path/chart'],
 ]
 
@@ -207,12 +207,12 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [versions, setVersions] = useState<string[]>([])
   const [chartNote, setChartNote] = useState<{ state: 'busy' | 'done' | 'error'; text: string } | null>(null)
   const repoKind = kind === 'helm' || kind === 'oci'
-  // --- Settings › Credentials (0.12.1, CR-10): the credential a git
-  // repository is fetched with, by id; null while not chosen (the only
-  // one that covers the repository is then preselected).
-  const [credential, setCredential] = useState<string | null>(app ? (app.credential ?? '') : null)
-  const credentialChosen = credential ?? ''
-  const legacyToken = !!app?.hasToken && !app.credMigrated
+  // --- Settings › Repositories (0.12.1, RP-03): the git repository of
+  // the list, by name, whose address and credential the chart is fetched
+  // with; the application keeps its branch, tag and path.
+  const [gitRepo, setGitRepo] = useState(app && !fromRepository(app.source) ? (app.source.repository ?? '') : '')
+  const [credential, setCredential] = useState(app?.credential ?? '')
+  const credentialChosen = credential
   const [values, setValues] = useState(app?.values ?? '')
   const [params, setParams] = useState((app?.params ?? []).join('\n'))
   const [createNs, setCreateNs] = useState(false)
@@ -257,13 +257,12 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
 
   // Looks over the repository and fills what is still empty: the chart's
   // path, the branch, and what the README's install example says (M-07).
-  const inspect = () => {
-    const url = repo.trim()
+  const inspect = (url = repo.trim(), cred = credentialChosen, at = ref.trim()) => {
     if (mode !== 'create' || !url || (inspected?.repo === url && inspected.state !== 'error')) return
     setInspected({ repo: url, state: 'busy' })
     // Only the answer to the last look counts: the URL may have changed since.
     const asked = ++inspecting.current
-    inspectRepo(cluster, url, ref.trim(), refKind, credentialChosen || undefined)
+    inspectRepo(cluster, url, at, refKind, cred || undefined)
       .then((d) => {
         if (asked !== inspecting.current) return
         setInspected({ repo: url, state: 'done', data: d })
@@ -362,7 +361,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith('#'))
 
-  const source = (): AppSource => (repoKind ? chartSource() : { repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind: refKind === 'version' ? 'branch' : refKind })
+  const source = (): AppSource => (repoKind ? chartSource() : { repo: repo.trim(), repository: gitRepo, path: path.trim(), ref: ref.trim(), refKind: refKind === 'version' ? 'branch' : refKind })
 
   const submit = (deployNow: boolean) => {
     setError('')
@@ -381,7 +380,6 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           namespace: namespace.trim(),
           name: name.trim(),
           source: source(),
-          ...(!repoKind ? { credential: credentialChosen } : {}),
           values,
           params: paramList(),
           createNamespace: createNs,
@@ -391,10 +389,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         })
         break
       case 'source':
+        // The credential is the git repository's (RP-03).
         input.source = source()
-        // The credential is sent once chosen; a record of before 0.12.1
-        // keeps its own token until one is.
-        if (!repoKind && credential !== null && (credential !== (app?.credential ?? '') || !legacyToken)) input.credential = credential
         if (deployNow) {
           input.upgrade = true
           input.install = true
@@ -427,8 +423,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
-  // Several credentials covering the repository: one must be chosen (CR-10).
-  const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : repo.trim() !== '' && ref.trim() !== '' && credential !== null
+  // A git chart comes from a repository Settings › Repositories lists (RP-03).
+  const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : gitRepo !== '' && repo.trim() !== '' && ref.trim() !== ''
   const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && sourceReady : mode === 'source' ? sourceReady : mode === 'switch' ? ref.trim() !== '' : true)
   // A release whose chart comes from a repository moves between versions, not branches.
   const appRepoKind = fromRepository(app?.source)
@@ -511,7 +507,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             <>
               <Field
                 label="Helm repository"
-                hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Applications' : 'As Settings › Applications lists them'}
+                hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Repositories' : 'As Settings › Repositories lists them'}
               >
                 <label className="rk-field">
                   <select value={repository} onChange={(e) => (setRepository(e.target.value), setChart(''), setRef(''), setVersions([]))} data-testid="app-repository">
@@ -541,7 +537,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             </>
           )}
           {(mode === 'create' || mode === 'source') && kind === 'oci' && (
-            <Field label="Chart" hint="oci:// with the registry, the path and the chart; an OCI registry Settings › Applications lists signs in for it" wide>
+            <Field label="Chart" hint="oci:// with the registry, the path and the chart; an OCI registry Settings › Repositories lists signs in for it" wide>
               <label className="rk-field">
                 <input className="rk-mono" value={chart} onChange={(e) => (setChart(e.target.value), setVersions([]))} onBlur={loadVersions} placeholder="oci://registry.example.com/charts/app" data-testid="app-oci" />
               </label>
@@ -568,21 +564,29 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           )}
           {(mode === 'create' || mode === 'source') && kind === 'git' && (
             <>
-              <Field label="Repository" hint="An https:// git URL; GitHub, GitLab and Gitea work" wide>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <label className="rk-field" style={{ flex: '1 1 320px' }}>
-                    <input
-                      ref={mode === 'source' ? (first as never) : undefined}
-                      className="rk-mono"
-                      value={repo}
-                      onChange={(e) => setRepo(e.target.value)}
-                      onBlur={inspect}
-                      onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), inspect())}
-                      placeholder="https://github.com/org/app"
-                      data-testid="app-repo"
+              <Field label="Repository" hint="A git repository of Settings › Repositories; the application keeps its own path and branch or tag" wide>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                    <GitRepoPicker
+                      value={gitRepo}
+                      keptAddress={gitRepo ? undefined : app?.source.repo}
+                      onChange={(r) => {
+                        setGitRepo(r?.name ?? '')
+                        setRepo(r?.url ?? '')
+                        setCredential(r?.credential ?? '')
+                        setRefs(null)
+                        const at = ref.trim() || r?.defaultBranch || ''
+                        if (!ref.trim() && r?.defaultBranch) {
+                          setRef(r.defaultBranch)
+                          setRefKind('branch')
+                        }
+                        // Picking it looks it over: the chart's path and the branch fill themselves (M-07).
+                        if (r) inspect(r.url, r.credential ?? '', at)
+                      }}
+                      testId="app-git-repository"
                     />
-                  </label>
-                  <button type="button" className="rk-btn" onClick={loadRefs} disabled={!repo.trim() || loadingRefs} title="Lists the repository's branches and tags" data-testid="app-load-refs">
+                  </div>
+                  <button type="button" className="rk-btn" onClick={loadRefs} disabled={!repo.trim() || !gitRepo || loadingRefs} title="Lists the repository's branches and tags" data-testid="app-load-refs">
                     {loadingRefs ? 'Reading…' : 'List branches and tags'}
                   </button>
                 </div>
@@ -621,12 +625,6 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
                 <label className="rk-field">
                   <input className="rk-mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="charts/app" data-testid="app-path" />
                 </label>
-              </Field>
-              <Field
-                label="Credential"
-                hint={legacyToken && credential === (app?.credential ?? '') ? 'Fetched with the token kept before 0.12.1 until a credential is chosen here' : 'For a private repository: one of Settings › Credentials that covers it'}
-              >
-                <CredentialPicker use="git" address={repo} value={credential} onChange={setCredential} label="" testId="app-credential" />
               </Field>
             </>
           )}

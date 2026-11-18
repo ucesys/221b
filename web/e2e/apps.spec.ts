@@ -8,6 +8,10 @@ import { expect, test } from './test'
 
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+// The git repositories of Settings › Repositories the Setup cards and the
+// new application pick (0.12.1, RP-03).
+const REPO = 'e2e-221b'
+const EXAMPLES = 'e2e-helm-examples'
 
 // The tools need Watson, which runs where Sherlock is on.
 test.beforeAll(async ({ browser }) => {
@@ -15,6 +19,13 @@ test.beforeAll(async ({ browser }) => {
   await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
   expect(on.status(), await on.text()).toBe(200)
+  for (const [name, url] of [
+    [REPO, 'https://github.com/ucesys/221b'],
+    [EXAMPLES, 'https://github.com/helm/examples'],
+  ] as const) {
+    const listed = await page.request.put(`/api/v1/helm-repositories/${name}`, { data: { kind: 'git', url }, headers: SAME })
+    expect(listed.status(), await listed.text()).toBe(200)
+  }
   await page.close()
 })
 
@@ -22,6 +33,7 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
+  for (const name of [REPO, EXAMPLES]) await page.request.delete(`/api/v1/helm-repositories/${name}`, { headers: SAME })
   await page.close()
 })
 
@@ -103,7 +115,7 @@ test('a release opens beside the table: overview, history with a diff of two rev
   await expect(page.getByTestId('apps-table').getByRole('columnheader', { name: /^Source/ })).toBeVisible()
 })
 
-test('a source is set in place, refused when it is not https, and forgotten; a Viewer may do none of it (HA-02, HA-11)', async ({ page, request, browser }) => {
+test('a source is set in place from a listed git repository, one added that is not https is refused, and it is forgotten; a Viewer may do none of it (HA-02, HA-11, RP-03)', async ({ page, request, browser }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
   const r = releases[0]!
   // A record a failed run left behind would get in the way.
@@ -113,31 +125,35 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-source-state')).toHaveText('Not set')
   // Save with a field missing reports it and keeps what was typed, across a reload (round 2 review).
-  await panel.getByTestId('app-src-repo').fill('http://github.com/ucesys/221b')
+  await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
   await panel.getByTestId('app-src-save').click()
   await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
   await page.reload()
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  await expect(panel.getByTestId('app-src-repo')).toHaveValue('http://github.com/ucesys/221b')
+  await expect(panel.getByTestId('app-src-path')).toHaveValue('deploy/helm/221b')
   await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
   await panel.getByTestId('app-src-ref').fill('main')
   await panel.getByTestId('app-src-ref').blur()
-  await expect(panel.getByTestId('app-source-state')).toContainText('https://')
-  await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
-  await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
-  // A public repository: no credential covers it, and None (public) is taken (CR-10).
-  await expect(panel.getByTestId('app-src-credential-select')).toHaveValue('')
-  // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows. A deployed release has no create-namespace box.
-  await expect(panel.getByTestId('app-source-state')).toContainText('Not saved yet')
+  // A repository added here must be https: refused, said why, nothing listed.
+  await panel.getByTestId('app-src-repository-select').selectOption('__add')
+  const add = panel.getByTestId('app-src-repository-new')
+  await add.getByTestId('app-src-repository-new-url').fill('http://github.com/ucesys/221b')
+  await add.getByTestId('app-src-repository-new-name').fill('e2e-not-https')
+  await expect(add.getByTestId('app-src-repository-new-credential-select')).toHaveValue('')
+  await add.getByTestId('app-src-repository-new-save').click()
+  await expect(add.getByTestId('app-src-repository-new-error')).toContainText('https://')
+  await add.getByRole('button', { name: 'Cancel' }).click()
+  // The listed one, public: picked, it saves with the path and branch typed. A deployed release has no create-namespace box.
   await expect(panel.getByTestId('app-src-create-ns')).toHaveCount(0)
-  await panel.getByTestId('app-src-save').click()
+  await panel.getByTestId('app-src-repository-select').selectOption(REPO)
+  await expect(panel.getByTestId('app-src-repository-hint')).toContainText('Public: no credential')
   // A save reads the repository on GitHub, once per save in a row: slow at times.
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 30_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
   try {
     const list = await request.get('/api/v1/apps')
     const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string }; ignoreDefaults?: boolean }[]
-    expect(apps.find((a) => a.name === r.name)?.source).toEqual({ repo: 'https://github.com/ucesys/221b', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' })
+    expect(apps.find((a) => a.name === r.name)?.source).toEqual({ repo: 'https://github.com/ucesys/221b', repository: REPO, path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' })
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await expect(page.getByTestId('app-tool-upgrade')).not.toHaveAttribute('aria-disabled', 'true')
     await page.keyboard.press('Escape')
@@ -255,9 +271,9 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   // A release's panel: the Upgrade dialog and the Uninstall confirmation, from the wrench.
   await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
   const panel = page.getByTestId('app-panel')
-  await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-ref').fill('main')
   await panel.getByTestId('app-src-ref').blur()
+  await panel.getByTestId('app-src-repository-select').selectOption(REPO)
   // A save reads the repository on GitHub, once per save in a row: slow at times.
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 30_000 })
   try {
@@ -321,9 +337,8 @@ test('installs a chart from a public git repository through Watson, checks its d
   const dlg = page.getByTestId('app-dialog')
   await dlg.getByTestId('app-namespace').fill(ns)
   await dlg.getByTestId('app-name').fill(name)
-  await dlg.getByTestId('app-repo').fill('https://github.com/helm/examples')
-  // Leaving the field looks the repository over: the chart's path and the branch fill themselves (M-07).
-  await dlg.getByTestId('app-repo').blur()
+  // Picking the listed repository looks it over: the chart's path and the branch fill themselves (M-07, RP-03).
+  await dlg.getByTestId('app-git-repository-select').selectOption(EXAMPLES)
   await expect(dlg.getByTestId('app-inspect')).toHaveAttribute('data-state', 'done', { timeout: 60_000 })
   await expect(dlg.getByTestId('app-path')).toHaveValue('charts/hello-world')
   await dlg.getByTestId('app-path').fill('charts/hello-world')

@@ -821,7 +821,9 @@ export const ADMIN_VIEW_PAGES: Record<string, AdminViewPage> = {
   knowledge: { label: 'Settings › Knowledge', area: 'settings', access: 'knowledge', hash: settings('knowledge') },
   watson: { label: 'Settings › Watson', area: 'settings', access: 'super', hash: settings('watson') },
   'notification-channels': { label: 'Settings › Watson, with its notification channels', area: 'settings', access: 'super', hash: settings('watson') },
-  applications: { label: 'Settings › Applications', area: 'settings', access: 'super', hash: settings('apps') },
+  // --- Settings › Repositories (0.12.1, RP-01): applications is its old name.
+  repositories: { label: 'Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
+  applications: { label: 'Settings › Repositories', area: 'settings', access: 'super', hash: settings('repositories') },
   sla: { label: 'Settings › SLA', area: 'settings', access: 'super', hash: settings('sla') },
   issues: { label: 'Settings › Issues', area: 'settings', access: 'super', hash: settings('issues') },
   'case-settings': { label: 'Settings › Cases', area: 'settings', access: 'super', hash: settings('cases') },
