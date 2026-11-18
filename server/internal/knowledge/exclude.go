@@ -116,31 +116,108 @@ func parentsOf(m *Manifest, source string, items []Item) map[string]string {
 	return out
 }
 
+// itemRoot is where a source's items are read from, as their ids begin
+// (0.12.1, KN-49): a bucket's prefix, a repository's path, the directory
+// of a web site's start address ("/" for the whole site); "" for a whole
+// bucket or repository. A bucket's prefix that does not end in / is its
+// folder when the id is under it, else the folder that holds it.
+func itemRoot(x Source, id string) string {
+	switch x.Kind {
+	case SourceS3:
+		p := x.Prefix
+		switch {
+		case p == "", strings.HasSuffix(p, "/"):
+			return p
+		case strings.HasPrefix(id, p+"/"):
+			return p + "/"
+		}
+		return p[:strings.LastIndex(p, "/")+1]
+	case SourceGit:
+		if d := strings.Trim(x.Path, "/"); d != "" {
+			return d + "/"
+		}
+	case SourceWeb:
+		u, err := crawlStart(x.URL)
+		if err != nil {
+			return "/"
+		}
+		p := u.EscapedPath()
+		if !strings.HasSuffix(p, "/") {
+			p = path.Dir(p)
+		}
+		return strings.TrimSuffix(p, "/") + "/"
+	}
+	return ""
+}
+
+// RelPath is an item's id, or an exclusion's pattern, as Mycroft ›
+// Sources shows it: relative to its source's root (KN-49). A web site's
+// keeps its leading /, and a page outside the start address's directory
+// is shown with its host; "" for a Confluence page (shown by its title)
+// and every other kind.
+func RelPath(x Source, id string) string {
+	switch x.Kind {
+	case SourceS3, SourceGit:
+		if r := itemRoot(x, id); r != "" && strings.HasPrefix(id, r) && len(id) > len(r) {
+			return id[len(r):]
+		}
+		return id
+	case SourceWeb:
+		if strings.HasPrefix(id, "*") {
+			return id
+		}
+		r := itemRoot(x, id)
+		if strings.HasPrefix(id, r) {
+			return "/" + id[len(r):]
+		}
+		if u, err := crawlStart(x.URL); err == nil {
+			return u.Host + id
+		}
+		return id
+	}
+	return ""
+}
+
+// Shown is an item's id, or a pattern, with its source's name leading,
+// as Mycroft › Sources shows it ("docs › runbooks/a.md"); "" when it is
+// not shown by a path.
+func Shown(x Source, id string) string {
+	if p := RelPath(x, id); p != "" {
+		return x.Name + " › " + p
+	}
+	return ""
+}
+
 // UnderPattern is the pattern of everything under an item's place, as a
-// row offers it (Exclude everything under …), and its words; "" when the
-// item's place has nothing above it to exclude.
-func UnderPattern(kind, id string) (pattern string, under bool, words string) {
-	switch kind {
+// row offers it (Exclude everything under …), and its words, relative to
+// the source's root; "" when the item's place is the source's root (or
+// above it): a whole source is turned off in Settings › Knowledge, not
+// excluded (KN-49). The pattern keeps the full id, as exclusions do.
+func UnderPattern(x Source, id string) (pattern string, under bool, words string) {
+	var dir string
+	switch x.Kind {
 	case SourceConfluence:
 		return id, true, "this page and its children"
 	case SourceWeb:
 		p, _, _ := strings.Cut(id, "?")
-		dir := path.Dir(p)
+		dir = path.Dir(p)
 		if strings.HasSuffix(p, "/") {
 			dir = strings.TrimSuffix(p, "/")
 		}
-		if dir == "/" || dir == "." || dir == "" {
-			return "", false, ""
-		}
-		return dir + "/*", false, dir + "/*"
 	case SourceGit, SourceS3:
-		dir := path.Dir(id)
-		if dir == "." || dir == "/" || dir == "" {
-			return "", false, ""
-		}
-		return dir + "/", false, dir + "/"
+		dir = path.Dir(id)
+	default:
+		return "", false, ""
 	}
-	return "", false, ""
+	if dir == "/" || dir == "." || dir == "" || strings.HasPrefix(itemRoot(x, id), dir+"/") {
+		return "", false, ""
+	}
+	pattern = dir + "/"
+	words = Shown(x, pattern)
+	if x.Kind == SourceWeb {
+		pattern += "*"
+	}
+	return pattern, false, words
 }
 
 // ExcludeInput is what Exclude is asked: an item, or a pattern, and why.

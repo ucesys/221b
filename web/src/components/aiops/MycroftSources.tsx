@@ -17,7 +17,11 @@
 // sync or Run now. Uploaded notes and documents are not excluded but
 // removed (final). Removing or excluding says which wiki pages drew on the
 // item, with Review those pages and Ask Mycroft to rewrite without it; the
-// pages are never changed by it. Sources themselves are changed in
+// pages are never changed by it. A web page, a git file or an S3 object is
+// shown by its path relative to its source, the source's name leading
+// ("sandbox-knowledge › docs/a.csv", KN-49); Exclude everything under …
+// is never offered at the source's root, which is turned off in Settings ›
+// Knowledge instead. Sources themselves are changed in
 // Settings › Knowledge. Admins and SuperAdmins see this page; a Viewer is
 // told so. #/aiops/mycroft/wiki/sources, the Wiki's old Sources view, leads
 // here (lib/router.ts).
@@ -41,6 +45,9 @@ export const ITEMS_PAGE = 50
 /** The states the filter offers, in order. */
 const STATES: ItemStateName[] = ['read', 'reading', 'error', 'skipped', 'excluded', 'live']
 
+/** An item's place in its source, the source's name leading; its id when it has no path. */
+export const shownPath = (it: SourceItem): string => (it.path ? `${it.sourceName} › ${it.path}` : it.id)
+
 /** What the page shows after an exclusion or a removal. */
 interface Outcome {
   text: string
@@ -62,7 +69,7 @@ function StateCell({ it }: { it: SourceItem }) {
       ) : it.state === 'excluded' && it.exclusion ? (
         <span className="rk-fhint" style={{ overflowWrap: 'anywhere' }} data-testid="sources-item-exclusion">
           by {it.exclusion.by}, {fmtTs(it.exclusion.at)}
-          {it.exclusion.pattern !== it.id ? ` · rule ${it.exclusion.pattern}${it.exclusion.under ? ' and its children' : ''}` : ''}
+          {it.exclusion.pattern !== it.id ? ` · rule ${it.rule || it.exclusion.pattern}${it.exclusion.under ? ' and its children' : ''}` : ''}
           {it.exclusion.reason ? ` · ${it.exclusion.reason}` : ''}
         </span>
       ) : (
@@ -173,7 +180,7 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
       tools={
         <label className="rk-field" style={{ flex: '0 1 240px' }}>
           <span className="rk-sr">Search the items</span>
-          <input type="search" placeholder="Title, address or who added it" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setTyped('')} data-testid="sources-search" />
+          <input type="search" placeholder="Title, path, address or who added it" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setTyped('')} data-testid="sources-search" />
         </label>
       }
     >
@@ -219,7 +226,11 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
                 <button className="rk-link" style={{ textAlign: 'left' }} onClick={() => setOpen(it)} data-testid="sources-item-open">
                   {it.title || it.id}
                 </button>
-                {it.title && it.id !== it.title && it.type !== 'note' && <div className="rk-fhint rk-mono">{it.id}</div>}
+                {it.title && shownPath(it) !== it.title && it.type !== 'note' && (
+                  <div className="rk-fhint rk-mono" data-testid="sources-item-path">
+                    {shownPath(it)}
+                  </div>
+                )}
               </td>
               <td>{it.sourceName}</td>
               <td>{ITEM_TYPE_LABEL[it.type] ?? it.type}</td>
@@ -318,6 +329,7 @@ function ExcludeDialog({ it, onCancel, onDone }: { it: SourceItem; onCancel: () 
         <label className="rk-tcheck">
           <input type="radio" name="exclude-what" checked={what === 'this'} onChange={() => setWhat('this')} data-testid="sources-exclude-this" />
           Exclude this: {it.title || it.id}
+          {it.path && ` (${shownPath(it)})`}
         </label>
         {under && (
           <label className="rk-tcheck">

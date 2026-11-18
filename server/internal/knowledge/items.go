@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -268,8 +269,17 @@ type SourceItem struct {
 	Pages      int        `json:"pages,omitempty"`
 	Exclusion  *Exclusion `json:"exclusion,omitempty"`
 	Excludable bool       `json:"excludable,omitempty"`
+	// Path is where the item is in its source, as the list shows it after
+	// the source's name: relative to the bucket's prefix, the repository's
+	// path or the web site's start address (KN-49); "" for what is shown
+	// by its title. ID stays the full key.
+	Path string `json:"path,omitempty"`
+	// Rule is an exclusion's pattern as the list shows it, with the
+	// source's name, when it is a pattern.
+	Rule string `json:"rule,omitempty"`
 	// Under is the pattern of everything under the item's place, and
-	// UnderLabel its words, for Exclude everything under ….
+	// UnderLabel its words, for Exclude everything under …; none at the
+	// source's root.
 	Under      string `json:"under,omitempty"`
 	UnderLabel string `json:"underLabel,omitempty"`
 	// key is the manifest's key of the item.
@@ -341,6 +351,9 @@ func (s *Service) Items(ctx context.Context, c Caller, q ItemsQuery) (ItemsPage,
 			continue
 		}
 		hay := strings.ToLower(it.Title + " " + it.ID + " " + it.URL + " " + it.By)
+		if it.Path != "" {
+			hay += " " + strings.ToLower(it.SourceName+" › "+it.Path)
+		}
 		if !allIn(hay, words) {
 			continue
 		}
@@ -404,13 +417,13 @@ func (s *Service) allItems(set Settings) []SourceItem {
 			parents := parentsOf(m, x.ID, nil)
 			matched := map[int]bool{}
 			for _, st := range m.bySource(x.ID) {
-				it := SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: typeOf(x.Kind, st), ID: st.ID, Title: st.Title, URL: st.URL, By: st.By, At: st.Modified, LastRead: st.LastRead, Pages: len(st.Pages), key: itemKey(x.ID, st.ID)}
+				it := SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: typeOf(x.Kind, st), ID: st.ID, Title: st.Title, URL: st.URL, By: st.By, At: st.Modified, LastRead: st.LastRead, Pages: len(st.Pages), Path: RelPath(x, st.ID), key: itemKey(x.ID, st.ID)}
 				if it.At.IsZero() {
 					it.At = st.LastRead
 				}
 				if excludable(x.Kind) {
 					it.Excludable = true
-					it.Under, _, it.UnderLabel = UnderPattern(x.Kind, st.ID)
+					it.Under, _, it.UnderLabel = UnderPattern(x, st.ID)
 					for i, e := range x.Excluded {
 						if e.matches(x.Kind, st.ID, ancestorsOf(st.ID, parents)) {
 							it.Exclusion, matched[i] = &e, true
@@ -421,7 +434,7 @@ func (s *Service) allItems(set Settings) []SourceItem {
 				switch {
 				case it.Exclusion != nil:
 					it.State = StateExcluded
-					it.Why = exclusionWords(*it.Exclusion)
+					it.Why, it.Rule = exclusionWords(x, *it.Exclusion), ruleOf(x, *it.Exclusion)
 				case st.Gone && st.Skipped == "":
 					continue
 				default:
@@ -435,14 +448,15 @@ func (s *Service) allItems(set Settings) []SourceItem {
 				if matched[i] {
 					continue
 				}
-				title := e.Pattern
+				rel := RelPath(x, e.Pattern)
+				title := cmp.Or(rel, e.Pattern)
 				if e.Title != "" {
 					title = e.Title
 				}
 				if e.Under {
 					title += " and its children"
 				}
-				rows = append(rows, SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: typeOf(x.Kind, &ItemState{}), ID: e.Pattern, Title: title, State: StateExcluded, Why: exclusionWords(e), Exclusion: &e, Excludable: true, At: e.At})
+				rows = append(rows, SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: typeOf(x.Kind, &ItemState{}), ID: e.Pattern, Title: title, Path: rel, Rule: ruleOf(x, e), State: StateExcluded, Why: exclusionWords(x, e), Exclusion: &e, Excludable: true, At: e.At})
 			}
 		}
 		sort.SliceStable(rows, func(i, j int) bool { return strings.ToLower(rows[i].Title) < strings.ToLower(rows[j].Title) })
@@ -451,11 +465,26 @@ func (s *Service) allItems(set Settings) []SourceItem {
 	return out
 }
 
+// isPattern says whether an exclusion is a pattern, not one item.
+func (e Exclusion) isPattern() bool {
+	return e.Pattern != "" && (strings.Contains(e.Pattern, "*") || strings.HasSuffix(e.Pattern, "/") || e.Under)
+}
+
+// ruleOf is an exclusion's pattern as the list shows it, relative to its
+// source's root with the source's name (KN-49); "" for one item, or a
+// Confluence page and its children.
+func ruleOf(x Source, e Exclusion) string {
+	if !e.isPattern() || e.Under {
+		return ""
+	}
+	return Shown(x, e.Pattern)
+}
+
 // exclusionWords say who excluded an item, when and why.
-func exclusionWords(e Exclusion) string {
+func exclusionWords(x Source, e Exclusion) string {
 	w := "excluded by " + e.By + " on " + e.At.UTC().Format("2006-01-02")
-	if e.Pattern != "" && (strings.Contains(e.Pattern, "*") || strings.HasSuffix(e.Pattern, "/") || e.Under) {
-		w += " (" + e.Pattern
+	if e.isPattern() {
+		w += " (" + cmp.Or(ruleOf(x, e), e.Pattern)
 		if e.Under {
 			w += " and its children"
 		}

@@ -655,7 +655,14 @@ export interface SourceItem {
   exclusion?: Exclusion
   /** Its source is a web site, a Confluence space, a git repository or an S3 bucket. */
   excludable?: boolean
-  /** The pattern of everything under it, and that in words, for Exclude everything under …. */
+  /**
+   * Where it is in its source, relative to the bucket's prefix, the repository's path or the web site's
+   * start address (KN-49); shown after the source's name. Absent for what is shown by its title.
+   */
+  path?: string
+  /** The exclusion's pattern as shown, with the source's name, when it is a pattern. */
+  rule?: string
+  /** The full pattern of everything under it, and that in words relative to its source, for Exclude everything under …; none at the source's root. */
   under?: string
   underLabel?: string
 }

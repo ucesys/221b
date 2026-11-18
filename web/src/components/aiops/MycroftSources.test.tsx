@@ -18,12 +18,35 @@ const site: SourceItem = {
   state: 'read',
   pages: 2,
   excludable: true,
+  path: '/blog/old.html',
   under: '/blog/*',
-  underLabel: '/blog/',
+  underLabel: 'Vendor docs › /blog/',
 }
+// A bucket read under 221b/: its objects are shown relative to the prefix (KN-49).
+const object = (key: string, under?: string, underLabel?: string): SourceItem => ({
+  source: 'sandbox-knowledge',
+  sourceName: 'sandbox-knowledge',
+  kind: 's3',
+  type: 's3Object',
+  id: '221b/' + key,
+  title: key.split('/').pop()!,
+  path: key,
+  state: 'read',
+  excludable: true,
+  under,
+  underLabel,
+})
 const note: SourceItem = { source: 'added', sourceName: 'Uploaded documents', kind: 'upload', type: 'note', id: 'note Backups.md', title: 'Backups', by: 'Ann', state: 'read', pages: 0 }
 const live: SourceItem = { source: 'status', sourceName: 'Status page', kind: 'live', type: 'liveAddress', id: 'https://status.example.com/', title: 'https://status.example.com/', state: 'live' }
-const excluded: SourceItem = { ...site, id: '/blog/a.html', title: 'A post', state: 'excluded', exclusion: { pattern: '/blog/*', by: 'Ann', at: '2026-11-10T10:00:00Z', reason: 'stale posts' } }
+const excluded: SourceItem = {
+  ...site,
+  id: '/blog/a.html',
+  path: '/blog/a.html',
+  title: 'A post',
+  state: 'excluded',
+  rule: 'Vendor docs › /blog/*',
+  exclusion: { pattern: '/blog/*', by: 'Ann', at: '2026-11-10T10:00:00Z', reason: 'stale posts' },
+}
 
 const page = (over: Partial<ItemsPage> = {}): ItemsPage => ({
   items: [site, note, live],
@@ -128,7 +151,8 @@ describe('AIOps › Mycroft › Sources', () => {
     render(<MycroftSources />)
     fireEvent.click(within((await screen.findAllByTestId('sources-item'))[0]!).getByTestId('sources-item-exclude'))
     const dialog = screen.getByTestId('sources-exclude-dialog')
-    expect(dialog.textContent).toContain('Exclude everything under /blog/')
+    expect(dialog.textContent).toContain('Exclude this: Old post (Vendor docs › /blog/old.html)')
+    expect(dialog.textContent).toContain('Exclude everything under Vendor docs › /blog/')
     fireEvent.click(within(dialog).getByTestId('sources-exclude-under'))
     fireEvent.change(within(dialog).getByTestId('sources-exclude-reason'), { target: { value: 'stale posts' } })
     fireEvent.click(screen.getByTestId('confirm-ok'))
@@ -140,10 +164,37 @@ describe('AIOps › Mycroft › Sources', () => {
     fireEvent.change(screen.getByTestId('sources-filter-state'), { target: { value: 'excluded' } })
     const row = await screen.findByTestId('sources-item')
     expect(screen.getByTestId('sources-excluded-hint').textContent).toContain('next sync')
-    expect(within(row).getByTestId('sources-item-exclusion').textContent).toContain('rule /blog/*')
+    expect(within(row).getByTestId('sources-item-exclusion').textContent).toContain('rule Vendor docs › /blog/*')
     fireEvent.click(within(row).getByTestId('sources-item-include'))
     expect((await screen.findByTestId('sources-notice')).textContent).toContain('next sync')
     expect(calls.some((c) => c.url === '/api/v1/knowledge/sources/vendor/exclusions?pattern=%2Fblog%2F*' && c.init?.method === 'DELETE')).toBe(true)
+  })
+
+  it('shows a bucket’s objects relative to its prefix, the source’s name leading, and offers nothing under the prefix itself', async () => {
+    const deep = object('docs/backup-windows.csv', '221b/docs/', 'sandbox-knowledge › docs/')
+    const top = object('runbook.md')
+    stub({ items: () => page({ items: [deep, top], total: 2 }), exclusions: () => ({ exclusion: { pattern: '221b/docs/', by: 'Ann', at: '2026-11-18T10:00:00Z' }, items: 1, pages: [], text: '1 item excluded.' }) })
+    render(<MycroftSources />)
+    const rows = await screen.findAllByTestId('sources-item')
+    expect(within(rows[0]!).getByTestId('sources-item-path').textContent).toBe('sandbox-knowledge › docs/backup-windows.csv')
+    expect(within(rows[1]!).getByTestId('sources-item-path').textContent).toBe('sandbox-knowledge › runbook.md')
+    expect(rows[0]!.getAttribute('data-id')).toBe('221b/docs/backup-windows.csv')
+    // At the prefix: Exclude this only.
+    fireEvent.click(within(rows[1]!).getByTestId('sources-item-exclude'))
+    let dialog = screen.getByTestId('sources-exclude-dialog')
+    expect(dialog.textContent).toContain('Exclude this: runbook.md (sandbox-knowledge › runbook.md)')
+    expect(within(dialog).queryByTestId('sources-exclude-under')).toBeNull()
+    expect(dialog.textContent).not.toContain('221b/')
+    fireEvent.click(within(screen.getByTestId('confirm')).getByText('Cancel'))
+    // Below it: everything under the folder, in words relative to the prefix, by its full key.
+    fireEvent.click(within(rows[0]!).getByTestId('sources-item-exclude'))
+    dialog = screen.getByTestId('sources-exclude-dialog')
+    expect(dialog.textContent).toContain('Exclude everything under sandbox-knowledge › docs/')
+    fireEvent.click(within(dialog).getByTestId('sources-exclude-under'))
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await screen.findByTestId('source-impact')
+    const post = calls.find((c) => c.url === '/api/v1/knowledge/sources/sandbox-knowledge/exclusions' && c.init?.method === 'POST')!
+    expect(JSON.parse(String(post.init?.body))).toEqual({ pattern: '221b/docs/' })
   })
 
   it('offers no Exclude or Include again to an Admin, and tells a Viewer who sees the items', async () => {

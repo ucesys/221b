@@ -540,9 +540,15 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toBeVisible()
     await expect(page.locator('[data-testid=sources-item][data-source]:not([data-source="' + ID + '"])')).toHaveCount(0)
     await expect(item('docs/backup-windows.csv')).toContainText('S3 object')
+    // Shown relative to the prefix docs/, the source's name leading (KN-49).
+    await expect(item('docs/backup-windows.csv').getByTestId('sources-item-path')).toHaveText('E2E docs bucket › backup-windows.csv')
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md').getByTestId('sources-item-path')).toHaveText('E2E docs bucket › runbooks/restart-the-wombat-cache.md')
 
     // Excluded by a SuperAdmin, with a reason: its excerpts are emptied at once; listed under Excluded.
+    // Directly under the prefix, nothing under it is offered: that is the whole source.
     await item('docs/backup-windows.csv').getByTestId('sources-item-exclude').click()
+    await expect(page.getByTestId('sources-exclude-dialog')).toContainText('E2E docs bucket › backup-windows.csv')
+    await expect(page.getByTestId('sources-exclude-under')).toHaveCount(0)
     await page.getByTestId('sources-exclude-this').check()
     await page.getByTestId('sources-exclude-reason').fill('e2e: not needed')
     await page.getByTestId('confirm-ok').click()

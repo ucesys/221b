@@ -72,6 +72,7 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **Run in Watson on a case says what it does** (CF-48): its tooltip promised "Nothing runs until you approve it there", but a read (such as a suggested fix's `kubectl get …`) runs at once while Watson's *Auto-run reads* is on, as Send to Watson does in the dock. The button and the fix's hint now say so: a change always waits on its card for your approval, a read runs at once only while Auto-run reads is on (otherwise it waits for *Run*); where the case has no Watson beside it, they say the command goes to the dock's Watson box and runs only on Enter. No path ran a change without an approval.
 - **An agent's steps with no draft** read as not started: Draft, Test and Pilot said *done* when nothing was on its way to live; only Live says *now*.
 - **A document removed and uploaded again unchanged is quoted again**: its excerpt, emptied when it was removed, was not written again because its text had not changed; the same for a source's item gone and back.
+- **Exclude everything under … no longer offers a whole source** (KN-49): an object directly under a bucket's prefix, a file directly under a repository's path, or a page in a web site's start address's directory offered everything under the prefix, path or directory, that is the whole source; it is offered below them only. A whole source is turned off in Settings › Knowledge.
 
 ### Changed
 
@@ -101,6 +102,7 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **Settings › Knowledge's Sources hold what is read again or looked up** (KN-48): *Uploaded documents* and *Added in Mycroft* left the table; their notes and documents are under Uploaded documents.
 - **Web pages added in Mycroft are web sites** (KN-46): at the upgrade each becomes a Web site source of its own (0 links deep, 1 page, renamable), its excerpts kept until the site's first read.
 - **An Admin's Settings › Knowledge** shows Uploaded documents in place of the Added in Mycroft card.
+- **Mycroft › Sources shows paths relative to their source** (KN-49): a web page, git file or S3 object is shown after its source's name, relative to the bucket's prefix, the repository's path or the web site's start address (`sandbox-knowledge › docs/backup-windows.csv`, `Docs site › /runbooks/backup`); *Exclude everything under …* and an exclusion's rule use the same words. The items API gives each its `path` (and an exclusion's shown `rule`); `id` and the exclusions stored keep the full key, and the search matches the path as shown. Confluence pages are shown by their titles, as before.
 
 ### Removed
 
