@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -192,5 +195,92 @@ func TestARequiredParameterBoundToAMissingVariableIsRefused(t *testing.T) {
 	code, body = e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"MODE":"\\var:NOWHERE"}`))
 	if code != http.StatusOK || !strings.Contains(body, `"MODE":"var:NOWHERE"`) {
 		t.Fatalf("%d %s", code, body)
+	}
+}
+
+// --- Waiting runs expire, and the asker is checked again (FU-05a) ---
+
+// A run request nobody decided within Settings › Watson's wait (an hour
+// by default) expires: it cannot be approved, the answer says to ask
+// again, Approvals and the run requests list it as expired, and the audit
+// log has it. The wait is set from 5 minutes to 7 days, and audited.
+func TestAWaitingRunExpires(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	later := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	e := autoSetupClock(t, "ops@corp.example", clusters.EnvProduction, nil, clock)
+	approved(t, e.store, "reads", valuesScript)
+	if err := e.store.SetVariables(context.Background(), clusters.LocalID, allNodes, automation.FleetVariables{Values: map[string]string{"MODE": "keep"}, Sensitive: []string{"MODE"}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := e.do(t, "GET", "/api/v1/watson/config", ""); code != http.StatusOK || !strings.Contains(body, `"waitingRunMinutes":60`) {
+		t.Fatalf("the default: %d %s", code, body)
+	}
+	if code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"MODE":"wipe"}`)); code != http.StatusAccepted {
+		t.Fatalf("%d %s", code, body)
+	}
+	if list, _ := e.store.WaitingRuns(context.Background(), ""); len(list) != 1 || list[0].Method != "local" {
+		t.Fatalf("how the asker signed in is not kept: %+v", list)
+	}
+	later(61 * time.Minute)
+	other := signIn(t, e.srv, "ops2@corp.example")
+	code, body := doAs(t, other, e, "POST", "/api/v1/automation/waiting-runs/1/approve", "")
+	if code != http.StatusBadRequest || !strings.Contains(body, "run request 1 expired after 1 hour; ask again") {
+		t.Fatalf("approving an expired one: %d %s", code, body)
+	}
+	if runs, _ := e.engine.Runs(context.Background()); len(runs) != 0 {
+		t.Fatalf("an expired run started: %+v", runs)
+	}
+	if !strings.Contains(e.audit.String(), "run request 1 expired after 1 hour without a decision") {
+		t.Fatalf("the expiry is not in the audit log: %s", e.audit.String())
+	}
+	if _, body := e.do(t, "GET", "/api/v1/admin/approvals", ""); !strings.Contains(body, `"kind":"run","state":"expired"`) {
+		t.Fatalf("approvals: %s", body)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/automation/waiting-runs", ""); !strings.Contains(body, `"state":"expired"`) {
+		t.Fatalf("waiting runs: %s", body)
+	}
+	// The wait is 5 minutes to 7 days.
+	for _, m := range []string{"4", "10081"} {
+		if code, body := e.do(t, "PUT", "/api/v1/watson/config", `{"twoPerson":false,"waitingRunMinutes":`+m+`}`); code != http.StatusBadRequest {
+			t.Fatalf("%s minutes: %d %s", m, code, body)
+		}
+	}
+	if code, body := e.do(t, "PUT", "/api/v1/watson/config", `{"twoPerson":false,"waitingRunMinutes":120}`); code != http.StatusOK || !strings.Contains(body, `"waitingRunMinutes":120`) {
+		t.Fatalf("two hours: %d %s", code, body)
+	}
+	if !strings.Contains(e.audit.String(), "Automation runs waiting for approval expire after 2 hours") {
+		t.Fatalf("the change is not in the audit log: %s", e.audit.String())
+	}
+	if code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"MODE":"wipe2"}`)); code != http.StatusAccepted {
+		t.Fatalf("%d %s", code, body)
+	}
+	later(90 * time.Minute)
+	if code, body := doAs(t, other, e, "POST", "/api/v1/automation/waiting-runs/2/approve", ""); code != http.StatusOK {
+		t.Fatalf("within two hours: %d %s", code, body)
+	}
+}
+
+// Approving starts the run only while a local account that asked for it
+// is still an enabled SuperAdmin.
+func TestAnApprovalChecksTheLocalAskerAgain(t *testing.T) {
+	e := valuesSetup(t)
+	gone := automation.Who{Name: "Gone", User: "gone@corp.example"}
+	wr, err := e.store.NewWaitingRun(context.Background(), automation.WaitingRun{Cluster: clusters.LocalID, Script: "reads", Version: 1, Fleet: "_cluster",
+		Params: map[string]string{"MODE": "wipe"}, Rollout: automation.Rollout{Mode: "all"}, By: gone, Method: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := signIn(t, e.srv, "ops2@corp.example")
+	code, body := doAs(t, other, e, "POST", "/api/v1/automation/waiting-runs/"+strconv.Itoa(wr.ID)+"/approve", "")
+	if code != http.StatusConflict || !strings.Contains(body, "Gone is no longer an enabled SuperAdmin") {
+		t.Fatalf("%d %s", code, body)
+	}
+	if runs, _ := e.engine.Runs(context.Background()); len(runs) != 0 {
+		t.Fatalf("it started: %+v", runs)
+	}
+	if !strings.Contains(e.audit.String(), "not approved: run request 1 cannot start") {
+		t.Fatalf("the refusal is not in the audit log: %s", e.audit.String())
 	}
 }

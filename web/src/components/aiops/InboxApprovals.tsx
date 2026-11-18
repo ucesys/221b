@@ -138,6 +138,11 @@ export function WaitingRunFacts({ row }: { row: ApprovalRow }) {
         {w.script} v{w.version} on {w.fleetName || w.fleet}: {w.targets.length} {w.targets.length === 1 ? 'node' : 'nodes'} when it was asked for.
         {w.run ? ` Approved, it started run #${w.run}.` : ''}
       </p>
+      {w.state === 'expired' && (
+        <p className="tb-hint" style={{ margin: 0 }} data-testid="waiting-run-expired">
+          Nobody decided it in time: it {w.comment || 'expired'} and can no longer be approved. Ask for the run again.
+        </p>
+      )}
       <table className="tb-table" data-testid="waiting-run-values">
         <thead>
           <tr>

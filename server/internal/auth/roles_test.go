@@ -1209,6 +1209,30 @@ func TestAnEmailInTheAdminListAloneIsMadeAtOnce(t *testing.T) {
 	}
 }
 
+// LocalSuperAdmin reads a local account as it stands now, for a run
+// approved after it was asked for (FU-05a): enabled and a SuperAdmin.
+func TestLocalSuperAdminIsReadAsItStandsNow(t *testing.T) {
+	e, root := adminEnv(t)
+	if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "alice", "password": goodPassword}); code != http.StatusCreated {
+		t.Fatalf("alice: %d %s", code, b)
+	}
+	if !e.svc.LocalSuperAdmin("root") || e.svc.LocalSuperAdmin("alice") || e.svc.LocalSuperAdmin("nobody") {
+		t.Fatal("before")
+	}
+	if code, b := e.api(root, http.MethodPut, "/api/v1/admin/users/alice/super", map[string]any{"roles": []string{"superAdmin"}}); code != http.StatusOK {
+		t.Fatalf("alice a SuperAdmin: %d %s", code, b)
+	}
+	if !e.svc.LocalSuperAdmin("alice") {
+		t.Fatal("alice is a SuperAdmin")
+	}
+	if code, b := e.api(root, http.MethodPatch, "/api/v1/admin/users/alice", map[string]any{"disabled": true}); code != http.StatusOK {
+		t.Fatalf("alice disabled: %d %s", code, b)
+	}
+	if e.svc.LocalSuperAdmin("alice") {
+		t.Fatal("a disabled account still counts")
+	}
+}
+
 // Local accounts still sign in with LDAP on, also while the directory cannot
 // be reached; a local name the directory also knows signs in with either
 // password (owner, 2026-11-17).

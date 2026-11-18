@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -164,6 +165,37 @@ func TestAWaitingRunIsDecidedBySomeoneElse(t *testing.T) {
 	// The variable changes kept beside them are untouched.
 	if changes, _ := st.Changes(ctx, "c"); len(changes) != 0 {
 		t.Fatalf("%+v", changes)
+	}
+}
+
+// A run request nobody decided in time expires (FU-05a): it is marked
+// once, at the time it expired, cannot be approved or rejected after, and
+// one asked for later still waits.
+func TestAWaitingRunExpires(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	st := newStore(&now)
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	old, _ := st.NewWaitingRun(ctx, WaitingRun{Cluster: "c", Script: "s", By: ann})
+	now = now.Add(40 * time.Minute)
+	fresh, _ := st.NewWaitingRun(ctx, WaitingRun{Cluster: "c", Script: "s", By: ann})
+	now = now.Add(20 * time.Minute)
+	gone, err := st.ExpireWaitingRuns(ctx, time.Hour, "expired after 1 hour")
+	if err != nil || len(gone) != 1 || gone[0].ID != old.ID || gone[0].State != ChangeExpired || !gone[0].DecidedAt.Equal(old.At.Add(time.Hour)) || gone[0].DecidedBy != nil {
+		t.Fatalf("expired: %+v %v", gone, err)
+	}
+	if again, err := st.ExpireWaitingRuns(ctx, time.Hour, "expired after 1 hour"); err != nil || len(again) != 0 {
+		t.Fatalf("expired twice: %+v %v", again, err)
+	}
+	_, err = st.WaitingRunFor(ctx, "c", old.ID, sam)
+	if !errors.Is(err, ErrInvalid) || err.Error() != "not valid: run request 1 expired after 1 hour; ask again" {
+		t.Fatalf("approving an expired one: %v", err)
+	}
+	if _, err := st.DecideWaitingRun(ctx, "c", old.ID, true, "", sam, 3); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "ask again") {
+		t.Fatalf("deciding an expired one: %v", err)
+	}
+	if w, err := st.WaitingRunFor(ctx, "c", fresh.ID, sam); err != nil || w.State != ChangeWaiting {
+		t.Fatalf("the newer one: %+v %v", w, err)
 	}
 }
 

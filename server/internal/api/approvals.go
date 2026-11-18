@@ -78,6 +78,8 @@ const (
 	approvalApproved = "approved"
 	approvalRejected = "rejected"
 	approvalRevoked  = "revoked"
+	// approvalExpired is a run request nobody decided in time (FU-05a).
+	approvalExpired = "expired"
 	// approvalsKept is how many decided rows the page lists.
 	approvalsKept = 200
 )
@@ -211,6 +213,7 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 		}
 		// Runs whose own values wait (FU-05): whoever asked sees theirs, to
 		// withdraw it; another admin approves it.
+		s.expireWaitingRuns(r)
 		runs, err := st.WaitingRuns(r.Context(), "")
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, err.Error())
@@ -227,8 +230,11 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 				pending = append(pending, row)
 			default:
 				row.State = approvalApproved
-				if q.State == automation.ChangeRejected {
+				switch q.State {
+				case automation.ChangeRejected:
 					row.State = approvalRejected
+				case automation.ChangeExpired:
+					row.State = approvalExpired
 				}
 				if q.DecidedBy != nil {
 					row.ApprovedBy = q.DecidedBy.Name

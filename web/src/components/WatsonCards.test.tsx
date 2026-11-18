@@ -94,6 +94,35 @@ describe('Administration › Settings › Watson: notifications', () => {
   })
 })
 
+describe('Administration › Settings › Watson: how long a run waits (FU-05a)', () => {
+  it('shows the wait as saved, an hour by default, and saves a new one with the approvals', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: true, approveAllMinutes: 0 })
+    vi.mocked(watson.saveWatsonConfig).mockImplementation(async (c) => c)
+    render(<WatsonSettings open />)
+    const wait = (await screen.findByTestId('watson-waiting-run')) as HTMLSelectElement
+    expect(wait.value).toBe('60')
+    expect(wait.selectedOptions[0]!.textContent).toBe('1 hour')
+    expect([...wait.options].map((o) => o.textContent)).toEqual(['5 minutes', '15 minutes', '30 minutes', '1 hour', '2 hours', '4 hours', '8 hours', '1 day', '3 days', '7 days'])
+    expect(screen.queryByTestId('save-bar')).toBeTruthy()
+    fireEvent.change(wait, { target: { value: '1440' } })
+    fireEvent.click(screen.getByTestId('watson-settings-save'))
+    await waitFor(() => expect(watson.saveWatsonConfig).toHaveBeenCalledWith({ twoPerson: true, approveAllMinutes: 0, waitingRunMinutes: 1440 }))
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+  })
+
+  it('keeps a saved wait that is not one of the choices', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: false, approveAllMinutes: 0, waitingRunMinutes: 90 })
+    render(<WatsonSettings open />)
+    const wait = (await screen.findByTestId('watson-waiting-run')) as HTMLSelectElement
+    expect(wait.value).toBe('90')
+    expect(wait.selectedOptions[0]!.textContent).toBe('90 minutes')
+  })
+})
+
 describe('Administration › Settings › Watson: one Save (CU-16)', () => {
   it('saves the approvals and the channels together; a part that fails is named and kept, the other stays saved', async () => {
     vi.mocked(api.fetchStanding).mockResolvedValue([])
@@ -108,7 +137,7 @@ describe('Administration › Settings › Watson: one Save (CU-16)', () => {
     fireEvent.change(await screen.findByTestId('notify-link'), { target: { value: 'http://221b' } })
     fireEvent.click(screen.getByTestId('watson-settings-save'))
     expect((await screen.findByTestId('save-error')).textContent).toBe('Notifications not saved: the address is https')
-    expect(watson.saveWatsonConfig).toHaveBeenCalledWith({ twoPerson: true, approveAllMinutes: 0 })
+    expect(watson.saveWatsonConfig).toHaveBeenCalledWith({ twoPerson: true, approveAllMinutes: 0, waitingRunMinutes: 60 })
     expect((screen.getByTestId('notify-link') as HTMLInputElement).value).toBe('http://221b')
     fireEvent.change(screen.getByTestId('notify-link'), { target: { value: 'https://221b' } })
     fireEvent.click(screen.getByTestId('watson-settings-save'))
