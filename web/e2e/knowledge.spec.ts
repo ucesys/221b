@@ -180,6 +180,11 @@ test('Settings › Knowledge › Uploaded documents with a store: a note under N
       },
       [path, method, body] as const,
     )
+  // Mycroft reads them: an item is read once Mycroft was given it (a
+  // batch not sent is read again at the next run), so Sherlock is on.
+  const SHERLOCK = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+  expect((await api('/api/v1/sherlock/key', 'PUT', { key: 'sk-ant-e2e-fake-key-0123456789' })).status).toBe(200)
+  expect((await api('/api/v1/sherlock/config', 'PUT', SHERLOCK)).status).toBe(200)
   // The wiki is kept in the simulator's bucket for this test.
   const store = { kind: 's3', endpoint: SIM, region: 'us-east-1', bucket: 'sim-wiki', prefix: 'e2e/', pathStyle: true, credentials: 'keys' }
   const saved = await api('/api/v1/knowledge/store', 'PUT', { store, keys: { accessKeyId: 'sim-access-key', secretAccessKey: 'sim-secret-key' } })
@@ -254,6 +259,7 @@ test('Settings › Knowledge › Uploaded documents with a store: a note under N
     for (const r of drafts.runs ?? []) await api(`/api/v1/knowledge/drafts/${r.id}/reject`, 'POST', { comment: 'e2e' })
     const back = await api('/api/v1/knowledge/store', 'PUT', { store: { kind: '' }, keys: {} })
     expect(back.status, back.body).toBe(200)
+    await api('/api/v1/sherlock/config', 'PUT', { ...SHERLOCK, clusters: {} })
   }
 })
 

@@ -672,6 +672,11 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const savedCred = app?.credential ?? ''
   const [cred, setCred] = useState<string | null>(app ? savedCred : null)
   const legacyToken = !!app?.hasToken && !app.credMigrated
+  // While the picker looks for the credentials that cover the repository,
+  // a save waits for its answer rather than taking "not chosen" for
+  // "several cover it".
+  const credLooking = useRef(false)
+  const credWaiting = useRef<{ createNs: boolean; pressed: boolean; quiet: boolean } | null>(null)
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
   useUnsaved(state === 'dirty', 'the release’s source')
@@ -718,14 +723,23 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       setError(pressed ? 'Not saved: needs a repository and a branch or tag.' : 'Not saved yet: needs a repository and a branch or tag.')
       return
     }
-    setState('saving')
-    setError('')
     if (c === null) {
+      if (credLooking.current) {
+        credWaiting.current = { createNs: createNsNow, pressed, quiet }
+        if (!quiet) {
+          setState('saving')
+          setError('')
+        }
+        return
+      }
       if (quiet) return
       setState('error')
       setError('Not saved: several credentials cover this repository; choose one.')
       return
     }
+    credWaiting.current = null
+    setState('saving')
+    setError('')
     // A record of before 0.12.1 keeps its own token until a credential is chosen.
     const sendCred = c !== savedCred || !legacyToken
     const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, ...(sendCred ? { credential: c } : {}), createNamespace: createNsNow }
@@ -923,8 +937,16 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
               latest.current = { ...latest.current, cred: v }
               if (v !== null && v !== savedCred) {
                 edited()
-                save(undefined, v)
+                const w = credWaiting.current
+                save(w?.createNs, v, w?.pressed)
               }
+            }}
+            onLooking={(l) => {
+              credLooking.current = l
+              const w = credWaiting.current
+              if (l || !w) return
+              credWaiting.current = null
+              save(w.createNs, latest.current.cred, w.pressed, w.quiet)
             }}
             testId="app-src-credential"
           />

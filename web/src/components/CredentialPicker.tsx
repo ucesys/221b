@@ -26,6 +26,9 @@ interface Props {
   testId?: string
   /** A saved credential's name, shown when it no longer covers the address. */
   savedName?: string
+  /** Told whether it is still looking for the credentials that cover the
+   * address; told false after any choice it made itself. */
+  onLooking?: (looking: boolean) => void
 }
 
 /**
@@ -35,7 +38,7 @@ interface Props {
  * choose: it never guesses. "None (public)" is always there. The page
  * keeps the id only, never a secret.
  */
-export function CredentialPicker({ use, address, value, onChange, label = 'Credential', noneLabel = 'None (public)', extra = [], disabled, testId = 'credential-picker', savedName }: Props) {
+export function CredentialPicker({ use, address, value, onChange, label = 'Credential', noneLabel = 'None (public)', extra = [], disabled, testId = 'credential-picker', savedName, onLooking }: Props) {
   const [choices, setChoices] = useState<{ key: string; list: CredentialChoice[] } | null>(null)
   const [error, setError] = useState('')
   const key = `${use}\n${address.trim()}`
@@ -72,6 +75,15 @@ export function CredentialPicker({ use, address, value, onChange, label = 'Crede
     auto.current = next === null ? null : { key, value: next }
     if (next !== value) onChange(next)
   }, [list, value, onChange, key])
+  // Said after the choice above, so a save waiting for it sees the choice.
+  const looking = !!address.trim() && !list
+  const lookingCb = useRef(onLooking)
+  useEffect(() => {
+    lookingCb.current = onLooking
+  })
+  useEffect(() => {
+    lookingCb.current?.(looking)
+  }, [looking])
   const known = list?.some((c) => c.id === value) || value === '' || extra.some((x) => x.value === value)
   const several = !!list && list.length > 1 && value === null
   return (

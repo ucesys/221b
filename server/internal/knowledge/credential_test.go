@@ -52,6 +52,27 @@ func TestASourceReadsWithItsCredentialCR11(t *testing.T) {
 	}
 }
 
+// A Confluence Cloud source that names a credential takes the email from
+// it: none is asked of the source itself (CR-11).
+func TestACloudSourceTakesItsEmailFromItsCredentialCR11(t *testing.T) {
+	f := newFixture(t)
+	cr, err := f.creds.Create(ctx, credentials.Credential{Name: "cloud", Kind: credentials.KindToken, Endpoint: "https://e2e.atlassian.net", SendAs: credentials.SendAs{Method: credentials.SendBasic, Username: "ann@example.com"}}, credentials.Secret{Token: "read-token-123456"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := Source{ID: "cloud", Name: "Cloud", Kind: SourceConfluence, BaseURL: "https://e2e.atlassian.net", Flavor: "cloud", Space: "E2E", Credential: cr.ID}
+	saved, err := f.s.SaveSourceWith(ctx, admin, src, CredsChange{}, true)
+	if err != nil || !saved.CredMigrated || saved.Email != "" {
+		t.Fatalf("saved: %+v %v", saved, err)
+	}
+	// One that keeps a token of its own still needs the email.
+	tok := "own-token-123456"
+	src.ID, src.Credential = "own", ""
+	if _, err := f.s.SaveSource(ctx, admin, src, &tok, true); err == nil || !strings.Contains(err.Error(), "email") {
+		t.Fatalf("no email asked: %v", err)
+	}
+}
+
 // The upgrade (CR-12) makes one credential per distinct secret and
 // endpoint, merging identical ones, switches the sources to it, leaves the
 // old secret where it was, unread, and finds nothing the second time.

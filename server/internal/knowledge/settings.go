@@ -254,8 +254,9 @@ func (x Source) Validate() error {
 		if x.Flavor != confluence.Cloud && x.Flavor != confluence.DataCenter {
 			return invalid("Confluence is cloud or datacenter")
 		}
-		// A credential names the account's email (CR-11).
-		if x.Flavor == confluence.Cloud && !x.CredMigrated && !strings.Contains(x.Email, "@") {
+		// A credential named gives the account's email (CR-11); a token
+		// of its own needs it here.
+		if x.Flavor == confluence.Cloud && !x.CredMigrated && x.Credential == "" && !strings.Contains(x.Email, "@") {
 			return invalid("Confluence Cloud needs the email of the account the API token belongs to")
 		}
 		if !regexp.MustCompile(`^~?[A-Za-z0-9_]{1,255}$`).MatchString(x.Space) {

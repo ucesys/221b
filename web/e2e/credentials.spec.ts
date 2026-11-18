@@ -11,6 +11,23 @@ const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const NAME = 'E2E git reader'
 const SECRET = 'e2e-git-token-never-shown-4b2f'
 const SOURCE = 'e2e-runbooks-repo'
+const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+
+// A release's Setup card is changed through Watson, which runs where Sherlock is on.
+test.beforeAll(async ({ browser }) => {
+  const page = await browser.newPage()
+  await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
+  const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
+  expect(on.status(), await on.text()).toBe(200)
+  await page.close()
+})
+
+test.afterAll(async ({ browser }) => {
+  const page = await browser.newPage()
+  await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
+  await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
+  await page.close()
+})
 
 test('a credential is picked by a knowledge source and an application, and cannot be removed while they use it', async ({ page, request }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
@@ -54,6 +71,7 @@ test('a credential is picked by a knowledge source and an application, and canno
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
     const panel = page.getByTestId('app-panel')
+    await expect(panel.getByTestId('app-src-repo')).toBeEditable()
     await panel.getByTestId('app-src-repo').fill('https://git.e2e.invalid/org/shop')
     await expect(panel.getByTestId('app-src-credential-select')).toHaveValue(credId)
     await panel.getByTestId('app-src-ref').fill('main')

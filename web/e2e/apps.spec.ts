@@ -125,11 +125,14 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   await expect(panel.getByTestId('app-source-state')).toContainText('https://')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
+  // A public repository: no credential covers it, and None (public) is taken (CR-10).
+  await expect(panel.getByTestId('app-src-credential-select')).toHaveValue('')
   // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows. A deployed release has no create-namespace box.
   await expect(panel.getByTestId('app-source-state')).toContainText('Not saved yet')
   await expect(panel.getByTestId('app-src-create-ns')).toHaveCount(0)
   await panel.getByTestId('app-src-save').click()
-  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
+  // A save reads the repository on GitHub, once per save in a row: slow at times.
+  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 30_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
   try {
     const list = await request.get('/api/v1/apps')
@@ -255,7 +258,8 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-ref').fill('main')
   await panel.getByTestId('app-src-ref').blur()
-  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
+  // A save reads the repository on GitHub, once per save in a row: slow at times.
+  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 30_000 })
   try {
     // The release was not deployed from that source: behind it (M-05).
     await expect(panel.getByTestId('app-behind')).toBeVisible({ timeout: 10_000 })
