@@ -371,10 +371,11 @@ kubectl -n "$NS" delete secret "$FULLNAME-cluster-local" --ignore-not-found
 kubectl -n "$NS" delete secret -l app.kubernetes.io/component=session --ignore-not-found
 # The AIOps cases are ConfigMaps the console makes, one per case (ADR-128),
 # and the backup key (kept on purpose, BK-15) and the credentials of the
-# knowledge sources and Helm repositories are Secrets it makes: records
+# knowledge sources and Helm repositories, and Administration › Credentials
+# (<release>-credentials, 0.12.1), are Secrets it makes: records
 # of its own, which outlive the release like its connections.
 kubectl -n "$NS" delete configmap -l 221b.io/case --ignore-not-found
-kubectl -n "$NS" delete secret "$FULLNAME-backup-key" "$FULLNAME-knowledge" "$FULLNAME-helm-repositories" --ignore-not-found
+kubectl -n "$NS" delete secret "$FULLNAME-backup-key" "$FULLNAME-knowledge" "$FULLNAME-helm-repositories" "$FULLNAME-credentials" --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.
