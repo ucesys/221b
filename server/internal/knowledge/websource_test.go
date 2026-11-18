@@ -578,7 +578,9 @@ func TestUploadedDocumentsAndNotes(t *testing.T) {
 		t.Fatalf("rewrite: %+v %v", res, err)
 	}
 	f.s.Wait()
-	if !slices.ContainsFunc(f.model.calls(), func(c string) bool { return strings.Contains(c, "Rewrite this page without what it took from that source") }) {
+	if !slices.ContainsFunc(f.model.calls(), func(c string) bool {
+		return strings.Contains(c, "Rewrite this page without what it took from that source")
+	}) {
 		t.Fatal("Mycroft was not asked to rewrite the page")
 	}
 	// A switched-off source is said, for a SuperAdmin to switch it on.

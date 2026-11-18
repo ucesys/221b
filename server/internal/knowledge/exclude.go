@@ -264,7 +264,6 @@ func excludeReport(r ExcludeResult, x Source) string {
 	return b.String()
 }
 
-
 // emptyExcluded empties the excerpts of a source's items an exclusion
 // covers, at once: each is marked gone in the manifest, its excerpt
 // emptied, and the index read again. It says how many, and the pages that
