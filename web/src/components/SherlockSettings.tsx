@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { ProviderAuth, ProviderKind, SherlockProvider } from '../api/sherlock'
 
 // What every provider form shares (Phase 6 review; since Phase 12 the
-// providers of Settings › AI › Providers, where Sherlock's settings were):
+// providers of Administration › AI › Providers, where Sherlock's settings were):
 // the presets, the kinds of authentication each kind takes, and the
 // headers as lines.
 

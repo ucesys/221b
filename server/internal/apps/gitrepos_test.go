@@ -10,7 +10,7 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
-// --- Settings › Repositories (0.12.1, RP-01 to RP-08) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-01 to RP-08) ---
 
 func gitRepos(t *testing.T) *Repos {
 	t.Helper()

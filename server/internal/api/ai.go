@@ -22,7 +22,7 @@ import (
 	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
-// The AI agents (Phase 12): Administration › Settings › AI, for
+// The AI agents (Phase 12): Administration › AI, for
 // SuperAdmins. Providers, agents, their instructions on the way from a
 // draft to live, test cases and pilots. Sherlock's settings endpoints from
 // before stay, over the same data.
@@ -101,7 +101,7 @@ func (s *Server) aiFail(w http.ResponseWriter, err error) {
 	jsonError(w, code, err.Error())
 }
 
-// aiOverview is Settings › AI: the overview and the clusters to pick.
+// aiOverview is Administration › AI: the overview and the clusters to pick.
 type aiOverview struct {
 	ai.Overview
 	Clusters []sherlockCluster `json:"clusters"`
@@ -149,7 +149,7 @@ func (s *Server) putAILimits(w http.ResponseWriter, r *http.Request) {
 	s.getAI(w, r)
 }
 
-// limitsChange says what a change of Settings › Limits changed, for the
+// limitsChange says what a change of Administration › AI › Limits changed, for the
 // audit log (AI-36): the total always, each provider's that changed.
 func limitsChange(before ai.Overview, in ai.Limits) string {
 	parts := []string{fmt.Sprintf("total limits $%.2f/$%.2f → $%.2f/$%.2f a day/month", before.DailyUSD, before.MonthlyUSD, in.DailyUSD, in.MonthlyUSD)}

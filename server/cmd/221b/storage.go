@@ -55,12 +55,12 @@ const (
 	// before 0.12.1 is no longer read.
 	objKnowledge = "knowledge"
 	// --- Case work (Phase 12, CW-13) ---
-	// objCasework holds Settings › Cases, the checks seen, the clean
+	// objCasework holds Administration › AI › Cases, the checks seen, the clean
 	// start's marker, and the accepted exceptions (package lessons); the
 	// cases, with their RCAs, are ConfigMaps of their own (wave 6).
 	objCasework = "casework"
 	// objWiki is the temporary wiki store's (CF-57): the wiki itself, in
-	// one key, while Settings › Knowledge names no store.
+	// one key, while Administration › AI › Knowledge names no store.
 	objWiki = "wiki"
 	// objectBudget is what the keys of one ConfigMap may add up to, below
 	// its 1 MiB with room for the object's own fields.
@@ -115,7 +115,7 @@ var layout = map[string]map[string]kv.Limit{
 	objIssues: {
 		// The index of the cases, one line each; each case is a ConfigMap of
 		// its own (Phase 12, wave 6, CF-20).
-		issues.IndexKey:  {Bytes: issues.DefaultIndexBytes, Hint: "shorten the issue service's retention and Settings › Cases' keepAgentClosedDays, or close the cases that are done"},
+		issues.IndexKey:  {Bytes: issues.DefaultIndexBytes, Hint: "shorten the issue service's retention and Administration › AI › Cases' keepAgentClosedDays, or close the cases that are done"},
 		issues.KnownKey:  {Bytes: issues.DefaultKnownBytes, Hint: "resolve or delete known issues no longer needed"},
 		issues.ConfigKey: {Bytes: issues.DefaultConfigBytes, Hint: "delete services no longer used"},
 		// Where builds before wave 6 kept every case: only the clean start
@@ -144,7 +144,7 @@ var layout = map[string]map[string]kv.Limit{
 	},
 	// --- The temporary wiki store (CF-57) ---
 	objWiki: {
-		knowledge.WikiKey: {Bytes: knowledge.DefaultWikiBytes, Hint: "move the wiki to Git or S3 in Settings › Knowledge"},
+		knowledge.WikiKey: {Bytes: knowledge.DefaultWikiBytes, Hint: "move the wiki to Git or S3 in Administration › AI › Knowledge"},
 	},
 	// --- Case work (Phase 12) ---
 	objCasework: {

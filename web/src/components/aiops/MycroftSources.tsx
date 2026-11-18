@@ -20,16 +20,16 @@
 // pages are never changed by it. A web page, a git file or an S3 object is
 // shown by its path relative to its source, the source's name leading
 // ("sandbox-knowledge › docs/a.csv", KN-49); Exclude everything under …
-// is never offered at the source's root, which is turned off in Settings ›
+// is never offered at the source's root, which is turned off in Administration › AI ›
 // Knowledge instead. Sources themselves are changed in
-// Settings › Knowledge. Admins and SuperAdmins see this page; a Viewer is
+// Administration › AI › Knowledge. Admins and SuperAdmins see this page; a Viewer is
 // told so. #/aiops/mycroft/wiki/sources, the Wiki's old Sources view, leads
 // here (lib/router.ts).
 import { useEffect, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
 import { excludeItems, fetchItemDetail, fetchItems, includeAgain, isWebUrl, ITEM_STATE_LABEL, ITEM_TYPE_LABEL, type ItemDetail, type ItemsPage, type ItemStateName, type PageBrief, type SourceItem } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
@@ -150,8 +150,8 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
       {data?.mayExclude && (
         <>
           {' '}
-          <a className="rk-link" href={adminHref('settings', ['knowledge'])} data-testid="sources-settings-link">
-            Change the sources in Settings › Knowledge
+          <a className="rk-link" href={aiHref('knowledge')} data-testid="sources-settings-link">
+            Change the sources in Administration › AI › Knowledge
           </a>
           .
         </>

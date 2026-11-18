@@ -119,7 +119,7 @@ func (h *handler) wrap(f func(w http.ResponseWriter, r *http.Request, c Caller),
 		may := h.mayEdit(r.Context(), c)
 		switch {
 		case change && !may:
-			fail(w, http.StatusForbidden, "Only a SuperAdmin, or a role Settings › Jobs names, may change jobs.")
+			fail(w, http.StatusForbidden, "Only a SuperAdmin, or a role Administration › AI › Jobs names, may change jobs.")
 			return
 		case !c.Read && !may && !c.Approve:
 			fail(w, http.StatusForbidden, "Jobs, runs and findings are for those who may see AIOps › Jobs.")

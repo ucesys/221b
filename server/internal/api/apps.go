@@ -324,7 +324,7 @@ type appInput struct {
 	Namespace string       `json:"namespace"`
 	Name      string       `json:"name"`
 	Source    *apps.Source `json:"source,omitempty"`
-	// Credential is the credential of Settings › Credentials a private
+	// Credential is the credential of Administration › Credentials a private
 	// git repository is fetched with, by id: "" is none, nil keeps it
 	// (CR-11).
 	Credential      *string  `json:"credential,omitempty"`
@@ -360,7 +360,7 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 		return in, false
 	}
 	if in.Source != nil {
-		// --- Settings › Repositories (0.12.1, RP-03): a git source names
+		// --- Administration › Settings › Repositories (0.12.1, RP-03): a git source names
 		// a repository of the list, whose address and credential it
 		// takes; an address typed that the list has is recorded as it.
 		src, err := s.listedGit(r.Context(), &in)
@@ -375,7 +375,7 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 		// their credentials, never a token of its own (HR-01).
 		if err == nil && src.FromRepository() {
 			if src, err = s.opts.Repos.Resolve(r.Context(), src); err == nil && in.Credential != nil && *in.Credential != "" {
-				err = errors.New("a repository's chart is fetched with the repository's credential, chosen in Settings › Repositories: choose none here")
+				err = errors.New("a repository's chart is fetched with the repository's credential, chosen in Administration › Settings › Repositories: choose none here")
 			}
 		}
 		if err == nil {
@@ -415,7 +415,7 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	return in, true
 }
 
-// listedGit fills in a git source that names a repository of Settings ›
+// listedGit fills in a git source that names a repository of Administration › Settings ›
 // Repositories: its address, and its credential as the one chosen.
 func (s *Server) listedGit(ctx context.Context, in *appInput) (apps.Source, error) {
 	src := *in.Source
@@ -428,14 +428,14 @@ func (s *Server) listedGit(ctx context.Context, in *appInput) (apps.Source, erro
 		return src, errors.New(strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
 	}
 	if in.Credential != nil && *in.Credential != repo.Credential {
-		return src, fmt.Errorf("%s is fetched with its own credential, chosen in Settings › Repositories: send none here", repo.Name)
+		return src, fmt.Errorf("%s is fetched with its own credential, chosen in Administration › Settings › Repositories: send none here", repo.Name)
 	}
 	cred := repo.Credential
 	in.Credential = &cred
 	return src, nil
 }
 
-// matchListedGit records the repository of Settings › Repositories at
+// matchListedGit records the repository of Administration › Settings › Repositories at
 // the address typed (RP-04): the one there, or the one with the
 // credential chosen; an address the list does not have is kept as typed.
 func (s *Server) matchListedGit(ctx context.Context, src apps.Source, in *appInput) (apps.Source, error) {
@@ -531,7 +531,7 @@ func appLine(verb, ns, name string, src apps.Source, extra ...string) (string, e
 		parts = append(parts, "-n", ns, "--app")
 		return strings.Join(append(parts, extra...), " "), nil
 	}
-	// A git repository of Settings › Repositories by its name (RP-04).
+	// A git repository of Administration › Settings › Repositories by its name (RP-04).
 	git := src.Repo
 	if src.Repository != "" {
 		git = src.Repository

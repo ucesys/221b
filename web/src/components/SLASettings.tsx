@@ -1,4 +1,4 @@
-// Settings › SLA (Phase 12, wave 5, CU-06; wave 6): the response and
+// Administration › AI › SLA (Phase 12, wave 5, CU-06; wave 6): the response and
 // resolution targets per priority, P0 to P4 (kept under "0" to "4"). They
 // apply to every case a person made (reported, by hand, from an alert) at
 // every priority, and to an agent-found case only at P0 and P1. A case

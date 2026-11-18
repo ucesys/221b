@@ -20,7 +20,7 @@ export interface AppSource {
   path?: string
   /** A Helm repository's or an OCI registry's chart, by name. */
   chart?: string
-  /** The repository of Settings › Repositories the chart comes from; for git, the git repository picked (0.12.1, RP-03), whose address repo is. */
+  /** The repository of Administration › Settings › Repositories the chart comes from; for git, the git repository picked (0.12.1, RP-03), whose address repo is. */
   repository?: string
   /** The branch or tag, or the chart's version. */
   ref: string
@@ -58,7 +58,7 @@ export interface AppRecord {
   adoptedRevision?: number
   /** A token of before 0.12.1 is kept with the record; it is used until the upgrade moves it to a credential. */
   hasToken?: boolean
-  /** The credential of Settings › Credentials the git repository is fetched with, by id; none when absent (0.12.1, CR-11). */
+  /** The credential of Administration › Credentials the git repository is fetched with, by id; none when absent (0.12.1, CR-11). */
   credential?: string
   /** The record names its credential: a token of before 0.12.1 is no longer read. */
   credMigrated?: boolean
@@ -302,7 +302,7 @@ export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'rep
 
 export type RepoAuth = 'none' | 'basic' | 'token'
 
-/** A git repository, a Helm repository or an OCI registry the console knows, as Settings › Repositories lists it (0.12.1, RP-02). */
+/** A git repository, a Helm repository or an OCI registry the console knows, as Administration › Settings › Repositories lists it (0.12.1, RP-02). */
 export interface HelmRepository {
   name: string
   kind: 'git' | 'helm' | 'oci'
@@ -311,7 +311,7 @@ export interface HelmRepository {
   defaultBranch?: string
   /** What names it: applications' Setup, Mycroft's sources (RP-06). */
   usedBy?: string[]
-  /** The credential of Settings › Credentials it signs in with, by id; none when absent (0.12.1, CR-11). */
+  /** The credential of Administration › Credentials it signs in with, by id; none when absent (0.12.1, CR-11). */
   credential?: string
   /** It names its credential; before the upgrade moves it, auth, username and hasSecret are its own of before 0.12.1. */
   credMigrated?: boolean

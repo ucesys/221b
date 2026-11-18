@@ -1,6 +1,6 @@
 // Alerts and cases (Phase 12, wave 6): an alert an open case covers shows
 // the case in place of New Case (CF-77); a job's acknowledgement links its
-// run and the case (CF-79); Settings › Cases says when a critical alert
+// run and the case (CF-79); Administration › AI › Cases says when a critical alert
 // opens a case by itself (CF-78). Since CF-82 a job's acknowledgement may
 // say the alert was diagnosed as expected, or an exception covers it; since
 // CF-84 New Case names the alert by its reason.
@@ -152,7 +152,7 @@ describe('what a job concluded on, and the alert’s reason (CF-82, CF-84)', () 
   })
 })
 
-describe('Settings › Cases: the safety net’s minutes (CF-78)', () => {
+describe('Administration › AI › Cases: the safety net’s minutes (CF-78)', () => {
   const base = { keepAgentClosedDays: 90, lookBackDays: 90, exceptionStaleDays: 90, exceptionsPerAgent: 50, newCasesPerRun: 50 }
 
   it('shows 15 when the server says none, takes 0 to turn it off, and refuses past 1440', async () => {

@@ -54,7 +54,7 @@ func RepoOwner(repo string) string {
 	return scheme + "://" + host + "/" + owner
 }
 
-// Label names an application for Settings › Credentials: "app
+// Label names an application for Administration › Credentials: "app
 // team/shop", with its cluster when it is not the console's own ("local").
 func Label(rec Record) string {
 	l := "app " + rec.Namespace + "/" + rec.Name
@@ -65,7 +65,7 @@ func Label(rec Record) string {
 }
 
 // CredentialUses lists the applications that name a credential, for
-// Settings › Credentials' Used by and for refusing to remove one in use.
+// Administration › Credentials' Used by and for refusing to remove one in use.
 func CredentialUses(store Store) credentials.UsersFunc {
 	return func(ctx context.Context) ([]credentials.Ref, error) {
 		recs, err := store.List(ctx)
@@ -74,7 +74,7 @@ func CredentialUses(store Store) credentials.UsersFunc {
 		}
 		var out []credentials.Ref
 		for _, rec := range recs {
-			// One naming a git repository of Settings › Repositories uses
+			// One naming a git repository of Administration › Settings › Repositories uses
 			// the repository's (RP-03), which lists it.
 			if rec.Credential != "" && !(isGit(rec.Source) && rec.Source.Repository != "") {
 				out = append(out, credentials.Ref{Credential: rec.Credential, What: Label(rec), Where: "Helm › " + rec.Namespace + "/" + rec.Name + " › Source"})
@@ -93,7 +93,7 @@ func (r *Repos) CredentialUses(ctx context.Context) ([]credentials.Ref, error) {
 	var out []credentials.Ref
 	for _, x := range list {
 		if x.Credential != "" {
-			out = append(out, credentials.Ref{Credential: x.Credential, What: KindWord(x.Kind) + " " + x.Name, Where: "Settings › Repositories"})
+			out = append(out, credentials.Ref{Credential: x.Credential, What: KindWord(x.Kind) + " " + x.Name, Where: "Administration › Settings › Repositories"})
 		}
 	}
 	return out, nil

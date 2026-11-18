@@ -3,7 +3,7 @@ import { fetchPermissions, fetchRoles, useAdmin, type PermRole, type RoleId, typ
 import { MATRIX_COLUMNS, matrixTerms } from '../columns/admin'
 import { driftText, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
 import { fmtClock } from '../lib/format'
-import { adminHref, navigate } from '../lib/router'
+import { navigate, authHref } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import type { AdminProps } from './AdminPage'
 import { ColumnsMenu } from './ColumnsMenu'
@@ -133,9 +133,9 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   const rows = useMemo(() => all.filter((r) => (!role || !!r.cells[role]) && (show === 'all' || r.access === show) && (!sensitive || r.flags.length > 0)), [all, role, show, sensitive])
   const columns = useMemo(() => (role ? MATRIX_COLUMNS.filter((c) => !c.id.startsWith('role-') || c.id === `role-${role}`) : MATRIX_COLUMNS), [role])
   const table = useTable<MatrixRow>({ id: 'admin-permissions', columns, rows, terms: matrixTerms, now, defaultSort: { col: 'resource', dir: 'asc' } })
-  const opened = data?.roles.find((r) => r.id === route.path[1]) ?? null
-  const open = (id: RoleId) => navigate(adminHref('permissions', route.path[1] === id ? [] : [id], name), true)
-  const close = () => navigate(adminHref('permissions', [], name), true)
+  const opened = data?.roles.find((r) => r.id === route.path[2]) ?? null
+  const open = (id: RoleId) => navigate(authHref('permissions', route.path[2] === id ? [] : [id], name), true)
+  const close = () => navigate(authHref('permissions', [], name), true)
 
   if (loaded.error && !data) {
     return (

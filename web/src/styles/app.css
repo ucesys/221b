@@ -297,7 +297,7 @@ button.rk-card:hover:not(:disabled) {
 .rk-boxed .rk-gh {
   background: transparent;
 }
-/* Settings › Issues (Phase 12): a number beside its words, the targets
+/* Administration › AI › Issues (Phase 12): a number beside its words, the targets
    table and the API tokens. */
 .rp-setrow {
   display: flex;

@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { fetchHistory, fetchHistoryItem, type HistoryEntry, type HistoryText } from '../../api/ai'
 import type { AdminRequest, ApprovalRow } from '../../api/automation'
 import { fmtTs } from '../../lib/format'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 import { testText } from '../ai/HistoryDialog'
 import { VersionDiff } from '../ai/TextDiff'
 
@@ -67,7 +67,7 @@ function PromptRequest({ q, row }: { q: AdminRequest; row: ApprovalRow }) {
       <dl className="cs-kv">
         <dt>Agent</dt>
         <dd>
-          <a className="rk-link" href={adminHref('settings', ['agents', agent])} data-testid="approval-prompt-agent">
+          <a className="rk-link" href={aiHref('agents', [agent])} data-testid="approval-prompt-agent">
             {q.agentName || agent}
           </a>
         </dd>

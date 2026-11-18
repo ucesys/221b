@@ -18,7 +18,7 @@ import (
 // An open case covers an alert when it is on the alert's cluster about
 // the alert's object, or when the alert's own diagnosis run sent its
 // findings to it. The Alerts tab shows the case in place of New Case
-// (CF-77); and a critical alert still going after Settings › Cases'
+// (CF-77); and a critical alert still going after Administration › AI › Cases'
 // minutes that no case covers opens one by itself, once per occurrence
 // (CF-78): the safety net for when the alert diagnosis job is off, failed
 // or found nothing. Since CF-82 it leaves an alert a diagnosis run
@@ -150,7 +150,7 @@ var (
 
 // WatchAlerts is the safety net (CF-78), given the alerts at each of the
 // leader's looks (jobs.AlertWatcher): a critical alert still going, and
-// not acknowledged by a person, after Settings › Cases' minutes opens a
+// not acknowledged by a person, after Administration › AI › Cases' minutes opens a
 // case like an alert's New Case, unless an open case covers it. One case
 // per occurrence: not again while it goes on. Since CF-82 only when no
 // diagnosis concluded on it as it is: a job acknowledged it (it does for

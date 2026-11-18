@@ -14,7 +14,7 @@ import (
 // --- Credentials (0.12.1, CR-11, CR-12) ---
 //
 // A Confluence space, a git repository, a bucket, a web site and a live
-// source sign in with a credential of Settings › Credentials, named by id
+// source sign in with a credential of Administration › Credentials, named by id
 // (Source.Credential), resolved for the source's address at each read and
 // test and never sent outside its endpoint. A source the upgrade has not
 // switched yet reads the credential it kept in the knowledge Secret, as
@@ -148,7 +148,7 @@ func (s *Service) sourceAuth(ctx context.Context, x Source) (Source, Creds, erro
 
 // --- the upgrade (CR-12) ---
 
-// CredentialConsumer moves the sources' own credentials to Settings ›
+// CredentialConsumer moves the sources' own credentials to Administration ›
 // Credentials.
 type CredentialConsumer struct{ S *Service }
 
@@ -230,7 +230,7 @@ func (m CredentialConsumer) Switch(ctx context.Context, id, credential string) e
 	return err
 }
 
-// Uses are the sources' credentials, for Settings › Credentials' Used by.
+// Uses are the sources' credentials, for Administration › Credentials' Used by.
 func (s *Service) Uses(ctx context.Context) ([]credentials.Ref, error) {
 	set, err := s.Settings(ctx)
 	if err != nil {
@@ -240,7 +240,7 @@ func (s *Service) Uses(ctx context.Context) ([]credentials.Ref, error) {
 	for _, x := range set.Sources {
 		// One naming a git repository uses the repository's, which lists it.
 		if x.Credential != "" && !x.namesRepo() {
-			out = append(out, credentials.Ref{Credential: x.Credential, What: "knowledge source " + x.Name, Where: "Settings › Knowledge › Sources"})
+			out = append(out, credentials.Ref{Credential: x.Credential, What: "knowledge source " + x.Name, Where: "Administration › AI › Knowledge › Sources"})
 		}
 	}
 	return out, nil

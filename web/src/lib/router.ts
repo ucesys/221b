@@ -163,8 +163,10 @@ export function parseHash(hash: string): Route {
       path: [],
       params: new URLSearchParams(query),
     }
-  // The Administration area (RB-41): #/admin/roles, #/admin/permissions, #/admin/users and #/admin/settings/<section>.
-  // Roles and Permissions describe a cluster, so they take the cluster prefix; Users and Settings belong to the console.
+  // The Administration area (RB-41, CU-18): #/admin/auth/<roles, permissions or users>, #/admin/ai/<page>,
+  // #/admin/credentials, #/admin/settings/<page>, #/admin/logs, #/admin/toolbox and #/admin/backup.
+  // Roles and Permissions describe a cluster, so they take the cluster prefix; the rest belong to the console.
+  // The addresses of before lead to the same pages (adminPath).
   // Sessions and Audit log moved under Logs: their old links land there.
   // --- Cases (Phase 12, CS-01) ---
   // Administration › Approvals moved to AIOps › Inbox (CS-06): its old
@@ -197,14 +199,14 @@ export function parseHash(hash: string): Route {
       params.set('show', 'all')
       return { cluster, view: 'aiops', tab: FIRST_TAB, path: ['inbox'], params }
     }
-    // Add moved to Settings › Knowledge (MY-11), its Uploaded documents
+    // Add moved to Administration › AI › Knowledge (MY-11), its Uploaded documents
     // section since 0.12.1: the Wiki's Add view's old addresses open it there.
     if (((segs[1] === 'mycroft' && segs[2] === 'wiki') || segs[1] === 'knowledge') && segs[segs[1] === 'mycroft' ? 3 : 2] === 'add')
       return {
         cluster: LOCAL,
         view: 'admin',
         tab: FIRST_TAB,
-        path: ['settings', 'knowledge', 'added'],
+        path: ['ai', 'knowledge', 'added'],
         params: new URLSearchParams(query),
       }
     // The Wiki's Sources view became Mycroft's own Sources sub-tab (0.12.1).
@@ -271,7 +273,7 @@ export function parseHash(hash: string): Route {
       cluster,
       view: 'admin',
       tab: FIRST_TAB,
-      path: segs[1] === 'sessions' || segs[1] === 'audit' ? ['logs', ...segs.slice(1)] : segs.slice(1),
+      path: adminPath(segs.slice(1)),
       params: new URLSearchParams(query),
     }
   // Settings moved under Administration (RB-47): an old #/settings link lands on it.
@@ -280,7 +282,7 @@ export function parseHash(hash: string): Route {
       cluster,
       view: 'admin',
       tab: FIRST_TAB,
-      path: ['settings', ...segs.slice(1)],
+      path: adminPath(['settings', ...segs.slice(1)]),
       params: new URLSearchParams(query),
     }
   // Sherlock in a window of its own (P5-08).
@@ -351,10 +353,51 @@ export function clusterHref(cluster: string, tab: Tab, path: string[] = [], para
   return prefix(cluster) + [tab, ...path.map(encodeURIComponent)].join('/') + query(params)
 }
 
-/** The pages of the Administration area, in order (RB-41). Approvals moved to AIOps › Inbox (CS-06). */
-export type AdminPage = 'roles' | 'permissions' | 'users' | 'toolbox' | 'logs' | 'settings' | 'backup'
+/**
+ * The tabs of the Administration area, in order (RB-41; CU-18, 0.12.1):
+ * Auth (Roles, Permissions, Users), AI (the agents' pages and AIOps'),
+ * Credentials, Settings, Logs, Toolbox and Backup. Approvals moved to
+ * AIOps › Inbox (CS-06).
+ */
+export type AdminPage = 'auth' | 'ai' | 'credentials' | 'settings' | 'logs' | 'toolbox' | 'backup'
 
-export const ADMIN_PAGES: AdminPage[] = ['roles', 'permissions', 'users', 'toolbox', 'logs', 'settings', 'backup']
+export const ADMIN_PAGES: AdminPage[] = ['auth', 'ai', 'credentials', 'settings', 'logs', 'toolbox', 'backup']
+
+/** Administration › Auth's pages, in order. */
+export type AuthPage = 'roles' | 'permissions' | 'users'
+
+export const AUTH_PAGES: AuthPage[] = ['roles', 'permissions', 'users']
+
+/** Administration › AI's pages, in order: the group Agents, then the group AIOps (CU-18). */
+export type AIPage = 'providers' | 'agents' | 'limits' | 'knowledge' | 'sla' | 'issues' | 'cases' | 'jobs'
+
+export const AI_PAGES: AIPage[] = ['providers', 'agents', 'limits', 'knowledge', 'sla', 'issues', 'cases', 'jobs']
+
+/** Administration › Settings' pages, in order. */
+export type SettingsPage = 'start' | 'general' | 'watson' | 'repositories'
+
+export const SETTINGS_PAGES: SettingsPage[] = ['start', 'general', 'watson', 'repositories']
+
+/**
+ * An Administration address's path as it is now (CU-19): the addresses of
+ * before lead to the same page and item. Roles, Permissions and Users were
+ * tabs of their own, now Auth's; Settings' AI and AIOps pages are AI's,
+ * and Credentials a tab; Sherlock's page is Agents, Email is General's
+ * section and Applications is Repositories; Sessions and Audit log are
+ * under Logs.
+ */
+export function adminPath(segs: string[]): string[] {
+  const [first = '', second, ...rest] = segs
+  if (first === 'sessions' || first === 'audit') return ['logs', ...segs]
+  if ((AUTH_PAGES as string[]).includes(first)) return ['auth', ...segs]
+  if (first !== 'settings' || second === undefined) return segs
+  if (second === 'sherlock') return ['ai', 'agents', ...rest]
+  if ((AI_PAGES as string[]).includes(second)) return ['ai', second, ...rest]
+  if (second === 'credentials') return ['credentials', ...rest]
+  if (second === 'email') return ['settings', 'general', 'email']
+  if (second === 'apps') return ['settings', 'repositories', ...rest]
+  return segs
+}
 
 // --- Cases (Phase 12, CS-01) ---
 
@@ -386,9 +429,24 @@ export function aiopsHref(tab: AIOpsTab = 'inbox', path: string[] = [], params: 
 
 // --- end Cases ---
 
-/** A page of the Administration area: "#/admin/roles/admin", or "#/c/dev/admin/permissions" for another cluster. */
+/** A tab of the Administration area: "#/admin/auth/roles/admin", or "#/c/dev/admin/auth/permissions" for another cluster. */
 export function adminHref(page: AdminPage, path: string[] = [], cluster: string = LOCAL, params: Record<string, string | undefined> = {}): string {
   return prefix(cluster) + ['admin', page, ...path.map(encodeURIComponent)].join('/') + query(params)
+}
+
+/** A page of Administration › Auth: "#/admin/auth/roles/admin". Roles and Permissions describe a cluster, so they take its prefix. */
+export function authHref(page: AuthPage, path: string[] = [], cluster: string = LOCAL, params: Record<string, string | undefined> = {}): string {
+  return adminHref('auth', [page, ...path], cluster, params)
+}
+
+/** A page of Administration › AI: "#/admin/ai/agents/sherlock". */
+export function aiHref(page: AIPage, path: string[] = [], cluster: string = LOCAL): string {
+  return adminHref('ai', [page, ...path], cluster)
+}
+
+/** A page of Administration › Settings: "#/admin/settings/repositories". */
+export function settingsHref(page: SettingsPage, path: string[] = [], cluster: string = LOCAL): string {
+  return adminHref('settings', [page, ...path], cluster)
 }
 
 /** A cluster's own page: "#/cluster", or "#/c/dev/cluster". */

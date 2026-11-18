@@ -333,7 +333,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           </label>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
-          0 means no cap of its own. Its spend counts toward the total limits and its provider’s too, set in Settings › Limits.{costs ? ` Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : ''}
+          0 means no cap of its own. Its spend counts toward the total limits and its provider’s too, set in Administration › AI › Limits.{costs ? ` Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : ''}
         </p>
         {/* --- AI-28, AI-39: the total and the provider's limits stop every agent under them, whatever its own cap says. --- */}
         {overallHints(set, ov, costs ? usd : undefined, set.provider ? ov.providers.find((p) => p.id === set.provider) : ov.providers.find((p) => p.default)).map((h) => (
@@ -347,7 +347,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           >
             <span>{h.text}</span>
             <button className="rk-link" style={{ fontSize: 12.5 }} disabled={changed} title={changed ? 'Save or cancel your changes first.' : undefined} onClick={() => toOverallLimits(onClose)} data-testid="agent-overall-link">
-              Go to Settings › Limits
+              Go to Administration › AI › Limits
             </button>
           </p>
         ))}
@@ -433,7 +433,7 @@ export function overallHints(
   return out
 }
 
-/** Closes the drawer and opens Settings › Limits, where the total and the providers' limits are changed (AI-39). */
+/** Closes the drawer and opens Administration › AI › Limits, where the total and the providers' limits are changed (AI-39). */
 export function toOverallLimits(close: () => void) {
   close()
   navigate(LIMITS_HREF)
@@ -462,7 +462,7 @@ export function ContextLine({ agent }: { agent: AgentView }) {
   const of = f.window ? ` of ${agent.model}’s ${tokensText(f.window)} (${Math.round((100 * total) / f.window)}%)` : ''
   const parts = [`Instructions and tools: ${sizeText(f)}${of}.`]
   const tone = !f.compact && f.window && whole > f.share * f.window ? 'warn' : undefined
-  if (!f.window) parts.push(agent.defaultModel ? 'The model’s context window is not known: set it on its provider, in Settings › Providers.' : 'The model’s context window is not known: set it above.')
+  if (!f.window) parts.push(agent.defaultModel ? 'The model’s context window is not known: set it on its provider, in Administration › AI › Providers.' : 'The model’s context window is not known: set it above.')
   if (agent.id === 'sherlock') {
     if (f.compact && f.mode === 'always') parts.push(`Sherlock answers in its compact form, as chosen; its whole form is ${sizeText(f.whole)}.`)
     else if (f.compact) parts.push(`Its whole form, ${sizeText(f.whole)}, takes more than ${Math.round(f.share * 100)}% of the context, so Sherlock answers in its compact form.`)

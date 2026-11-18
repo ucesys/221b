@@ -4,7 +4,7 @@
 // sources' excerpts. Drafts: the runs of changes waiting for review, with
 // every page's diff. Each view has its address: #/aiops/mycroft/wiki[/drafts],
 // a page #/aiops/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 notes and
-// documents are added in Settings › Knowledge only (its Uploaded documents
+// documents are added in Administration › AI › Knowledge only (its Uploaded documents
 // section since 0.12.1): the Add view's old address opens it there. Since
 // 0.12.1 what Mycroft reads is AIOps › Mycroft › Sources, a sub-tab of its
 // own (MycroftSources.tsx); the Sources view's old address leads there.
@@ -34,15 +34,15 @@ import { CallError } from '../../api/call'
 import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, wikiHref, type DraftRun, type PageView as PageData, type WikiPage, type WikiState } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Markdown } from '../../lib/markdown'
-import { adminHref, navigate, type Route } from '../../lib/router'
+import { navigate, type Route, aiHref } from '../../lib/router'
 import { DraftRunCard } from './KnowledgeDraft'
 import { MycroftPage } from './MycroftPage'
 import { SourceLink } from './SourceLink'
 import { STORE_NEAR, StoreRoom } from './WikiStoreRoom'
 import { PageActions, PageNotices } from './WikiPageActions'
 
-/** Where notes and documents are added: Settings › Knowledge's Uploaded documents section (MY-11, 0.12.1). */
-export const ADD_HREF = adminHref('settings', ['knowledge', 'added'])
+/** Where notes and documents are added: Administration › AI › Knowledge's Uploaded documents section (MY-11, 0.12.1). */
+export const ADD_HREF = aiHref('knowledge', ['added'])
 
 export { pageHref } from '../../api/knowledge'
 
@@ -290,12 +290,12 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                   <>
                     No approved pages yet: add knowledge or connect sources in{' '}
                     <a className="rk-link" href={ADD_HREF} data-testid="knowledge-empty-add">
-                      Settings › Knowledge
+                      Administration › AI › Knowledge
                     </a>
                     , and approve Mycroft’s first changes under Drafts.
                   </>
                 ) : (
-                  'No approved pages yet: an Admin adds knowledge, or a SuperAdmin connects sources, in Settings › Knowledge.'
+                  'No approved pages yet: an Admin adds knowledge, or a SuperAdmin connects sources, in Administration › AI › Knowledge.'
                 )}
               </span>
             ) : kept.length === 0 ? (
@@ -373,12 +373,12 @@ function NoStore({ maySetup }: { maySetup: boolean }) {
     <div className="rk-callout" data-tone="warn" style={{ fontSize: 12.5, flexDirection: 'column', gap: 6 }} data-testid="wiki-no-store">
       <strong>No wiki is kept yet.</strong>
       <span>
-        Mycroft keeps the wiki’s pages, the excerpts of its sources and its drafts in a git repository or an S3 bucket, chosen in Administration › Settings › Knowledge. Until one is chosen there is nothing to browse or add, and the agents
-        answer without the wiki.
+        Mycroft keeps the wiki’s pages, the excerpts of its sources and its drafts in a git repository or an S3 bucket, chosen in Administration › AI › Knowledge. Until one is chosen there is nothing to browse or add, and the agents answer
+        without the wiki.
       </span>
       {maySetup ? (
         <span>
-          <a className="rk-btn" data-on href={adminHref('settings', ['knowledge'])} data-testid="wiki-setup">
+          <a className="rk-btn" data-on href={aiHref('knowledge')} data-testid="wiki-setup">
             Set up the wiki
           </a>
         </span>

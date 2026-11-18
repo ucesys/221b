@@ -14,7 +14,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 )
 
-// View is Settings › Knowledge: the sources with whether each credential
+// View is Administration › AI › Knowledge: the sources with whether each credential
 // is set (never the credential), where the wiki is kept, the last syncs,
 // the drafts waiting and the store's state.
 type View struct {
@@ -39,7 +39,7 @@ type View struct {
 	ConfigMapStore bool `json:"configMapStore"`
 }
 
-// GetView builds Settings › Knowledge's view.
+// GetView builds Administration › AI › Knowledge's view.
 func (s *Service) GetView(ctx context.Context, c Caller) (View, error) {
 	if !c.SuperAdmin {
 		return View{}, wrapf(ErrDenied, "only a SuperAdmin sees Mycroft's sources")

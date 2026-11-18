@@ -129,7 +129,7 @@ func (c *ConfigMapStore) edit(ctx context.Context, fn func(*cmWiki) error) error
 			return err
 		}
 		if len(raw) > c.limit && len(raw) > size {
-			return fmt.Errorf("%w (%d KiB): move the wiki to Git or S3 in Settings › Knowledge", ErrStoreFull, c.limit>>10)
+			return fmt.Errorf("%w (%d KiB): move the wiki to Git or S3 in Administration › AI › Knowledge", ErrStoreFull, c.limit>>10)
 		}
 		if _, err := c.b.SaveKey(ctx, WikiKey, raw, version); errors.Is(err, kv.ErrConflict) {
 			continue

@@ -326,7 +326,7 @@ sherlock:
 
 agents:
   # The AI agents (Phase 12): Sherlock at the front desk, and an agent for
-  # each other purpose, configured in Administration › Settings › AI. Each
+  # each other purpose, configured in Administration › AI. Each
   # agent's instructions are its fixed core (in the console, changed only
   # by releases), then house instructions, then notes per cluster. What is
   # set here is the baseline of the house instructions: an edit made in
@@ -427,7 +427,7 @@ issues:
   # "Report page" links, the console's emails): a path on this console
   # or an http or https address, such as https://help.example.com/report
   # when a proxy serves it elsewhere. Empty is /report on this console.
-  # Set in Settings › Issues before 0.12.1; a value saved there is no
+  # Set in Administration › AI › Issues before 0.12.1; a value saved there is no
   # longer read.
   reportURL: ""
   # The issue service's webhook is set in its settings at run time; with
@@ -505,7 +505,7 @@ jobs:
   # budget. Their output is read-only: runs with a report and findings,
   # kept in the ConfigMap <release>-runs, and proposals that wait for a
   # person in Cases › Inbox. They read the clusters as the user
-  # 221b:agents with the role Settings › Jobs chooses (Viewer by default;
+  # 221b:agents with the role Administration › AI › Jobs chooses (Viewer by default;
   # bind a role to that user to let them read a namespace, or pick a group
   # of the role Viewer there).
   # The time zone a new schedule starts in, an IANA name such as
@@ -545,12 +545,12 @@ backup:
 
 # --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
 knowledge:
-  # Mycroft's knowledge: the sources a SuperAdmin connects in Settings ›
+  # Mycroft's knowledge: the sources a SuperAdmin connects in Administration › AI ›
   # Knowledge (Confluence spaces, git repositories of runbooks, uploaded
   # documents, and what the console knows), and the wiki it keeps in a git
   # repository or an S3 bucket. Its records are in the ConfigMap
   # <release>-knowledge, every credential in the Secret <release>-knowledge
-  # (with connections.store secrets). A live source (Settings › Knowledge,
+  # (with connections.store secrets). A live source (Administration › AI › Knowledge,
   # mode Live) is never copied: its pages are fetched when an agent
   # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
   #
@@ -572,13 +572,13 @@ knowledge:
     sizeLimit: 512Mi
   # How often the local copy is read again from a git repository (besides
   # each push to the webhook) or an S3 bucket (besides each bucket
-  # notification); Settings › Knowledge may set its own.
+  # notification); Administration › AI › Knowledge may set its own.
   refresh:
     git: 15m
     s3: 5m
   # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
-  # the wiki while Settings › Knowledge names no store, so Mycroft's wiki
-  # can be tried without a repository or a bucket. Settings › Knowledge
+  # the wiki while Administration › AI › Knowledge names no store, so Mycroft's wiki
+  # can be tried without a repository or a bucket. Administration › AI › Knowledge
   # shows it as "ConfigMap (temporary, for testing — will be removed; move
   # to Git or S3 before relying on it)". It holds at most 900 KiB, and a
   # write past that is refused; it will be removed, so move the wiki to

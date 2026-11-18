@@ -1,4 +1,4 @@
-// Package credentials keeps Settings › Credentials (0.12.1, CR-01 to
+// Package credentials keeps Administration › Credentials (0.12.1, CR-01 to
 // CR-14): who the console is when it signs in somewhere, and where that
 // applies. A credential has a name, a kind, an endpoint (the address, or
 // the prefix of the addresses, it is ever sent to), a description, when it

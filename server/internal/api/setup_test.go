@@ -97,7 +97,7 @@ func TestGettingStarted(t *testing.T) {
 	}
 	// Sherlock reads the same steps in words.
 	words := SetupText(v)
-	if !strings.Contains(words, "Next: step") || !strings.Contains(words, "(#/admin/settings/knowledge)") || !strings.Contains(words, "5. Knowledge: connect Mycroft's sources: open.") {
+	if !strings.Contains(words, "Next: step") || !strings.Contains(words, "(#/admin/ai/knowledge)") || !strings.Contains(words, "5. Knowledge: connect Mycroft's sources: open.") {
 		t.Fatalf("%s", words)
 	}
 	if b, _ := json.Marshal(v); strings.Contains(string(b), "correct horse") {

@@ -17,7 +17,7 @@ import (
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
-// --- Settings › Repositories (0.12.1, RP-01 to RP-08) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-01 to RP-08) ---
 
 // A SuperAdmin lists a git repository beside the chart repositories; an
 // application's Setup names it, by name or by its address, and reads its

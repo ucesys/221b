@@ -104,17 +104,17 @@ func TestCaseworkAccess(t *testing.T) {
 	if resp, body := send(t, adam, "POST", url+"/C-1/close", `{"outcome": "notAProblem", "explanation": "As designed."}`); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"outcome":"noAction"`) {
 		t.Fatalf("closed as notAProblem: %d %s", resp.StatusCode, body)
 	}
-	// Settings › Cases (CF-19): read by those who see the cases, set by a
+	// Administration › AI › Cases (CF-19): read by those who see the cases, set by a
 	// SuperAdmin.
 	if resp, body := send(t, sue, "GET", srv.URL+casework.SettingsPath, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"newCasesPerRun":50`) {
-		t.Fatalf("Settings › Cases: %d %s", resp.StatusCode, body)
+		t.Fatalf("Administration › AI › Cases: %d %s", resp.StatusCode, body)
 	}
 	cases := `{"keepAgentClosedDays": 30, "lookBackDays": 30, "exceptionStaleDays": 30, "exceptionsPerAgent": 10, "newCasesPerRun": 10}`
 	if resp, _ := send(t, adam, "PUT", srv.URL+casework.SettingsPath, cases); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("an Admin sets Settings › Cases: %d", resp.StatusCode)
+		t.Fatalf("an Admin sets Administration › AI › Cases: %d", resp.StatusCode)
 	}
 	if resp, body := send(t, sam, "PUT", srv.URL+casework.SettingsPath, cases); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"newCasesPerRun":10`) {
-		t.Fatalf("a SuperAdmin sets Settings › Cases: %d %s", resp.StatusCode, body)
+		t.Fatalf("a SuperAdmin sets Administration › AI › Cases: %d %s", resp.StatusCode, body)
 	}
 	// --- Cases replace reports (Phase 12, wave 5): any words, or none,
 	// for what a case is about (CU-03); the SLA, read by all who see the

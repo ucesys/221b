@@ -17,7 +17,7 @@ import (
 	"github.com/ucesys/221b/server/internal/scrub"
 )
 
-// Testing a source (KN-25, KN-26). Settings › Knowledge's source dialog
+// Testing a source (KN-25, KN-26). Administration › AI › Knowledge's source dialog
 // tests the values as typed, before they are saved: a new source's, or a
 // saved one's with what was changed in its dialog. A credential left blank
 // on Edit is the saved one, read here by the source's id and never sent
@@ -83,7 +83,7 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	if err := s.leads(); err != nil {
 		return SourceTest{}, err
 	}
-	// A git source naming a repository of Settings › Repositories is
+	// A git source naming a repository of Administration › Settings › Repositories is
 	// tested with its address and credential (RP-03).
 	x, err := s.fillRepo(ctx, x)
 	if err != nil {

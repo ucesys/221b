@@ -686,7 +686,7 @@ describe('the drawer’s pilot history, discarded drafts and the limits', () => 
     expect(toasts).toContain('Saved draft 4. Earlier draft 3 was discarded; the pilot of draft 3 ended; request 1 was withdrawn.')
   })
 
-  it('says the total limit still applies beside a cap of 0, warns of a cap above it, and leads to Settings › Limits (AI-28, AI-39)', async () => {
+  it('says the total limit still applies beside a cap of 0, warns of a cap above it, and leads to Administration › AI › Limits (AI-28, AI-39)', async () => {
     ov = { ...ov, dailyUSD: 20, monthlyUSD: 200, agents: ov.agents.map((a) => (a.id === 'sherlock' ? { ...a, settings: { dailyUSD: 100 } } : a)) }
     render(<AgentsSection />)
     fireEvent.click((await screen.findAllByTestId('agent-open'))[0]!)
@@ -695,7 +695,7 @@ describe('the drawer’s pilot history, discarded drafts and the limits', () => 
     expect(hints.map((h) => `${h.dataset.which}:${h.dataset.tone}`)).toEqual(['daily:warn', 'monthly:info'])
     expect(hints[0]!.textContent).toContain('Its daily cap of $100.00 is higher than the total limit of $20.00 a day, which counts all agents together, and stops it first.')
     expect(hints[1]!.textContent).toContain('The total limit of $200.00 a month still applies to all agents together.')
-    expect(hints[0]!.textContent).toContain('Go to Settings › Limits')
+    expect(hints[0]!.textContent).toContain('Go to Administration › AI › Limits')
     // A cap below the total limit needs no word; an unsaved edit must be saved before leaving.
     fireEvent.change(within(drawer).getByTestId('agent-daily'), { target: { value: '5' } })
     hints = within(drawer).getAllByTestId('agent-overall-hint')
@@ -705,6 +705,6 @@ describe('the drawer’s pilot history, discarded drafts and the limits', () => 
     drawer = screen.getByTestId('agent-drawer')
     fireEvent.click(within(drawer).getAllByTestId('agent-overall-link')[0]!)
     await waitFor(() => expect(screen.queryByTestId('agent-drawer')).toBeNull())
-    expect(window.location.hash).toBe('#/admin/settings/limits')
+    expect(window.location.hash).toBe('#/admin/ai/limits')
   })
 })

@@ -16,7 +16,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 )
 
-// --- Settings › Credentials (0.12.1, CR-01 to CR-14) ---
+// --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 // wireCredentials opens the credentials: their list and secrets in the
 // Secret <release>-credentials when the console keeps its connections in
@@ -153,7 +153,7 @@ func (w *wiring) migrateCredentials(ctx context.Context) {
 		next = time.Now().Add(15 * time.Minute)
 		mctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		created, err := w.creds.Migrate(mctx, consumers, "the upgrade to 0.12.1")
-		// Then the git addresses become repositories of Settings ›
+		// Then the git addresses become repositories of Administration › Settings ›
 		// Repositories (RP-05), with the credentials just made.
 		if err == nil {
 			if gerr := w.migrateGitRepositories(mctx); gerr != nil {
@@ -167,7 +167,7 @@ func (w *wiring) migrateCredentials(ctx context.Context) {
 			w.auditLog.Record(audit.Event{Action: "credential.save", Who: audit.Who{Subject: "221b", Name: "the upgrade to 0.12.1"}, Target: c.Name, Detail: "credential made at the upgrade from " + strings.Join(c.From, ", ") + "; their own secrets stay where they were, no longer read", Outcome: audit.OutcomeOK})
 		}
 		if err != nil {
-			w.log.Warn("moving the kept secrets to Settings › Credentials stopped; it runs again later", "err", err)
+			w.log.Warn("moving the kept secrets to Administration › Credentials stopped; it runs again later", "err", err)
 			next = time.Now().Add(time.Minute)
 		}
 	}

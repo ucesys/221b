@@ -27,7 +27,7 @@ import { ModelPicker } from './ModelPicker'
 import { useUnsaved } from '../../lib/unsaved'
 
 /**
- * Settings › AI › Providers (Phase 12): where the agents' models come from.
+ * Administration › AI › Providers (Phase 12): where the agents' models come from.
  * The first is the provider Sherlock had; any number may be added, each
  * with a credential kept in a Secret of its own and never shown again, and
  * a Test that sends it one short request.
@@ -41,7 +41,7 @@ export function ProvidersSection({ onToast, initial }: { onToast?: (msg: string)
       .then(setOv)
       .catch((e: Error) => setError(e.message))
   }, [])
-  // A provider named in the address (#/admin/settings/providers/<id>), as
+  // A provider named in the address (#/admin/ai/providers/<id>), as
   // Sherlock's view_admin opens it (SR-12), opens its drawer once the
   // providers are read.
   const [opened, setOpened] = useState<string | undefined>(undefined)

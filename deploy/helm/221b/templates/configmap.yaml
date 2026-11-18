@@ -58,7 +58,7 @@ metadata:
 {{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
 ---
 # The temporary wiki store (CF-57): Mycroft's wiki itself, in one key,
-# while Settings › Knowledge names no store, so the wiki can be tried
+# while Administration › AI › Knowledge names no store, so the wiki can be tried
 # without a repository or a bucket. At most 900 KiB; it will be removed:
 # move the wiki to Git or S3 before relying on it. Created empty; the
 # console writes its key, and helm upgrade keeps it.

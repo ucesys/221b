@@ -91,7 +91,7 @@ func (s *Service) Outdated(ctx context.Context, c Caller, pagePath, text string)
 		return OutdatedResult{}, err
 	}
 	if x, ok := set.source(AddedSourceID); !ok || x.Off {
-		return OutdatedResult{}, invalid("the source %q is switched off in Settings › Knowledge: switch it on to correct the wiki", "Added in Mycroft")
+		return OutdatedResult{}, invalid("the source %q is switched off in Administration › AI › Knowledge: switch it on to correct the wiki", "Added in Mycroft")
 	}
 	if _, _, err := s.currentStore(ctx); err != nil {
 		return OutdatedResult{}, err

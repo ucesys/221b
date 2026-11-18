@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { fetchIssueSettings, saveIssueSettings, type IssueSettings as Settings } from '../api/issues'
 import { SaveBar } from './SaveBar'
+import { aiHref } from '../lib/router'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 /**
  * The issue service's settings (Phase 12, IS-29), for SuperAdmins: the
- * match threshold, the timers and the webhook. The targets are Settings ›
- * SLA's, the company or IT name Settings › General's, and the report
+ * match threshold, the timers and the webhook. The targets are Administration › AI ›
+ * SLA's, the company or IT name Administration › Settings › General's, and the report
  * page's address the chart's issues.reportURL (0.12.1).
  */
 export function IssueSettings({ open }: { open: boolean }) {
@@ -87,11 +88,11 @@ export function IssueSettings({ open }: { open: boolean }) {
             {num('fixedDays', 'A fix nobody answers closes after', 'days')}
             {num('needInfoDays', 'A question nobody answers closes after', 'days')}
           </section>
-          {/* --- Cases replace reports (Phase 12, wave 5): the response targets are Settings › SLA's now. */}
+          {/* --- Cases replace reports (Phase 12, wave 5): the response targets are Administration › AI › SLA's now. */}
           <p className="rk-fhint" style={{ margin: 0 }} data-testid="issue-settings-sla">
             The response and resolution targets per priority are in{' '}
-            <a className="rk-link" href="#/admin/settings/sla">
-              Settings › SLA
+            <a className="rk-link" href={aiHref('sla')}>
+              Administration › AI › SLA
             </a>
             , for every case.
           </p>

@@ -119,7 +119,7 @@ func (s *Service) updateWork(ctx context.Context, n int, f func(*Work) error) er
 
 // ---------- the casework ConfigMap's own records ----------
 
-// record is SettingsKey: Settings › Cases, the counter, the analyses
+// record is SettingsKey: Administration › AI › Cases, the counter, the analyses
 // under way (case number to since when), and when the retention ran.
 type record struct {
 	Settings   Settings             `json:"settings"`
@@ -187,7 +187,7 @@ func (s *Service) updateRecord(ctx context.Context, f func(*record) error) error
 	})
 }
 
-// settings are Settings › Cases as they stand; the defaults when they
+// settings are Administration › AI › Cases as they stand; the defaults when they
 // cannot be read.
 func (s *Service) settings(ctx context.Context) Settings {
 	rec, err := s.loadRecord(ctx)

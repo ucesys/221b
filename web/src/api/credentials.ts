@@ -1,4 +1,4 @@
-// Settings › Credentials (0.12.1, CR-01 to CR-14): who the console is when
+// Administration › Credentials (0.12.1, CR-01 to CR-14): who the console is when
 // it signs in somewhere, and where that applies. A secret is written once
 // and never read back: no answer holds one, and the page keeps none.
 

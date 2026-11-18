@@ -15,7 +15,7 @@ import (
 
 // --- Mycroft tab (Phase 12, wave 5, MY-04 to MY-08, ADR-118) ---
 //
-// What people add in Mycroft's wiki (since MY-11 in Settings › Knowledge's
+// What people add in Mycroft's wiki (since MY-11 in Administration › AI › Knowledge's
 // Added in Mycroft card, once AIOps › Mycroft › Wiki › Add): a note of plain text,
 // a web address to read (the pages of that site it links to, as deep and
 // as many as asked, robots.txt respected), or documents. Each goes in as
@@ -139,7 +139,7 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 		return AddResult{}, err
 	}
 	if x, ok := set.source(AddedSourceID); !ok || x.Off {
-		return AddResult{}, invalid("the source %q is switched off in Settings › Knowledge: switch it on to add to the wiki", "Added in Mycroft")
+		return AddResult{}, invalid("the source %q is switched off in Administration › AI › Knowledge: switch it on to add to the wiki", "Added in Mycroft")
 	}
 	if _, _, err := s.currentStore(ctx); err != nil {
 		return AddResult{}, err
@@ -199,7 +199,7 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 		}
 	case AddURL:
 		// Since 0.12.1 a web address is a source of its own (KN-44).
-		return AddResult{}, invalid("a web address is read as a Web site source now: a SuperAdmin adds one in Settings › Knowledge")
+		return AddResult{}, invalid("a web address is read as a Web site source now: a SuperAdmin adds one in Administration › AI › Knowledge")
 	default:
 		return AddResult{}, invalid("an addition is text or document")
 	}

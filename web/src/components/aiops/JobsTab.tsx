@@ -3,7 +3,7 @@ import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, rebui
 import { hideAmounts, useShowCosts } from '../../lib/costs'
 import { clockInBrowser, fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { adminHref, navigate, type Route } from '../../lib/router'
+import { navigate, type Route, aiHref } from '../../lib/router'
 import { Drawer } from '../Drawer'
 import { SchedulePicker, type Schedule } from '../SchedulePicker'
 import { Select } from '../Select'
@@ -141,7 +141,7 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
       <p style={{ margin: 0, color: 'var(--fg2)', lineHeight: 1.5, fontSize: 13 }}>
         Jobs that start an agent on schedule or events. Open one to see exactly what it does: its agent, the instructions it sends, what it reads and what it may make, all of which may be changed. Their output is read-only: reports, notes,
         wiki pages. A change they want waits in the Inbox. Who may edit jobs is set in{' '}
-        <a className="rk-link" href={adminHref('settings', ['jobs'])}>
+        <a className="rk-link" href={aiHref('jobs')}>
           Administration › Settings
         </a>
         .
@@ -173,7 +173,7 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
                     </a>
                     {/* The agent beside the name (I-5): several jobs share one agent, and its settings. */}
                     {j.agentName && (
-                      <span style={{ color: 'var(--fg2)' }} title={`Run by the ${j.agentName}: its model, tools and caps in Settings › Agents apply to every job it runs`} data-testid="job-agent">
+                      <span style={{ color: 'var(--fg2)' }} title={`Run by the ${j.agentName}: its model, tools and caps in Administration › AI › Agents apply to every job it runs`} data-testid="job-agent">
                         {' · '}
                         {j.agentName}
                       </span>
@@ -515,7 +515,9 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
               </label>
             ))}
           </div>
-          <span className="rk-fhint">A job stops when either is spent, and says so.{costs ? ` Today it has spent ${usd(job.spentToday)}.` : ''} The agent's own caps and the total and provider limits in Settings › Limits hold too.</span>
+          <span className="rk-fhint">
+            A job stops when either is spent, and says so.{costs ? ` Today it has spent ${usd(job.spentToday)}.` : ''} The agent's own caps and the total and provider limits in Administration › AI › Limits hold too.
+          </span>
           {draft.minPriority !== null && (
             // --- A job's lowest priority (Phase 12, wave 6c, CF-33) ---
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }} data-testid="job-min-priority-field">
@@ -554,7 +556,7 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
               )}
             </div>
           )}
-          {!may && <span className="rk-fhint">Only a SuperAdmin, or a role Settings › Jobs names, changes jobs.</span>}
+          {!may && <span className="rk-fhint">Only a SuperAdmin, or a role Administration › AI › Jobs names, changes jobs.</span>}
         </fieldset>
       )}
       {may && kind?.addMore && (

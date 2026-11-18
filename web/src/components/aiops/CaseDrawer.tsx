@@ -99,7 +99,7 @@ import { LiveContext } from '../../api/live'
 import { alertKeyOf, isActive } from '../../lib/alerts'
 import { useAIOpsItem } from '../../lib/aiopsItem'
 import { fmtAge, fmtClock, fmtTs } from '../../lib/format'
-import { adminHref, clusterHref, useRoute } from '../../lib/router'
+import { clusterHref, useRoute, aiHref } from '../../lib/router'
 import { openWatson } from '../../lib/watsonFill'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
@@ -128,7 +128,7 @@ export function useNow(every = 60_000): number {
 }
 
 /** Where the SLA's targets are set (CU-06). */
-export const slaHref = () => adminHref('settings', ['sla'])
+export const slaHref = () => aiHref('sla')
 
 /** What each way of closing means, in a line, as Close offers them. */
 export const CLOSE_HINT: Record<CloseOutcome, string> = {
@@ -574,7 +574,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
 /** A target of the SLA passed, linking to where it is set. */
 function LateTag({ what, minutes: m }: { what: string; minutes?: number }) {
   return (
-    <a href={slaHref()} className="rk-tag" data-tone="err" data-testid="case-late" title={`${what} target${m ? ` (${minutes(m)})` : ''} passed: see Settings › SLA`} style={{ textDecoration: 'none' }}>
+    <a href={slaHref()} className="rk-tag" data-tone="err" data-testid="case-late" title={`${what} target${m ? ` (${minutes(m)})` : ''} passed: see Administration › AI › SLA`} style={{ textDecoration: 'none' }}>
       {what} late{m ? ` · target ${minutes(m)}` : ''}
     </a>
   )
@@ -966,7 +966,7 @@ function CaseBody({
                   <span className="tb-hint">No SLA: an agent-found case has targets only at P0 and P1. </span>
                 )}
                 <a className="rk-link" href={slaHref()} style={{ fontSize: 12 }}>
-                  Settings › SLA
+                  Administration › AI › SLA
                 </a>
               </dd>
             </>

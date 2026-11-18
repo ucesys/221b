@@ -34,4 +34,4 @@ No knowledge is connected yet: Mycroft has no sources here. Answer from what the
 
 ## when no live source is set up
 
-No live source is set up (Settings › Knowledge, mode Live): there are no pages to look up. Answer from what the tools and ask_knowledge show.
+No live source is set up (Administration › AI › Knowledge, mode Live): there are no pages to look up. Answer from what the tools and ask_knowledge show.

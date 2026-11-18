@@ -1,11 +1,11 @@
 package apps
 
-// --- Settings › Repositories (0.12.1, RP-01 to RP-08) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-01 to RP-08) ---
 //
-// Settings › Applications became Settings › Repositories: beside the Helm
+// Settings › Applications became Administration › Settings › Repositories: beside the Helm
 // repositories and OCI registries it lists the git repositories that
 // applications' Setup and Mycroft's git sources name, each with its
-// address, the credential of Settings › Credentials it is fetched with
+// address, the credential of Administration › Credentials it is fetched with
 // and an optional default branch. A user names the repository and keeps
 // its own branch, tag and path: an address or a credential changes once,
 // on the repository, and every user reads it from there (Resolve,
@@ -215,7 +215,7 @@ func (r *Repos) UsersOf(ctx context.Context, name string) ([]string, error) {
 	return m[name], nil
 }
 
-// AppLabel names an application for Settings › Repositories' Used by:
+// AppLabel names an application for Administration › Settings › Repositories' Used by:
 // "application team/shop", with its cluster when it is not the console's
 // own.
 func AppLabel(rec Record) string {
@@ -313,7 +313,7 @@ func (r *Repos) gitSource(ctx context.Context, src Source) (Source, error) {
 	return src, nil
 }
 
-// ResolveGit fills in a git source naming a repository of Settings ›
+// ResolveGit fills in a git source naming a repository of Administration › Settings ›
 // Repositories (RP-03): its address, from the list; the repository is
 // returned for its credential and default branch.
 func (r *Repos) ResolveGit(ctx context.Context, src Source) (Source, Repository, error) {
@@ -390,14 +390,14 @@ func plural(n int, one, many string) string {
 }
 
 // resolvingStore is a store whose records read their git repository's
-// address and credential from Settings › Repositories.
+// address and credential from Administration › Settings › Repositories.
 type resolvingStore struct {
 	Store
 	repos *Repos
 }
 
 // WithRepositories is a store whose records that name a git repository of
-// Settings › Repositories read its address and credential from the list
+// Administration › Settings › Repositories read its address and credential from the list
 // (RP-03): what changes there applies to every application at once. A
 // record naming one no longer listed reads as it was kept.
 func WithRepositories(s Store, r *Repos) Store {
@@ -453,7 +453,7 @@ func (s resolvingStore) Get(ctx context.Context, cluster, namespace, name string
 // --- The upgrade (RP-05) ---
 
 // GitMigration is what the upgrade made of the git addresses typed before
-// 0.12.1, as Settings › Repositories shows it until dismissed.
+// 0.12.1, as Administration › Settings › Repositories shows it until dismissed.
 type GitMigration struct {
 	At        time.Time     `json:"at,omitzero"`
 	Created   []GitMigrated `json:"created,omitempty"`
@@ -491,7 +491,7 @@ type GitConsumer interface {
 	UseRepository(ctx context.Context, key, name string) error
 }
 
-// Migration is what the upgrade made, for Settings › Repositories.
+// Migration is what the upgrade made, for Administration › Settings › Repositories.
 func (r *Repos) Migration(ctx context.Context) (GitMigration, error) {
 	if r == nil {
 		return GitMigration{}, nil

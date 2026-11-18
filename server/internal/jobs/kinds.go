@@ -60,7 +60,7 @@ func (s *Service) RegisterBuiltins() {
 	s.o.Kinds.Register(Kind{ID: KindAudit, Label: "Nightly audit", Agent: agentAuditor, AgentName: "Auditor", Order: 10,
 		Does:        "A report of new RBAC risks, volumes nearly full and practices not met",
 		Task:        AuditTask,
-		Reads:       "Each cluster the job covers, one after another, read-only as the reader identity of Settings › Jobs: review_cluster, then the access, policy and storage tools. It is told the cluster, the check ids it may name, and the keys in use there.",
+		Reads:       "Each cluster the job covers, one after another, read-only as the reader identity of Administration › AI › Jobs: review_cluster, then the access, policy and storage tools. It is told the cluster, the check ids it may name, and the keys in use there.",
 		Proposes:    ProposesFindings,
 		Default:     When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "02:00"}},
 		Budget:      Budget{RunUSD: 4, DayUSD: 4},

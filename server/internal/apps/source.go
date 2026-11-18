@@ -53,7 +53,7 @@ type Source struct {
 	Path string `json:"path,omitempty"`
 	// Chart is a Helm repository's or an OCI registry's chart, by name.
 	Chart string `json:"chart,omitempty"`
-	// Repository names the repository of Settings › Repositories the chart
+	// Repository names the repository of Administration › Settings › Repositories the chart
 	// comes from, whose credentials it is fetched with: always for a Helm
 	// repository, for an OCI registry when one covers its address; for git,
 	// the git repository picked (0.12.1, RP-03), whose address and
@@ -122,7 +122,7 @@ func Normalize(s Source) (Source, error) {
 	default:
 		return s, fmt.Errorf("a source is git, helm (a chart repository) or oci (an OCI registry), not %q", s.Kind)
 	}
-	// A git repository of Settings › Repositories is named by its name
+	// A git repository of Administration › Settings › Repositories is named by its name
 	// (RP-03); its address is filled in from the list (Repos.ResolveGit).
 	s.Repository = strings.TrimSpace(s.Repository)
 	if s.Repository != "" && !repoName.MatchString(s.Repository) {
@@ -291,7 +291,7 @@ func normalizeRepoChart(s Source) (Source, error) {
 	s.Chart = strings.TrimSpace(s.Chart)
 	s.Repository = strings.TrimSpace(s.Repository)
 	if s.Kind == KindHelm && s.Repository == "" {
-		return s, errors.New("name the chart repository, as Settings › Repositories lists it")
+		return s, errors.New("name the chart repository, as Administration › Settings › Repositories lists it")
 	}
 	if s.Repository != "" && !repoName.MatchString(s.Repository) {
 		return s, fmt.Errorf("%q is not a repository's name", s.Repository)
@@ -315,7 +315,7 @@ func normalizeRepoChart(s Source) (Source, error) {
 }
 
 // ParseChartRef reads a chart as a helm line names it (HR-07): repo/chart,
-// a chart of a repository Settings › Repositories lists, or
+// a chart of a repository Administration › Settings › Repositories lists, or
 // oci://registry/path/chart; version is --version, "" for the newest.
 func ParseChartRef(ref, version string) (Source, error) {
 	ref = strings.TrimSpace(ref)
@@ -328,7 +328,7 @@ func ParseChartRef(ref, version string) (Source, error) {
 	}
 	repo, chart, ok := strings.Cut(ref, "/")
 	if !ok || strings.Contains(chart, "/") || strings.Contains(ref, "://") {
-		return Source{}, fmt.Errorf("%q is not a chart: name it as repo/chart, with a repository Settings › Repositories lists, or as oci://registry/path/chart (a chart in git is --git URL)", ref)
+		return Source{}, fmt.Errorf("%q is not a chart: name it as repo/chart, with a repository Administration › Settings › Repositories lists, or as oci://registry/path/chart (a chart in git is --git URL)", ref)
 	}
 	return Normalize(Source{Kind: KindHelm, Repository: repo, Chart: chart, Ref: version})
 }
@@ -438,7 +438,7 @@ type Record struct {
 	// whose values (helm get values) the record's values started from
 	// when the console adopted it; 0 for none (asked November 17, 2026).
 	AdoptedRevision int `json:"adoptedRevision,omitempty"`
-	// Credential is the credential of Settings › Credentials the git
+	// Credential is the credential of Administration › Credentials the git
 	// repository is fetched with, by id; "" is none (0.12.1, CR-11). A
 	// repository's chart is fetched with its repository's.
 	Credential string `json:"credential,omitempty"`

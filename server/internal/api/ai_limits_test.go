@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Settings › Limits sets the total and each provider's limits in one
+// Administration › AI › Limits sets the total and each provider's limits in one
 // change: each is checked, 0 is no limit, the overview shows them with
 // the providers' spend, and the audit log says what changed (AI-36).
 func TestAILimitsAPI(t *testing.T) {

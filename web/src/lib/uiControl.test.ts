@@ -361,31 +361,31 @@ describe('Sherlock opens Administration and Settings pages the person may open (
   const open = (input: Record<string, unknown>) => REGISTRY.view_admin!(currentRoute(), input)
 
   it('opens each page as its own link does, with an item’s drawer, in the cluster the person is on', () => {
-    expect(open({ page: 'agents', item: 'sherlock' }).label).toBe('Opened Settings › Agents, sherlock')
-    expect(window.location.hash).toBe('#/admin/settings/agents/sherlock')
+    expect(open({ page: 'agents', item: 'sherlock' }).label).toBe('Opened Administration › AI › Agents, sherlock')
+    expect(window.location.hash).toBe('#/admin/ai/agents/sherlock')
     open({ page: 'general' })
-    expect(window.location.hash).toBe('#/admin/settings')
+    expect(window.location.hash).toBe('#/admin/settings/general')
     open({ page: 'audit-log' })
     expect(window.location.hash).toBe('#/admin/logs/audit')
     open({ page: 'email' })
-    expect(window.location.hash).toBe('#/admin/settings/email')
-    // Settings › Repositories (0.12.1, RP-01), and its old name.
-    expect(open({ page: 'repositories' }).label).toBe('Opened Settings › Repositories')
+    expect(window.location.hash).toBe('#/admin/settings/general/email')
+    // Administration › Settings › Repositories (0.12.1, RP-01), and its old name.
+    expect(open({ page: 'repositories' }).label).toBe('Opened Administration › Settings › Repositories')
     expect(window.location.hash).toBe('#/admin/settings/repositories')
     open({ page: 'general' })
     open({ page: 'applications' })
     expect(window.location.hash).toBe('#/admin/settings/repositories')
     open({ page: 'providers', item: 'gateway' })
-    expect(window.location.hash).toBe('#/admin/settings/providers/gateway')
+    expect(window.location.hash).toBe('#/admin/ai/providers/gateway')
     open({ page: 'roles', item: 'admin' })
-    expect(window.location.hash).toBe('#/admin/roles/admin')
+    expect(window.location.hash).toBe('#/admin/auth/roles/admin')
     open({ page: 'home' })
     expect(window.location.hash).toBe('#/')
     // The conversation is the cluster's: its pages open under it.
     window.history.replaceState(null, '', '#/c/staging/pods')
     setRouteForTests('#/c/staging/pods')
     open({ page: 'users', item: 'bob' })
-    expect(window.location.hash).toBe('#/c/staging/admin/users/bob')
+    expect(window.location.hash).toBe('#/c/staging/admin/auth/users/bob')
     open({ page: 'connection' })
     expect(window.location.hash).toBe('#/c/staging/cluster')
     setRouteForTests('#/c/staging/cluster')
@@ -400,7 +400,7 @@ describe('Sherlock opens Administration and Settings pages the person may open (
 
   it('sets a page’s search once its table is on screen, and reads and sorts the tables there', async () => {
     open({ page: 'users', search: 'ana' })
-    setRouteForTests('#/admin/users')
+    setRouteForTests('#/admin/auth/users')
     const { result, unmount } = renderHook(() => useTable({ id: 'admin-users', columns: COLS, rows: rowsOf(5), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
     await vi.waitFor(() => expect(result.current.query).toBe('ana'))
     expect(viewState().tables?.map((t) => t.id)).toContain('admin-users')
@@ -418,13 +418,13 @@ describe('Sherlock opens Administration and Settings pages the person may open (
     expect(() => open({ page: 'users', item: 'bob' })).toThrow('is for SuperAdmins')
     expect(() => open({ page: 'knowledge' })).toThrow('is for SuperAdmins')
     expect(window.location.hash).toBe(before)
-    expect(open({ page: 'roles' }).label).toBe('Opened Administration › Roles')
+    expect(open({ page: 'roles' }).label).toBe('Opened Administration › Auth › Roles')
     // An Admin sees Knowledge's Uploaded documents section.
     setUIMe(ME({ roles: ['admin'] }))
-    expect(open({ page: 'knowledge' }).label).toBe('Opened Settings › Knowledge')
+    expect(open({ page: 'knowledge' }).label).toBe('Opened Administration › AI › Knowledge')
     setUIMe(ME({ mode: 'none', roles: [] }))
     expect(() => open({ page: 'roles' })).toThrow('Sign-in is off')
-    expect(open({ page: 'permissions' }).label).toBe('Opened Administration › Permissions')
+    expect(open({ page: 'permissions' }).label).toBe('Opened Administration › Auth › Permissions')
     setUIMe(null)
     expect(() => open({ page: 'permissions' })).toThrow('not known')
     setUIMe(SUPER)
@@ -465,15 +465,15 @@ describe('never away from unsaved changes; Show in 221B applies them later (SR-1
       const changes = [{ action: 'view_admin', input: { page: 'agents', item: 'sherlock' } }]
       expect(await showChanges(changes)).toEqual({ applied: [], failed: [], unsaved: ['the agent drawer'] })
       expect(window.location.hash).toBe('#/admin/settings')
-      expect((await showChanges(changes, true)).applied).toEqual(['Opened Settings › Agents, sherlock'])
-      expect(window.location.hash).toBe('#/admin/settings/agents/sherlock')
+      expect((await showChanges(changes, true)).applied).toEqual(['Opened Administration › AI › Agents, sherlock'])
+      expect(window.location.hash).toBe('#/admin/ai/agents/sherlock')
     } finally {
       release()
     }
     // Saved or undone, the next change applies at once.
     setAnswering('local', 22)
     expect(await runRequest(ask(22, 'view_admin', { page: 'sla' }), 'local')).toMatchObject({ applied: true })
-    expect(window.location.hash).toBe('#/admin/settings/sla')
+    expect(window.location.hash).toBe('#/admin/ai/sla')
   })
 
   // The screen moves only once the answer is done (SR-18): during it a
@@ -494,7 +494,7 @@ describe('never away from unsaved changes; Show in 221B applies them later (SR-1
     }
     // Sent again once the answer is done, it is made.
     expect(await runRequest(ask(23, 'view_admin', { page: 'sla' }), 'local')).toMatchObject({ applied: true })
-    expect(window.location.hash).toBe('#/admin/settings/sla')
+    expect(window.location.hash).toBe('#/admin/ai/sla')
   })
 
   it('applies what was left in order and says what it could not', async () => {

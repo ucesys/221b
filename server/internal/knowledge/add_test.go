@@ -42,7 +42,7 @@ func TestNoPagesIsAnEmptyList(t *testing.T) {
 	}
 	// With no store an addition says what to do.
 	w = serve(t, s, &admin, "POST", "add", `{"kind":"text","title":"Backups","text":"Kept 30 days."}`, nil)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Settings › Knowledge") {
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Administration › AI › Knowledge") {
 		t.Fatalf("no store: %d %s", w.Code, w.Body)
 	}
 	if w := serve(t, s, &admin, "GET", "wiki", "", nil); !strings.Contains(w.Body.String(), `"maySetup":true`) || !strings.Contains(w.Body.String(), `"mayAdd":true`) {

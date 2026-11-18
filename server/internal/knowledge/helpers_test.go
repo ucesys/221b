@@ -141,7 +141,7 @@ type fixture struct {
 	audits  []audit.Event
 	mu      sync.Mutex
 	conf    *confluencetest.Fake
-	// creds are Settings › Credentials (CR-11).
+	// creds are Administration › Credentials (CR-11).
 	creds *credentials.Service
 }
 

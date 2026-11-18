@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UploadItem, UploadsView } from '../../api/knowledge'
 import { UPLOAD_ROWS, UploadedDocuments, uploadsShown } from './UploadedDocuments'
 
-// Settings › Knowledge › Uploaded documents (0.12.1): notes and documents
+// Administration › AI › Knowledge › Uploaded documents (0.12.1): notes and documents
 // from both built-in sources of uploads, in two tabs.
 
 const item = (over: Partial<UploadItem>): UploadItem => ({ source: 'added', id: 'x', type: 'note', title: 'x', state: 'read', ...over })
@@ -42,7 +42,7 @@ function stub(over: Record<string, Answer> = {}) {
   })
 }
 
-describe('Settings › Knowledge › Uploaded documents', () => {
+describe('Administration › AI › Knowledge › Uploaded documents', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()

@@ -18,7 +18,7 @@ type Target struct {
 // Settings are the issue service's own (IS-29), kept with its records.
 type Settings struct {
 	// Company is the name in the report page's header ("Example Corp IT"),
-	// set in Settings › General. The report page's address is the chart's
+	// set in Administration › Settings › General. The report page's address is the chart's
 	// issues.reportURL (Options.ReportURL) since 0.12.1, and the status
 	// page is gone; values saved here before are ignored.
 	Company string `json:"company"`
@@ -26,7 +26,7 @@ type Settings struct {
 	// linked to a known issue without asking anyone (IS-10).
 	MatchThreshold int `json:"matchThreshold"`
 	// Targets are the SLA: P0 to P4's, by "0".."4", for every case with an
-	// SLA clock (Settings › SLA, CU-06, CF-02).
+	// SLA clock (Administration › AI › SLA, CU-06, CF-02).
 	Targets map[string]Target `json:"targets"`
 	// RetentionDays is how long a closed report's text is kept (IS-17).
 	RetentionDays int `json:"retentionDays"`

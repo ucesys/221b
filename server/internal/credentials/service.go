@@ -63,7 +63,7 @@ func secretKey(id string) string { return "secret-" + id }
 // MaxCredentials bounds the list.
 const MaxCredentials = 200
 
-// Ref is one use of a credential, as Settings › Credentials lists it
+// Ref is one use of a credential, as Administration › Credentials lists it
 // under Used by: what uses it, and where that is set.
 type Ref struct {
 	Credential string `json:"-"`
@@ -250,7 +250,7 @@ func (s *Service) Get(ctx context.Context, id string) (Credential, error) {
 			return c, nil
 		}
 	}
-	return Credential{}, fmt.Errorf("%w %q: Settings › Credentials lists them", ErrNotFound, id)
+	return Credential{}, fmt.Errorf("%w %q: Administration › Credentials lists them", ErrNotFound, id)
 }
 
 // ByName is one credential by its name, any case.
@@ -264,7 +264,7 @@ func (s *Service) ByName(ctx context.Context, name string) (Credential, error) {
 			return c, nil
 		}
 	}
-	return Credential{}, fmt.Errorf("%w named %q: Settings › Credentials lists them", ErrNotFound, name)
+	return Credential{}, fmt.Errorf("%w named %q: Administration › Credentials lists them", ErrNotFound, name)
 }
 
 // Migration is what the upgrade made, for the page.

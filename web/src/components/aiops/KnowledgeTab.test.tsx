@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WikiPage, WikiState } from '../../api/knowledge'
-import { adminHref, parseHash, type Route } from '../../lib/router'
+import { aiHref, parseHash, type Route } from '../../lib/router'
 import { KnowledgeTab, PAGE_ROWS, pageHref, pagesShown, wikiRoute } from './KnowledgeTab'
 
 const pages: WikiPage[] = [
@@ -122,7 +122,7 @@ describe('AIOps › Mycroft › Wiki', () => {
     render(<KnowledgeTab route={route(['wiki'])} />)
     const room = await screen.findByTestId('wiki-store-room')
     expect(room.textContent).toContain('nearly full: 800 KiB of 900 KiB used (89%)')
-    expect(screen.getByTestId('wiki-store-move').getAttribute('href')).toBe(adminHref('settings', ['knowledge']))
+    expect(screen.getByTestId('wiki-store-move').getAttribute('href')).toBe(aiHref('knowledge'))
     cleanup()
     stub({ wiki: () => state({ store: 'configmap', usage: { used: 899 << 10, limit: 900 << 10 } }) })
     render(<KnowledgeTab route={route(['wiki'])} />)
@@ -149,8 +149,8 @@ describe('AIOps › Mycroft › Wiki', () => {
     render(<KnowledgeTab route={route(['wiki'])} />)
     expect((await screen.findByTestId('knowledge-empty')).textContent).toBe('No pages: no wiki is kept yet.')
     const banner = await screen.findByTestId('wiki-no-store')
-    expect(banner.textContent).toContain('Settings › Knowledge')
-    expect(within(banner).getByTestId('wiki-setup').getAttribute('href')).toBe(adminHref('settings', ['knowledge']))
+    expect(banner.textContent).toContain('Administration › AI › Knowledge')
+    expect(within(banner).getByTestId('wiki-setup').getAttribute('href')).toBe(aiHref('knowledge'))
     expect(screen.queryByText('Loading…')).toBeNull()
     cleanup()
     // Not a SuperAdmin: told who sets it up.
@@ -166,8 +166,8 @@ describe('AIOps › Mycroft › Wiki', () => {
     expect((await screen.findByTestId('knowledge-pages-error')).textContent).toContain('Your role does not include the wiki')
   })
 
-  // 0.12.1: Sources is Mycroft's own sub-tab; Add is in Settings › Knowledge only (MY-11).
-  it('has no Sources or Add view: the empty wiki leads to Settings › Knowledge', async () => {
+  // 0.12.1: Sources is Mycroft's own sub-tab; Add is in Administration › AI › Knowledge only (MY-11).
+  it('has no Sources or Add view: the empty wiki leads to Administration › AI › Knowledge', async () => {
     render(<KnowledgeTab route={route(['wiki'])} />)
     await screen.findAllByTestId('knowledge-page-link')
     expect(screen.queryByTestId('knowledge-view-sources')).toBeNull()
@@ -175,7 +175,7 @@ describe('AIOps › Mycroft › Wiki', () => {
     cleanup()
     stub({ pages: () => ({ pages: [], connected: true }) })
     render(<KnowledgeTab route={route(['wiki'])} />)
-    expect((await screen.findByTestId('knowledge-empty-add')).getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
+    expect((await screen.findByTestId('knowledge-empty-add')).getAttribute('href')).toBe(aiHref('knowledge', ['added']))
   })
 
   it('shows only the pages named by Review those pages, with Show all (0.12.1)', async () => {

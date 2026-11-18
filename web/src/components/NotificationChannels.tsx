@@ -19,7 +19,7 @@ export interface Draft extends ChannelInput {
 
 const draftsOf = (n: Notifications): Draft[] => n.channels.map((c) => ({ id: c.id, kind: c.kind, name: c.name, on: c.on, url: '', urlSet: c.urlSet, lastAt: c.lastAt, lastError: c.lastError }))
 
-/** The channels as Settings › Watson edits them; the page's one Save bar saves them with the rest, only when changed (CU-16). */
+/** The channels as Administration › Settings › Watson edits them; the page's one Save bar saves them with the rest, only when changed (CU-16). */
 export interface NotifyForm {
   saved: Notifications | null
   loadError: string
@@ -79,7 +79,7 @@ export function useNotifyForm(): NotifyForm {
 
 /**
  * Where new agents' proposals are announced (Phase 12, ADR-102), for a
- * SuperAdmin in Settings › Watson: Slack, Teams or any webhook, each
+ * SuperAdmin in Administration › Settings › Watson: Slack, Teams or any webhook, each
  * message a summary and a link, never a secret or any output. An address
  * is written here and never shown again: whoever has it can post. The
  * page's Save bar saves them (CU-16); Test sends to a channel as saved.

@@ -344,7 +344,7 @@ func TestNewCaseSimilarAndJoin(t *testing.T) {
 
 func ptrS(s string) *string { return &s }
 
-// Settings › Cases (CF-19): a SuperAdmin changes them, within their
+// Administration › AI › Cases (CF-19): a SuperAdmin changes them, within their
 // ranges; the retention deletes closed agent-found cases past
 // keepAgentClosedDays, once a day (CF-21).
 func TestSettingsAndRetention(t *testing.T) {
@@ -420,7 +420,7 @@ func TestTheSLA(t *testing.T) {
 	}
 }
 
-// A backup holds every case's ConfigMap whole, Settings › Cases and the
+// A backup holds every case's ConfigMap whole, Administration › AI › Cases and the
 // checks seen; a restore adds what is missing and keeps what is here
 // (CF-22).
 func TestBackupOfTheCases(t *testing.T) {
@@ -684,7 +684,7 @@ func TestTheCleanStartTouchesOnlyTheCasesArea(t *testing.T) {
 	var rec record
 	json.Unmarshal([]byte(after["casework/"+SettingsKey]), &rec)
 	if rec.Settings.KeepAgentClosedDays != 30 || rec.Duplicates != 0 || len(rec.Analyzing) != 0 {
-		t.Fatalf("Settings › Cases: %+v", rec)
+		t.Fatalf("Administration › AI › Cases: %+v", rec)
 	}
 	var cardsDoc struct {
 		Next  int `json:"next"`

@@ -20,7 +20,7 @@
 // suggested fix), the changes it proposed (Watson cards), the fix applied
 // and its RCA (the case's only, CF-44), the history, and its one draft,
 // shared by the people who work it (CF-59); and, in the ConfigMap <release>-casework, the
-// settings of Settings › Cases, the check ids seen per cluster and the
+// settings of Administration › AI › Cases, the check ids seen per cluster and the
 // analyses under way. It routes the runs' findings, serves the console's
 // Cases under /api/v1/aiops/cases and runs the case analysis job.
 //
@@ -41,7 +41,7 @@ import (
 // The keys of the casework ConfigMap this package keeps (the exceptions
 // beside them are package lessons').
 const (
-	// SettingsKey holds Settings › Cases, the counter of agent-found
+	// SettingsKey holds Administration › AI › Cases, the counter of agent-found
 	// cases closed as duplicates, the analyses under way and when the
 	// retention last ran.
 	SettingsKey = "cases-settings.json"
@@ -410,7 +410,7 @@ func AlertPriority(severity string) int {
 	return 3
 }
 
-// Settings are Settings › Cases (CF-19): SuperAdmin edits, the
+// Settings are Administration › AI › Cases (CF-19): SuperAdmin edits, the
 // console-wide roles read.
 type Settings struct {
 	// KeepAgentClosedDays is how long a closed agent-found case is kept

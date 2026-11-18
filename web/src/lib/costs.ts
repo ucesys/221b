@@ -1,5 +1,5 @@
 // Show costs (Phase 12, wave 6c, CF-40): a SuperAdmin's switch in
-// Settings › AI. Off, no dollar amount shows anywhere for anyone (runs,
+// Administration › AI. Off, no dollar amount shows anywhere for anyone (runs,
 // jobs, spend, Sherlock's usage, agents, tests), except the budget fields
 // where budgets are set; the budgets are still enforced. The console-wide
 // settings the shell loads carry it (showCosts); this keeps the last value

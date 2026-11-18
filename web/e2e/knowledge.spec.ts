@@ -1,12 +1,12 @@
-// Mycroft's knowledge (Phase 12, KN-01 to KN-18): Settings › Knowledge
+// Mycroft's knowledge (Phase 12, KN-01 to KN-18): Administration › AI › Knowledge
 // lists the sources and keeps the wiki in the temporary ConfigMap store
 // until another is chosen (CF-57), saying it is temporary;
-// a source names a credential of Settings › Credentials (0.12.1, CR-11),
+// a source names a credential of Administration › Credentials (0.12.1, CR-11),
 // whose token never comes back from any endpoint; the
-// webhook refuses a call without its token; and Settings › Issues has no
+// webhook refuses a call without its token; and Administration › AI › Issues has no
 // Confluence publisher or API tokens any more (0.12.1). AIOps › Mycroft (Phase 12, wave 5, MY-01
 // to MY-10): its sub-tabs and addresses, the Wiki in the default store
-// (never "Loading…" for good), and, since MY-11, adding in Settings ›
+// (never "Loading…" for good), and, since MY-11, adding in Administration › AI ›
 // Knowledge's Uploaded documents section (0.12.1) with a store (the
 // simulator's fake S3 bucket): a note under Notes and a CSV document under
 // Documents, listed in AIOps › Mycroft › Sources, and removed again. An S3
@@ -29,8 +29,8 @@ async function credential(page: Page, data: Record<string, unknown>): Promise<st
   return ((await r.json()) as { id: string }).id
 }
 
-test('Settings › Knowledge takes a source whose token never comes back, and keeps the wiki in the temporary ConfigMap store by default', async ({ page }) => {
-  await page.goto('/#/admin/settings/knowledge')
+test('Administration › AI › Knowledge takes a source whose token never comes back, and keeps the wiki in the temporary ConfigMap store by default', async ({ page }) => {
+  await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   await expect(section.locator('[data-testid=knowledge-source][data-source=console]')).toBeVisible()
@@ -75,7 +75,7 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   await expect(row).toHaveCount(0)
   expect((await page.request.delete(`/api/v1/credentials/${credId}`, { headers: SAME_ORIGIN })).status()).toBe(204)
 
-  // Settings › Issues: no Confluence publisher and no API tokens since 0.12.1.
+  // Administration › AI › Issues: no Confluence publisher and no API tokens since 0.12.1.
   await page.locator('[data-testid=settings-section][data-section=issues]').click()
   await expect(page.getByTestId('issue-settings')).toContainText('issues.reportURL')
   await expect(page.getByTestId('confluence-settings')).toHaveCount(0)
@@ -84,11 +84,11 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
 
 // A live source (0.12.1, KN-39): added with its address and a credential
 // whose bearer token never comes back; listed as Live, with no Wiki sync job.
-// Settings › Repositories (0.12.1, RP-03): a git source picks a git
+// Administration › Settings › Repositories (0.12.1, RP-03): a git source picks a git
 // repository of the list, keeps its own branch and directory, and the
 // repository says it uses it; it is not removed while it does.
-test('Settings › Knowledge takes a git source from a repository of Settings › Repositories', async ({ page }) => {
-  await page.goto('/#/admin/settings/knowledge')
+test('Administration › AI › Knowledge takes a git source from a repository of Administration › Settings › Repositories', async ({ page }) => {
+  await page.goto('/#/admin/ai/knowledge')
   const listed = await page.request.put('/api/v1/helm-repositories/e2e-handbook', { data: { kind: 'git', url: 'https://git.e2e.invalid/ops/handbook', defaultBranch: 'trunk' }, headers: SAME_ORIGIN })
   expect(listed.status(), await listed.text()).toBe(200)
   try {
@@ -113,9 +113,9 @@ test('Settings › Knowledge takes a git source from a repository of Settings �
   }
 })
 
-test('Settings › Knowledge takes a live source, listed as Live, never read into the wiki', async ({ page }) => {
+test('Administration › AI › Knowledge takes a live source, listed as Live, never read into the wiki', async ({ page }) => {
   const LIVE_TOKEN = 'e2e-live-bearer-token-5c1d'
-  await page.goto('/#/admin/settings/knowledge')
+  await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   const credId = await credential(page, { name: 'E2E status page', kind: 'token', endpoint: 'https://status.e2e.example.com', secret: { token: LIVE_TOKEN } })
@@ -153,7 +153,7 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   // asks for a store, and Add is open.
   await expect(page.getByTestId('knowledge-pages')).not.toContainText('Loading…', { timeout: 15_000 })
   await expect(page.getByTestId('wiki-no-store')).toHaveCount(0)
-  // Add is in Settings › Knowledge only (MY-11): the Wiki has no Add view.
+  // Add is in Administration › AI › Knowledge only (MY-11): the Wiki has no Add view.
   await expect(page.getByTestId('knowledge-view-add')).toHaveCount(0)
   // Sources is a sub-tab of its own (0.12.1); the Wiki has no Sources view.
   await expect(page.getByTestId('knowledge-view-sources')).toHaveCount(0)
@@ -188,17 +188,17 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await page.goto('/#/cases/knowledge/drafts')
   await expect(page.getByTestId('mycroft-sub-wiki')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('knowledge-view-drafts')).toHaveAttribute('aria-pressed', 'true')
-  // The Add view's old address opens Settings › Knowledge's Uploaded documents section (MY-11, 0.12.1).
+  // The Add view's old address opens Administration › AI › Knowledge's Uploaded documents section (MY-11, 0.12.1).
   await page.goto('/#/cases/mycroft/wiki/add')
   await expect(page.getByTestId('uploads-section').getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('knowledge-section')).toBeVisible()
   await expect(page.getByTestId('uploads-refused')).toHaveCount(0)
 })
 
-test('Settings › Knowledge › Uploaded documents with a store: a note under Notes and a CSV under Documents become sources the wiki quotes, listed in Mycroft › Sources, and are removed', async ({ page }) => {
+test('Administration › AI › Knowledge › Uploaded documents with a store: a note under Notes and a CSV under Documents become sources the wiki quotes, listed in Mycroft › Sources, and are removed', async ({ page }) => {
   test.skip(inKind, 'the fake S3 bucket is the simulator’s')
   test.setTimeout(120_000)
-  await page.goto('/#/admin/settings/knowledge/added')
+  await page.goto('/#/admin/ai/knowledge/added')
   const card = page.getByTestId('uploads-section')
   await expect(card.getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   const api = (path: string, method = 'GET', body?: unknown) =>
@@ -268,8 +268,8 @@ test('Settings › Knowledge › Uploaded documents with a store: a note under N
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.add'), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain('e2e-hunter2-secret-value')
 
-    // Removed again, item by item, in Settings › Knowledge: final, and said so.
-    await page.goto('/#/admin/settings/knowledge/added')
+    // Removed again, item by item, in Administration › AI › Knowledge: final, and said so.
+    await page.goto('/#/admin/ai/knowledge/added')
     for (const [tab, title] of [
       ['notes', 'E2E zephyr backups'],
       ['documents', 'e2e-quokka-hosts.csv'],
@@ -427,7 +427,7 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
 
 // A bucket of documents (Phase 12, KN-25): the simulator's second fake
 // bucket, sim-docs (MY-10), holds a Markdown runbook and a CSV under docs/
-// and a picture Mycroft skips. Added in Settings › Knowledge naming a
+// and a picture Mycroft skips. Added in Administration › AI › Knowledge naming a
 // credential of a read-only access key that never comes back, and tested. Its Wiki sync
 // job (KN-28) is in AIOps › Jobs › Schedule, nightly, and read the bucket
 // at once as a run of it: the fake model cut its answer to the batch of
@@ -435,7 +435,7 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
 // and each asked again (KN-27). Run now runs the job again. Settings
 // starts no sync; its items are listed under Mycroft › Wiki › Sources.
 // Removing the source removes its job.
-test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sync job in AIOps › Jobs', async ({ page }) => {
+test('Administration › AI › Knowledge reads an S3 bucket of documents through its Wiki sync job in AIOps › Jobs', async ({ page }) => {
   test.skip(inKind, 'the fake S3 bucket is the simulator’s')
   test.setTimeout(180_000)
   const SECRET = 'sim-secret-key'
@@ -456,7 +456,7 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
   await page.goto('/#/nodes')
   expect((await api('/api/v1/sherlock/key', 'PUT', { key: 'sk-ant-e2e-fake-key-0123456789' })).status).toBe(200)
   expect((await api('/api/v1/sherlock/config', 'PUT', SHERLOCK)).status).toBe(200)
-  await page.goto('/#/admin/settings/knowledge')
+  await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   // No sync starts here: one line says where the syncs are.
@@ -553,8 +553,8 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     await expect(fact('Items read')).toHaveText('0 changed items', { timeout: 20_000 })
     await expect(fact('Unchanged')).toHaveText('2 items')
 
-    // Settings › Knowledge counts it, and still starts no sync.
-    await page.goto('/#/admin/settings/knowledge')
+    // Administration › AI › Knowledge counts it, and still starts no sync.
+    await page.goto('/#/admin/ai/knowledge')
     await expect(row.getByTestId('knowledge-source-state')).toHaveText('Read · 2 items · 1 skipped', { timeout: 15_000 })
     await expect(page.getByTestId('knowledge-sync')).toHaveCount(0)
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.source' && String(r.target) === ID), { timeout: 15_000 }).toBe(true)

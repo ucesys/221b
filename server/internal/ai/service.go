@@ -343,7 +343,7 @@ func (s *Service) usable(p Provider) string {
 		if p.ID == DefaultProvider {
 			return "Sherlock has no API key. An administrator adds one in Settings."
 		}
-		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Settings › Providers.", p.Name)
+		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Administration › AI › Providers.", p.Name)
 	}
 	return ""
 }
@@ -557,7 +557,7 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	set := s.settingsOf(snap, id)
 	p, ok := s.provider(snap, set.Provider)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Settings › Agents", info.Name, set.Provider)
+		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider)
 	}
 	if why := s.usable(p); why != "" {
 		return sherlock.Agent{}, errors.New(why)
@@ -682,7 +682,7 @@ func (s *Service) Usable(id, cluster string) string {
 
 // ---------- the administrators' view ----------
 
-// ProviderView is a provider as Settings › Providers shows it.
+// ProviderView is a provider as Administration › AI › Providers shows it.
 type ProviderView struct {
 	Provider
 	// Resolved is the provider with its kind's defaults filled in.
@@ -703,7 +703,7 @@ type ProviderView struct {
 	Spend sherlock.AgentSpend `json:"spend"`
 }
 
-// AgentView is an agent as Settings › Agents shows it.
+// AgentView is an agent as Administration › AI › Agents shows it.
 type AgentView struct {
 	Info
 	Settings AgentSettings `json:"settings"`
@@ -782,7 +782,7 @@ func (s *Service) footprint(snap snapshot, info Info) *AgentFootprint {
 	return f
 }
 
-// Overview is Settings › Agents and Providers.
+// Overview is Administration › AI › Agents and Providers.
 type Overview struct {
 	Providers []ProviderView   `json:"providers"`
 	Agents    []AgentView      `json:"agents"`
@@ -1158,7 +1158,7 @@ func mustInfo(id string) Info {
 	return info
 }
 
-// Limits are the spending limits Settings › Limits changes (AI-36): the
+// Limits are the spending limits Administration › AI › Limits changes (AI-36): the
 // total, every agent's spend on every provider together, and each
 // provider's. 0 is no limit.
 type Limits struct {

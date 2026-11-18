@@ -107,7 +107,7 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 	switch x.Kind {
 	case SourceConfluence:
 		if c.Token == "" {
-			return nil, invalid("%s names no credential: choose one in Settings › Knowledge", x.Name)
+			return nil, invalid("%s names no credential: choose one in Administration › AI › Knowledge", x.Name)
 		}
 		hc := s.o.HTTP
 		if x.CAPEM != "" {

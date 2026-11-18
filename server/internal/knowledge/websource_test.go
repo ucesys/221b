@@ -570,7 +570,7 @@ func TestTheItemsArePagedAndFiltered(t *testing.T) {
 	}
 }
 
-// Settings › Knowledge's Uploaded documents list the notes and documents
+// Administration › AI › Knowledge's Uploaded documents list the notes and documents
 // of both sources of uploaded documents, newest first; an Admin adds and
 // removes; a document replaces the one of its name in either; removing
 // says the pages that drew on it, which Mycroft may be asked to rewrite

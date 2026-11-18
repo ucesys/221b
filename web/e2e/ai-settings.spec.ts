@@ -25,7 +25,7 @@ async function open(page: Page, hash: string) {
 }
 
 async function agents(page: Page) {
-  await open(page, '#/admin/settings/agents')
+  await open(page, '#/admin/ai/agents')
   await expect(page.getByTestId('agents-table')).toBeVisible()
 }
 
@@ -47,7 +47,7 @@ test('an in-house endpoint without a key is tested in its dialog, its models lis
   // The fake's address as the console reaches it: the default provider's.
   const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { provider: { endpoint: string } }
   const house = cfg.provider.endpoint.replace(/\/$/, '') + '/open/v1'
-  await open(page, '#/admin/settings/providers')
+  await open(page, '#/admin/ai/providers')
   await page.getByTestId('provider-add').click()
   const s = page.getByTestId('provider-drawer')
   await s.getByTestId('provider-name').fill('A5000')

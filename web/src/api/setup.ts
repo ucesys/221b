@@ -60,7 +60,7 @@ export function leftText(v: SetupView | null): string {
   return `${v.open} step${v.open === 1 ? '' : 's'} left`
 }
 
-/** The last part of where a step is done: "Administration › Settings › Knowledge" → "Knowledge". */
+/** The last part of where a step is done: "Administration › AI › Knowledge" → "Knowledge". */
 export function shortWhere(where: string): string {
   const first = where.split(',')[0] ?? where
   const parts = first.split('›')

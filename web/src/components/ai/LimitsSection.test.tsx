@@ -4,7 +4,7 @@ import type { AIOverview } from '../../api/ai'
 import { setShowCosts } from '../../lib/costs'
 import { LimitsSection } from './LimitsSection'
 
-// --- Settings › Limits (Phase 12.1, AI-37) ---
+// --- Administration › AI › Limits (Phase 12.1, AI-37) ---
 
 const agent = (id: string, name: string, providerId: string, providerName: string, settings = {}) => ({
   id,
@@ -67,7 +67,7 @@ function overview(): AIOverview {
   } as unknown as AIOverview
 }
 
-describe('Settings › Limits (AI-37)', () => {
+describe('Administration › AI › Limits (AI-37)', () => {
   const calls: { method: string; url: string; body?: unknown }[] = []
   let ov = overview()
   beforeEach(() => {
@@ -138,7 +138,7 @@ describe('Settings › Limits (AI-37)', () => {
     expect(rows[0]!.textContent).toContain('$15.00')
     expect(rows[1]!.textContent).toContain('none')
     expect(rows[1]!.textContent).toContain('Gateway')
-    expect(within(rows[1]!).getByTestId('limits-agent-link').getAttribute('href')).toBe('#/admin/settings/agents/auditor')
+    expect(within(rows[1]!).getByTestId('limits-agent-link').getAttribute('href')).toBe('#/admin/ai/agents/auditor')
     expect(within(screen.getByTestId('limits-agents')).queryByRole('spinbutton')).toBeNull()
   })
 

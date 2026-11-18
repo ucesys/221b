@@ -9,7 +9,7 @@ vi.mock('../../api/jobs', async (original) => ({
   saveJobsSettings: vi.fn(),
 }))
 
-describe('Settings › Jobs', () => {
+describe('Administration › AI › Jobs', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()

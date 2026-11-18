@@ -10,9 +10,9 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
-// --- Settings › Repositories (0.12.1, RP-04) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-04) ---
 
-// --git NAME installs from a git repository of Settings › Repositories,
+// --git NAME installs from a git repository of Administration › Settings › Repositories,
 // and the record names it; an address the list has is recorded as that
 // repository; a name the list does not have is refused, and so is a
 // --credential other than the repository's.
@@ -60,7 +60,7 @@ func TestHelmGitTakesARepositoryByName(t *testing.T) {
 	if out, code := run("helm upgrade hello -n web --app --set replicas=3"); code != 0 || !strings.Contains(out, "REVISION: 2") {
 		t.Fatalf("upgrade --app: exit %d\n%s", code, out)
 	}
-	if out, code := run("helm install third --git nosuch --path charts/web --ref v1.0.0 --tag -n web"); code == 0 || !strings.Contains(out, "--git nosuch") || !strings.Contains(out, "Settings › Repositories") {
+	if out, code := run("helm install third --git nosuch --path charts/web --ref v1.0.0 --tag -n web"); code == 0 || !strings.Contains(out, "--git nosuch") || !strings.Contains(out, "Administration › Settings › Repositories") {
 		t.Errorf("an unknown name: exit %d\n%s", code, out)
 	}
 	if _, err := creds.Create(ctx, credentials.Credential{Name: "elsewhere", Kind: credentials.KindToken, Endpoint: "https://gitlab.com"}, credentials.Secret{Token: "glpat"}, "ann"); err != nil {

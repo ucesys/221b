@@ -191,7 +191,7 @@ func Shown(x Source, id string) string {
 // UnderPattern is the pattern of everything under an item's place, as a
 // row offers it (Exclude everything under …), and its words, relative to
 // the source's root; "" when the item's place is the source's root (or
-// above it): a whole source is turned off in Settings › Knowledge, not
+// above it): a whole source is turned off in Administration › AI › Knowledge, not
 // excluded (KN-49). The pattern keeps the full id, as exclusions do.
 func UnderPattern(x Source, id string) (pattern string, under bool, words string) {
 	var dir string

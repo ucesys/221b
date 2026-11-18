@@ -141,7 +141,7 @@ spec:
             - name: KNOWLEDGE_CONFIGMAP
               value: {{ printf "%s/%s-knowledge" .Release.Namespace (include "b221.fullname" .) | quote }}
             {{- if ne (toString (dig "configMapStore" "enabled" true $knowledge)) "false" }}
-            # The temporary wiki store (CF-57), while Settings › Knowledge
+            # The temporary wiki store (CF-57), while Administration › AI › Knowledge
             # names no store.
             - name: WIKI_CONFIGMAP
               value: {{ printf "%s/%s-wiki" .Release.Namespace (include "b221.fullname" .) | quote }}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DEFAULT_GRACE, GRACE_CHOICES, REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
 import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
-import { adminHref, navigate, type Route } from '../lib/router'
+import { adminHref, aiHref, navigate, settingsHref, type AIPage, type Route, type SettingsPage } from '../lib/router'
 import { fetchIssueSettings, saveIssueSettings } from '../api/issues'
 import { IssueSettings } from './IssueSettings'
 import { SLASettings } from './SLASettings'
@@ -16,15 +16,17 @@ import { LimitsSection } from './ai/LimitsSection' // Limits (Phase 12.1, AI-37)
 import { ProvidersSection } from './ai/ProvidersSection'
 import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
-import { HelmReposSettings } from './apps/HelmReposSettings' // Settings › Repositories (0.12.1; Helm repositories, Phase 12, wave 5)
-import { CredentialsSettings } from './CredentialsSettings' // Settings › Credentials (0.12.1)
-import { expiringSoon, fetchCredentials } from '../api/credentials'
+import { HelmReposSettings } from './apps/HelmReposSettings' // Administration › Settings › Repositories (0.12.1; Helm repositories, Phase 12, wave 5)
+import { CredentialsSettings } from './CredentialsSettings' // Administration › Credentials (0.12.1)
 import { leftText, useSetup } from '../api/setup'
 import { LeaveSaveContext } from '../lib/leaveSave'
 import { hasUnsaved, unsavedWhat } from '../lib/unsaved'
 import { ConfirmDialog } from './ConfirmDialog'
 
-type Section = 'start' | 'general' | 'credentials' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'repositories' | 'issues' | 'jobs' | 'sla' | 'cases'
+/** The panel's tab of Administration: AI, Credentials or Settings (CU-18). */
+export type Area = 'ai' | 'credentials' | 'settings'
+
+type Section = AIPage | SettingsPage | 'credentials'
 
 interface SectionInfo {
   id: Section
@@ -32,64 +34,83 @@ interface SectionInfo {
   hint: string
 }
 
-// The sections, in groups under a heading (Phase 12): the AI agents'
-// replace Sherlock's of before, whose address leads to Agents.
-const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
-  {
-    sections: [
-      // --- Getting started (Phase 12, GS-05): first, with what is left.
-      { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
-      // Email is a section of General since 0.12.1 (its old address leads there).
-      { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts, email' },
-      // --- Settings › Credentials (0.12.1, CR-01): after General, as
-      // applications, repositories and Mycroft's sources all use them.
-      { id: 'credentials', label: 'Credentials', hint: 'Tokens and keys the console signs in with' },
+// Each tab's pages, in groups under a heading (Phase 12; CU-18, 0.12.1):
+// AI has the agents' pages, then AIOps' (a group, not a tab: the main
+// app has an AIOps area); Settings the console's own; Credentials is one
+// page, with no list.
+const AREAS: Record<Area, { nav: string; groups: { label?: string; sections: SectionInfo[] }[] }> = {
+  ai: {
+    nav: 'AI pages',
+    groups: [
+      {
+        label: 'Agents',
+        sections: [
+          { id: 'providers', label: 'Providers', hint: 'Where models come from' },
+          { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
+          // --- Limits (Phase 12.1, AI-37): the total, each provider's, each agent's.
+          { id: 'limits', label: 'Limits', hint: 'What the agents may spend: total, providers, agents' },
+          { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
+        ],
+      },
+      {
+        label: 'AIOps',
+        sections: [
+          // --- Cases replace reports (Phase 12, wave 5): the SLA, for every
+          // case; first, since every case has one.
+          { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
+          { id: 'issues', label: 'Issues', hint: 'Matching, timers, webhook' },
+          // --- One flow for findings and cases (Phase 12, wave 6) ---
+          { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
+          // --- Jobs (Phase 12) ---
+          { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
+        ],
+      },
     ],
   },
-  {
-    label: 'AI',
-    sections: [
-      { id: 'providers', label: 'Providers', hint: 'Where models come from' },
-      { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
-      // --- Limits (Phase 12.1, AI-37): the total, each provider's, each agent's.
-      { id: 'limits', label: 'Limits', hint: 'What the agents may spend: total, providers, agents' },
-      { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
+  // --- Administration › Credentials (0.12.1, CR-01; a tab since CU-18):
+  // applications, repositories and Mycroft's sources all use them.
+  credentials: {
+    nav: 'Credentials',
+    groups: [{ sections: [{ id: 'credentials', label: 'Credentials', hint: 'Tokens and keys the console signs in with' }] }],
+  },
+  settings: {
+    nav: 'Settings pages',
+    groups: [
+      {
+        sections: [
+          // --- Getting started (Phase 12, GS-05): first, with what is left.
+          { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
+          // Email is a section of General since 0.12.1 (its old address leads there).
+          { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts, email' },
+          { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
+          // --- Repositories (0.12.1, RP-01): Settings › Applications before;
+          // its old address leads here.
+          { id: 'repositories', label: 'Repositories', hint: 'Git, Helm and OCI repositories applications and sources come from' },
+        ],
+      },
     ],
   },
-  {
-    label: 'Changes',
-    sections: [
-      { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
-      // --- Settings › Repositories (0.12.1, RP-01): Applications before;
-      // its old address leads here.
-      { id: 'repositories', label: 'Repositories', hint: 'Git, Helm and OCI repositories applications and sources come from' },
-    ],
-  },
-  {
-    label: 'AIOps',
-    sections: [
-      // --- Cases replace reports (Phase 12, wave 5): the SLA, for every
-      // case; first, since every case has one.
-      { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
-      { id: 'issues', label: 'Issues', hint: 'Matching, timers, webhook' },
-      // --- One flow for findings and cases (Phase 12, wave 6) ---
-      { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
-      // --- Jobs (Phase 12) ---
-      { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
-    ],
-  },
-]
+}
 
-const SECTIONS: SectionInfo[] = GROUPS.flatMap((g) => g.sections)
+const sectionsOf = (area: Area): SectionInfo[] => AREAS[area].groups.flatMap((g) => g.sections)
 
-const settingsHref = (section: Section) => adminHref('settings', section === 'general' ? [] : [section])
+/** A page's address in its tab. */
+export function sectionHref(area: Area, section: Section): string {
+  if (area === 'ai') return aiHref(section as AIPage)
+  if (area === 'settings') return settingsHref(section as SettingsPage)
+  return adminHref('credentials')
+}
 
-/** The section an address asks for: Sherlock's of before is Agents now, and Email is General's. */
-export function sectionOf(asked: string | undefined): Section {
-  if (asked === 'sherlock') return 'agents'
-  if (asked === 'email') return 'general'
-  if (asked === 'apps') return 'repositories'
-  return SECTIONS.find((s) => s.id === asked)?.id ?? 'general'
+/** The tab an Administration address is on: AI, Credentials, or Settings otherwise. */
+export function areaOf(route: Route): Area {
+  const tab = route.path[0]
+  return tab === 'ai' || tab === 'credentials' ? tab : 'settings'
+}
+
+/** The page of a tab an address asks for, or the tab's first (Settings': General). */
+export function sectionOf(area: Area, asked: string | undefined): Section {
+  const all = sectionsOf(area)
+  return all.find((s) => s.id === asked)?.id ?? (area === 'settings' ? 'general' : all[0]!.id)
 }
 
 interface Props {
@@ -100,33 +121,33 @@ interface Props {
 }
 
 /**
- * Settings, the last page of the Administration area (RB-47), for
- * SuperAdmins: General (the refresh rate, kept on the server), the AI
- * agents' Providers, Agents and Knowledge (Phase 12), Watson, and the issue
- * service's (Phase 12). The theme is personal and lives in the account
- * menu. The page and its frame, with Back and Escape, are the
- * Administration area's.
+ * Administration's AI, Credentials and Settings tabs (RB-47; CU-18), for
+ * SuperAdmins: AI has the agents' Providers, Agents, Limits and Knowledge
+ * and AIOps' SLA, Issues, Cases and Jobs; Credentials is one page;
+ * Settings has Getting started, General (the refresh rate, kept on the
+ * server, times, alerts, email), Watson and Repositories. Each page has
+ * one Save, and leaving one with changes asks first. The theme is
+ * personal and lives in the account menu. The frame, with Back and
+ * Escape, is the Administration area's.
  */
 export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) {
-  const section = sectionOf(route.path[1])
+  const area = areaOf(route)
+  const section = sectionOf(area, route.path[1])
   const heading = useRef<HTMLHeadingElement>(null)
+  const href = (s: Section) => sectionHref(area, s)
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
   }, [section])
   // Settings › Email of before (EM-01): General's Email section, at its
-  // own address no more.
-  const askedEmail = route.path[1] === 'email'
+  // own address no more (#/admin/settings/general/email, which its old
+  // address leads to, scrolls to it).
+  const askedEmail = section === 'general' && route.path[2] === 'email'
   useEffect(() => {
     if (!askedEmail) return
     document.getElementById('settings-email')?.scrollIntoView?.({ block: 'start' })
     navigate(settingsHref('general'), true)
   }, [askedEmail])
-  // Settings › Applications of before is Repositories (0.12.1, RP-01).
-  const askedApps = route.path[1] === 'apps'
-  useEffect(() => {
-    if (askedApps) navigate(settingsHref('repositories'), true)
-  }, [askedApps])
 
   // Leaving a page with changes not saved asks first (CU-16): Save (where
   // the page's Save can say it all went), Discard, or stay. Closing or
@@ -144,63 +165,55 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
     return () => window.removeEventListener('beforeunload', ask)
   }, [])
   const go = (to: string) => {
-    if (to !== settingsHref(section) && hasUnsaved()) setLeaving({ to, canSave: !!leaveSave.current })
+    if (to !== href(section) && hasUnsaved()) setLeaving({ to, canSave: !!leaveSave.current })
     else navigate(to, true)
   }
 
-  const label = SECTIONS.find((s) => s.id === section)!.label
+  const label = sectionsOf(area).find((s) => s.id === section)!.label
+  const groups = AREAS[area].groups
+  const nav = sectionsOf(area).length > 1
   // Getting started's hint says how many steps are left (Phase 12).
-  const { view: setup } = useSetup(true)
-  // Credentials' hint says how many expire within 14 days (CR-08).
-  const [credsSoon, setCredsSoon] = useState(0)
-  useEffect(() => {
-    let stop = false
-    fetchCredentials().then(
-      (v) => !stop && setCredsSoon(expiringSoon(v.credentials ?? []).length),
-      () => undefined,
-    )
-    return () => {
-      stop = true
-    }
-  }, [section])
+  const { view: setup } = useSetup(area === 'settings')
   return (
     <LeaveSaveContext.Provider value={leaveSave}>
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
-        <nav aria-label="Settings sections" style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
-          {GROUPS.map((g) => [
-            g.label && (
-              <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
-                {g.label}
-              </span>
-            ),
-            ...g.sections.map((s) => (
-              <a
-                key={s.id}
-                href={settingsHref(s.id)}
-                aria-current={s.id === section ? 'page' : undefined}
-                onClick={(e) => {
-                  e.preventDefault()
-                  go(settingsHref(s.id))
-                }}
-                data-testid="settings-section"
-                data-section={s.id}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  textDecoration: 'none',
-                  color: 'var(--fg)',
-                  background: s.id === section ? 'var(--surface)' : 'transparent',
-                  boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
-                }}
-              >
-                <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.id === 'credentials' && credsSoon > 0 ? `${credsSoon} ${credsSoon === 1 ? 'expires' : 'expire'} within 14 days` : s.hint}</span>
-              </a>
-            )),
-          ])}
-        </nav>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page" data-area={area}>
+        {nav && (
+          <nav aria-label={AREAS[area].nav} style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
+            {groups.map((g) => [
+              g.label && (
+                <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
+                  {g.label}
+                </span>
+              ),
+              ...g.sections.map((s) => (
+                <a
+                  key={s.id}
+                  href={href(s.id)}
+                  aria-current={s.id === section ? 'page' : undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    go(href(s.id))
+                  }}
+                  data-testid="settings-section"
+                  data-section={s.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                    color: 'var(--fg)',
+                    background: s.id === section ? 'var(--surface)' : 'transparent',
+                    boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
+                  <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
+                </a>
+              )),
+            ])}
+          </nav>
+        )}
         <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
           <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
             {label}
@@ -334,7 +347,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     }
     if (companyChanged) {
       try {
-        // Read again just before, so Settings › Issues' other values stay as they are now.
+        // Read again just before, so Administration › AI › Issues' other values stay as they are now.
         const current = await fetchIssueSettings()
         const s = await saveIssueSettings({ ...current, company: companyDraft.trim() })
         setCompany(s.company)
@@ -408,7 +421,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
         <EmailSettings mail={mail} busy={busy} />
       </section>
       <SaveBar
-        what="Settings › General"
+        what="Administration › Settings › General"
         changed={changed}
         busy={busy}
         onSave={() => void save()}

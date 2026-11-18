@@ -29,7 +29,7 @@ func appsSetup(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Clie
 	return srv, c, store, local
 }
 
-// appsSetupCreds is appsSetup with Settings › Credentials (CR-11).
+// appsSetupCreds is appsSetup with Administration › Credentials (CR-11).
 func appsSetupCreds(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, *apps.MemoryStore, *source, *credentials.Service) {
 	t.Helper()
 	store := apps.NewMemoryStore()

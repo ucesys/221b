@@ -168,7 +168,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(screen.getByTestId('case-object').querySelector('[data-testid="object-link"]')).not.toBeNull()
     expect(txt(screen.getByTestId('case-fix-command'))).toContain('kubectl set resources')
     expect(txt(screen.getByTestId('case-late'))).toContain('Resolution late · target 4 h')
-    expect(screen.getByTestId('case-late').getAttribute('href')).toBe('#/admin/settings/sla')
+    expect(screen.getByTestId('case-late').getAttribute('href')).toBe('#/admin/ai/sla')
     expect(screen.queryByTestId('case-no-sla')).toBeNull()
     // No reporter: notes only.
     expect(screen.queryByTestId('case-send')).toBeNull()
@@ -797,7 +797,7 @@ describe('the parts around the drawer', () => {
     await waitFor(() => expect(api.saveSLA).toHaveBeenCalledWith({ ...targets, '0': { responseMinutes: 10, resolveMinutes: 240 } }))
   })
 
-  it('sets Settings › Cases within their ranges, and shows the duplicates counter', async () => {
+  it('sets Administration › AI › Cases within their ranges, and shows the duplicates counter', async () => {
     const s = { keepAgentClosedDays: 90, lookBackDays: 90, exceptionStaleDays: 90, exceptionsPerAgent: 50, newCasesPerRun: 50, duplicatesOfAgentCases: 7 }
     vi.mocked(api.fetchCasesSettings).mockResolvedValue(s)
     vi.mocked(api.saveCasesSettings).mockImplementation(async (x) => ({ ...x, duplicatesOfAgentCases: 7 }))
@@ -817,7 +817,7 @@ describe('the parts around the drawer', () => {
     expect(rangeError(1.5, 500)).toBe('From 1 to 500.')
   })
 
-  it('shows Settings › Cases read-only to who may not set them', async () => {
+  it('shows Administration › AI › Cases read-only to who may not set them', async () => {
     vi.mocked(api.fetchCasesSettings).mockResolvedValue({ keepAgentClosedDays: 90, lookBackDays: 90, exceptionStaleDays: 90, exceptionsPerAgent: 50, newCasesPerRun: 50, maySet: false })
     render(<CasesSettings />)
     expect(((await screen.findByTestId('cases-lookBackDays')) as HTMLInputElement).disabled).toBe(true)

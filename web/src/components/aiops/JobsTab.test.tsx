@@ -127,7 +127,7 @@ describe('AIOps › Jobs', () => {
     expect(a.textContent).toContain('Nightly audit')
     // The agent beside the job's name, so jobs that share one are plain (I-5).
     expect(`${within(a).getByRole('link', { name: 'Nightly audit' }).textContent}${within(a).getByTestId('job-agent').textContent}`).toBe('Nightly audit · Auditor')
-    expect(within(a).getByTestId('job-agent').title).toContain('Settings › Agents apply to every job it runs')
+    expect(within(a).getByTestId('job-agent').title).toContain('Administration › AI › Agents apply to every job it runs')
     expect(a.textContent).toContain('All clusters')
     expect(a.textContent).toContain('Every day at 02:00')
     expect(a.textContent).toContain('Europe/Berlin')

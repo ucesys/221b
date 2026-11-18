@@ -23,7 +23,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('Settings › Watson: standing approvals', () => {
+describe('Administration › Settings › Watson: standing approvals', () => {
   it('adds one with its class, clusters and rate', async () => {
     vi.mocked(api.fetchStanding).mockResolvedValue([])
     vi.mocked(api.saveStanding).mockImplementation(async (st) => ({ ...st, id: 's1' }))
@@ -61,7 +61,7 @@ describe('Settings › Watson: standing approvals', () => {
   })
 })
 
-describe('Settings › Watson: notifications', () => {
+describe('Administration › Settings › Watson: notifications', () => {
   it('never shows an address, sends one only when typed, and tests a channel; the page’s one Save saves only what changed (CU-16)', async () => {
     vi.mocked(api.fetchStanding).mockResolvedValue([])
     vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: false, approveAllMinutes: 0 })
@@ -94,7 +94,7 @@ describe('Settings › Watson: notifications', () => {
   })
 })
 
-describe('Settings › Watson: one Save (CU-16)', () => {
+describe('Administration › Settings › Watson: one Save (CU-16)', () => {
   it('saves the approvals and the channels together; a part that fails is named and kept, the other stays saved', async () => {
     vi.mocked(api.fetchStanding).mockResolvedValue([])
     vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })

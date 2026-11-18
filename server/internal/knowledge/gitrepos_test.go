@@ -7,9 +7,9 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
-// --- Settings › Repositories (0.12.1, RP-03, RP-05, RP-06) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-03, RP-05, RP-06) ---
 
-// A git source names a git repository of Settings › Repositories and
+// A git source names a git repository of Administration › Settings › Repositories and
 // keeps its branch and directory; its address and credential are the
 // repository's, read from the list, so a change there applies at once. A
 // name the list does not have is refused. The upgrade finds the sources
@@ -41,7 +41,7 @@ func TestAGitSourceNamesARepository(t *testing.T) {
 	if x.URL != "https://git.example.com/ops/handbook" || x.Credential != cr.ID || x.Branch != "ops" {
 		t.Fatalf("%+v", x)
 	}
-	// Its credential is the repository's: Settings › Credentials lists the
+	// Its credential is the repository's: Administration › Credentials lists the
 	// repository, not the source.
 	if uses, _ := f.s.Uses(ctx); len(uses) != 0 {
 		t.Errorf("uses: %+v", uses)

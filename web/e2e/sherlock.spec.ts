@@ -67,10 +67,10 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
   await expect(page.getByTestId('alert-troubleshoot')).toHaveCount(0)
 
-  // Phase 12: the key is the default provider's, under Settings › AI ›
+  // Phase 12: the key is the default provider's, under Administration › AI ›
   // Providers; Sherlock is turned on per cluster in its drawer under Agents.
   await page.getByTestId('admin-link').click()
-  await page.locator('[data-admin-page=settings]').click()
+  await page.locator('[data-admin-page=ai]').click()
   await page.locator('[data-testid=settings-section][data-section=providers]').click()
   const provider = page.locator('[data-testid=provider][data-provider=default]')
   await expect(provider.getByTestId('provider-key-state')).toContainText('No key yet')
@@ -175,7 +175,7 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
 })
 
 test('Sherlock is on the Administration pages too, and Escape in it stays there', async ({ page }) => {
-  await open(page, '#/admin/roles')
+  await open(page, '#/admin/auth/roles')
   await expect(page.getByTestId('admin-page')).toBeVisible()
   const fab = page.getByTestId('sherlock-fab')
   if (await fab.isVisible()) await fab.click()
@@ -351,12 +351,12 @@ test('a spending cap stops new questions with a clear message (P5-05)', async ({
   await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
 })
 
-test('a provider’s limit, set in Settings › Limits, stops the agents on it and says where it is changed (AI-37, AI-38)', async ({ page }) => {
+test('a provider’s limit, set in Administration › AI › Limits, stops the agents on it and says where it is changed (AI-37, AI-38)', async ({ page }) => {
   await open(page)
   expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
   try {
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     // Limits comes right after Agents.
     const sections = await page.getByTestId('settings-section').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')))
     expect(sections[sections.indexOf('agents') + 1]).toBe('limits')
@@ -368,7 +368,7 @@ test('a provider’s limit, set in Settings › Limits, stops the agents on it a
     await page.getByTestId('limits-save').click()
     await expect(page.getByTestId('save-bar')).toContainText('Saved.')
     await open(page)
-    await expect(page.getByTestId('sherlock-unavailable')).toContainText('Settings › Limits › Providers (', { timeout: 15_000 })
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('Administration › AI › Limits › Providers (', { timeout: 15_000 })
   } finally {
     expect(await put(page, '/api/v1/ai/limits', { dailyUSD: 20, monthlyUSD: 200, providers: { default: { dailyUSD: 0, monthlyUSD: 0 } } })).toBe(200)
   }
@@ -445,9 +445,9 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
   const base = cfg.provider.endpoint.replace(/\/$/, '')
   try {
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=providers]').click()
-    await expect(page).toHaveURL(/#\/admin\/settings\/providers$/)
+    await expect(page).toHaveURL(/#\/admin\/ai\/providers$/)
     const pcard = page.locator('[data-testid=provider][data-provider=default]')
     await pcard.getByTestId('provider-edit').click()
     const s = page.getByTestId('provider-drawer')
@@ -538,7 +538,7 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     expect(await violations(), theme + ' maximized').toEqual([])
     await page.keyboard.press('Escape')
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=agents]').click()
     await expect(page.getByTestId('agents-table')).toBeVisible()
     expect(await violations(), theme + ' settings').toEqual([])
@@ -552,7 +552,7 @@ test('the administrators’ notes join Sherlock’s instructions as a draft, whi
   expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
   try {
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=agents]').click()
     await page.locator('[data-testid=agent-row][data-agent=sherlock] [data-testid=agent-open]').click()
     const drawer = page.getByTestId('agent-drawer')

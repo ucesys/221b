@@ -11,11 +11,11 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
-// --- Settings › Credentials (0.12.1, CR-01 to CR-14) ---
+// --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 //
 // A SuperAdmin adds, changes, tests and removes the credentials; anyone
 // signed in reads their names, kinds, endpoints and uses, which the
-// pickers of the Helm tab, Settings › Repositories and Settings ›
+// pickers of the Helm tab, Administration › Settings › Repositories and Administration › AI ›
 // Knowledge offer. A secret is written and never read back: no answer
 // holds one, nor does the audit log.
 

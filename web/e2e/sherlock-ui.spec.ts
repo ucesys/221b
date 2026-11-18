@@ -256,21 +256,21 @@ test('Sherlock opens a Settings page with an agent’s drawer, and a page’s se
   await open(page, '#/pods')
   await ask(page, '[[view_admin {"page":"agents","item":"sherlock"}]]')
   await done(page)
-  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  expect(new URL(page.url()).hash).toBe('#/admin/ai/agents/sherlock')
   await expect(page.getByTestId('agent-drawer')).toBeVisible()
-  await expect(lastAnswer(page).getByTestId('sherlock-view-changes')).toHaveText('Opened Settings › Agents, sherlock')
+  await expect(lastAnswer(page).getByTestId('sherlock-view-changes')).toHaveText('Opened Administration › AI › Agents, sherlock')
   // Nothing in the drawer was changed or pressed.
   await expect(page.getByTestId('agent-save-state')).toHaveText('No changes.')
   await ask(page, '[[view_admin {"page":"roles","search":"admin"}]]', false)
   await done(page)
-  expect(new URL(page.url()).hash).toBe('#/admin/roles')
+  expect(new URL(page.url()).hash).toBe('#/admin/auth/roles')
   await expect(page.getByRole('combobox', { name: 'Search roles' })).toHaveValue('admin')
 })
 
 test('with unsaved changes open, the view stays and Show in 221B applies it on the person’s word (SR-14, SR-15)', async ({ page }) => {
   const me = (await (await page.context().request.get('/api/v1/me')).json()) as { admin: boolean }
   test.skip(!me.admin, 'Settings are a SuperAdmin’s')
-  await open(page, '#/admin/settings/agents/sherlock')
+  await open(page, '#/admin/ai/agents/sherlock')
   await expect(page.getByTestId('agent-drawer')).toBeVisible()
   const daily = page.getByTestId('agent-daily')
   const was = await daily.inputValue()
@@ -280,7 +280,7 @@ test('with unsaved changes open, the view stays and Show in 221B applies it on t
   // The drawer covers the page; the question box is still typed in.
   await ask(page, '[[view_open {"tab":"nodes","filters":{"err":"errors"}}]]', false)
   await done(page)
-  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  expect(new URL(page.url()).hash).toBe('#/admin/ai/agents/sherlock')
   await expect(daily).toHaveValue(typed)
   await expect(lastAnswer(page).getByTestId('sherlock-view-changed')).toHaveCount(0)
   const left = lastAnswer(page).getByTestId('sherlock-view-left')
@@ -290,7 +290,7 @@ test('with unsaved changes open, the view stays and Show in 221B applies it on t
   await left.getByTestId('sherlock-show').click()
   await expect(left.getByTestId('sherlock-show-unsaved')).toContainText('the agent drawer')
   await left.getByTestId('sherlock-show-stay').click()
-  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  expect(new URL(page.url()).hash).toBe('#/admin/ai/agents/sherlock')
   await expect(daily).toHaveValue(typed)
   await left.getByTestId('sherlock-show').click()
   await left.getByTestId('sherlock-show-anyway').click()

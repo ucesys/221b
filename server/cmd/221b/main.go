@@ -122,7 +122,7 @@ type wiring struct {
 
 	// Watson, the toolbox, SSH and Automation.
 	helmRepos *apps.Repos
-	// creds are Settings › Credentials (0.12.1, credentials.go).
+	// creds are Administration › Credentials (0.12.1, credentials.go).
 	creds       *credentials.Service
 	watsonSvc   *watson.Service
 	toolboxCfg  toolbox.Config
@@ -254,7 +254,7 @@ func run(args []string) error {
 	if err := w.wireAPI(); err != nil {
 		return err
 	}
-	// Settings › Credentials (0.12.1, CR-12): the secrets kept with what
+	// Administration › Credentials (0.12.1, CR-12): the secrets kept with what
 	// used them move to credentials, on the leader.
 	go w.migrateCredentials(ctx)
 	// Jobs (Phase 12): the agents read through the handler's tools as

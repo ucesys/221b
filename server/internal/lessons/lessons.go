@@ -210,7 +210,7 @@ type Options struct {
 	Now    func() time.Time
 	Logger *slog.Logger
 	// StaleDays is after how many days without a match an exception is
-	// stale (Settings › Cases); nil never.
+	// stale (Administration › AI › Cases); nil never.
 	StaleDays func() int
 	// Clusters lists the console's clusters: the names the page shows and
 	// the clusters a new exception may be on; nil takes any id, named by

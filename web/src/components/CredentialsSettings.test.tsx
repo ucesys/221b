@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CredentialPicker } from './CredentialPicker'
 import { CredentialsSettings, expiryText } from './CredentialsSettings'
 
-// --- Settings › Credentials (0.12.1, CR-01 to CR-14) ---
+// --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 const day = 86_400_000
 
-describe('Settings › Credentials', () => {
+describe('Administration › Credentials', () => {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
   let list: Record<string, unknown>[] = []
   let migration: Record<string, unknown> | undefined

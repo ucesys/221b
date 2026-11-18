@@ -1,4 +1,4 @@
-// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): Settings › Knowledge,
+// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): Administration › AI › Knowledge,
 // the wiki's pages and the drafts in Cases. Credentials go in and never
 // come back: the server says only whether each is set.
 import { call, post } from './call'
@@ -34,7 +34,7 @@ export interface KnowledgeSource {
   branch?: string
   path?: string
   username?: string
-  /** A git source's repository of Settings › Repositories, by name (0.12.1, RP-03): url and credential are its own then. */
+  /** A git source's repository of Administration › Settings › Repositories, by name (0.12.1, RP-03): url and credential are its own then. */
   repository?: string
   /** A bucket of documents (KN-25): its name, the prefix read under, region, endpoint (empty for AWS), path-style, and an access key in the Secret or the pod's identity. */
   bucket?: string
@@ -56,7 +56,7 @@ export interface KnowledgeSource {
   migratedFrom?: string[]
   added?: string
   addedBy?: string
-  /** The credential of Settings › Credentials it signs in with, by id (0.12.1, CR-11); none when absent, or a bucket's pod identity. */
+  /** The credential of Administration › Credentials it signs in with, by id (0.12.1, CR-11); none when absent, or a bucket's pod identity. */
   credential?: string
   /** It names its credential; before the upgrade moves it, the one kept in the knowledge Secret is used. */
   credMigrated?: boolean

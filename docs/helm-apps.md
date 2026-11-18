@@ -22,7 +22,7 @@ Out, for now:
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git, within limits on what is sent, unpacked and written out (HA-04) | The image has no git; nothing touches disk; a private repository is fetched with a credential of Settings › Credentials chosen by name (0.12.1, CR-11), sent only under its endpoint: a change of repository it does not cover lets it go |
+| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git, within limits on what is sent, unpacked and written out (HA-04) | The image has no git; nothing touches disk; a private repository is fetched with a credential of Administration › Credentials chosen by name (0.12.1, CR-11), sent only under its endpoint: a change of repository it does not cover lets it go |
 | Who deploys | Watson, as the person: `helm install\|upgrade\|uninstall … --git --path --ref [--tag] --app`; the card pins the commit and the values, and the run deploys those or refuses | The dry run, the card, the two-person rule, the audit log and the output are the ones every change has (ADR-66, ADR-68) |
 | What the console keeps | A record per application in a Secret of its namespace, beside the connections | Survives restarts and replicas; the release itself stays Helm's |
 | Drift | Each object of the manifest read as the person and compared with what the manifest sets; kept two minutes | Catches changes by hand without caching anything, and without showing values |
@@ -60,7 +60,7 @@ apps:
     - registry.example.com:5443 # that port only
 ```
 
-With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Settings › Repositories, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
+With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Administration › Settings › Repositories, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
 
 Fetching a chart takes the rights of managing applications. In Watson, `helm install` and `helm upgrade` with `--git` or a repository's chart, a dry run included, are for an Admin or SuperAdmin whom Kubernetes lets manage applications in the namespace, asked before anything is fetched.
 
@@ -83,7 +83,7 @@ When a fetch fails on the way to the repository (the host refuses the connection
 | `POST apps` | Creates a record and submits `helm install` |
 | `POST apps/refs` | Lists a repository's branches and tags for the dialog, with the `credential` chosen there |
 | `GET apps/{ns}/{name}` | One record |
-| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or `credential` (an id of Settings › Credentials, `""` for none); with `upgrade`, submits `helm upgrade [--install]`. Another repository the credential does not cover lets it go, and `credentialRemoved` says so |
+| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or `credential` (an id of Administration › Credentials, `""` for none); with `upgrade`, submits `helm upgrade [--install]`. Another repository the credential does not cover lets it go, and `credentialRemoved` says so |
 | `POST apps/{ns}/{name}/upgrade` | Submits `helm upgrade`, moving the ref first when given |
 | `DELETE apps/{ns}/{name}` | Submits `helm uninstall`; `?record=1` forgets the source only |
 | `GET apps/{ns}/{name}/drift` | Compares the cluster with the manifest, as the person (`?refresh=1` asks again) |
@@ -98,7 +98,7 @@ Every `apps/…` route is served by the leader replica, where Watson runs. What 
 
 ## Credentials (0.12.1)
 
-A git repository, a Helm repository or an OCI registry of Settings › Repositories signs in with a credential of **Settings › Credentials** (CR-01 to CR-14), chosen by name: the picker offers those that serve the use and cover the address, preselects the only one, and makes you choose among several; *None (public)* is always there. A git repository takes a token sent as Basic (`x-access-token` for GitHub, `oauth2` for GitLab) or Bearer, a user and password, a GitHub App (the console mints its installation tokens) or an OAuth2 client; a Helm repository or OCI registry a user and password, or a token sent as Basic or Bearer (a registry exchanges it at its token service, as Helm does). The credential is sent only to addresses under its endpoint; the record keeps its id, never the secret.
+A git repository, a Helm repository or an OCI registry of Administration › Settings › Repositories signs in with a credential of **Administration › Credentials** (CR-01 to CR-14), chosen by name: the picker offers those that serve the use and cover the address, preselects the only one, and makes you choose among several; *None (public)* is always there. A git repository takes a token sent as Basic (`x-access-token` for GitHub, `oauth2` for GitLab) or Bearer, a user and password, a GitHub App (the console mints its installation tokens) or an OAuth2 client; a Helm repository or OCI registry a user and password, or a token sent as Basic or Bearer (a registry exchanges it at its token service, as Helm does). The credential is sent only to addresses under its endpoint; the record keeps its id, never the secret.
 
 Watson's typed `helm install|upgrade NAME --git URL …` fetches with `--credential NAME` when given, else with the application's own credential when a record is kept for that repository, else with the one credential that covers the repository; when several do, it refuses and asks for `--credential`.
 
@@ -106,7 +106,7 @@ Before 0.12.1 an application kept a token of its own, and a repository its own p
 
 ## Repositories (0.12.1)
 
-**Settings › Repositories** (RP-01 to RP-06; Settings › Applications before, whose address leads there) lists every repository applications and Mycroft's sources come from: git repositories, Helm repositories and OCI registries, each with a short name, its address, its credential (or *None (public)*), *Used by* and its last test; a git repository may have a default branch. SuperAdmins add, change, rename, test and remove them; those who manage applications see the list and pick from it.
+**Administration › Settings › Repositories** (RP-01 to RP-06; Settings › Applications before, whose address leads there) lists every repository applications and Mycroft's sources come from: git repositories, Helm repositories and OCI registries, each with a short name, its address, its credential (or *None (public)*), *Used by* and its last test; a git repository may have a default branch. SuperAdmins add, change, rename, test and remove them; those who manage applications see the list and pick from it.
 
 - **An application's git source names a repository.** The new application and a release's Setup card pick a git repository from the list (a SuperAdmin adds one inline with *Add a repository…*); the application keeps its own chart path and branch or tag. The record holds `source.repository` and, as before, the address, which is read from the repository each time: change the address or the credential once, on the repository, and every application that names it follows. A credential sent beside a listed repository is refused; an address sent without one that the list has is recorded as that repository.
 - **Mycroft's git sources** pick a repository the same way and keep their branch and directory.
@@ -152,7 +152,7 @@ Asked on November 13, 2026 (HA-21 to HA-23, ADR-154). For every image the newest
 
 **Network.** The registries are reached over HTTPS (443) through the proxy in `HTTPS_PROXY` when set. The chart's network policy allows that by default: `sherlock.egress` (on) opens `networkPolicy.outboundPorts` to any address. With `sherlock.egress: false`, or `networkPolicy.outboundCIDRs` narrowed, list the registries' addresses there, or under `helmRepositories.egressCIDRs` with the chart registries; otherwise the checks say *could not check* and nothing else. An air-gapped cluster sees no notice and no error.
 
-**Off.** Settings › Newer images › Off: no registry is asked, and the Helm tab shows nothing of it.
+**Off.** Administration › Settings › General › Newer images › Off: no registry is asked, and the Helm tab shows nothing of it.
 
 ## Who sees what
 

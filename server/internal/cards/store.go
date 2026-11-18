@@ -1601,7 +1601,7 @@ func (s *Store) Import(ctx context.Context, b Backup, open func(inFile, name, wh
 			if ch.URL == "" || urls[ch.ID] != "" {
 				continue
 			}
-			addr, err := open(ch.URL, fmt.Sprintf("the address of the notification channel %q", ch.Name), "Settings › Watson › Notifications › "+ch.Name)
+			addr, err := open(ch.URL, fmt.Sprintf("the address of the notification channel %q", ch.Name), "Administration › Settings › Watson › Notifications › "+ch.Name)
 			if err != nil {
 				return n, notes, err
 			}
@@ -1609,7 +1609,7 @@ func (s *Store) Import(ctx context.Context, b Backup, open func(inFile, name, wh
 				continue
 			}
 			if err := checkURL(ch.Kind, addr); err != nil {
-				notes = append(notes, fmt.Sprintf("notifications: the backup's address of the channel %q is not taken (%v); enter it again in Settings › Watson", ch.Name, err))
+				notes = append(notes, fmt.Sprintf("notifications: the backup's address of the channel %q is not taken (%v); enter it again in Administration › Settings › Watson", ch.Name, err))
 				continue
 			}
 			next[ch.ID] = addr
@@ -1617,7 +1617,7 @@ func (s *Store) Import(ctx context.Context, b Backup, open func(inFile, name, wh
 		if !mapsEqual(urls, next) {
 			raw, _ := json.Marshal(next)
 			if err := s.secrets().SaveKeyIf(ctx, urlsKey, raw, version); err != nil {
-				notes = append(notes, "notifications: the channels' addresses from the backup were not saved: "+err.Error()+"; enter them again in Settings › Watson")
+				notes = append(notes, "notifications: the channels' addresses from the backup were not saved: "+err.Error()+"; enter them again in Administration › Settings › Watson")
 			}
 		}
 		s.mu.Lock()

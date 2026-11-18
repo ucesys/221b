@@ -199,7 +199,7 @@ var specs = []*spec{
 	// --version (the newest when none is named). 0.12.1 (CR-11): a git
 	// source is fetched with the credential --credential names, else the
 	// application's, else the one that covers the repository. 0.12.1
-	// (RP-04): --git NAME is a git repository of Settings › Repositories,
+	// (RP-04): --git NAME is a git repository of Administration › Settings › Repositories,
 	// fetched with its own credential.
 	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 2, usage: "helm install RELEASE --git URL|NAME [--path DIR] --ref BRANCH|TAG [--tag] [--credential NAME] -n NAMESPACE [--app] [--create-namespace] | helm install RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--create-namespace]",
 		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "credential": {value: true}, "version": {value: true}, "app": {}, "create-namespace": {}, "set": {value: true},

@@ -1,4 +1,4 @@
-// The issue service's settings, for Settings › Issues (Phase 12, IS-29).
+// The issue service's settings, for Administration › AI › Issues (Phase 12, IS-29).
 // The report page has its own calls
 // (report/api.ts).
 import { call, post } from './call'

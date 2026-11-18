@@ -5,7 +5,7 @@
 // pages and changes are refused whole. The Wiki says so from STORE_NEAR on,
 // and points to the git and S3 stores, which have no such limit.
 import type { JSX } from 'react'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 
 /** From this share of the room on, the Wiki warns. */
 export const STORE_NEAR = 0.8
@@ -30,12 +30,12 @@ export function StoreRoom({ usage, maySetup }: { usage: { used: number; limit: n
       </span>
       {maySetup ? (
         <span>
-          <a className="rk-btn" data-on href={adminHref('settings', ['knowledge'])} data-testid="wiki-store-move">
+          <a className="rk-btn" data-on href={aiHref('knowledge')} data-testid="wiki-store-move">
             Move the wiki to Git or S3
           </a>
         </span>
       ) : (
-        <span className="rk-fhint">A SuperAdmin moves it to Git or S3 in Administration › Settings › Knowledge.</span>
+        <span className="rk-fhint">A SuperAdmin moves it to Git or S3 in Administration › AI › Knowledge.</span>
       )}
     </div>
   )

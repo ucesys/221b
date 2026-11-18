@@ -1402,6 +1402,6 @@ func (s *Service) noteMoved(config []byte) {
 		if json.Unmarshal(config, &old) != nil || old.Settings == nil || strings.TrimSpace(old.Settings.ReportURL) == "" || s.reportURL != "" {
 			return
 		}
-		s.log.Warn("the report page address saved in Settings › Issues is no longer read: it moved to the chart value issues.reportURL; set it there, or links go to /report on this console", "saved", strings.TrimSpace(old.Settings.ReportURL))
+		s.log.Warn("the report page address saved in Administration › AI › Issues is no longer read: it moved to the chart value issues.reportURL; set it there, or links go to /report on this console", "saved", strings.TrimSpace(old.Settings.ReportURL))
 	})
 }

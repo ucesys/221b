@@ -17,11 +17,11 @@ import (
 // ADR-125) ---
 //
 // The chart repositories and OCI registries the console installs charts
-// from besides git: Settings › Repositories lists them, with Test; a
+// from besides git: Administration › Settings › Repositories lists them, with Test; a
 // SuperAdmin adds, changes and removes them, and those who manage
 // applications (Admin, SuperAdmin) read the list, a repository's charts
 // and a chart's versions for the new application's form. Each signs in
-// with a credential of Settings › Credentials, named by id (0.12.1,
+// with a credential of Administration › Credentials, named by id (0.12.1,
 // CR-11). Since 0.12.1 (RP-01 to RP-08) the list holds the git
 // repositories applications' Setup and Mycroft's git sources name too,
 // each with what uses it; one in use is not removed.

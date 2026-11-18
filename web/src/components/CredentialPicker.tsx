@@ -32,7 +32,7 @@ interface Props {
 }
 
 /**
- * A credential of Settings › Credentials, chosen by name (0.12.1, CR-10):
+ * A credential of Administration › Credentials, chosen by name (0.12.1, CR-10):
  * those that serve the use and cover the address. The only one is
  * preselected while nothing is chosen; among several the person must
  * choose: it never guesses. "None (public)" is always there. The page
@@ -130,8 +130,8 @@ export function CredentialPicker({ use, address, value, onChange, label = 'Crede
               : list.length === 0
                 ? 'No credential covers this address.'
                 : `${list.length} ${list.length === 1 ? 'credential covers' : 'credentials cover'} this address.`}{' '}
-        <a href={adminHref('settings', ['credentials'])} className="rk-link">
-          Settings › Credentials
+        <a href={adminHref('credentials')} className="rk-link">
+          Administration › Credentials
         </a>
         {error && <span style={{ color: 'var(--err)' }}> {error}</span>}
       </span>

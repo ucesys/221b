@@ -419,7 +419,7 @@ describe('the Inbox as one table (IN-01 to IN-04)', () => {
     vi.mocked(casework.fetchCases).mockResolvedValue({ cases: [kase(5, { late: { response: true } }), kase(8, { late: { response: true }, slaApplies: false, agentFound: true })], clusters: [], mayChange: true, me: '' })
     page('#/aiops/inbox?kind=case')
     const late = await screen.findByTestId('inbox-row-late')
-    expect(late.getAttribute('href')).toBe('#/admin/settings/sla')
+    expect(late.getAttribute('href')).toBe('#/admin/ai/sla')
     expect(late.getAttribute('title')).toContain('Its response target passed')
     expect(screen.getAllByTestId('inbox-row-late')).toHaveLength(1)
   })

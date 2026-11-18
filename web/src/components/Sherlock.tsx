@@ -298,7 +298,7 @@ function SaveCase({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; on
         setBusy(true)
         try {
           const c = await saveTestCase(cluster, m.id, '', [])
-          onToast(`Saved as test case ${c.id}, with its tool results recorded: it runs with the agent’s tests in Settings › Agents.`)
+          onToast(`Saved as test case ${c.id}, with its tool results recorded: it runs with the agent’s tests in Administration › AI › Agents.`)
         } catch (e) {
           onToast(e instanceof Error ? e.message : String(e))
         } finally {

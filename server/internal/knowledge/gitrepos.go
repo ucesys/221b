@@ -1,8 +1,8 @@
 package knowledge
 
-// --- Settings › Repositories (0.12.1, RP-03, RP-05, RP-06) ---
+// --- Administration › Settings › Repositories (0.12.1, RP-03, RP-05, RP-06) ---
 //
-// A git source names a git repository of Settings › Repositories and
+// A git source names a git repository of Administration › Settings › Repositories and
 // keeps its own branch and directory: the address and the credential are
 // the repository's, read from the list whenever the settings are read, so
 // a change made there applies at once.
@@ -13,14 +13,14 @@ import (
 	"sync"
 )
 
-// GitRepo is a git repository of Settings › Repositories as a source
+// GitRepo is a git repository of Administration › Settings › Repositories as a source
 // reads it: its address and the credential it is fetched with ("" none).
 type GitRepo struct {
 	URL        string
 	Credential string
 }
 
-// GitReposFunc reads the git repositories of Settings › Repositories, by
+// GitReposFunc reads the git repositories of Administration › Settings › Repositories, by
 // name.
 type GitReposFunc func(ctx context.Context) (map[string]GitRepo, error)
 
@@ -30,7 +30,7 @@ type gitRepos struct {
 	f  GitReposFunc
 }
 
-// SetGitRepos has the sources read their git repositories from Settings ›
+// SetGitRepos has the sources read their git repositories from Administration › Settings ›
 // Repositories.
 func (s *Service) SetGitRepos(f GitReposFunc) {
 	s.gitRepos.mu.Lock()
@@ -86,13 +86,13 @@ func (s *Service) fillRepo(ctx context.Context, x Source) (Source, error) {
 	}
 	r, ok := m[x.Repository]
 	if !ok {
-		return x, invalid("Settings › Repositories lists no git repository %q", x.Repository)
+		return x, invalid("Administration › Settings › Repositories lists no git repository %q", x.Repository)
 	}
 	x.URL, x.Credential, x.CredMigrated = r.URL, r.Credential, true
 	return x, nil
 }
 
-// RepoUse is a source that names a repository, for Settings ›
+// RepoUse is a source that names a repository, for Administration › Settings ›
 // Repositories' Used by.
 type RepoUse struct {
 	Repository string
@@ -121,7 +121,7 @@ type GitSourceUser struct {
 	URL        string
 	Credential string
 	// Waiting says its own credential of before 0.12.1 has not moved to
-	// Settings › Credentials yet.
+	// Administration › Credentials yet.
 	Waiting bool
 }
 

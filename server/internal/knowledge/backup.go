@@ -86,9 +86,9 @@ func sealedOrPlaceholder(v string) bool {
 func credName(k string, set Settings) (string, string) {
 	switch {
 	case k == storeKey:
-		return "the wiki store's credential", "Settings › Knowledge › Wiki"
+		return "the wiki store's credential", "Administration › AI › Knowledge › Wiki"
 	case k == hookKey:
-		return "the knowledge webhook's token", "Settings › Knowledge › Webhook"
+		return "the knowledge webhook's token", "Administration › AI › Knowledge › Webhook"
 	case strings.HasPrefix(k, "source-"):
 		id := strings.TrimPrefix(k, "source-")
 		name, what := id, "the token"
@@ -100,9 +100,9 @@ func credName(k string, set Settings) (string, string) {
 				what = "the access key"
 			}
 		}
-		return what + " of the knowledge source " + name, "Settings › Knowledge › Sources › " + name
+		return what + " of the knowledge source " + name, "Administration › AI › Knowledge › Sources › " + name
 	}
-	return "the knowledge credential " + k, "Settings › Knowledge"
+	return "the knowledge credential " + k, "Administration › AI › Knowledge"
 }
 
 // Import restores the part: the settings replace the console's, every

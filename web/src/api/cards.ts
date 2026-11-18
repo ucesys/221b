@@ -1,7 +1,7 @@
 // The agents' proposals as durable Watson cards (Phase 12, ADR-99 to
 // ADR-102): listed in AIOps › Inbox, approved or rejected with a reason,
 // checked again; and a SuperAdmin's standing approvals and notification
-// channels, in Settings › Watson.
+// channels, in Administration › Settings › Watson.
 import { call, CallError, post } from './call'
 import { fmtTs, localTimes } from '../lib/format'
 import type { Actor } from './actor'

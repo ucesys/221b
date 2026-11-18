@@ -64,7 +64,7 @@ func (s *Service) resolve(ctx context.Context, c Credential, sec Secret) (*Use, 
 	// reads, is not sent half-made.
 	cp := c
 	if err := cp.Check(sec); err != nil {
-		return nil, fmt.Errorf("the credential %s cannot be used (%s): give its secret again in Settings › Credentials", c.Name, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+		return nil, fmt.Errorf("the credential %s cannot be used (%s): give its secret again in Administration › Credentials", c.Name, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	}
 	ep, err := ParseEndpoint(c.Endpoint)
 	if err != nil {

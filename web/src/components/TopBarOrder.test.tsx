@@ -190,7 +190,7 @@ describe('the area switch (CF-88)', () => {
     expect(pressed()).toEqual(['cases'])
     expect(screen.getByTestId('cases-nav')).toBeTruthy()
     cleanup()
-    bar(admin, '#/admin/roles')
+    bar(admin, '#/admin/auth/roles')
     expect(pressed()).toEqual(['cases'])
   })
 
@@ -198,7 +198,7 @@ describe('the area switch (CF-88)', () => {
     bar(admin, '#/scripts')
     expect(pressed()).toEqual(['automation'])
     cleanup()
-    bar(admin, '#/admin/users')
+    bar(admin, '#/admin/auth/users')
     expect(pressed()).toEqual(['automation'])
   })
 

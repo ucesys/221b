@@ -75,14 +75,14 @@ func TestCheckAllOrderAndMessages(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Agent != "" || ce.Provider != "" || ce.Which != "daily" {
 		t.Fatalf("total first: %v", err)
 	}
-	if want := "All agents together have reached the total daily limit of $5.00 an administrator set, across all providers. Sherlock answers again tomorrow (UTC), or when an administrator raises it in Settings › Limits › Total."; err.Error() != want {
+	if want := "All agents together have reached the total daily limit of $5.00 an administrator set, across all providers. Sherlock answers again tomorrow (UTC), or when an administrator raises it in Administration › AI › Limits › Total."; err.Error() != want {
 		t.Fatalf("total: %s", err)
 	}
 	err = CheckAll(Caps{}, s, a) // 0 is no limit
 	if !errors.As(err, &ce) || ce.Provider != "Lab vLLM" || ce.Which != "daily" {
 		t.Fatalf("provider second: %v", err)
 	}
-	if want := "The agents on the provider Lab vLLM have reached its daily limit of $5.00 an administrator set. They answer on it again tomorrow (UTC), or when an administrator raises it in Settings › Limits › Providers (Lab vLLM)."; err.Error() != want {
+	if want := "The agents on the provider Lab vLLM have reached its daily limit of $5.00 an administrator set. They answer on it again tomorrow (UTC), or when an administrator raises it in Administration › AI › Limits › Providers (Lab vLLM)."; err.Error() != want {
 		t.Fatalf("provider: %s", err)
 	}
 	a.ProviderCaps = Caps{}
@@ -90,7 +90,7 @@ func TestCheckAllOrderAndMessages(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Agent != "Auditor" || ce.Which != "monthly" {
 		t.Fatalf("agent last: %v", err)
 	}
-	if want := "Auditor has reached its own monthly spending cap of $5.00 an administrator set. It works again next month, or when an administrator raises it in Settings › Agents › Auditor (its own cap)."; err.Error() != want {
+	if want := "Auditor has reached its own monthly spending cap of $5.00 an administrator set. It works again next month, or when an administrator raises it in Administration › AI › Agents › Auditor (its own cap)."; err.Error() != want {
 		t.Fatalf("agent: %s", err)
 	}
 	a.Caps = Caps{}

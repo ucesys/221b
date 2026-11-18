@@ -41,7 +41,7 @@ func openHelmRepos(cfg config.Config, restCfg *rest.Config, settings kv.Backend,
 // with the install's backup key (ADR-137). A restore adds the ones
 // missing, by name, and leaves the ones the console has; a repository
 // whose password or token the backup's key does not open is restored
-// without one, and listed to be given again in Settings › Repositories.
+// without one, and listed to be given again in Administration › Settings › Repositories.
 func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 	if repos == nil {
 		return
@@ -106,7 +106,7 @@ func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 				in := apps.RepositoryInput{Kind: e.Kind, URL: e.URL, Auth: e.Auth, Username: e.Username}
 				if e.HasSecret || e.Auth != apps.AuthNone {
 					name := fmt.Sprintf("the %s of the Helm repository %s", map[bool]string{true: "token", false: "password"}[e.Auth == apps.AuthToken], e.Name)
-					where := "Settings › Repositories › " + e.Name
+					where := "Administration › Settings › Repositories › " + e.Name
 					secret, _ := env.Open(e.Secret, name, where)
 					if secret != "" {
 						in.Secret = &secret
@@ -142,6 +142,6 @@ func (w *wiring) wireHelmRepos() error {
 		return err
 	}
 	w.helmRepos = helmRepos
-	w.wireGitRepositories() // Settings › Repositories (0.12.1, RP-03)
+	w.wireGitRepositories() // Administration › Settings › Repositories (0.12.1, RP-03)
 	return nil
 }

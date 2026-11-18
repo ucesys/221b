@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react'
 import { fetchAI, saveLimits, type AIOverview, type Caps } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
-import { adminHref } from '../../lib/router'
+import { aiHref } from '../../lib/router'
 import { SaveBar } from '../SaveBar'
 
-/** Where the total limits are on Settings › Limits (AI-37). */
+/** Where the total limits are on Administration › AI › Limits (AI-37). */
 export const LIMITS_TOTAL_ID = 'limits-total'
 
-/** The address of Settings › Limits. */
-export const LIMITS_HREF = adminHref('settings', ['limits'])
+/** The address of Administration › AI › Limits. */
+export const LIMITS_HREF = aiHref('limits')
 
 /** The words beside every limit field: 0 is no limit. */
 export const NO_LIMIT = '0 means no limit.'
@@ -19,7 +19,7 @@ const capsOf = (c?: Caps | null): Caps => ({ dailyUSD: c?.dailyUSD ?? 0, monthly
 const amount = (v: string) => Math.max(0, Number(v) || 0)
 
 /**
- * Settings › Limits (Phase 12.1, AI-37): what the agents may spend. The
+ * Administration › AI › Limits (Phase 12.1, AI-37): what the agents may spend. The
  * total counts every agent on every provider; each provider's counts the
  * agents while on it; each agent's own cap is set in its drawer and only
  * shown here. The amounts spent show only when costs show (CF-40); the
@@ -165,7 +165,7 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
               {ov.agents.map((a) => (
                 <tr key={a.id} data-testid="limits-agent" data-agent={a.id}>
                   <td>
-                    <a className="rk-link" style={{ fontWeight: 600 }} href={adminHref('settings', ['agents', a.id])} data-testid="limits-agent-link">
+                    <a className="rk-link" style={{ fontWeight: 600 }} href={aiHref('agents', [a.id])} data-testid="limits-agent-link">
                       {a.name}
                     </a>
                   </td>
@@ -180,10 +180,10 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
           </table>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
-          An agent’s own cap is set in its drawer on Settings › Agents: open an agent to change it. {NO_LIMIT}
+          An agent’s own cap is set in its drawer on Administration › AI › Agents: open an agent to change it. {NO_LIMIT}
         </p>
       </section>
-      <SaveBar what="Settings › Limits" changed={changed} busy={busy} onSave={() => void save()} save={save} onUndo={undo} error={saveError} saved={changed ? '' : saved} testId="limits-save" />
+      <SaveBar what="Administration › AI › Limits" changed={changed} busy={busy} onSave={() => void save()} save={save} onUndo={undo} error={saveError} saved={changed ? '' : saved} testId="limits-save" />
     </>
   )
 }

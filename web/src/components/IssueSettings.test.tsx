@@ -24,7 +24,7 @@ const settings: api.IssueSettings = {
   webhook: { url: '' },
 }
 
-describe('Settings › Issues', () => {
+describe('Administration › AI › Issues', () => {
   beforeEach(() => {
     vi.mocked(api.fetchIssueSettings).mockResolvedValue(settings)
   })
@@ -33,7 +33,7 @@ describe('Settings › Issues', () => {
     vi.clearAllMocks()
   })
 
-  it('saves what was changed; the targets are kept as they are (Settings › SLA sets them)', async () => {
+  it('saves what was changed; the targets are kept as they are (Administration › AI › SLA sets them)', async () => {
     vi.mocked(api.saveIssueSettings).mockImplementation(async (s) => s)
     render(<IssueSettings open />)
     const threshold = await screen.findByLabelText('Link to a known issue at')
@@ -43,7 +43,7 @@ describe('Settings › Issues', () => {
     const sent = vi.mocked(api.saveIssueSettings).mock.calls[0]![0]
     expect(sent.matchThreshold).toBe(70)
     expect(sent.targets.P1).toEqual({ responseMinutes: 15, resolveMinutes: 240 })
-    expect(screen.getByTestId('issue-settings-sla').textContent).toContain('Settings › SLA')
+    expect(screen.getByTestId('issue-settings-sla').textContent).toContain('Administration › AI › SLA')
     expect(sent.company).toBe('Example IT')
   })
 

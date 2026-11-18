@@ -28,7 +28,7 @@ import (
 // and SuperAdmins see them; a SuperAdmin excludes and includes again; an
 // Admin or a SuperAdmin removes an uploaded document or note.
 //
-// Settings › Knowledge's Uploaded documents (MY-12), and an Admin's card
+// Administration › AI › Knowledge's Uploaded documents (MY-12), and an Admin's card
 // in Administration, list the notes and documents of both sources of
 // uploaded documents together: "Uploaded documents" (once a SuperAdmin's
 // Upload) and "Added in Mycroft" (once Add). Nothing is moved between them,
@@ -133,7 +133,7 @@ type SourceRefBrief struct {
 	Name string `json:"name"`
 }
 
-// UploadsView is Settings › Knowledge's Uploaded documents (MY-12).
+// UploadsView is Administration › AI › Knowledge's Uploaded documents (MY-12).
 type UploadsView struct {
 	Items    []UploadItem `json:"items"`
 	Limits   AddLimits    `json:"limits"`

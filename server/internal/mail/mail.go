@@ -246,7 +246,7 @@ type Options struct {
 	Secrets SecretStore
 	// Sender sends; nil is SMTP.
 	Sender Sender
-	// Link is the console's address the links start with (Settings ›
+	// Link is the console's address the links start with (Administration › Settings ›
 	// Watson's); nil is none.
 	Link   func(ctx context.Context) string
 	Audit  *audit.Log
@@ -333,7 +333,7 @@ func (s *Service) load(ctx context.Context) (Config, string, error) {
 		return c, "", err
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
-		return c, "", fmt.Errorf("Settings › Email cannot be read: %w", err)
+		return c, "", fmt.Errorf("Administration › Settings › General › Email cannot be read: %w", err)
 	}
 	return c, version, nil
 }
@@ -355,7 +355,7 @@ func (s *Service) change(ctx context.Context, f func(*Config) error) (Config, er
 		}
 		return c, err
 	}
-	return Config{}, errors.New("Settings › Email kept changing")
+	return Config{}, errors.New("Administration › Settings › General › Email kept changing")
 }
 
 func (s *Service) password(ctx context.Context) (string, string, error) {
@@ -577,7 +577,7 @@ func (s *Service) Save(ctx context.Context, in Input, by Person) (View, error) {
 		return View{}, err
 	}
 	if len(said) > 0 {
-		detail := "Settings › Email: " + strings.Join(said, ", ")
+		detail := "Administration › Settings › General › Email: " + strings.Join(said, ", ")
 		if saved.Configured() {
 			detail += "; email is off until a test passes"
 		} else {
@@ -645,12 +645,12 @@ func (s *Service) Test(ctx context.Context, to string, by Person) (View, error) 
 		return View{}, fmt.Errorf("%w: save a server and a From address first", ErrInvalid)
 	}
 	link := s.link(ctx)
-	text := "This is a test email from 221B, sent by " + by.label() + " from Settings › Email.\n\n" +
+	text := "This is a test email from 221B, sent by " + by.label() + " from Administration › Settings › General › Email.\n\n" +
 		"It got through: from now on the people involved in a case are emailed when it is opened and when it changes.\n"
 	if link != "" {
 		text += "\nThe console: " + link + "/\n"
 	} else {
-		text += "\nThe emails' links need the console's address, set in Settings › Watson › Notifications.\n"
+		text += "\nThe emails' links need the console's address, set in Administration › Settings › Watson › Notifications.\n"
 	}
 	m := Message{From: c.From, To: to, Subject: "221B: test email", Text: text}
 	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -662,7 +662,7 @@ func (s *Service) Test(ctx context.Context, to string, by Person) (View, error) 
 	}
 	saved, err := s.change(ctx, func(x *Config) error {
 		if x.Gen != c.Gen {
-			return fmt.Errorf("%w: Settings › Email changed during the test; test again", ErrInvalid)
+			return fmt.Errorf("%w: Administration › Settings › General › Email changed during the test; test again", ErrInvalid)
 		}
 		x.Tested = &t
 		return nil

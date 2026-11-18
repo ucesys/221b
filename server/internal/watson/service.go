@@ -218,7 +218,7 @@ type Options struct {
 	// Repos are the chart repositories and OCI registries charts come
 	// from besides git (Phase 12, wave 5, HR-07); nil is git alone.
 	Repos *apps.Repos
-	// Credentials are Settings › Credentials (0.12.1, CR-11): a git
+	// Credentials are Administration › Credentials (0.12.1, CR-11): a git
 	// source's credential; nil fetches without one.
 	Credentials *credentials.Service
 	// Reread reads a standing approval's holder again as the sign-in sees

@@ -322,9 +322,9 @@ type Caps struct {
 // The places in Settings where each limit is changed, as the messages
 // name them (Phase 12.1).
 const (
-	WhereTotal    = "Settings › Limits › Total"
-	WhereProvider = "Settings › Limits › Providers"
-	WhereAgents   = "Settings › Agents"
+	WhereTotal    = "Administration › AI › Limits › Total"
+	WhereProvider = "Administration › AI › Limits › Providers"
+	WhereAgents   = "Administration › AI › Agents"
 )
 
 // ErrCap is the error for a question refused or stopped at a cap.
