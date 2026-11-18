@@ -467,7 +467,7 @@ func (s *Service) allItems(set Settings) []SourceItem {
 
 // isPattern says whether an exclusion is a pattern, not one item.
 func (e Exclusion) isPattern() bool {
-	return e.Pattern != "" && (strings.Contains(e.Pattern, "*") || strings.HasSuffix(e.Pattern, "/") || e.Under)
+	return e.Pattern != "" && !e.Item && (strings.Contains(e.Pattern, "*") || strings.HasSuffix(e.Pattern, "/") || e.Under)
 }
 
 // ruleOf is an exclusion's pattern as the list shows it, relative to its
