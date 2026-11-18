@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -86,9 +87,27 @@ type Creds struct {
 	Token           string `json:"token,omitempty"`
 	AccessKeyID     string `json:"accessKeyId,omitempty"`
 	SecretAccessKey string `json:"secretAccessKey,omitempty"`
+	// From a credential of Settings › Credentials (CR-11): a git token
+	// sent as Bearer, an access key's session token, how a web site's or
+	// live source's request is signed, and the values to scrub.
+	bearer       bool
+	sessionToken string
+	apply        func(*http.Request)
+	values       []string
 }
 
-func (c Creds) empty() bool { return c == Creds{} }
+func (c Creds) empty() bool { return c.Token == "" && c.AccessKeyID == "" && c.SecretAccessKey == "" }
+
+// secrets are the values to scrub from what a read writes.
+func (c Creds) secrets() []string {
+	out := append([]string(nil), c.values...)
+	for _, v := range []string{c.Token, c.AccessKeyID, c.SecretAccessKey, c.sessionToken} {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
 
 // CredsChange replaces what it sets: a value replaces, "" removes, nil
 // keeps.
@@ -177,10 +196,13 @@ func (s *Service) secretValues(ctx context.Context) []string {
 		return nil
 	}
 	keys := []string{storeKey, hookKey}
+	var out []string
 	for _, x := range set.Sources {
 		keys = append(keys, sourceKey(x.ID))
+		if x.Credential != "" && s.o.Credentials != nil {
+			out = append(out, s.o.Credentials.SecretValues(ctx, x.Credential)...)
+		}
 	}
-	var out []string
 	for _, k := range keys {
 		c, _ := s.creds(ctx, k)
 		for _, v := range []string{c.Token, c.AccessKeyID, c.SecretAccessKey} {

@@ -1,0 +1,289 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/credentials"
+)
+
+// --- Settings › Credentials (0.12.1, CR-01 to CR-14) ---
+//
+// A SuperAdmin adds, changes, tests and removes the credentials; anyone
+// signed in reads their names, kinds, endpoints and uses, which the
+// pickers of the Helm tab, Settings › Applications and Settings ›
+// Knowledge offer. A secret is written and never read back: no answer
+// holds one, nor does the audit log.
+
+// The audit log's actions of the credentials.
+const (
+	ActionCredentialSave   = "credential.save"
+	ActionCredentialRemove = "credential.remove"
+	ActionCredentialTest   = "credential.test"
+)
+
+func (s *Server) credentialsRoutes() {
+	s.handle("GET /api/v1/credentials", "credentials", s.getCredentials)
+	s.handle("GET /api/v1/credentials/choices", "credential-choices", s.getCredentialChoices)
+	s.handle("POST /api/v1/credentials", "credential-create", s.postCredential)
+	s.handle("POST /api/v1/credentials/migration/dismiss", "credential-migration-dismiss", s.postCredentialMigrationDismiss)
+	s.handle("PUT /api/v1/credentials/{id}", "credential-save", s.putCredential)
+	s.handle("DELETE /api/v1/credentials/{id}", "credential-remove", s.deleteCredential)
+	s.handle("POST /api/v1/credentials/{id}/test", "credential-test", s.postCredentialTest)
+}
+
+// credentialView is a credential as the page sees it: everything but the
+// secret for a SuperAdmin, its name, kind, endpoint and uses for others.
+type credentialView struct {
+	credentials.Credential
+	UsedBy []credentials.Ref `json:"usedBy"`
+	// Expiring says it expires within 14 days, or has (CR-08).
+	Expiring bool `json:"expiring,omitempty"`
+	// How says how it signs in, in words.
+	How string `json:"how"`
+}
+
+// credentialsView is the page's list.
+type credentialsView struct {
+	Credentials []credentialView `json:"credentials"`
+	MayEdit     bool             `json:"mayEdit"`
+	// Migration is what the upgrade made, until a SuperAdmin dismisses it
+	// (CR-12).
+	Migration *credentials.Migration `json:"migration,omitempty"`
+}
+
+func (s *Server) getCredentials(w http.ResponseWriter, r *http.Request) {
+	list, err := s.opts.Credentials.List(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	used, err := s.opts.Credentials.UsedBy(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	admin := s.isSuperAdmin(r)
+	now := s.opts.Now()
+	out := credentialsView{Credentials: []credentialView{}, MayEdit: admin}
+	for _, c := range list {
+		v := credentialView{UsedBy: used[c.ID], How: credentials.Describe(c)}
+		if v.UsedBy == nil {
+			v.UsedBy = []credentials.Ref{}
+		}
+		if admin {
+			v.Credential, v.Expiring = c, c.Expiring(now)
+		} else {
+			v.Credential = credentials.Credential{ID: c.ID, Name: c.Name, Kind: c.Kind, Endpoint: c.Endpoint}
+			v.How = ""
+		}
+		out.Credentials = append(out.Credentials, v)
+	}
+	if admin {
+		if m, err := s.opts.Credentials.Migration(r.Context()); err == nil && !m.Dismissed && (len(m.Created) > 0 || len(m.Notes) > 0) {
+			out.Migration = &m
+		}
+	}
+	b, _ := json.Marshal(out)
+	writeJSON(w, r, b)
+}
+
+// credentialChoice is a credential a picker offers.
+type credentialChoice struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Endpoint string `json:"endpoint"`
+}
+
+// getCredentialChoices lists the credentials that serve a use at an
+// address (CR-10): the picker preselects the only one, and makes the
+// person choose among several.
+func (s *Server) getCredentialChoices(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	use, address := q.Get("use"), strings.TrimSpace(q.Get("address"))
+	known := false
+	for _, u := range credentials.Uses {
+		known = known || u == use
+	}
+	if !known {
+		jsonError(w, http.StatusBadRequest, "name the use: git, helm, s3, confluence-cloud, confluence-dc or http")
+		return
+	}
+	list, err := s.opts.Credentials.Matching(r.Context(), use, address)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	out := []credentialChoice{}
+	for _, c := range list {
+		out = append(out, credentialChoice{ID: c.ID, Name: c.Name, Kind: c.Kind, Endpoint: c.Endpoint})
+	}
+	b, _ := json.Marshal(map[string]any{"choices": out})
+	writeJSON(w, r, b)
+}
+
+// credentialInput is a credential as the page sends it; Secret replaces
+// the kept one when given.
+type credentialInput struct {
+	credentials.Credential
+	Secret *credentials.Secret `json:"secret,omitempty"`
+}
+
+func (s *Server) mayEditCredentials(w http.ResponseWriter, r *http.Request) bool {
+	if !s.isSuperAdmin(r) {
+		jsonError(w, http.StatusForbidden, "Only a SuperAdmin adds, changes, tests or removes credentials.")
+		return false
+	}
+	return true
+}
+
+func (s *Server) readCredential(w http.ResponseWriter, r *http.Request) (credentialInput, bool) {
+	var in credentialInput
+	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
+		jsonError(w, http.StatusUnsupportedMediaType, "send the credential as application/json")
+		return in, false
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the credential is not valid: "+err.Error())
+		return in, false
+	}
+	// What the page may not set: the server keeps these.
+	in.Set, in.LastTest, in.From = nil, nil, nil
+	in.Created, in.Changed = time.Time{}, time.Time{}
+	in.CreatedBy, in.ChangedBy = "", ""
+	return in, true
+}
+
+// credentialFailed answers a refused change: not valid or in use is the
+// person's to fix, not there is 404, the rest the store's.
+func credentialFailed(w http.ResponseWriter, err error) {
+	msg := strings.TrimPrefix(err.Error(), credentials.ErrInvalid.Error()+": ")
+	switch {
+	case errors.Is(err, credentials.ErrInvalid):
+		jsonError(w, http.StatusBadRequest, msg)
+	case errors.Is(err, credentials.ErrNotFound):
+		jsonError(w, http.StatusNotFound, msg)
+	case errors.Is(err, credentials.ErrInUse):
+		jsonError(w, http.StatusConflict, strings.TrimPrefix(msg, credentials.ErrInUse.Error()+": "))
+	default:
+		jsonError(w, http.StatusBadGateway, msg)
+	}
+}
+
+// credentialAudit is a credential as the audit log names it: never a
+// secret.
+func credentialAudit(c credentials.Credential) string {
+	return c.Kind + " for " + c.Endpoint + ", " + credentials.Describe(c)
+}
+
+func (s *Server) postCredential(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	in, ok := s.readCredential(w, r)
+	if !ok {
+		return
+	}
+	sec := credentials.Secret{}
+	if in.Secret != nil {
+		sec = *in.Secret
+	}
+	c, err := s.opts.Credentials.Create(r.Context(), in.Credential, sec, repoBy(r))
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	s.record(r, ActionCredentialSave, c.Name, "credential added: "+credentialAudit(c))
+	b, _ := json.Marshal(credentialView{Credential: c, UsedBy: []credentials.Ref{}, How: credentials.Describe(c), Expiring: c.Expiring(s.opts.Now())})
+	writeJSONStatus(w, r, http.StatusCreated, b)
+}
+
+func (s *Server) putCredential(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	in, ok := s.readCredential(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.opts.Credentials.Update(r.Context(), r.PathValue("id"), in.Credential, in.Secret, repoBy(r))
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	detail := "credential changed: " + credentialAudit(c)
+	if in.Secret != nil {
+		// Replaced for every use from now on (CR-05); the value is never
+		// written here.
+		detail += "; its secret replaced"
+	}
+	s.record(r, ActionCredentialSave, c.Name, detail)
+	used, _ := s.opts.Credentials.UsedBy(r.Context())
+	v := credentialView{Credential: c, UsedBy: used[c.ID], How: credentials.Describe(c), Expiring: c.Expiring(s.opts.Now())}
+	if v.UsedBy == nil {
+		v.UsedBy = []credentials.Ref{}
+	}
+	b, _ := json.Marshal(v)
+	writeJSON(w, r, b)
+}
+
+func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	c, err := s.opts.Credentials.Delete(r.Context(), r.PathValue("id"))
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	s.record(r, ActionCredentialRemove, c.Name, "credential removed: "+credentialAudit(c))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) postCredentialTest(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	var in struct {
+		Target string `json:"target,omitempty"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	if err := dec.Decode(&in); err != nil && err.Error() != "EOF" {
+		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
+		return
+	}
+	id := r.PathValue("id")
+	t, err := s.opts.Credentials.RunTest(r.Context(), id, in.Target, repoBy(r))
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	outcome := audit.OutcomeOK
+	if !t.OK {
+		outcome = audit.OutcomeFailed
+	}
+	name := id
+	if c, err := s.opts.Credentials.Get(r.Context(), id); err == nil {
+		name = c.Name
+	}
+	s.recordOutcome(r, ActionCredentialTest, name, "credential tested against "+t.Target+": "+t.Text, outcome)
+	b, _ := json.Marshal(t)
+	writeJSON(w, r, b)
+}
+
+func (s *Server) postCredentialMigrationDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	if err := s.opts.Credentials.DismissMigration(r.Context()); err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

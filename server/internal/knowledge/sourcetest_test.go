@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/s3/s3test"
 )
 
@@ -56,8 +57,20 @@ func TestTestingUnsavedValuesKN26(t *testing.T) {
 		t.Fatalf("only a SuperAdmin: %v", err)
 	}
 
-	// Through the API: the answer, 403 for an Admin, and never the key.
-	body, _ := json.Marshal(map[string]any{"source": typedBucket(b), "keys": map[string]string{"accessKeyId": docsKeyID, "secretAccessKey": docsSecret}})
+	// Through the API, which names a credential (CR-11): the answer, 403
+	// for an Admin, and never the key.
+	addr := credentials.S3Address(b.URL, b.Bucket)
+	good, err := f.creds.Create(ctx, credentials.Credential{Name: "docs", Kind: credentials.KindAccessKey, Endpoint: addr, Region: b.Region}, credentials.Secret{AccessKeyID: docsKeyID, SecretAccessKey: docsSecret}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, _ := f.creds.Create(ctx, credentials.Credential{Name: "docs wrong", Kind: credentials.KindAccessKey, Endpoint: addr}, credentials.Secret{AccessKeyID: docsKeyID, SecretAccessKey: "typed-wrong-secret-1234"}, "ann")
+	withCred := func(id string) Source {
+		x := typedBucket(b)
+		x.Credentials, x.Credential = CredentialsKeys, id
+		return x
+	}
+	body, _ := json.Marshal(map[string]any{"source": withCred(good.ID)})
 	w := serve(t, f.s, &admin, "POST", "sources/test", string(body), nil)
 	var res struct {
 		OK     bool     `json:"ok"`
@@ -72,7 +85,7 @@ func TestTestingUnsavedValuesKN26(t *testing.T) {
 	if w := serve(t, f.s, &bob, "POST", "sources/test", string(body), nil); w.Code != http.StatusForbidden {
 		t.Fatalf("an Admin tests a source: %d", w.Code)
 	}
-	wrong, _ := json.Marshal(map[string]any{"source": typedBucket(b), "keys": map[string]string{"accessKeyId": docsKeyID, "secretAccessKey": "typed-wrong-secret-1234"}})
+	wrong, _ := json.Marshal(map[string]any{"source": withCred(bad.ID)})
 	w = serve(t, f.s, &admin, "POST", "sources/test", string(wrong), nil)
 	_ = json.Unmarshal(w.Body.Bytes(), &res)
 	if res.OK || !strings.Contains(res.Error, "refused the credentials") || strings.Contains(w.Body.String(), "typed-wrong-secret-1234") || strings.Contains(w.Body.String(), docsKeyID) {

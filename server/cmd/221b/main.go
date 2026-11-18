@@ -29,6 +29,7 @@ import (
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -120,7 +121,9 @@ type wiring struct {
 	exceptionsSvc *lessons.Service
 
 	// Watson, the toolbox, SSH and Automation.
-	helmRepos   *apps.Repos
+	helmRepos *apps.Repos
+	// creds are Settings › Credentials (0.12.1, credentials.go).
+	creds       *credentials.Service
 	watsonSvc   *watson.Service
 	toolboxCfg  toolbox.Config
 	hosts       *nodessh.Hosts
@@ -216,6 +219,9 @@ func run(args []string) error {
 	if err := w.wireSherlock(ctx); err != nil {
 		return err
 	}
+	if err := w.wireCredentials(); err != nil {
+		return err
+	}
 	if err := w.wireHelmRepos(); err != nil {
 		return err
 	}
@@ -248,6 +254,9 @@ func run(args []string) error {
 	if err := w.wireAPI(); err != nil {
 		return err
 	}
+	// Settings › Credentials (0.12.1, CR-12): the secrets kept with what
+	// used them move to credentials, on the leader.
+	go w.migrateCredentials(ctx)
 	// Jobs (Phase 12): the agents read through the handler's tools as
 	// the reader identity; the schedules and alerts are looked at on the
 	// leader.

@@ -37,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/imagecheck"
@@ -250,6 +251,9 @@ type Options struct {
 	// Repos are the chart repositories and OCI registries applications
 	// install from besides git (HR-01); nil is git alone.
 	Repos *apps.Repos
+	// Credentials are Settings › Credentials (0.12.1, CR-01): nil leaves
+	// the page out, and applications fetch without one.
+	Credentials *credentials.Service
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
@@ -522,6 +526,16 @@ func New(o Options) *Server {
 		}
 	}
 	s.secretsRoutes()
+	if o.Credentials != nil {
+		s.credentialsRoutes()
+		// What names a credential, for its Used by (CR-06).
+		if o.Apps != nil {
+			o.Credentials.Register(apps.CredentialUses(o.Apps))
+		}
+		if o.Repos != nil {
+			o.Credentials.Register(o.Repos.CredentialUses)
+		}
+	}
 	if o.Watson != nil && o.Sessions != nil {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)

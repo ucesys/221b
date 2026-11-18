@@ -302,9 +302,9 @@ func (s *Service) LiveDocs(ctx context.Context, query string) ([]LiveDoc, []stri
 	var jobs []job
 	var problems []string
 	for _, x := range sources {
-		c, err := s.creds(ctx, sourceKey(x.ID))
+		x, c, err := s.sourceAuth(ctx, x)
 		if err != nil {
-			problems = append(problems, x.Name+": its credential could not be read")
+			problems = append(problems, x.Name+": its credential could not be used: "+scrub.Known(err.Error(), secrets))
 			continue
 		}
 		for _, a := range x.Addresses {
@@ -375,7 +375,7 @@ func liveKey(x Source, a LiveAddress, terms []string) string {
 func (s *Service) testLive(ctx context.Context, x Source, c Creds) SourceTest {
 	ctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
-	secrets := []string{c.Token, c.AccessKeyID, c.SecretAccessKey}
+	secrets := c.secrets()
 	out := SourceTest{}
 	for _, a := range x.Addresses {
 		ck := LiveCheck{URL: a.URL, Kind: a.Kind}
@@ -416,8 +416,11 @@ func (s *Service) liveClient(x Source, site *url.URL) *http.Client {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		tr.DialContext = (&net.Dialer{Timeout: liveTimeout, Control: guardedDial}).DialContext
-		if strings.TrimSpace(x.CAPEM) != "" {
+		if strings.TrimSpace(x.CAPEM) != "" || x.cert != nil {
 			tr.TLSClientConfig = &tls.Config{RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12}
+			if x.cert != nil {
+				tr.TLSClientConfig.Certificates = []tls.Certificate{*x.cert}
+			}
 		}
 		base = tr
 	}
@@ -466,12 +469,15 @@ func liveGet(ctx context.Context, hc *http.Client, x Source, c Creds, raw, accep
 	}
 	req.Header.Set("User-Agent", CrawlAgent+"/1.0 (+the 221B console's live knowledge)")
 	req.Header.Set("Accept", accept)
-	switch x.Auth {
-	case LiveAuthBearer:
+	switch {
+	case c.apply != nil:
+		// A credential signs only the addresses under its endpoint.
+		c.apply(req)
+	case x.Auth == LiveAuthBearer:
 		if c.Token != "" {
 			req.Header.Set("Authorization", "Bearer "+c.Token)
 		}
-	case LiveAuthBasic:
+	case x.Auth == LiveAuthBasic:
 		req.SetBasicAuth(x.Username, c.Token)
 	}
 	resp, err := hc.Do(req)

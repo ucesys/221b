@@ -162,22 +162,15 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 	h.getSettings(w, r, c)
 }
 
+// sourceInput is a source as its dialog sends it: it names its
+// credential of Settings › Credentials (0.12.1, CR-11), and sends none.
 type sourceInput struct {
-	Source Source  `json:"source"`
-	Token  *string `json:"token,omitempty"`
-	// Keys are a bucket's access key (KN-25): a value replaces, ""
-	// removes, absent keeps.
-	Keys CredsChange `json:"keys"`
+	Source Source `json:"source"`
 }
 
-// creds is the input's credential change.
-func (in sourceInput) creds() CredsChange {
-	ch := in.Keys
-	if in.Token != nil {
-		ch.Token = in.Token
-	}
-	return ch
-}
+// creds is the input's change to the credential kept in the knowledge
+// Secret: none since 0.12.1.
+func (in sourceInput) creds() CredsChange { return CredsChange{} }
 
 func (h *handler) postSource(w http.ResponseWriter, r *http.Request, c Caller) {
 	var in sourceInput

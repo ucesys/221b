@@ -36,6 +36,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -176,6 +177,9 @@ type Options struct {
 	// Secrets keeps the credentials, one key each, in the Secret
 	// <release>-knowledge; nil keeps them in memory.
 	Secrets SecretStore
+	// Credentials are Settings › Credentials, which the sources name
+	// (0.12.1, CR-11); nil is none.
+	Credentials *credentials.Service
 	// Dir is where the local copy of the wiki, and the source
 	// repositories, are kept on the pod's disk; empty is a temporary
 	// directory.

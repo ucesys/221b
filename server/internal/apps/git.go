@@ -29,6 +29,8 @@ import (
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	chartutil "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/ignore"
+
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 // Refs is what a repository offers (HA-05): its branches and tags, and the
@@ -80,18 +82,49 @@ func fetchSlot(ctx context.Context) (release func(), err error) {
 	}
 }
 
-func auth(token string) transport.AuthMethod {
-	if token == "" {
-		return nil
+// GitAuth is how a git fetch signs in (CR-04): a user and a password or
+// token as Basic, or a token as Bearer; the zero value is anonymously.
+// It comes from a credential of Settings › Credentials, resolved for the
+// repository's address (GitAuthOf).
+type GitAuth struct {
+	Username, Password string
+	Bearer             string
+}
+
+// None says it signs in with nothing.
+func (a GitAuth) None() bool { return a == GitAuth{} }
+
+func auth(a GitAuth) transport.AuthMethod {
+	switch {
+	case a.Bearer != "":
+		return &githttp.TokenAuth{Token: a.Bearer}
+	case a.Password != "":
+		// GitHub takes a token as the password of any user name; so do
+		// GitLab and Gitea.
+		user := a.Username
+		if user == "" {
+			user = "x-access-token"
+		}
+		return &githttp.BasicAuth{Username: user, Password: a.Password}
 	}
-	// GitHub takes a token as the password of any user name; so do GitLab
-	// and Gitea.
-	return &githttp.BasicAuth{Username: "x-access-token", Password: token}
+	return nil
+}
+
+// GitAuthOf is a credential resolved for a repository, as a fetch sends
+// it: Basic or Bearer (Credential.Supports refuses the others for git).
+func GitAuthOf(u *credentials.Use) GitAuth {
+	if user, pass, ok := u.Basic(); ok {
+		return GitAuth{Username: user, Password: pass}
+	}
+	if tok, ok := u.Bearer(); ok {
+		return GitAuth{Bearer: tok}
+	}
+	return GitAuth{}
 }
 
 // ListRefs asks the repository for its branches and tags, as git
 // ls-remote does, without fetching anything else.
-func ListRefs(ctx context.Context, repo, token string) (Refs, error) {
+func ListRefs(ctx context.Context, repo string, token GitAuth) (Refs, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{repo}})
@@ -353,7 +386,7 @@ func checkOut(r *git.Repository, st boundedStorage, fsys billy.Filesystem, hash 
 
 // Fetch clones the repository at the ref, shallow and in memory (HA-04),
 // within FetchLimits.
-func Fetch(ctx context.Context, s Source, token string) (*Checkout, error) {
+func Fetch(ctx context.Context, s Source, token GitAuth) (*Checkout, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
@@ -386,7 +419,7 @@ func Fetch(ctx context.Context, s Source, token string) (*Checkout, error) {
 // run what its card showed. A server that does not hand out commits by
 // their ids can still serve it while the ref points there; anything else
 // is refused, so the commit deployed is the one asked for or none.
-func FetchCommit(ctx context.Context, s Source, token, commit string) (*Checkout, error) {
+func FetchCommit(ctx context.Context, s Source, token GitAuth, commit string) (*Checkout, error) {
 	co, err := fetchExact(ctx, s, token, commit)
 	if !errors.Is(err, git.ErrExactSHA1NotSupported) {
 		return co, err
@@ -400,7 +433,7 @@ func FetchCommit(ctx context.Context, s Source, token, commit string) (*Checkout
 	return co, nil
 }
 
-func fetchExact(ctx context.Context, s Source, token, commit string) (*Checkout, error) {
+func fetchExact(ctx context.Context, s Source, token GitAuth, commit string) (*Checkout, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
@@ -440,9 +473,9 @@ func describe(err error) error {
 	}
 	switch {
 	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed):
-		return errors.New("the repository needs a token, or the token is wrong")
+		return errors.New("the repository needs a credential, or refused the one given")
 	case errors.Is(err, transport.ErrRepositoryNotFound):
-		return errors.New("no repository at that URL (a private one needs a token)")
+		return errors.New("no repository at that URL (a private one needs a credential)")
 	case errors.Is(err, errHostRefused):
 		return errHostRefused
 	case errors.Is(err, errHostNotAllowed):

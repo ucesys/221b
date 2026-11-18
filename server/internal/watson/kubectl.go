@@ -39,6 +39,7 @@ import (
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kube"
 )
 
@@ -83,6 +84,9 @@ type Target struct {
 	// Repos are the chart repositories the console knows (Phase 12, wave
 	// 5, HR-07); nil fetches charts from git alone.
 	Repos *apps.Repos
+	// Credentials resolve a git source's credential (0.12.1, CR-11); nil
+	// fetches without one.
+	Credentials *credentials.Service
 	// pin is what a card of a deploy showed: its planning fills it, and
 	// its dry run and its run hold to it. A nil pin is no card.
 	pin *appPin

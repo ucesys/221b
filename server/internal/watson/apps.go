@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 // Helm applications (Phase 10, HA-06 to HA-08): helm install, upgrade and
@@ -91,7 +92,7 @@ func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Comman
 	}
 	if !who.ManageApps {
 		if app {
-			return "Only Admins and SuperAdmins use an application's saved values and token."
+			return "Only Admins and SuperAdmins use an application's saved values and credential."
 		}
 		return "Only Admins and SuperAdmins install or upgrade a chart from a repository."
 	}
@@ -116,14 +117,19 @@ func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Comman
 
 // appChart fetches and loads the chart a command names, with the values
 // it asks for. The record, when the command uses one, supplies the
-// source, the token, the values file and the parameters.
+// source, the credential, the values file and the parameters.
 type appChart struct {
-	src    apps.Source
-	rec    *apps.Record
-	co     *apps.Checkout
-	vals   map[string]any
-	values string
-	params []string
+	src apps.Source
+	rec *apps.Record
+	// cred is the credential a git source is fetched with, by id ("" for
+	// none), and credSet says the line chose it: --credential, or the one
+	// credential that covers the repository (CR-11).
+	cred    string
+	credSet bool
+	co      *apps.Checkout
+	vals    map[string]any
+	values  string
+	params  []string
 	// set are the line's --set parameters.
 	set []string
 	// composed says the values need the checkout: see loadAppChart.
@@ -146,7 +152,8 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		}
 	}
 	a := &appChart{src: src}
-	token := ""
+	token := apps.GitAuth{}
+	legacy := ""
 	if c.Has("app") {
 		if t.Apps == nil {
 			return nil, errors.New("this console keeps no applications")
@@ -160,12 +167,12 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		case err != nil:
 			return nil, err
 		default:
-			// The saved token and values belong to the saved repository:
+			// The saved credential and values belong to the saved repository:
 			// another one on the line would receive them.
 			if given && !apps.SameRepo(src, rec.Source) {
-				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its token and values to another repository", ns, name, keptIn(rec.Source))
+				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its credential and values to another repository", ns, name, keptIn(rec.Source))
 			}
-			a.rec, token = &rec, tok
+			a.rec, legacy = &rec, tok
 			if !given {
 				a.src = rec.Source
 			}
@@ -174,6 +181,13 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 	}
 	if a.src.Repo == "" {
 		return nil, errors.New("name the chart: --git URL with --ref BRANCH|TAG for a chart in git, or REPO/CHART or oci://REGISTRY/PATH/CHART with --version")
+	}
+	if !a.src.FromRepository() {
+		if token, err = a.gitAuth(ctx, c, t, ns, name, legacy); err != nil {
+			return nil, err
+		}
+	} else if c.Has("credential") {
+		return nil, errors.New("a repository's chart is fetched with its repository's credential (Settings › Applications): --credential goes with --git")
 	}
 	for _, set := range c.Flags["set"] {
 		a.params = append(a.params, set)
@@ -216,6 +230,72 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 	return a, nil
 }
 
+// gitAuth is the credential a git source is fetched with (CR-11): the one
+// --credential names; else the application's, when a record is kept for
+// it with this repository; else the one credential that covers the
+// repository. Several that cover it are refused: Watson never guesses.
+func (a *appChart) gitAuth(ctx context.Context, c *Command, t Target, ns, name, legacy string) (apps.GitAuth, error) {
+	repo := a.src.Repo
+	if c.Has("credential") {
+		if t.Credentials == nil {
+			return apps.GitAuth{}, errors.New("this console keeps no credentials")
+		}
+		cr, err := t.Credentials.ByName(ctx, c.Flag("credential"))
+		if err != nil {
+			return apps.GitAuth{}, err
+		}
+		a.cred, a.credSet = cr.ID, true
+		return apps.CredentialAuth(ctx, t.Credentials, cr.ID, repo)
+	}
+	rec := a.rec
+	if rec == nil && t.Apps != nil {
+		// The application's own credential, when one is kept for this
+		// repository, even without --app.
+		if got, tok, err := t.Apps.Get(ctx, t.Cluster, ns, name); err == nil && apps.SameRepo(got.Source, a.src) {
+			rec, legacy = &got, tok
+		}
+	}
+	if rec != nil && (rec.CredMigrated || rec.Credential != "" || legacy != "") {
+		a.cred = rec.Credential
+		return apps.AuthFor(ctx, t.Credentials, apps.Record{Source: a.src, Credential: rec.Credential, CredMigrated: rec.CredMigrated}, legacy)
+	}
+	if t.Credentials == nil {
+		return apps.GitAuth{}, nil
+	}
+	list, err := t.Credentials.Matching(ctx, credentials.UseGit, repo)
+	if err != nil {
+		return apps.GitAuth{}, err
+	}
+	switch len(list) {
+	case 0:
+		a.credSet = true
+		return apps.GitAuth{}, nil
+	case 1:
+		a.cred, a.credSet = list[0].ID, true
+		return apps.CredentialAuth(ctx, t.Credentials, list[0].ID, repo)
+	}
+	names := make([]string, 0, len(list))
+	for _, cr := range list {
+		names = append(names, lineQuote(cr.Name))
+	}
+	return apps.GitAuth{}, fmt.Errorf("%d credentials cover %s (%s): say which with --credential NAME", len(list), repo, strings.Join(names, ", "))
+}
+
+// lineQuote is a name as a Watson line takes it: single-quoted unless it
+// is plain.
+func lineQuote(s string) string {
+	plain := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._/@:-", r)) {
+			plain = false
+		}
+	}
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // pinTo keeps what the card shows, for its dry run and its run.
 func (a *appChart) pinTo(pin *appPin) {
 	if pin != nil {
@@ -256,8 +336,8 @@ func (a *appChart) saveDeploy(ctx context.Context, c *Command, t Target, out io.
 
 func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out io.Writer, ns, name, chartVersion string) error {
 	now := time.Now().UTC()
-	var token *string
 	rec, _, err := t.Apps.Get(ctx, t.Cluster, ns, name)
+	moved := false
 	switch {
 	case errors.Is(err, apps.ErrNotFound):
 		rec = apps.Record{Cluster: t.Cluster, Namespace: ns, Name: name, Created: now, CreatedBy: t.Person.User}
@@ -266,24 +346,29 @@ func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out
 			rec.Rev = ""
 		}
 		rec.Source, rec.Values, rec.Params = a.src, a.values, a.params
+		// A new record names the credential it was fetched with (CR-11).
+		rec.Credential, rec.CredMigrated = a.cred, true
 	case err != nil:
 		return err
 	case c.Has("git") || len(c.Positionals) > 1:
-		// A token belongs to its repository: a new one on the line would
-		// receive it at the next deploy.
-		if !apps.SameRepo(a.src, rec.Source) {
-			empty := ""
-			token = &empty
+		// A credential goes only where it covers: a source moved to
+		// another repository takes the one the line chose, or none.
+		moved = !apps.SameRepo(a.src, rec.Source) && (rec.Credential != "" || rec.HasToken && !rec.CredMigrated)
+		if moved || a.credSet {
+			rec.Credential, rec.CredMigrated = a.cred, true
 		}
 		rec.Source = a.src
 	}
+	if rec.Source.FromRepository() {
+		rec.Credential = ""
+	}
 	rec.Commit, rec.CommitDate, rec.CommitSubject = a.co.Commit, a.co.CommitDate, a.co.CommitSubject
 	rec.ChartVersion, rec.Updated, rec.UpdatedBy = chartVersion, now, t.Person.User
-	if err := t.Apps.Save(ctx, rec, token); err != nil {
+	if err := t.Apps.Save(ctx, rec, nil); err != nil {
 		return err
 	}
-	if token != nil {
-		fmt.Fprintln(out, "# watson: the application moved to another repository; the token saved for the old one was removed")
+	if moved {
+		fmt.Fprintln(out, "# watson: the application moved to another repository; its credential for the old one no longer applies")
 	}
 	return nil
 }
@@ -590,7 +675,7 @@ func objectNames(manifest string) []string {
 // renders on the console, in a process of its own, where lookup finds
 // nothing, so what it shows is what the chart and its values say.
 func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, name string, ch *chart.Chart, vals map[string]any) (string, error) {
-	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
+	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	if err != nil {
 		return "", err

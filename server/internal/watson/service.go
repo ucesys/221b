@@ -19,6 +19,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kube"
 )
 
@@ -217,6 +218,9 @@ type Options struct {
 	// Repos are the chart repositories and OCI registries charts come
 	// from besides git (Phase 12, wave 5, HR-07); nil is git alone.
 	Repos *apps.Repos
+	// Credentials are Settings › Credentials (0.12.1, CR-11): a git
+	// source's credential; nil fetches without one.
+	Credentials *credentials.Service
 	// Reread reads a standing approval's holder again as the sign-in sees
 	// them now; false means their session has ended or they may no longer
 	// use the console. Nil keeps the holder as they were.
@@ -849,7 +853,7 @@ func (s *Service) plan(cl Cluster, id string) {
 	p := &Plan{pin: &appPin{}}
 	// The card reads as the person who asked (ADR-51): it shows them
 	// nothing their own access does not.
-	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, pin: p.pin}
+	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: p.pin}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	var cs *clients
 	if err == nil {
@@ -1348,7 +1352,7 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 
 // execute runs one command as the person who approved it.
 func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who) {
-	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
+	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials}
 	if it.Plan != nil {
 		t.pin = it.Plan.pin
 	}

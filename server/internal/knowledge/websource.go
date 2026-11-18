@@ -60,6 +60,10 @@ func (x Source) validateWeb() error {
 
 // siteAuth sets a web site's credential on a request, as a live source's.
 func siteAuth(x Source, c Creds) func(*http.Request) {
+	if c.apply != nil {
+		// A credential signs only the pages under its endpoint (CR-04).
+		return c.apply
+	}
 	switch x.Auth {
 	case LiveAuthBearer:
 		if c.Token == "" {

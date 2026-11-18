@@ -121,7 +121,7 @@ spec:
 func TestFetchRenderImagesAndCompare(t *testing.T) {
 	repo := chartRepo(t)
 	ctx := context.Background()
-	refs, err := apps.ListRefs(ctx, repo, "")
+	refs, err := apps.ListRefs(ctx, repo, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestFetchRenderImagesAndCompare(t *testing.T) {
 	}
 
 	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.0.0", RefKind: apps.RefTag}
-	co, err := apps.Fetch(ctx, src, "")
+	co, err := apps.Fetch(ctx, src, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,12 +178,12 @@ func TestFetchRenderImagesAndCompare(t *testing.T) {
 	if _, err := apps.LoadChart(co, ""); err == nil || !strings.Contains(err.Error(), "Chart.yaml") {
 		t.Errorf("no chart: %v", err)
 	}
-	if _, err := apps.Fetch(ctx, apps.Source{Repo: repo, Ref: "v9.9.9", RefKind: apps.RefTag}, ""); err == nil || !strings.Contains(err.Error(), "no tag v9.9.9") {
+	if _, err := apps.Fetch(ctx, apps.Source{Repo: repo, Ref: "v9.9.9", RefKind: apps.RefTag}, apps.GitAuth{}); err == nil || !strings.Contains(err.Error(), "no tag v9.9.9") {
 		t.Errorf("missing tag: %v", err)
 	}
 
 	// The newer tag changes the deployment; the diff says which object.
-	two, err := apps.Fetch(ctx, apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.1.0", RefKind: apps.RefTag}, "")
+	two, err := apps.Fetch(ctx, apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.1.0", RefKind: apps.RefTag}, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ stringData:
 
 func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
 	repo := chartRepo(t)
-	co, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.1.0", RefKind: apps.RefTag}, "")
+	co, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.1.0", RefKind: apps.RefTag}, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
 		t.Errorf("values files %v", got.Charts[0].ValuesFiles)
 	}
 	// The first commit's README has no install line: no hints, the chart still found.
-	one, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.0.0", RefKind: apps.RefTag}, "")
+	one, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.0.0", RefKind: apps.RefTag}, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
 func TestComposeLaysTheValuesInOrder(t *testing.T) {
 	repo := chartRepo(t)
 	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.1.0", RefKind: apps.RefTag}
-	co, err := apps.Fetch(context.Background(), src, "")
+	co, err := apps.Fetch(context.Background(), src, apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}

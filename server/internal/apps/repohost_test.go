@@ -92,8 +92,8 @@ func TestAFetchThatFailsOnTheWayReadsTheSame(t *testing.T) {
 			t.Errorf("%v: %v", e, err)
 		}
 	}
-	if err := describe(transport.ErrAuthenticationRequired); !strings.Contains(err.Error(), "token") {
-		t.Errorf("a token: %v", err)
+	if err := describe(transport.ErrAuthenticationRequired); !strings.Contains(err.Error(), "credential") {
+		t.Errorf("a credential: %v", err)
 	}
 	if err := describe(transport.ErrRepositoryNotFound); !strings.Contains(err.Error(), "no repository at that URL") {
 		t.Errorf("no repository: %v", err)
@@ -136,7 +136,7 @@ func TestOnlyTheAllowedHostsAreFetchedFrom(t *testing.T) {
 		t.Errorf("CheckRepoHost: %v", err)
 	}
 	// At the connection: git's and Helm's, and a redirect off the list.
-	if _, err := ListRefs(ctx, "https://10.0.0.5:8443/a", ""); !errors.Is(err, errHostNotAllowed) {
+	if _, err := ListRefs(ctx, "https://10.0.0.5:8443/a", GitAuth{}); !errors.Is(err, errHostNotAllowed) {
 		t.Errorf("git: %v", err)
 	}
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("entries: {}\n")) }))

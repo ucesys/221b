@@ -416,8 +416,16 @@ type Record struct {
 	// whose values (helm get values) the record's values started from
 	// when the console adopted it; 0 for none (asked November 17, 2026).
 	AdoptedRevision int `json:"adoptedRevision,omitempty"`
-	// HasToken says a credential for the repository is saved with the
-	// record; the token itself never leaves the server.
+	// Credential is the credential of Settings › Credentials the git
+	// repository is fetched with, by id; "" is none (0.12.1, CR-11). A
+	// repository's chart is fetched with its repository's.
+	Credential string `json:"credential,omitempty"`
+	// CredMigrated says the record names its credential: the token of
+	// before 0.12.1 kept with it was moved to one, or there was none
+	// (CR-12). Until then the kept token is the one used.
+	CredMigrated bool `json:"credMigrated,omitempty"`
+	// HasToken says a token of before 0.12.1 is kept with the record; it
+	// never leaves the server, and is not read once CredMigrated.
 	HasToken bool `json:"hasToken,omitempty"`
 	// Rev is the stored version Get read, which Save holds it to; it is
 	// not part of the record.

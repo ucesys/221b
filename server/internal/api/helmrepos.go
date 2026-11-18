@@ -20,8 +20,9 @@ import (
 // from besides git: Settings › Applications lists them, with Test; a
 // SuperAdmin adds, changes and removes them, and those who manage
 // applications (Admin, SuperAdmin) read the list, a repository's charts
-// and a chart's versions for the new application's form. A password or
-// token is written, never read back: the list says whether one is kept.
+// and a chart's versions for the new application's form. Each signs in
+// with a credential of Settings › Credentials, named by id (0.12.1,
+// CR-11).
 
 // The audit log's actions of the repositories.
 const (
@@ -103,14 +104,21 @@ func repoBy(r *http.Request) string {
 	return "someone"
 }
 
-// repoAudit is a repository as the audit log names it: never its
-// password or token.
-func repoAudit(repo apps.Repository) string {
-	kept := ""
-	if repo.HasSecret {
-		kept = ", one kept"
+// repoAudit is a repository as the audit log names it: its credential
+// by name, never a secret.
+func (s *Server) repoAudit(r *http.Request, repo apps.Repository) string {
+	if !repo.CredMigrated {
+		kept := ""
+		if repo.HasSecret {
+			kept = ", one kept"
+		}
+		return repo.Kind + " " + repo.URL + ", sign-in " + repo.Auth + kept
 	}
-	return repo.Kind + " " + repo.URL + ", sign-in " + repo.Auth + kept
+	cred := "none"
+	if repo.Credential != "" && s.opts.Credentials != nil {
+		cred = s.credentialLabel(r.Context(), repo.Credential)
+	}
+	return repo.Kind + " " + repo.URL + ", credential " + cred
 }
 
 func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +149,7 @@ func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
 	if created {
 		verb = "added"
 	}
-	s.record(r, ActionHelmRepoSave, repo.Name, "chart repository "+verb+": "+repoAudit(repo))
+	s.record(r, ActionHelmRepoSave, repo.Name, "chart repository "+verb+": "+s.repoAudit(r, repo))
 	b, _ := json.Marshal(repo)
 	writeJSON(w, r, b)
 }
@@ -151,7 +159,7 @@ func (s *Server) deleteHelmRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	old, _, err := s.opts.Repos.Get(r.Context(), name)
+	old, err := s.opts.Repos.Raw(r.Context(), name)
 	if errors.Is(err, apps.ErrNoRepository) {
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
@@ -163,12 +171,12 @@ func (s *Server) deleteHelmRepo(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.record(r, ActionHelmRepoRemove, name, "chart repository removed: "+repoAudit(old))
+	s.record(r, ActionHelmRepoRemove, name, "chart repository removed: "+s.repoAudit(r, old))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// repoTestInput is a repository as typed, tested before it is saved; a
-// name of a saved one with no secret given tests with the one kept.
+// repoTestInput is a repository as typed, tested before it is saved with
+// the credential chosen (CR-11).
 type repoTestInput struct {
 	Name string `json:"name,omitempty"`
 	apps.RepositoryInput
@@ -193,17 +201,11 @@ func (s *Server) postHelmRepoTest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	secret := ""
-	if in.Secret != nil {
-		secret = strings.TrimSpace(*in.Secret)
-	} else if in.Name != "" {
-		// The kept secret goes only to the address it was kept for.
-		if old, kept, err := s.opts.Repos.Get(r.Context(), in.Name); err == nil && old.URL == repo.URL {
-			secret = kept
-		}
-	}
-	if repo.Auth == apps.AuthNone {
-		secret = ""
+	// The credential goes only to an address it covers (CR-04).
+	repo, secret, err := s.opts.Repos.Signed(r.Context(), repo)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+		return
 	}
 	s.answerRepoTest(w, r, repo, secret, false)
 }

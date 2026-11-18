@@ -45,6 +45,7 @@ func (w *wiring) wireAPI() error {
 		Apps:                    w.appStore,
 		SelfRelease:             apps.ParseSelfRelease(clusters.LocalID, cfg.SelfRelease),
 		Repos:                   w.helmRepos, // Helm repositories (Phase 12, wave 5)
+		Credentials:             w.creds,     // Settings › Credentials (0.12.1)
 		ImageChecks:             images,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                w.sessionsMgr,

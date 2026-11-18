@@ -28,10 +28,12 @@ import (
 type repo struct {
 	url, branch string
 	user, token string
-	ca          []byte
-	dir         string
-	mu          sync.Mutex
-	r           *git.Repository
+	// bearer sends the token as Bearer rather than Basic (CR-11).
+	bearer bool
+	ca     []byte
+	dir    string
+	mu     sync.Mutex
+	r      *git.Repository
 }
 
 // maxFile bounds a file read from a repository.
@@ -47,6 +49,9 @@ func newRepo(dir, url, branch, user, token, ca string) *repo {
 func (g *repo) auth() transport.AuthMethod {
 	if g.token == "" {
 		return nil
+	}
+	if g.bearer {
+		return &githttp.TokenAuth{Token: g.token}
 	}
 	user := g.user
 	if user == "" {

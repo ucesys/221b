@@ -94,12 +94,9 @@ type ConsoleHost struct {
 
 // readerFor makes a source's reader, with its saved credential.
 func (s *Service) readerFor(ctx context.Context, x Source) (reader, error) {
-	var c Creds
-	if x.Kind == SourceConfluence || x.Kind == SourceGit || x.Kind == SourceS3 || x.Kind == SourceWeb {
-		var err error
-		if c, err = s.creds(ctx, sourceKey(x.ID)); err != nil {
-			return nil, err
-		}
+	x, c, err := s.sourceAuth(ctx, x)
+	if err != nil {
+		return nil, err
 	}
 	return s.readerWith(x, c)
 }
@@ -110,7 +107,7 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 	switch x.Kind {
 	case SourceConfluence:
 		if c.Token == "" {
-			return nil, invalid("no read token is saved for %s", x.Name)
+			return nil, invalid("%s names no credential: choose one in Settings › Knowledge", x.Name)
 		}
 		hc := s.o.HTTP
 		if x.CAPEM != "" {
@@ -122,7 +119,9 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 		}
 		return &confluenceReader{c: client, key: x.Space}, nil
 	case SourceGit:
-		return &gitReader{g: newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.CAPEM), dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
+		g := newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.CAPEM)
+		g.bearer = c.bearer
+		return &gitReader{g: g, dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
 	case SourceS3:
 		return s.bucketReader(x, c)
 	case SourceWeb:

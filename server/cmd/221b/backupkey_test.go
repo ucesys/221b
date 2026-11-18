@@ -65,7 +65,7 @@ func TestHelmRepositoriesBackupWithTheKey(t *testing.T) {
 	src := func(context.Context) (*backup.SecretsKey, error) { return backup.ParseSecretsKey(key) }
 	repos := apps.NewRepos(apps.RepoOptions{})
 	pw := "s3cret-value"
-	if _, _, err := repos.Save(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
+	if _, _, err := repos.RestoreLegacy(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	reg := backup.NewRegistry()

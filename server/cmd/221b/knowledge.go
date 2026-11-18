@@ -17,6 +17,7 @@ import (
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/issues"
@@ -38,6 +39,7 @@ import (
 
 type knowledgeOptions struct {
 	auditLog *audit.Log
+	creds    *credentials.Service
 	leads    func() bool
 	model    knowledge.Completer
 	console  knowledge.Console
@@ -84,7 +86,7 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 	record := func(e audit.Event) { o.auditLog.Record(e) }
 	l := layout[objKnowledge]
 	svc := knowledge.New(knowledge.Options{
-		Backend: backend, Secrets: secrets, Dir: cfg.KnowledgeDir, Model: o.model, Console: o.console, Proposer: o.proposer,
+		Backend: backend, Secrets: secrets, Credentials: o.creds, Dir: cfg.KnowledgeDir, Model: o.model, Console: o.console, Proposer: o.proposer,
 		Limits: knowledge.Limits{SettingsBytes: l[knowledge.SettingsKey].Bytes, DraftsBytes: l[knowledge.DraftsKey].Bytes, StatusBytes: l[knowledge.StatusKey].Bytes},
 		Leads:  o.leads, Audit: record, RefreshGit: cfg.KnowledgeRefreshGit, RefreshS3: cfg.KnowledgeRefreshS3,
 		Logger:        o.log.With("component", "knowledge"),
@@ -770,7 +772,7 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	var knowledgeStored *kv.Limited
 	// Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
 	// wiki's local copy and index on every replica.
-	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
+	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
 		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log})
 	if err != nil {
 		return err
@@ -783,6 +785,7 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	}
 	knowledgeStored = l
 	w.knowledgeSvc = svc
+	w.creds.Register(svc.Uses)
 	// A report no known issue explains is checked against the live
 	// sources too (0.12.1, KN-43).
 	if w.issueSvc != nil {
