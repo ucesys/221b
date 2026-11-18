@@ -351,8 +351,8 @@ func (s *Service) StartPilot(ctx context.Context, id string, people, clusters []
 		if p.Draft == nil {
 			return fmt.Errorf("%w: there is no draft", ErrInvalid)
 		}
-		if p.Draft.Test == nil || p.Draft.Test.Rev != p.Draft.Rev {
-			return fmt.Errorf("%w: test the draft first", ErrInvalid)
+		if err := untestedWhy(p.Draft); err != nil {
+			return err
 		}
 		now := s.opts.Now().UTC()
 		p.Draft.Stage = StagePilot
@@ -420,8 +420,10 @@ func (s *Service) readyForLive(ctx context.Context, id string, untested bool) (i
 		return 0, fmt.Errorf("%w: there is no draft", ErrInvalid)
 	}
 	d := ap.Draft
-	if !untested && (d.Test == nil || d.Test.Rev != d.Rev) && d.Restored == 0 && d.Stage != StagePilot {
-		return 0, fmt.Errorf("%w: test the draft first", ErrInvalid)
+	if !untested && d.Restored == 0 && d.Stage != StagePilot {
+		if err := untestedWhy(d); err != nil {
+			return 0, err
+		}
 	}
 	return d.Rev, nil
 }

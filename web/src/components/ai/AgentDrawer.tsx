@@ -20,6 +20,7 @@ import {
   stateLabel,
   stateTone,
   stopPilot,
+  testComplete,
   testLine,
   tokensText,
   words,
@@ -93,7 +94,7 @@ export function stageIndex(ins: Instructions | null): number {
   const d = ins?.draft
   if (!d) return 3
   if (piloting(ins)) return 2
-  return d.test && d.test.rev === d.rev ? 1 : 0
+  return d.test && d.test.rev === d.rev && testComplete(d.test) ? 1 : 0
 }
 
 /** Settings as text to compare, whatever order their keys were set in; an unset key is no key. */
@@ -766,6 +767,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         <p className="rk-fhint" style={{ margin: 0 }} data-testid="ins-last-test">
           Last test {fmtTs(d.test.at)}: {testLine(d.test, costs ? usd : undefined)}
           {d.test.rev !== d.rev ? ' (of an earlier draft)' : ''}
+          {d.test.rev === d.rev && !testComplete(d.test) && <span data-testid="ins-test-incomplete"> · it did not run every case, so the draft is still untested: run the tests again, or make it live untested</span>}
           {d.test.rev === d.rev && d.test.cases > d.test.passed && (
             <span data-tone="err" data-testid="ins-test-failed">
               {' '}
@@ -1210,7 +1212,9 @@ function UntestedConfirm({
   onConfirm: (reason: string) => void
   onCancel: () => void
 }) {
-  const offProduction = !!localEnv && localEnv !== 'production'
+  // Only a cluster chosen as staging or development is not production;
+  // other counts as production.
+  const offProduction = localEnv === 'staging' || localEnv === 'development'
   const [reason, setReason] = useState('')
   return (
     <ConfirmDialog title="Make the draft live untested?" confirm="Make live untested" danger busy={busy} disabled={!reason.trim()} error={error} onConfirm={() => onConfirm(reason.trim())} onCancel={onCancel}>

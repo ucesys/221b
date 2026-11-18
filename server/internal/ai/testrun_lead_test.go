@@ -2,10 +2,12 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // heldRun starts a run of the troubleshooter's tests with one case held
@@ -49,6 +51,40 @@ func TestLosingTheLeadStopsTestRuns(t *testing.T) {
 	}
 	if w.ai.testing(Troubleshooter) {
 		t.Fatal("still testing")
+	}
+}
+
+// Only a run that ran every case to the end tests a draft: one stopped
+// is kept and shown, but the pilot and Make live still wait for a test,
+// and Make live untested is offered.
+func TestAStoppedRunDoesNotTestTheDraft(t *testing.T) {
+	wrap, held, release := holdOn(t, "HOLD-HERE")
+	w := setupWith(t, nil, wrap)
+	t.Cleanup(release)
+	ended := heldRun(t, w, held)
+	if err := w.ai.StopTests(Troubleshooter); err != nil {
+		t.Fatal(err)
+	}
+	if r := waitRun(t, ended); r.State != RunStopped || r.Complete() {
+		t.Fatalf("the run: %+v", r)
+	}
+	ctx := context.Background()
+	v, _ := w.ai.Instructions(ctx, Troubleshooter)
+	if v.Draft == nil || v.Draft.Test == nil || v.Draft.Test.State != RunStopped || v.Draft.Stage != StageDraft {
+		t.Fatalf("kept: %+v", v.Draft)
+	}
+	if _, err := w.ai.ReadyForLive(ctx, Troubleshooter); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "did not run every case") {
+		t.Fatalf("ready for live: %v", err)
+	}
+	if err := w.ai.StartPilot(ctx, Troubleshooter, []string{"dev@corp.example"}, nil, time.Hour, "ann"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a pilot: %v", err)
+	}
+	if _, err := w.ai.ReadyUntested(ctx, Troubleshooter); err != nil {
+		t.Fatal(err)
+	}
+	// A run kept before Phase 12.1 is complete unless its error says not.
+	if !(&TestRun{}).Complete() || (&TestRun{Error: "stopped"}).Complete() || (&TestRun{State: RunFailed}).Complete() {
+		t.Fatal("complete")
 	}
 }
 

@@ -425,6 +425,31 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	return usd, len(cases), len(traces), nil
 }
 
+// Complete says the run ran every case it planned to the end: only such a
+// run tests a draft, for its pilot and its going live. A run stopped, or
+// failed at a cap, is kept and shown, but the draft is still untested. A
+// run kept before Phase 12.1 is complete unless its error says otherwise.
+func (r *TestRun) Complete() bool {
+	if r == nil {
+		return false
+	}
+	if r.State == "" {
+		return r.Error == ""
+	}
+	return r.State == RunDone
+}
+
+// untestedWhy is why a draft is not tested at its revision.
+func untestedWhy(d *Draft) error {
+	switch {
+	case d.Test == nil || d.Test.Rev != d.Rev:
+		return fmt.Errorf("%w: test the draft first", ErrInvalid)
+	case !d.Test.Complete():
+		return fmt.Errorf("%w: test the draft first: its last test did not run every case to the end", ErrInvalid)
+	}
+	return nil
+}
+
 // liveRun is a test run in flight on this replica: its progress so far,
 // and how to stop it (Phase 12.1).
 type liveRun struct {
@@ -587,7 +612,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 					p.Revisions[i].Test = briefOf(&r)
 				}
 			}
-			if p.Draft.Stage == StageDraft {
+			if p.Draft.Stage == StageDraft && r.Complete() {
 				p.Draft.Stage = StageTest
 			}
 			return nil

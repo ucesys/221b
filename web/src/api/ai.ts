@@ -472,6 +472,11 @@ export function stateTone(s: PromptState): string {
 }
 
 /** A test run in one line: "12 of 12 cases passed · 18 of 20 replays the same · $1.40"; no cost without `usd`. */
+/** Whether a run ran every case to the end: only such a run tests a draft (a run kept before Phase 12.1 does unless its error says otherwise). */
+export function testComplete(t: TestRun): boolean {
+  return t.state ? t.state === 'done' : !t.error
+}
+
 export function testLine(t: TestSummary | TestRun, usd?: (n: number) => string): string {
   const replays = 'replays' in t ? (Array.isArray(t.replays) ? t.replays.length : t.replays) : 0
   const parts = [`${t.passed} of ${t.cases} recorded case${t.cases === 1 ? '' : 's'} passed`]

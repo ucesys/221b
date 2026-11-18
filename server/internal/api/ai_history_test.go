@@ -67,6 +67,7 @@ func TestAIHistoryAPI(t *testing.T) {
 		t.Fatalf("discarded: %+v", h.Entries)
 	}
 	// Live: the drafts go, the one that went live stays as its version.
+	setLocalEnv(t, srv, ops, "staging")
 	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh SOC 2 first."}`, 200, nil)
 	aiJSON(t, ops, http.MethodPost, srv.URL+"/api/v1/ai/agents/auditor/live", `{"untested":true,"reason":"hotfix"}`, 200, nil)
 	h.Entries = nil
@@ -89,7 +90,7 @@ func TestAIUntestedOffProductionNeedsNoSecondApproval(t *testing.T) {
 	srv, ops, _, aiSvc, _, aud := aiSetupWith(t, nil)
 	_ = signIn(t, srv, "ops2@corp.example")
 	live := srv.URL + "/api/v1/ai/agents/auditor/live"
-	for _, env := range []string{"staging", "development", "other"} {
+	for _, env := range []string{"staging", "development"} {
 		setLocalEnv(t, srv, ops, env)
 		aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh PCI first on `+env+`."}`, 200, nil)
 		var out struct {
@@ -110,12 +111,14 @@ func TestAIUntestedOffProductionNeedsNoSecondApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	aiJSON(t, ops, http.MethodPost, live, "", http.StatusAccepted, nil)
-	// On production, untested waits too.
-	srv2, ops3, _, _, _, _ := aiSetupWith(t, nil)
-	_ = signIn(t, srv2, "ops2@corp.example")
-	setLocalEnv(t, srv2, ops3, "production")
-	aiJSON(t, ops3, http.MethodPut, srv2.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh PCI first."}`, 200, nil)
-	aiJSON(t, ops3, http.MethodPost, srv2.URL+"/api/v1/ai/agents/auditor/live", `{"untested":true,"reason":"hotfix"}`, http.StatusAccepted, nil)
+	// On production, or other, untested waits too.
+	for _, env := range []string{"production", "other"} {
+		srv2, ops3, _, _, _, _ := aiSetupWith(t, nil)
+		_ = signIn(t, srv2, "ops2@corp.example")
+		setLocalEnv(t, srv2, ops3, env)
+		aiJSON(t, ops3, http.MethodPut, srv2.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh PCI first."}`, 200, nil)
+		aiJSON(t, ops3, http.MethodPost, srv2.URL+"/api/v1/ai/agents/auditor/live", `{"untested":true,"reason":"hotfix"}`, http.StatusAccepted, nil)
+	}
 }
 
 // A go-live request on Approvals carries what it asks for, for its drawer
