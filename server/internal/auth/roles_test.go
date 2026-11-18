@@ -1123,6 +1123,92 @@ func TestASecondSuperAdminApprovesANewOne(t *testing.T) {
 	}
 }
 
+// An email in the deployment's admin list makes a local account a
+// SuperAdmin too: changing a user's email to one is refused while another
+// SuperAdmin could approve, and leaves the account as it was; the only
+// SuperAdmin makes one at once, and the audit log says why. Once a
+// SuperAdmin by approval, the email changes freely.
+func TestAnEmailInTheAdminListIsASuperAdminGrant(t *testing.T) {
+	ctx := context.Background()
+	cfg := localConfig(t)
+	cfg.Admins = []string{"Boss@Corp.example", "chief@corp.example"}
+	cfg.Local = []auth.LocalUser{{Username: "root", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}}
+	cfg.TwoPerson = twoperson.New(nil, nil)
+	e := newEnv(t, cfg)
+	root := e.mustSignIn("root", goodPassword)
+	for _, u := range []string{"alice", "carol"} {
+		if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": u, "email": u + "@corp.example", "password": goodPassword}); code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", u, code, b)
+		}
+	}
+	// Another SuperAdmin could approve (the admin list names others than
+	// root): the email change is refused, the name with it.
+	code, b := e.api(root, http.MethodPatch, "/api/v1/admin/users/alice", map[string]any{"email": " boss@corp.example ", "name": "Alice B"})
+	if code != http.StatusConflict || !strings.Contains(string(b), "admin list") {
+		t.Fatalf("alice: %d %s", code, b)
+	}
+	alice := e.mustSignIn("alice", goodPassword)
+	if w, _ := e.whoami(alice); w.Admin {
+		t.Fatalf("alice became a SuperAdmin: %+v", w)
+	}
+	if !strings.Contains(e.audit.String(), `"outcome":"denied"`) {
+		t.Errorf("the refusal is not audited: %s", e.audit.String())
+	}
+	// Other emails, and other details, change as before.
+	if code, b := e.api(root, http.MethodPatch, "/api/v1/admin/users/alice", map[string]any{"email": "alice.b@corp.example", "name": "Alice B"}); code != http.StatusOK {
+		t.Fatalf("another email: %d %s", code, b)
+	}
+	// Made a SuperAdmin by approval, the email in the list changes freely.
+	if code, b := e.api(root, http.MethodPut, "/api/v1/admin/users/carol/super", map[string]any{"roles": []string{"superAdmin"}}); code != http.StatusAccepted {
+		t.Fatalf("carol: %d %s", code, b)
+	}
+	list, _ := cfg.TwoPerson.List(ctx)
+	for _, r := range list {
+		if err := e.svc.ApplySuperAdmin(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, b := e.api(root, http.MethodPatch, "/api/v1/admin/users/carol", map[string]any{"email": "chief@corp.example"}); code != http.StatusOK {
+		t.Fatalf("carol, a SuperAdmin: %d %s", code, b)
+	}
+}
+
+// The only SuperAdmin, with nobody else in the admin list, makes one by an
+// email at once, as by the role.
+func TestAnEmailInTheAdminListAloneIsMadeAtOnce(t *testing.T) {
+	cfg := localConfig(t)
+	cfg.Admins = []string{"root", "boss@corp.example"}
+	cfg.Local = []auth.LocalUser{{Username: "root", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}}
+	cfg.TwoPerson = twoperson.New(nil, nil)
+	e := newEnv(t, cfg)
+	root := e.mustSignIn("root", goodPassword)
+	if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "alice", "password": goodPassword}); code != http.StatusCreated {
+		t.Fatalf("alice: %d %s", code, b)
+	}
+	// boss@corp.example is another name in the list: someone could approve.
+	if code, b := e.api(root, http.MethodPatch, "/api/v1/admin/users/alice", map[string]any{"email": "boss@corp.example"}); code != http.StatusConflict {
+		t.Fatalf("with another listed admin: %d %s", code, b)
+	}
+	cfg2 := localConfig(t)
+	cfg2.Admins = []string{"root@corp.example"}
+	cfg2.Local = []auth.LocalUser{{Username: "root", Email: "root@corp.example", PasswordHash: hashOf(t, goodPassword)}}
+	cfg2.TwoPerson = twoperson.New(nil, nil)
+	e2 := newEnv(t, cfg2)
+	root2 := e2.mustSignIn("root", goodPassword)
+	if code, b := e2.api(root2, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "alice", "password": goodPassword}); code != http.StatusCreated {
+		t.Fatalf("alice: %d %s", code, b)
+	}
+	if code, b := e2.api(root2, http.MethodPatch, "/api/v1/admin/users/alice", map[string]any{"email": "ROOT@corp.example"}); code != http.StatusOK {
+		t.Fatalf("alone: %d %s", code, b)
+	}
+	if w, _ := e2.whoami(e2.mustSignIn("alice", goodPassword)); !w.Admin {
+		t.Fatalf("alice: %+v", w)
+	}
+	if !strings.Contains(e2.audit.String(), "nobody else could approve") {
+		t.Fatalf("the audit log does not say why: %s", e2.audit.String())
+	}
+}
+
 // Local accounts still sign in with LDAP on, also while the directory cannot
 // be reached; a local name the directory also knows signs in with either
 // password (owner, 2026-11-17).
