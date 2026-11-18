@@ -10,14 +10,16 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/scrub"
 )
 
-// Testing a source (KN-25, KN-26). Settings › Knowledge's source dialog
+// Testing a source (KN-25, KN-26). Administration › AI › Knowledge's source dialog
 // tests the values as typed, before they are saved: a new source's, or a
 // saved one's with what was changed in its dialog. A credential left blank
 // on Edit is the saved one, read here by the source's id and never sent
@@ -42,6 +44,11 @@ type SourceTest struct {
 	Sample     []string `json:"sample,omitempty"`
 	Skipped    int      `json:"skipped,omitempty"`
 	SkippedWhy string   `json:"skippedWhy,omitempty"`
+	// Live is a live source's addresses, each read once (KN-42).
+	Live []LiveCheck `json:"live,omitempty"`
+	// Certificate is the certificate the source's address presented, when
+	// it is not trusted or is the pinned one (CR-15), also with an error.
+	Certificate *certpin.Cert `json:"certificate,omitempty"`
 }
 
 // testSample is how many items a Test names.
@@ -63,7 +70,7 @@ func (s *Service) TestSource(ctx context.Context, c Caller, id string) (SourceTe
 	if !ok {
 		return SourceTest{}, wrapf(ErrNotFound, "no source %q", id)
 	}
-	keys, err := s.creds(ctx, sourceKey(x.ID))
+	x, keys, err := s.sourceAuth(ctx, x)
 	if err != nil {
 		return SourceTest{}, err
 	}
@@ -81,7 +88,17 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	if err := s.leads(); err != nil {
 		return SourceTest{}, err
 	}
+	// A git source naming a repository of Administration › Settings › Repositories is
+	// tested with its address and credential (RP-03).
+	x, err := s.fillRepo(ctx, x)
+	if err != nil {
+		return SourceTest{}, err
+	}
 	var have Creds
+	// A pinned certificate is the saved source's, while the address is the
+	// same (CR-16); the dialog cannot send one.
+	x.PinnedCert = nil
+	legacy := s.keepsOwnCredential(ctx, Source{ID: saved, Kind: x.Kind, Credential: x.Credential, Repository: x.Repository}, ch, saved == "")
 	if saved != "" {
 		set, err := s.Settings(ctx)
 		if err != nil {
@@ -94,8 +111,16 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 		if old.Kind != x.Kind {
 			return SourceTest{}, invalid("a source keeps its kind; add a new one instead")
 		}
-		if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
-			return SourceTest{}, err
+		if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {
+			x.PinnedCert = old.PinnedCert
+		}
+		// The credential the source keeps goes to its own address only:
+		// typed to another, the test signs in with what is typed, if
+		// anything.
+		if legacy && keptFor(old, x) {
+			if have, err = s.creds(ctx, sourceKey(saved)); err != nil {
+				return SourceTest{}, err
+			}
 		}
 	}
 	x = x.normalized()
@@ -104,17 +129,29 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	if x.Name == "" {
 		x.Name = "the new source"
 	}
+	// The dialog names the credential to test with (CR-11); typed keys
+	// are those of before 0.12.1 (the Go API).
+	x.CredMigrated = !legacy
 	if err := x.Validate(); err != nil {
 		return SourceTest{}, err
 	}
 	keys := ch.apply(have)
+	if !legacy {
+		if err := s.checkCredential(ctx, x); err != nil {
+			return SourceTest{}, err
+		}
+		var err error
+		if x, keys, err = s.sourceAuth(ctx, x); err != nil {
+			return SourceTest{}, err
+		}
+	}
 	switch {
-	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3:
-		return SourceTest{}, invalid("only a Confluence space, a git repository or an S3 bucket is tested")
+	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3 && x.Kind != SourceLive && x.Kind != SourceWeb:
+		return SourceTest{}, invalid("only a Confluence space, a git repository, an S3 bucket, a web site or a live source is tested")
 	case x.Kind == SourceConfluence && keys.Token == "":
-		return SourceTest{}, invalid("type the API token to test")
+		return SourceTest{}, invalid("choose the credential to test with")
 	case x.Kind == SourceS3 && x.Credentials == CredentialsKeys && (keys.AccessKeyID == "" || keys.SecretAccessKey == ""):
-		return SourceTest{}, invalid("give the access key's ID and secret to test, or use the pod's identity")
+		return SourceTest{}, invalid("choose the access key's credential to test with, or use the pod's identity")
 	}
 	return s.testSource(ctx, x, keys)
 }
@@ -122,24 +159,34 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 // testSource connects to a source, lists its items and says what it
 // found, or what is wrong without a credential in it.
 func (s *Service) testSource(ctx context.Context, x Source, keys Creds) (SourceTest, error) {
+	if x.Kind == SourceLive {
+		out := s.testLive(ctx, x, keys)
+		ok := true
+		for _, c := range out.Live {
+			ok = ok && c.OK
+		}
+		out.Certificate = s.certificateOf(ctx, x, ok)
+		return out, nil
+	}
 	out, err := s.listForTest(ctx, x, keys)
 	if err != nil {
-		var secrets []string
-		for _, v := range []string{keys.Token, keys.AccessKeyID, keys.SecretAccessKey} {
-			if v != "" {
-				secrets = append(secrets, v)
-			}
+		cert := s.certificateOf(ctx, x, false)
+		if msg := scrub.Known(err.Error(), keys.secrets()); msg != err.Error() {
+			return SourceTest{Certificate: cert}, errors.New(msg)
 		}
-		if msg := scrub.Known(err.Error(), secrets); msg != err.Error() {
-			return SourceTest{}, errors.New(msg)
-		}
-		return SourceTest{}, err
+		return SourceTest{Certificate: cert}, err
 	}
+	out.Certificate = s.certificateOf(ctx, x, true)
 	return out, nil
 }
 
 func (s *Service) listForTest(ctx context.Context, x Source, keys Creds) (SourceTest, error) {
-	tctx, cancel := context.WithTimeout(ctx, testTimeout)
+	timeout := testTimeout
+	if x.Kind == SourceWeb {
+		// A web site is listed by crawling it, as a read does.
+		timeout = SiteCrawlTime
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := s.reach(tctx, x); err != nil {
 		return SourceTest{}, err
@@ -155,7 +202,7 @@ func (s *Service) listForTest(ctx context.Context, x Source, keys Creds) (Source
 			if u := sourceAddr(x); u != nil {
 				where = u.Host
 			}
-			return SourceTest{}, fmt.Errorf("%s took the connection but did not list its items within %d s: %v", where, int(testTimeout/time.Second), err)
+			return SourceTest{}, fmt.Errorf("%s took the connection but did not list its items within %d s: %v", where, int(timeout/time.Second), err)
 		}
 		return SourceTest{}, err
 	}
@@ -184,7 +231,7 @@ func sourceAddr(x Source) *url.URL {
 	switch x.Kind {
 	case SourceConfluence:
 		raw = x.BaseURL
-	case SourceGit:
+	case SourceGit, SourceWeb:
 		raw = x.URL
 	case SourceS3:
 		raw = x.Endpoint
@@ -238,7 +285,7 @@ func (s *Service) reach(ctx context.Context, x Source) error {
 	if u.Scheme != "https" {
 		return nil
 	}
-	tc := tls.Client(conn, &tls.Config{ServerName: u.Hostname(), RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12})
+	tc := tls.Client(conn, certpin.Config(&tls.Config{ServerName: u.Hostname(), RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12}, certpin.Trust{Pin: x.pin()}))
 	hctx, cancelTLS := context.WithTimeout(ctx, connectTimeout)
 	defer cancelTLS()
 	if err := tc.HandshakeContext(hctx); err != nil {
@@ -295,13 +342,29 @@ func tlsError(addr string, err error) error {
 	var invalidCert x509.CertificateInvalidError
 	var record tls.RecordHeaderError
 	var ne net.Error
+	var pinned *certpin.Error
 	switch {
+	case errors.As(err, &pinned):
+		return fmt.Errorf("%s: %v. Test shows the certificate it presents now: trust it if it is the server's new one.", addr, pinned)
 	case errors.As(err, &verify), errors.As(err, &unknown), errors.As(err, &host), errors.As(err, &invalidCert):
-		return fmt.Errorf("%s has a TLS certificate the console does not trust: set the private CA in this dialog, or check the address (%v).", addr, err)
+		return fmt.Errorf("%s has a TLS certificate the console does not trust: set the private CA in this dialog, trust the certificate shown, or check the address (%v).", addr, err)
 	case errors.As(err, &record):
 		return fmt.Errorf("%s does not answer in TLS: if it serves plain HTTP, the address starts with http://; otherwise check the port.", addr)
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
 		return fmt.Errorf("%s took the connection but did not finish the TLS handshake within %d s. Check that this port serves HTTPS.", addr, int(connectTimeout/time.Second))
 	}
 	return fmt.Errorf("The TLS handshake with %s failed: %v. If it uses a private CA, set it in this dialog.", addr, err)
+}
+
+// keptFor says a source's own credential, of before 0.12.1, may go with
+// a test of the source as typed: its address is the saved one (a live
+// source's addresses are on the saved one's site).
+func keptFor(old, typed Source) bool {
+	if old.Kind == SourceLive {
+		site := oneSite(normalizedLive(old.Addresses))
+		return slices.Equal(old.Addresses, typed.Addresses) || site != "" && strings.EqualFold(site, oneSite(normalizedLive(typed.Addresses)))
+	}
+	norm := func(a string) string { return strings.TrimRight(strings.TrimSpace(a), "/") }
+	a := norm(credentialAddress(old))
+	return a != "" && a == norm(credentialAddress(typed))
 }

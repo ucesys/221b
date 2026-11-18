@@ -159,10 +159,11 @@ const investigateFormat = "End with exactly one fenced block of JSON, and nothin
  "reply": "optional: a reply to the reporter, which an operator sends or not; empty for none",
  "knownIssue": null,
  "proposals": []}` + "\n```\n\n" +
-	`"confidence" is 0 to 100: how sure you are of the service. "knownIssue", when others may hit the same problem and no open known issue says it, is {"title": "...", "symptoms": ["in users' words"], "services": ["service id"], "workaround": "..."}, which an operator accepts or not. "proposals" are changes that would fix it, each resolving this report's case once a person approves it: {"title": "...", "reasoning": "...", "cluster": "cluster id", "commands": ["kubectl ..."], "impact": "...", "risk": "low|medium|high"}, only kubectl or helm commands Watson runs.`
+	`"confidence" is 0 to 100: how sure you are of the service. When the report does not say enough to find the service, leave "service" empty and use "reply" for the one question that would settle it. "knownIssue", when others may hit the same problem and no open known issue says it, is {"title": "...", "symptoms": ["in users' words"], "services": ["service id"], "workaround": "..."}, which an operator accepts or not. "proposals" are changes that would fix it, each resolving this report's case once a person approves it: {"title": "...", "reasoning": "...", "cluster": "cluster id", "commands": ["kubectl ..."], "impact": "...", "risk": "low|medium|high"}, only kubectl or helm commands Watson runs.`
 
 const verifyFormat = "End with exactly one fenced block of JSON, and nothing after it:\n\n```json\n" +
-	`{"fixed": true, "evidence": ["what you saw that shows the symptom is gone, or still there"], "technical": "for operators, in a few lines"}` + "\n```"
+	`{"fixed": true, "evidence": ["what you saw that shows the symptom is gone, or still there"], "technical": "for operators, in a few lines"}` + "\n```\n\n" +
+	`"fixed" is true only when you read that the symptom is gone. When you could not check, answer false and start "evidence" with "could not check:" and why.`
 
 // TriageTask is the report triage job's built-in instructions (JR-05);
 // checking a fix keeps its own.

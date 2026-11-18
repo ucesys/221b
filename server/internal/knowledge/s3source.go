@@ -54,6 +54,8 @@ type s3Reader struct {
 	identity bool
 	skipped  int
 	why      string
+	// left are the objects skipped, each with why (KN-47).
+	left []skippedItem
 }
 
 // bucketReader makes a bucket source's reader from its settings and keys.
@@ -63,24 +65,20 @@ func (s *Service) bucketReader(x Source, c Creds) (*s3Reader, error) {
 			return s.o.Identity.Credentials(ctx, x.Region)
 		}
 		if c.AccessKeyID == "" || c.SecretAccessKey == "" {
-			return awsv4.Credentials{}, invalid("no access key is saved for %s: give one, or use the pod's identity", x.Name)
+			return awsv4.Credentials{}, invalid("%s names no access key: choose its credential, or use the pod's identity", x.Name)
 		}
-		return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey}, nil
+		return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.sessionToken}, nil
 	}
 	hc := s.o.HTTP
-	if x.CAPEM != "" {
+	if !x.trust().Empty() {
 		hc = nil
 	}
-	client, err := s3.New(s3.Config{Endpoint: x.Endpoint, Region: x.Region, Bucket: x.Bucket, PathStyle: x.PathStyle, CAPEM: x.CAPEM, Credentials: creds, HTTP: hc, Now: s.o.Now})
+	client, err := s3.New(s3.Config{Endpoint: x.Endpoint, Region: x.Region, Bucket: x.Bucket, PathStyle: x.PathStyle, CAPEM: x.CAPEM, Pin: x.pin(), Credentials: creds, HTTP: hc, Now: s.o.Now})
 	if err != nil {
 		return nil, invalid("%v", err)
 	}
 	r := &s3Reader{c: client, bucket: x.Bucket, prefix: x.Prefix, identity: x.Credentials == CredentialsIdentity}
-	for _, v := range []string{c.AccessKeyID, c.SecretAccessKey} {
-		if v != "" {
-			r.secrets = append(r.secrets, v)
-		}
-	}
+	r.secrets = append(r.secrets, c.secrets()...)
 	return r, nil
 }
 
@@ -96,6 +94,7 @@ func (r *s3Reader) List(ctx context.Context, _ time.Time) ([]Item, bool, error) 
 	big := 0
 	kinds := map[string]int{}
 	other := 0
+	r.left = nil
 	for _, o := range objs {
 		switch {
 		case strings.HasSuffix(o.Key, "/"):
@@ -107,8 +106,10 @@ func (r *s3Reader) List(ctx context.Context, _ time.Time) ([]Item, bool, error) 
 			}
 			kinds[ext]++
 			other++
+			r.left = append(r.left, skippedItem{ID: o.Key, Title: path.Base(o.Key), URL: s3URL(r.bucket, o.Key), Why: "not a kind Mycroft reads (" + ext + ")"})
 		case o.Size > MaxDocument:
 			big++
+			r.left = append(r.left, skippedItem{ID: o.Key, Title: path.Base(o.Key), URL: s3URL(r.bucket, o.Key), Why: fmt.Sprintf("over %d MiB", MaxDocument>>20)})
 		default:
 			out = append(out, Item{ID: o.Key, Title: path.Base(o.Key), Version: strings.Trim(o.ETag, `"`), Modified: o.Modified, URL: s3URL(r.bucket, o.Key)})
 		}
@@ -147,6 +148,9 @@ func (r *s3Reader) Read(ctx context.Context, it Item) (string, error) {
 }
 
 func (r *s3Reader) Skipped() (int, string) { return r.skipped, r.why }
+
+// SkippedItems are the objects skipped, each with why (KN-47).
+func (r *s3Reader) SkippedItems() []skippedItem { return r.left }
 
 // describe says what is wrong with a bucket in words a person can act on:
 // no such bucket, the credentials refused, another region, a certificate

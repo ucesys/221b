@@ -38,6 +38,8 @@ import { DecideDialog } from './DecideDialog'
 import { Drawer } from '../Drawer'
 import { DiffIcon, NoDiffIcon, PlusIcon } from '../Icons'
 import { errText, Pill, Field, Findings } from './parts'
+import { paramTypeText } from './paramSuggest'
+import { useUnsaved } from '../../lib/unsaved'
 
 export function ScriptDrawer({
   name,
@@ -166,6 +168,7 @@ export function ScriptDrawer({
   // Closing with changes not saved asks first. Once saved, a new script
   // compares with what was saved, before the drawer takes its name.
   const unsaved = script ? text !== latestOf(script).text || group !== (script.group ?? '') : name === null && (text !== base.text || newName !== base.name || group !== base.group)
+  useUnsaved(unsaved, 'the script drawer')
   // A save under way finishes on the server whether the drawer stays or not.
   const close = () => (unsaved && !busy ? setConfirmClose(true) : onClose())
   const nameBad = name === null && newName !== '' && !SCRIPT_NAME.test(newName)
@@ -444,7 +447,8 @@ export function ScriptDrawer({
                         : (check.header.params ?? []).map((p) => (
                             <span key={p.name} style={{ display: 'block' }}>
                               <span className="rk-mono">{p.name}</span>
-                              {p.required ? ' (required)' : ''}
+                              {/* FU-03: the kind of parameter, as the Run dialog says it. */}
+                              {` · ${paramTypeText(p)}`}
                             </span>
                           ))}
                     </span>

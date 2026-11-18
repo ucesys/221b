@@ -61,6 +61,8 @@ export interface SherlockMsg {
   costUSD?: number
   /** What the answer changed in the asking window's view (P6U-10). */
   view?: { label: string }[]
+  /** What the window left undone, for the Show in 221B button (SR-15): unsaved changes were open, the person moved the view, the window did not answer, or the answer stopped before it was done (SR-18). */
+  show?: { action: string; input: unknown; why: 'unsaved' | 'moved' | 'asleep' | 'stopped' }[]
   /** Who answered, when not Sherlock (Phase 12). */
   agent?: string
   /** The parts handed to other agents, in order (Phase 12). */
@@ -200,11 +202,23 @@ export async function postUIResult(cluster: string, id: string, result: unknown)
   }
 }
 
-/** Where a main console window runs the UI actions sent to it. */
-let uiHandler: ((req: unknown, cluster: string) => void) | null = null
+/**
+ * Where a main console window runs the UI actions sent to it: from the
+ * person's own conversation on a cluster, or from a shared one (a case's
+ * or a proposed change's, SR-19), whose results go back by reply and whose
+ * answers are known by scope.
+ */
+export type UIHandler = (req: unknown, scope: string, reply?: (id: string, result: unknown) => Promise<void>) => void
 
-export function setUIHandler(fn: ((req: unknown, cluster: string) => void) | null): void {
+let uiHandler: UIHandler | null = null
+
+export function setUIHandler(fn: UIHandler | null): void {
   uiHandler = fn
+}
+
+/** Hands a ui event of a shared conversation to the main window's handler (SR-19). */
+export function runSharedUI(req: unknown, scope: string, reply: (id: string, result: unknown) => Promise<void>): void {
+  uiHandler?.(req, scope, reply)
 }
 export const stopSherlock = (cluster: string) => call<{ stopped: boolean }>('POST', apiPath('sherlock/stop', cluster), {})
 export const newSherlockChat = (cluster: string) => call<Conversation>('POST', apiPath('sherlock/new', cluster), {})

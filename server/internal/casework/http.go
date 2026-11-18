@@ -30,7 +30,7 @@ const (
 	SLAPath   = "/api/v1/aiops/sla"
 	KnownPath = "/api/v1/aiops/known-open"
 	// SimilarPath is what New Case shows beside the form (CF-12);
-	// SettingsPath Settings › Cases (CF-19).
+	// SettingsPath Administration › AI › Cases (CF-19).
 	SimilarPath  = "/api/v1/aiops/similar"
 	SettingsPath = "/api/v1/aiops/settings"
 	// RulesPath is AIOps › Mycroft › Validation rules (ADR-138).
@@ -223,6 +223,11 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request, c Caller) {
 	}
 	if truthy(q.Get("mine")) {
 		f.Owner = c.key()
+	}
+	// The cases the caller is involved in (EM-08): ?involved=me, or the
+	// Inbox's ?who=involved.
+	if v := q.Get("involved"); v == "me" || truthy(v) || q.Get("who") == "involved" {
+		f.Involved = true
 	}
 	list, err := h.s.List(r.Context(), c, f)
 	if err != nil {

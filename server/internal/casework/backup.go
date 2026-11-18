@@ -13,7 +13,7 @@ import (
 // A backup (CW-13, CU-14, CF-22) holds every case object whole, by its
 // name: the issue service's record and the work on it (the analyses, the
 // ids of the changes it proposed, the fix, the RCA, the history and the
-// drafts); and Settings › Cases with the check ids seen. No record holds
+// drafts); and Administration › AI › Cases with the check ids seen. No record holds
 // a credential: what people and agents write is scrubbed when kept.
 
 // Exported is what a backup holds of the cases.
@@ -45,7 +45,7 @@ func (s *Service) Export(ctx context.Context) (*Exported, error) {
 }
 
 // Import makes the cases of a backup this console does not have; a case
-// here stays as it is. Settings › Cases are restored, and the checks seen
+// here stays as it is. Administration › AI › Cases are restored, and the checks seen
 // added. It says how many cases it added and how many were here already.
 func (s *Service) Import(ctx context.Context, raw json.RawMessage, by string) (int, int, error) {
 	var in Exported

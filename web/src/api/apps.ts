@@ -3,6 +3,7 @@
 // any release. Changes come back as the Watson card that runs them.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { PinnedWith, PresentedCert } from './certificates'
 import { apiPath } from '../lib/router'
 import { BACKGROUND, unauthorized } from './auth'
 import type { WatsonItem } from './watson'
@@ -20,7 +21,7 @@ export interface AppSource {
   path?: string
   /** A Helm repository's or an OCI registry's chart, by name. */
   chart?: string
-  /** The repository of Settings › Applications the chart comes from. */
+  /** The repository of Administration › Settings › Repositories the chart comes from; for git, the git repository picked (0.12.1, RP-03), whose address repo is. */
   repository?: string
   /** The branch or tag, or the chart's version. */
   ref: string
@@ -54,7 +55,14 @@ export interface AppRecord {
   matchedRevision?: number
   /** How the source rendered differently from what runs when it was set, or why it could not be compared. */
   sourceDiff?: string
+  /** The release revision whose values (helm get values) the values file started from when the console adopted the release. */
+  adoptedRevision?: number
+  /** A token of before 0.12.1 is kept with the record; it is used until the upgrade moves it to a credential. */
   hasToken?: boolean
+  /** The credential of Administration › Credentials the git repository is fetched with, by id; none when absent (0.12.1, CR-11). */
+  credential?: string
+  /** The record names its credential: a token of before 0.12.1 is no longer read. */
+  credMigrated?: boolean
   /** The application's own deploy commands: each a redeploy with its own parameters (asked October 30, 2026). */
   commands?: AppCommand[]
   createdBy?: string
@@ -96,10 +104,14 @@ export interface AppDrift {
 }
 
 export interface AppView extends AppRecord {
-  /** This change moved the application to another repository, and the token saved for the old one went with it. */
-  tokenRemoved?: boolean
+  /** This change moved the application to a repository its credential does not cover, and it was let go. */
+  credentialRemoved?: boolean
   drift?: AppDrift
   driftState?: 'in sync' | 'drifted' | 'unknown'
+  /** The keys of the values file whose credentials show masked; a masked value saved as it is keeps what it hid. */
+  valuesMasked?: string[]
+  /** This is the release that runs this console. */
+  self?: boolean
 }
 
 /** A chart found in a repository, and what its README's install example says (M-07). */
@@ -175,12 +187,41 @@ export interface AppImage {
   init?: boolean
 }
 
+/** What the check for newer images says about one image (HA-21). */
+export interface ImageCheck {
+  /** newer, current, pending (the registry is being asked), unknown (could not check) or skipped (nothing to compare). */
+  state: 'newer' | 'current' | 'pending' | 'unknown' | 'skipped'
+  /** The newest tag of the running tag's form; for a tag that moved, the tag itself. */
+  newer?: string
+  /** For a tag that moved: the digest it points at now. */
+  digest?: string
+  reason?: string
+  checked?: string
+}
+
+/** An image of a release with a newer one published (HA-22). */
+export interface NewerImage {
+  image: string
+  registry?: string
+  repository: string
+  tag?: string
+  newer: string
+  digest?: string
+}
+
+/** The releases with a newer image, by namespace/name; enabled is false when Settings turned the check off. */
+export interface NewerImages {
+  enabled: boolean
+  releases: Record<string, NewerImage[]>
+  pending: number
+}
+
 export interface AppInput {
   namespace?: string
   name?: string
   source?: AppSource
-  token?: string
-  clearToken?: boolean
+  /** The credential the git repository is fetched with, by id; "" for none. */
+  credential?: string
   values?: string
   params?: string[]
   createNamespace?: boolean
@@ -247,13 +288,13 @@ export function useApps(cluster: string, tick: number, version: number) {
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
 export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''), undefined, !refresh)
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
-/** A kept application's repository looked over at its ref, with the saved token (R2-08). */
+/** A kept application's repository looked over at its ref, with its credential (R2-08). */
 export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
 /** Looks over a repository for the new-application form: its charts and the README's install example (M-07). */
-export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) =>
-  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
+export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, credential?: string) =>
+  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(credential ? { credential } : {}) })
 
-export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
+export const fetchRepoRefs = (cluster: string, repo: string, credential = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), credential ? { repo, credential } : { repo })
 /** A repository chart looked over at a version (the newest when none): its values files, its version and digest (HR-05). */
 export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart' | 'ref'>) =>
   call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { kind: src.kind, ...(src.repo ? { repo: src.repo } : {}), ...(src.repository ? { repository: src.repository } : {}), chart: src.chart, ...(src.ref ? { ref: src.ref } : {}) })
@@ -262,35 +303,53 @@ export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'rep
 
 export type RepoAuth = 'none' | 'basic' | 'token'
 
-/** A Helm repository or an OCI registry the console knows, as Settings › Applications lists it. */
+/** A git repository, a Helm repository or an OCI registry the console knows, as Administration › Settings › Repositories lists it (0.12.1, RP-02). */
 export interface HelmRepository {
   name: string
-  kind: 'helm' | 'oci'
+  kind: 'git' | 'helm' | 'oci'
   url: string
-  auth: RepoAuth
+  /** A git repository's branch offered first; none leaves it to the repository. */
+  defaultBranch?: string
+  /** What names it: applications' Setup, Mycroft's sources (RP-06). */
+  usedBy?: string[]
+  /** The credential of Administration › Credentials it signs in with, by id; none when absent (0.12.1, CR-11). */
+  credential?: string
+  /** It names its credential; before the upgrade moves it, auth, username and hasSecret are its own of before 0.12.1. */
+  credMigrated?: boolean
+  auth?: RepoAuth
   username?: string
-  /** A password or token is kept; it is never shown. */
-  hasSecret: boolean
+  /** A password or token of before 0.12.1 is kept; it is never shown. */
+  hasSecret?: boolean
   testedAt?: string
   testOk?: boolean
   tested?: string
   setBy?: string
   setAt?: string
+  /** The certificate pinned for it, its own or its credential's (CR-19), for a SuperAdmin. */
+  pinned?: PinnedWith
 }
 
 export interface HelmRepositoryInput {
-  kind: 'helm' | 'oci'
+  kind: 'git' | 'helm' | 'oci'
   url: string
-  auth?: RepoAuth
-  username?: string
-  /** A value replaces the kept one, "" removes it, missing keeps it. */
-  secret?: string
+  /** The credential it signs in with, by id; "" or missing for none. */
+  credential?: string
+  defaultBranch?: string
+}
+
+/** What the upgrade to 0.12.1 made of the git addresses typed before (RP-05), until dismissed. */
+export interface RepoMigration {
+  at?: string
+  created?: { name: string; url: string; credential?: string; from: string[] }[]
+  notes?: string[]
 }
 
 export interface RepoTest {
   ok: boolean
   text: string
   charts?: number
+  /** The certificate the repository presented, when it is not trusted or is the pinned one (CR-15). */
+  certificate?: PresentedCert
 }
 
 export interface ChartInfo {
@@ -303,20 +362,64 @@ export interface ChartInfo {
 }
 
 const repos = '/api/v1/helm-repositories'
-export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean }>('GET', repos)
+export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean; migration?: RepoMigration }>('GET', repos)
+/** Gives a repository a new name; what names it follows (RP-05). */
+export const renameHelmRepo = (name: string, to: string) => call<HelmRepository>('POST', `${repos}/${encodeURIComponent(name)}/rename`, { name: to })
+/** Hides the list of what the upgrade made. */
+export const dismissRepoMigration = () => call<void>('POST', `${repos}/migration/dismiss`)
 export const saveHelmRepo = (name: string, input: HelmRepositoryInput) => call<HelmRepository>('PUT', `${repos}/${encodeURIComponent(name)}`, input)
 export const deleteHelmRepo = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}`)
-/** Tests a repository as typed; a saved one's name with no secret given tests with the one kept. */
+/** Tests a repository as typed, with the credential chosen. */
 export const testHelmRepo = (input: HelmRepositoryInput & { name?: string }) => call<RepoTest>('POST', `${repos}/test`, input)
 /** Tests a saved repository and keeps what it found. */
 export const retestHelmRepo = (name: string) => call<RepoTest>('POST', `${repos}/${encodeURIComponent(name)}/test`)
+/** Trusts the certificate a saved repository presents, when it is the one its Test showed (CR-16): with its credential when it names one. */
+export const trustRepoCert = (name: string, sha256: string) => call<PinnedWith>('POST', `${repos}/${encodeURIComponent(name)}/trust`, { sha256 })
+/** Lets a repository's pinned certificate go: its own, or its credential's (CR-19). */
+export const forgetRepoCert = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}/trust`)
 export const fetchRepoCharts = (name: string) => call<{ charts: ChartInfo[] }>('GET', `${repos}/${encodeURIComponent(name)}/charts`)
 /** A repository chart's versions, newest first, and the newest stable one. */
 export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart'>) =>
   call<{ versions: string[]; newest: string }>('POST', `${repos}/versions`, { kind: src.kind, repo: src.repo ?? '', repository: src.repository ?? '', chart: src.chart ?? '', ref: '', refKind: 'version' })
 export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
-  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
+  call<{ revision: number; images: AppImage[]; checks?: Record<string, ImageCheck> }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
+
+export const fetchNewerImages = (cluster: string) => call<NewerImages>('GET', apiPath('helm/newer-images', cluster), undefined, true)
+
+const NO_NEWER: Record<string, NewerImage[]> = {}
+
+/**
+ * The releases with a newer image (HA-22), read when the tab opens, again
+ * soon while registries are still being asked, and every ten minutes
+ * after: the server keeps the registries' answers for hours. A failed read
+ * is no notice, never an error (an air-gapped cluster's registries).
+ */
+export function useNewerImages(cluster: string): Record<string, NewerImage[]> {
+  const [held, setHeld] = useState<{ cluster: string; releases: Record<string, NewerImage[]> }>({ cluster, releases: NO_NEWER })
+  useEffect(() => {
+    let stop = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = () => {
+      fetchNewerImages(cluster).then(
+        (v) => {
+          if (stop) return
+          setHeld({ cluster, releases: v.enabled ? v.releases : NO_NEWER })
+          timer = setTimeout(read, v.enabled && v.pending > 0 ? 15_000 : 600_000)
+        },
+        () => {
+          if (!stop) timer = setTimeout(read, 600_000)
+        },
+      )
+    }
+    read()
+    return () => {
+      stop = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [cluster])
+  return held.cluster === cluster ? held.releases : NO_NEWER
+}
 
 /** One side of a diff: a revision, or the source at its saved ref, or at a branch or tag named here. */
 export type DiffSide = { kind: 'revision'; revision: number } | { kind: 'source'; ref?: string; refKind?: RefKind }

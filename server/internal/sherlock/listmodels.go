@@ -12,7 +12,7 @@ import (
 )
 
 // The models a provider's endpoint lists, for the model field's dropdown
-// in Settings › Providers (Phase 12, wave 5, AS-05): an OpenAI-compatible
+// in Administration › AI › Providers (Phase 12, wave 5, AS-05): an OpenAI-compatible
 // endpoint's /models (with vLLM's max_model_len, the context window, when
 // it says), Ollama's /api/tags when there is no /models, the Claude API's
 // /v1/models, and Amazon Bedrock's foundation models. Vertex AI lists

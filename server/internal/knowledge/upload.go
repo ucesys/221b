@@ -30,8 +30,7 @@ func (s *Service) Upload(ctx context.Context, c Caller, source, name string, bod
 	if err != nil {
 		return "", err
 	}
-	x, ok := set.source(source)
-	if !ok || x.Kind != SourceUpload {
+	if x, ok := set.source(source); !ok || x.Kind != SourceUpload {
 		return "", wrapf(ErrNotFound, "no source of uploaded documents %q", source)
 	}
 	name = path.Base(strings.TrimSpace(name))
@@ -48,7 +47,16 @@ func (s *Service) Upload(ctx context.Context, c Caller, source, name string, bod
 	text = scrub.Known(scrub.Text(text), s.secretValues(ctx))
 	h := hashOf(body)
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: source, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("document %s uploaded to %s (%d bytes)", name, source, len(body)), From: c.From})
-	s.readSoon(ctx, c, []pendingDoc{{source: source, name: name, text: text, hash: h, at: s.o.Now().UTC(), by: c.label()}}, "upload of "+name)
+	// One document of a name (MY-12): one of the other source of uploaded
+	// documents is replaced by this one.
+	for _, o := range set.Sources {
+		if o.Kind == SourceUpload && o.ID != source && s.holds(o.ID, name) {
+			if err := s.removeDocument(ctx, c, o.ID, name); err != nil {
+				s.o.Logger.Warn("a document replaced by one of the same name stays in its source", "source", o.ID, "err", err)
+			}
+		}
+	}
+	s.readSoon(ctx, c, []pendingDoc{{source: source, name: name, text: text, hash: h, at: s.o.Now().UTC(), by: c.label(), kind: AddDocument}}, "upload of "+name)
 	return h[:16], nil
 }
 
@@ -99,7 +107,7 @@ func (s *Service) Documents(source string) []ItemState {
 	var out []ItemState
 	seen := map[string]bool{}
 	for _, st := range m.bySource(source) {
-		if !st.Gone {
+		if !st.Gone && !st.record() {
 			out = append(out, *st)
 			seen[st.ID] = true
 		}
@@ -108,7 +116,7 @@ func (s *Service) Documents(source string) []ItemState {
 	defer s.pendingMu.Unlock()
 	for _, p := range s.pending {
 		if p.source == source && !seen[p.name] {
-			out = append(out, ItemState{Source: source, ID: p.name, Title: p.label(), URL: p.url, Version: p.hash[:16], Modified: p.at, Corrects: p.corrects, By: p.by})
+			out = append(out, ItemState{Source: source, ID: p.name, Title: p.label(), URL: p.url, Version: p.hash[:16], Modified: p.at, Corrects: p.corrects, By: p.by, Type: p.kind})
 		}
 	}
 	return out
@@ -150,11 +158,28 @@ func (s *Service) removeDocument(ctx context.Context, c Caller, source, name str
 	if st == nil {
 		return wrapf(ErrNotFound, "no document %q", name)
 	}
-	st.Gone = true
+	// Uploaded again, it is read again in whole: its excerpt is emptied
+	// now.
+	st.Gone, st.Hash, st.Version = true, "", ""
 	empty := []byte(`{"key":"` + key + `","chunks":[]}`)
 	if err := store.Write(ctx, []Change{{Path: excerptPath(key), Body: empty}, {Path: ManifestPath, Body: m.encode()}}, "Mycroft forgets the document "+name); err != nil {
 		return err
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: source, Outcome: audit.OutcomeOK, Detail: "document " + name + " removed from " + source, From: c.From})
 	return s.Refresh(ctx)
+}
+
+// holds says a source of uploaded documents holds a document by name,
+// read or waiting.
+func (s *Service) holds(source, name string) bool {
+	s.pendingMu.Lock()
+	_, waiting := s.pending[source+"/"+name]
+	s.pendingMu.Unlock()
+	if waiting {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st := s.manifest.Items[itemKey(source, name)]
+	return st != nil && !st.Gone
 }

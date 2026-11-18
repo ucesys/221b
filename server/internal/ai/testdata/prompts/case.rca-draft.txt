@@ -30,7 +30,8 @@ The case's history:
 End with exactly one fenced block of JSON, and nothing after it:
 
 ```json
-{"cause": "the root cause, in a few lines", "fixApplied": "what was done to fix it, from the record: the changes applied, the commands run", "prevention": "what would keep it from happening again"}
+{"cause": "the root cause, in a few lines", "fixApplied": "what was done to fix it, from the record: the changes applied, the commands run", "prevention": "what would keep it from happening again",
+ "timeline": "when it started, when it was detected and when it was fixed, from the record", "detection": "how it was found: an alert, a job's run or a person", "impact": "what was affected, and for how long"}
 ```
 
 Say only what the record and the cluster support; where the record does not say, write that it does not.

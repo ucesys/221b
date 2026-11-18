@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +39,13 @@ func (u *uiWindow) requests() []sherlock.UIRequest {
 }
 
 func runWindow(t *testing.T, srv *httptest.Server, c *http.Client, path string, respond func(sherlock.UIRequest) (sherlock.UIResult, bool)) *uiWindow {
+	t.Helper()
+	return runWindowAt(t, srv, c, path, "/api/v1/sherlock/ui/", respond)
+}
+
+// runWindowAt is runWindow on another conversation's stream, posting the
+// results under results: a case's (SR-19).
+func runWindowAt(t *testing.T, srv *httptest.Server, c *http.Client, path, results string, respond func(sherlock.UIRequest) (sherlock.UIResult, bool)) *uiWindow {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -86,7 +94,7 @@ func runWindow(t *testing.T, srv *httptest.Server, c *http.Client, path string, 
 				u.mu.Unlock()
 				if res, ok := respond(r); ok {
 					b, _ := json.Marshal(res)
-					go postResult(c, srv.URL+"/api/v1/sherlock/ui/"+r.ID, string(b))
+					go postResult(c, srv.URL+results+r.ID, string(b))
 				}
 			}
 			if err != nil {
@@ -161,8 +169,17 @@ func TestSherlockUIActionsRunInTheAskingWindow(t *testing.T) {
 	if m.Status != "done" || len(m.View) != 2 || m.View[0].Label != "Did view_filter" || m.View[1].Label != "Did view_sort" {
 		t.Fatalf("answer: %+v", m)
 	}
+	// Each change is checked and held as the model makes it, then made
+	// once the answer is done, in order (SR-18); the read runs at once.
 	seen := win.requests()
-	if len(seen) != 3 || seen[0].Window != testWindow || seen[0].Answer != m.ID || seen[0].Action != "view_filter" || !strings.Contains(string(seen[0].Input), "failing") {
+	var order []string
+	for _, r := range seen {
+		order = append(order, fmt.Sprintf("%s:%v", r.Action, r.Hold))
+	}
+	if got := strings.Join(order, ","); got != "view_filter:true,view_sort:true,view_state:false,view_filter:false,view_sort:false" {
+		t.Fatalf("ui events: %s", got)
+	}
+	if seen[0].Window != testWindow || seen[0].Answer != m.ID || !strings.Contains(string(seen[0].Input), "failing") || string(seen[3].Input) != string(seen[0].Input) {
 		t.Fatalf("ui events: %+v", seen)
 	}
 	if len(m.Steps) != 3 || m.Steps[0].Label != "Changed the filters" || m.Steps[2].Label != "Read your view" || m.Steps[1].Status != "done" {
@@ -173,7 +190,7 @@ func TestSherlockUIActionsRunInTheAskingWindow(t *testing.T) {
 	if !strings.Contains(first, "console-view") || !strings.Contains(first, `{\"cluster\":\"local\"`) {
 		t.Fatalf("no view in the question: %s", first)
 	}
-	if body := lastRequest(t, fake); !strings.Contains(body, `\"applied\":true`) || !strings.Contains(body, `\"view\":{\"tab\":\"pods\"`) {
+	if body := lastRequest(t, fake); !strings.Contains(body, `\"held\":true`) || !strings.Contains(body, "made with your other view changes") || !strings.Contains(body, `\"view\":{\"tab\":\"pods\"}`) {
 		t.Fatalf("results: %s", body)
 	}
 	// One audit record names all three (P6U-15).
@@ -186,7 +203,7 @@ func TestSherlockUIActionsRunInTheAskingWindow(t *testing.T) {
 	if len(recs) != 1 {
 		t.Fatalf("%d records: %v", len(recs), recs)
 	}
-	for _, want := range []string{"ui [view_filter", `failing`, "applied", "view_sort", "view_state {} read"} {
+	for _, want := range []string{"ui [view_filter", `failing`, "held", "applied", "view_sort", "view_state {} read"} {
 		if !strings.Contains(recs[0], want) {
 			t.Errorf("the record lacks %q: %s", want, recs[0])
 		}
@@ -200,7 +217,11 @@ func TestSherlockUIResultsAreThePersonsOwn(t *testing.T) {
 	refused := make(chan int, 1)
 	runWindow(t, srv, ops, "/api/v1/sherlock/events", func(r sherlock.UIRequest) (sherlock.UIResult, bool) {
 		// Another person's session posts first: refused (P6U-17).
-		refused <- postResult(other, srv.URL+"/api/v1/sherlock/ui/"+r.ID, `{"applied":true,"label":"forged"}`)
+		code := postResult(other, srv.URL+"/api/v1/sherlock/ui/"+r.ID, `{"applied":true,"label":"forged"}`)
+		select {
+		case refused <- code:
+		default:
+		}
 		return sherlock.UIResult{Applied: true, Label: "Sorted"}, true
 	})
 	m := askWith(t, srv, ops, svc, map[string]any{"question": `[[view_sort {"column":"name","direction":"asc"}]]`, "window": testWindow})
@@ -254,8 +275,14 @@ func TestSherlockUIWithoutAWindowAndPastTheLimit(t *testing.T) {
 	win := runWindow(t, srv, ops, "/api/v1/sherlock/events", applied("Did"))
 	q := strings.Repeat(`[[view_highlight {"row":"a"}]] `, 11)
 	m := askWith(t, srv, ops, svc, map[string]any{"question": q, "window": testWindow})
-	if n := len(win.requests()); n != sherlock.MaxUIActions {
-		t.Fatalf("%d actions reached the window", n)
+	checked := 0
+	for _, r := range win.requests() {
+		if r.Hold {
+			checked++
+		}
+	}
+	if checked != sherlock.MaxUIActions {
+		t.Fatalf("%d actions reached the window", checked)
 	}
 	if len(m.View) != sherlock.MaxUIActions || m.Steps[10].Status != "failed" {
 		t.Fatalf("answer: %d changes, steps %+v", len(m.View), m.Steps)
@@ -319,8 +346,128 @@ func TestSherlockUIActionsList(t *testing.T) {
 		}
 	}
 	// open_tool_dialog opens a dialog the person reads and sends (TB-42).
-	want := "view_state,view_open,view_filter,view_search,view_sort,view_columns,view_details,view_highlight,open_tool_dialog"
+	want := "view_state,view_open,view_filter,view_search,view_sort,view_columns,view_details,view_highlight,view_aiops,view_admin,open_tool_dialog"
 	if strings.Join(names, ",") != want {
 		t.Fatalf("the UI actions changed; review that each changes only the asking person's view (P6U-12), then update this list:\n got %v\nwant %v", names, want)
+	}
+}
+
+// A change the window leaves undone, because the person has unsaved
+// changes open or moved the view themselves, is kept under the answer for
+// its Show in 221B button, with the model told why (SR-14, SR-15); a
+// refused one and a read are not.
+func TestSherlockKeepsWhatTheWindowLeft(t *testing.T) {
+	srv, ops, fake, auditOut, _, svc := sherlockSetup(t, "ops@corp.example", nil)
+	enableSherlock(t, srv, ops, sherlockOn)
+	runWindow(t, srv, ops, "/api/v1/sherlock/events", func(r sherlock.UIRequest) (sherlock.UIResult, bool) {
+		switch r.Action {
+		case "view_admin":
+			return sherlock.UIResult{Deferred: true, View: json.RawMessage(`{"view":"admin"}`)}, true
+		case "view_filter":
+			return sherlock.UIResult{Dropped: true}, true
+		case "view_sort":
+			return sherlock.UIResult{Error: "Table pods has no column \"x\"."}, true
+		}
+		return sherlock.UIResult{View: json.RawMessage(`{"view":"admin"}`)}, true
+	})
+	m := askWith(t, srv, ops, svc, map[string]any{
+		"question": `[[view_admin {"page":"agents","item":"sherlock"}]] [[view_filter {"set":{"status":"failing"}}]] [[view_sort {"column":"x","direction":"asc"}]] [[view_state]]`,
+		"window":   testWindow,
+	})
+	if len(m.View) != 0 || len(m.Show) != 2 {
+		t.Fatalf("answer: view %+v show %+v", m.View, m.Show)
+	}
+	if m.Show[0].Action != "view_admin" || m.Show[0].Why != "unsaved" || !strings.Contains(string(m.Show[0].Input), `"item":"sherlock"`) || m.Show[1].Action != "view_filter" || m.Show[1].Why != "moved" {
+		t.Fatalf("show: %+v", m.Show)
+	}
+	if m.Steps[0].Label != "Opened a page" {
+		t.Fatalf("steps: %+v", m.Steps)
+	}
+	all := ""
+	for _, r := range fake.Requests() {
+		all += string(r)
+	}
+	if !strings.Contains(all, "unsaved changes open in this window") || !strings.Contains(all, "Show in 221B") {
+		t.Fatalf("the model was not told: %s", all)
+	}
+	if !strings.Contains(auditOut.String(), "view_admin") || !strings.Contains(auditOut.String(), "deferred") {
+		t.Fatalf("audit: %s", auditOut.String())
+	}
+}
+
+// The view changes of an answer move the person's screen only once the
+// answer is done (SR-18): none is made before the model's last reply, and
+// an answer stopped part way makes none, keeping them for Show in 221B.
+func TestSherlockMakesViewChangesWhenTheAnswerIsDone(t *testing.T) {
+	srv, ops, fake, _, _, svc := sherlockSetup(t, "ops@corp.example", nil)
+	enableSherlock(t, srv, ops, sherlockOn)
+	var mu sync.Mutex
+	madeAt := map[string]int{}
+	runWindow(t, srv, ops, "/api/v1/sherlock/events", func(r sherlock.UIRequest) (sherlock.UIResult, bool) {
+		if r.Hold {
+			return sherlock.UIResult{Held: true, View: json.RawMessage(`{"tab":"nodes"}`)}, true
+		}
+		mu.Lock()
+		madeAt[r.Action] = len(fake.Requests())
+		mu.Unlock()
+		return sherlock.UIResult{Applied: true, Label: "Made " + r.Action}, true
+	})
+	m := askWith(t, srv, ops, svc, map[string]any{
+		"question": `[[view_open {"tab":"pods"}]] [[view_filter {"set":{"status":"failing"}}]] [[view_state]]`,
+		"window":   testWindow,
+	})
+	total := len(fake.Requests())
+	mu.Lock()
+	if madeAt["view_open"] != total || madeAt["view_filter"] != total {
+		t.Fatalf("changes made after %v of %d model requests", madeAt, total)
+	}
+	if m.Status != "done" || len(m.View) != 2 || m.View[0].Label != "Made view_open" || m.View[1].Label != "Made view_filter" || len(m.Show) != 0 {
+		t.Fatalf("answer: %+v", m)
+	}
+
+	// Stopped part way: nothing is made, and the held change waits under
+	// the answer for Show in 221B.
+	madeAt = map[string]int{}
+	mu.Unlock()
+	b, _ := json.Marshal(map[string]any{"question": `[[view_filter {"set":{"status":"pending"}}]] [[sleep 3000]] [[view_state]]`, "window": testWindow})
+	if r, text := send(t, ops, http.MethodPost, srv.URL+"/api/v1/sherlock/ask", string(b)); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("ask %d %s", r.StatusCode, text)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(fake.Requests()) < total+2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the answer did not reach its second round")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/sherlock/stop", "{}"); r.StatusCode != 200 {
+		t.Fatalf("stop: %d", r.StatusCode)
+	}
+	svc.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	var v sherlock.View
+	_, text := send(t, ops, http.MethodGet, srv.URL+"/api/v1/sherlock/conversation", "")
+	_ = json.Unmarshal([]byte(text), &v)
+	last := v.Messages[len(v.Messages)-1]
+	if len(madeAt) != 0 || last.Status != "stopped" || len(last.View) != 0 || len(last.Show) != 1 || last.Show[0].Action != "view_filter" || last.Show[0].Why != "stopped" {
+		t.Fatalf("stopped: made %v, answer %+v", madeAt, last)
+	}
+}
+
+// A view change the window refuses as it checks it is not held: the model
+// reads why, and nothing is made at the end.
+func TestSherlockHoldsOnlyWhatTheWindowAccepts(t *testing.T) {
+	srv, ops, fake, _, _, svc := sherlockSetup(t, "ops@corp.example", nil)
+	enableSherlock(t, srv, ops, sherlockOn)
+	win := runWindow(t, srv, ops, "/api/v1/sherlock/events", func(r sherlock.UIRequest) (sherlock.UIResult, bool) {
+		return sherlock.UIResult{Error: "Your role does not open that page."}, true
+	})
+	m := askWith(t, srv, ops, svc, map[string]any{"question": `[[view_admin {"page":"users"}]]`, "window": testWindow})
+	if n := len(win.requests()); n != 1 || len(m.View) != 0 || len(m.Show) != 0 || m.Steps[0].Status != "failed" {
+		t.Fatalf("%d requests, answer %+v", n, m)
+	}
+	if body := lastRequest(t, fake); !strings.Contains(body, "Your role does not open that page.") || strings.Contains(body, `\"held\":true`) {
+		t.Fatalf("result: %s", body)
 	}
 }

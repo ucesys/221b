@@ -58,9 +58,13 @@ type Settings struct {
 	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
 	// review, R2-03).
 	FleetsPage *bool `json:"fleetsPage,omitempty"`
+	// ImageChecks says whether the leader asks the registries of the
+	// images Helm releases run for newer ones (HA-23); nil is true. Off,
+	// no registry is asked and the Helm tab shows no notice.
+	ImageChecks *bool `json:"imageChecks,omitempty"`
 	// HideCosts hides every dollar amount from the console's pages for
 	// everyone, but the budgets where they are set (Phase 12, wave 6c,
-	// CF-40): a SuperAdmin's switch, Settings › AI › Show costs. The
+	// CF-40): a SuperAdmin's switch, Administration › AI › Agents › Show costs. The
 	// budgets are kept all the same. A State says it as showCosts.
 	HideCosts bool `json:"hideCosts,omitempty"`
 }
@@ -70,6 +74,9 @@ func (s Settings) ShowsCosts() bool { return !s.HideCosts }
 
 // ShowsFleets says whether the Fleets tab shows.
 func (s Settings) ShowsFleets() bool { return s.FleetsPage == nil || *s.FleetsPage }
+
+// ChecksImages says whether newer images are looked for (HA-23).
+func (s Settings) ChecksImages() bool { return s.ImageChecks == nil || *s.ImageChecks }
 
 // DefaultPendingGrace gives a pod time to pull its image and start before
 // it is an alert (asked at the Toolbox review).
@@ -119,17 +126,40 @@ type Watson struct {
 	// give Watson: for that long, every card they could approve is
 	// approved as it is ready (R2-04). 0 offers none.
 	ApproveAllMinutes int `json:"approveAllMinutes,omitempty"`
+	// WaitingRunMinutes is how long an Automation run whose own values
+	// wait for approval may wait: after that it expires and is asked for
+	// again (FU-05a). 0 is DefaultWaitingRunMinutes.
+	WaitingRunMinutes int `json:"waitingRunMinutes,omitempty"`
 }
 
 // MaxApproveAll bounds a standing approval.
 const MaxApproveAll = 240
+
+// How long a run may wait for approval: an hour unless set, 5 minutes to
+// 7 days.
+const (
+	DefaultWaitingRunMinutes = 60
+	MinWaitingRunMinutes     = 5
+	MaxWaitingRunMinutes     = 7 * 24 * 60
+)
 
 // Validate reports what is wrong with Watson's settings.
 func (w Watson) Validate() error {
 	if w.ApproveAllMinutes < 0 || w.ApproveAllMinutes > MaxApproveAll {
 		return fmt.Errorf("approveAllMinutes must be between 0 and %d", MaxApproveAll)
 	}
+	if w.WaitingRunMinutes != 0 && (w.WaitingRunMinutes < MinWaitingRunMinutes || w.WaitingRunMinutes > MaxWaitingRunMinutes) {
+		return fmt.Errorf("a run waits for approval 5 minutes to 7 days (waitingRunMinutes %d to %d)", MinWaitingRunMinutes, MaxWaitingRunMinutes)
+	}
 	return nil
+}
+
+// WaitingRunFor is how long a run may wait for approval.
+func (w Watson) WaitingRunFor() time.Duration {
+	if w.WaitingRunMinutes == 0 {
+		return DefaultWaitingRunMinutes * time.Minute
+	}
+	return time.Duration(w.WaitingRunMinutes) * time.Minute
 }
 
 // WatsonOrDefault returns the Watson settings in force.
@@ -479,6 +509,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		}
 		if next.FleetsPage == nil {
 			next.FleetsPage = cur.FleetsPage
+		}
+		if next.ImageChecks == nil {
+			next.ImageChecks = cur.ImageChecks
 		}
 		// Show costs has its own route, a SuperAdmin's (CF-40).
 		next.HideCosts = cur.HideCosts

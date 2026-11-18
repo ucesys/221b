@@ -323,3 +323,54 @@ func TestNotesThatPrintATooShortValueAreDropped(t *testing.T) {
 		t.Errorf("notes that do not print it changed: %q", got)
 	}
 }
+
+// A release keeps the images its manifest's containers run, each once
+// (HA-21), wherever the containers are, and not the manifest itself.
+func TestAReleaseKeepsItsImages(t *testing.T) {
+	var rec HelmRecord
+	rec.Name, rec.Namespace, rec.Version = "shop", "web", 1
+	rec.Manifest = `---
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: migrate
+          image: ghcr.io/acme/api:1.2.3
+      containers:
+        - name: api
+          image: ghcr.io/acme/api:1.2.3
+        - name: proxy
+          image: nginx:1.27
+---
+kind: CronJob
+metadata:
+  name: nightly
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: job
+              image: busybox@sha256:0123
+---
+kind: ConfigMap
+metadata:
+  name: says
+data:
+  text: "image: not-a-container"
+`
+	r, err := DecodeHelmRelease(EncodeHelmRelease(rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(r.Images, ","); got != "busybox@sha256:0123,ghcr.io/acme/api:1.2.3,nginx:1.27" {
+		t.Errorf("images %s", got)
+	}
+	if len(r.Resources) != 3 {
+		t.Errorf("resources %v", r.Resources)
+	}
+}

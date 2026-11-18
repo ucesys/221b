@@ -99,7 +99,7 @@ import { LiveContext } from '../../api/live'
 import { alertKeyOf, isActive } from '../../lib/alerts'
 import { useAIOpsItem } from '../../lib/aiopsItem'
 import { fmtAge, fmtClock, fmtTs } from '../../lib/format'
-import { adminHref, clusterHref, useRoute } from '../../lib/router'
+import { clusterHref, useRoute, aiHref } from '../../lib/router'
 import { openWatson } from '../../lib/watsonFill'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
@@ -128,7 +128,7 @@ export function useNow(every = 60_000): number {
 }
 
 /** Where the SLA's targets are set (CU-06). */
-export const slaHref = () => adminHref('settings', ['sla'])
+export const slaHref = () => aiHref('sla')
 
 /** What each way of closing means, in a line, as Close offers them. */
 export const CLOSE_HINT: Record<CloseOutcome, string> = {
@@ -574,7 +574,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
 /** A target of the SLA passed, linking to where it is set. */
 function LateTag({ what, minutes: m }: { what: string; minutes?: number }) {
   return (
-    <a href={slaHref()} className="rk-tag" data-tone="err" data-testid="case-late" title={`${what} target${m ? ` (${minutes(m)})` : ''} passed: see Settings › SLA`} style={{ textDecoration: 'none' }}>
+    <a href={slaHref()} className="rk-tag" data-tone="err" data-testid="case-late" title={`${what} target${m ? ` (${minutes(m)})` : ''} passed: see Administration › AI › SLA`} style={{ textDecoration: 'none' }}>
       {what} late{m ? ` · target ${minutes(m)}` : ''}
     </a>
   )
@@ -966,7 +966,7 @@ function CaseBody({
                   <span className="tb-hint">No SLA: an agent-found case has targets only at P0 and P1. </span>
                 )}
                 <a className="rk-link" href={slaHref()} style={{ fontSize: 12 }}>
-                  Settings › SLA
+                  Administration › AI › SLA
                 </a>
               </dd>
             </>
@@ -1055,8 +1055,8 @@ function CaseBody({
               </span>
             )}
             {a.cause && (
-              <span>
-                <strong>Cause:</strong> {a.cause}
+              <span data-testid="case-analysis-cause" title={a.confidence === 'likely' ? 'The cause fits the evidence, and the agent could not confirm it (PM-J1d)' : undefined}>
+                <strong>{a.confidence === 'likely' ? 'Likely cause:' : 'Cause:'}</strong> {a.cause}
               </span>
             )}
             {a.summary && <span style={{ whiteSpace: 'pre-wrap' }}>{a.summary}</span>}
@@ -1068,6 +1068,16 @@ function CaseBody({
                   </li>
                 ))}
               </ul>
+            )}
+            {(a.ruledOut ?? []).length > 0 && (
+              <div data-testid="case-analysis-ruled-out" style={{ fontSize: 12.5 }}>
+                <strong>Ruled out:</strong>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {a.ruledOut!.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              </div>
             )}
             {a.run && (
               <span className="tb-hint" style={{ fontSize: 12 }}>
@@ -1100,13 +1110,21 @@ function CaseBody({
                 <pre className="rk-code" style={{ margin: 0, padding: '8px 12px', whiteSpace: 'pre-wrap', flex: '1 1 auto' }} data-testid="case-fix-command">
                   $ {cmd}
                 </pre>
-                {/* Beside the case, its Watson asks before it runs; without it, the dock's Watson has the command in its box. */}
-                <RunInWatson onClick={() => (onRun ? onRun(cmd) : openWatson(c.cluster ?? '', cmd))} disabled={!c.cluster} testId="case-open-watson" />
+                {/* Beside the case, its Watson: a change waits on its card, a read runs as Auto-run reads says; without it, the dock's Watson has the command in its box. */}
+                <RunInWatson
+                  onClick={() => (onRun ? onRun(cmd) : openWatson(c.cluster ?? '', cmd))}
+                  disabled={!c.cluster}
+                  testId="case-open-watson"
+                  title={onRun ? undefined : 'Opens Watson in the dock with the command in its box: nothing runs until you press Enter there, and a change then waits on its card until you approve it.'}
+                />
               </div>
             ))}
             {commands.length > 0 && (
               <span className="tb-hint" style={{ fontSize: 12 }}>
-                Run in Watson hands it to Watson beside the case, which asks before it runs it, as you, with your own rights. Then close it as Fixed and say what was done.
+                {onRun
+                  ? 'Run in Watson hands it to Watson beside the case: a change waits there on its card until you approve it, and runs as you, with your own rights; a read runs at once while Watson’s Auto-run reads is on.'
+                  : 'Run in Watson puts it in the box of the dock’s Watson: nothing runs until you press Enter there, and a change then waits on its card until you approve it.'}{' '}
+                Then close it as Fixed and say what was done.
               </span>
             )}
           </>
@@ -1588,7 +1606,7 @@ function CloseForm({ c, busy, writing, onWriting, onCancel, act, err, onDone }: 
             rca={writing.rca}
             onRCA={(rca) => onWriting({ ...writing, rca })}
             // The agent's draft, as it is when it comes: its fix fills What was done only when nothing is written there.
-            onDrafted={(d) => onWriting((w) => ({ ...w, fix: w.fix.trim() ? w.fix : d.fix || w.fix, rca: { ...w.rca, cause: d.cause, prevention: d.prevention } }))}
+            onDrafted={(d) => onWriting((w) => ({ ...w, fix: w.fix.trim() ? w.fix : d.fix || w.fix, rca: { ...w.rca, cause: d.cause, prevention: d.prevention, text: w.rca.text?.trim() ? w.rca.text : d.text || w.rca.text } }))}
           />
         )
       case 'knownIssue':

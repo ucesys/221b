@@ -1,8 +1,36 @@
+import { useLeaveSave } from '../lib/leaveSave'
+import { useUnsaved } from '../lib/unsaved'
+
 /**
  * The foot of every Settings section (6.3 review): changes wait for Save,
- * the same way on every page, and Undo puts back what is saved.
+ * the same way on every page, and Undo puts back what is saved. Changes
+ * not saved yet keep Sherlock from moving the view (SR-14).
  */
-export function SaveBar({ changed, busy, onSave, onUndo, error, saved, testId }: { changed: boolean; busy: boolean; onSave: () => void; onUndo: () => void; error: string; saved: string; testId: string }) {
+export function SaveBar({
+  changed,
+  busy,
+  onSave,
+  onUndo,
+  error,
+  saved,
+  testId,
+  what = 'a Settings section',
+  save,
+}: {
+  changed: boolean
+  busy: boolean
+  onSave: () => void
+  onUndo: () => void
+  error: string
+  saved: string
+  testId: string
+  /** What holds the changes, as Sherlock is told: "Administration › AI › SLA". */
+  what?: string
+  /** The same Save, saying whether all was saved: offered by the prompt on leaving the page with changes (CU-16). */
+  save?: () => Promise<boolean>
+}) {
+  useUnsaved(changed, what)
+  useLeaveSave(changed && save ? save : null)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', position: 'sticky', bottom: 0, padding: '10px 0', background: 'var(--surface)', borderTop: '1px solid var(--line)' }} data-testid="save-bar">
       <button className="rk-btn" data-primary="true" disabled={!changed || busy} onClick={onSave} data-testid={testId}>

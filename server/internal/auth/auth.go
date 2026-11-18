@@ -88,6 +88,9 @@ type Config struct {
 	// AccessTTL is how long a person's groups stand before the directory is
 	// asked again (RB-23).
 	AccessTTL time.Duration
+	// ProxyWatch notices a proxy that is not trusted (SEC-30); nil makes
+	// one that logs here.
+	ProxyWatch *ProxyWatch
 }
 
 // Cookie names.
@@ -164,6 +167,9 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	}
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = time.Hour
+	}
+	if cfg.ProxyWatch == nil {
+		cfg.ProxyWatch = NewProxyWatch(log, now)
 	}
 	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
 	if cfg.SessionStore != nil {
@@ -609,7 +615,7 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	acct, local := s.accounts.Find(login)
 	if !local && s.dir != nil {
-		s.signInDirectory(w, r, login, password, refuse)
+		s.signInDirectory(w, r, login, password, refuse, false)
 		return
 	}
 	// The check runs on a dummy hash when the account is unknown, so the
@@ -619,10 +625,20 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		hash = dummyHash
 	}
 	if !CheckPassword(hash, password) || !local {
+		// A local account and a directory person may share a name: the
+		// local password is tried first, then the directory's.
+		if local && s.dir != nil {
+			s.signInDirectory(w, r, login, password, refuse, true)
+			return
+		}
 		refuse("wrong user name or password")
 		return
 	}
 	if acct.Disabled {
+		if s.dir != nil {
+			s.signInDirectory(w, r, login, password, refuse, true)
+			return
+		}
 		refuse("the account is disabled")
 		return
 	}
@@ -648,11 +664,16 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request, sess Session, sr
 }
 
 // signInDirectory signs a person in with the directory (RB-21, RB-22).
-func (s *Service) signInDirectory(w http.ResponseWriter, r *http.Request, login, password string, refuse func(string)) {
+// localTried says a local account of that name refused the password: then a
+// directory that cannot be reached is a plain refusal, not an outage page.
+func (s *Service) signInDirectory(w http.ResponseWriter, r *http.Request, login, password string, refuse func(string), localTried bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	p, err := s.dir.Authenticate(ctx, login, password)
 	switch {
+	case errors.Is(err, ErrDirectoryDown) && localTried:
+		refuse("wrong password for the local account, and the directory cannot be reached: " + cleanErr(err))
+		return
 	case errors.Is(err, ErrDirectoryDown):
 		s.record(r, audit.ActionSignInFailed, User{Username: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
 		s.renderSignIn(w, r, "The directory cannot be reached, so nobody can sign in just now. People already signed in can keep working. Try again in a minute.", http.StatusServiceUnavailable)
@@ -825,7 +846,14 @@ type Me struct {
 	// SessionIdle is how long the session lives without activity, in
 	// seconds.
 	SessionIdle int `json:"sessionIdleSeconds"`
+	// UntrustedProxy, for a SuperAdmin, is the address of a peer that sent
+	// a forwarding header without being listed under auth.trustedProxies
+	// (SEC-30).
+	UntrustedProxy string `json:"untrustedProxy,omitempty"`
 }
+
+// ProxyWatch is what notices a proxy that is not trusted (SEC-30).
+func (s *Service) ProxyWatch() *ProxyWatch { return s.cfg.ProxyWatch }
 
 func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	sess, ok := SessionFrom(r.Context())
@@ -838,6 +866,9 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	me := Me{Mode: s.cfg.Mode, User: sess.User, Admin: sess.Admin, Roles: sess.Roles, Method: sess.Method, SessionIdle: int(s.cfg.SessionIdle / time.Second)}
 	if s.provider != nil {
 		me.Provider = s.provider.Name()
+	}
+	if sess.Admin {
+		me.UntrustedProxy = s.cfg.ProxyWatch.Peer()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

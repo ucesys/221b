@@ -121,38 +121,29 @@ func TestTheIssueRolesFollowTheChart(t *testing.T) {
 	if resp, _ := send(t, adam, "GET", srv.URL+"/api/issues/v1/settings", ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("an Admin read the settings: %d", resp.StatusCode)
 	}
-	resp, body := send(t, sam, "PUT", srv.URL+"/api/issues/v1/settings", `{"company":"Example IT","matchThreshold":75,"retentionDays":365,"ratePerHour":10,"reopenDays":7,"fixedDays":3,"needInfoDays":5,"duplicateHours":6,"bumpP2At":3,"bumpP1At":10,"targets":{"0":{"responseMinutes":15,"resolveMinutes":240}},"webhook":{"url":""},"statusPage":"","reportURL":""}`)
+	resp, body := send(t, sam, "PUT", srv.URL+"/api/issues/v1/settings", `{"company":"Example IT","matchThreshold":75,"retentionDays":365,"ratePerHour":10,"reopenDays":7,"fixedDays":3,"needInfoDays":5,"duplicateHours":6,"bumpP2At":3,"bumpP1At":10,"targets":{"0":{"responseMinutes":15,"resolveMinutes":240}},"webhook":{"url":""}}`)
 	if resp.StatusCode != 200 {
 		t.Fatalf("a SuperAdmin's settings: %d %s", resp.StatusCode, body)
 	}
-	resp, body = send(t, sam, "POST", srv.URL+"/api/issues/v1/tokens", `{"name":"Alerts","account":"alertmanager","scopes":["reports:create"]}`)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("a token: %d %s", resp.StatusCode, body)
-	}
-	var made struct{ Secret string }
-	json.Unmarshal([]byte(body), &made)
-	// The intake needs no session, only the token; and no browser page
-	// can send it, since it carries no cookie that counts.
+	// The token intake is gone (0.12.1): without a session its old path
+	// is closed like the rest of the API.
 	req, _ := http.NewRequest("POST", srv.URL+"/api/issues/v1/intake/reports", strings.NewReader(`{"text":"disk 95% full on db-1"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+made.Secret)
+	req.Header.Set("Authorization", "Bearer 221bis_whatever")
 	r2, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r2.Body.Close()
-	if r2.StatusCode != http.StatusCreated {
-		t.Fatalf("the intake: %d", r2.StatusCode)
+	if r2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("the old intake: %d", r2.StatusCode)
 	}
 	if r3, _ := http.Get(srv.URL + "/api/issues/v1/reports"); r3.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("without a session: %d", r3.StatusCode)
 	}
-	for _, a := range []string{issues.ActionReport, issues.ActionTriage, issues.ActionSettings, issues.ActionToken} {
+	for _, a := range []string{issues.ActionReport, issues.ActionTriage, issues.ActionSettings} {
 		if !strings.Contains(auditOut.String(), `"action":"`+a+`"`) {
 			t.Errorf("no %s in the audit log", a)
 		}
-	}
-	if strings.Contains(auditOut.String(), made.Secret) {
-		t.Fatal("the token reached the audit log")
 	}
 }

@@ -67,10 +67,10 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
   await expect(page.getByTestId('alert-troubleshoot')).toHaveCount(0)
 
-  // Phase 12: the key is the default provider's, under Settings › AI ›
+  // Phase 12: the key is the default provider's, under Administration › AI ›
   // Providers; Sherlock is turned on per cluster in its drawer under Agents.
   await page.getByTestId('admin-link').click()
-  await page.locator('[data-admin-page=settings]').click()
+  await page.locator('[data-admin-page=ai]').click()
   await page.locator('[data-testid=settings-section][data-section=providers]').click()
   const provider = page.locator('[data-testid=provider][data-provider=default]')
   await expect(provider.getByTestId('provider-key-state')).toContainText('No key yet')
@@ -175,7 +175,7 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
 })
 
 test('Sherlock is on the Administration pages too, and Escape in it stays there', async ({ page }) => {
-  await open(page, '#/admin/roles')
+  await open(page, '#/admin/auth/roles')
   await expect(page.getByTestId('admin-page')).toBeVisible()
   const fab = page.getByTestId('sherlock-fab')
   if (await fab.isVisible()) await fab.click()
@@ -183,6 +183,31 @@ test('Sherlock is on the Administration pages too, and Escape in it stays there'
   await page.getByTestId('sherlock-input').focus()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('admin-page')).toBeVisible()
+  // SR-17: Escape with the focus in Sherlock closes it to its icon, which takes the focus.
+  await expect(dock(page)).toHaveCount(0)
+  await expect(fab).toBeFocused()
+})
+
+test('Escape in Sherlock closes it to its icon, and maximized it first restores it (SR-17)', async ({ page }) => {
+  await open(page, '#/nodes')
+  const fab = page.getByTestId('sherlock-fab')
+  if (await fab.isVisible()) await fab.click()
+  await expect(dock(page)).toHaveAttribute('data-mode', 'open')
+  // A node's panel open on the page stays open.
+  await page.locator('[data-node]').first().click()
+  await expect(page.getByTestId('node-panel')).toBeVisible()
+  await page.locator('[data-testid=sherlock-maximize]:visible').click()
+  await expect(dock(page)).toHaveAttribute('data-mode', 'max')
+  await page.keyboard.press('Escape')
+  await expect(dock(page)).toHaveAttribute('data-mode', 'open')
+  await page.getByTestId('sherlock-input').fill('a draft')
+  await page.keyboard.press('Escape')
+  await expect(dock(page)).toHaveCount(0)
+  await expect(fab).toBeFocused()
+  await expect(page.getByTestId('node-panel')).toBeVisible()
+  // The draft is still there when it opens again.
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('sherlock-input')).toHaveValue('a draft')
 })
 
 test('the round button stays clear of what a drawer has at the bottom right', async ({ page }) => {
@@ -316,12 +341,36 @@ test('a spending cap stops new questions with a clear message (P5-05)', async ({
   await open(page)
   expect(await put(page, '/api/v1/sherlock/config', { ...ON, dailyUSD: 0.0001 })).toBe(200)
   try {
-    await expect(page.getByTestId('sherlock-unavailable')).toContainText('daily spending cap', { timeout: 15_000 })
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('total daily limit', { timeout: 15_000 })
     const status = await page.evaluate(async () => (await fetch('/api/v1/sherlock/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"question":"Anything?"}' })).status)
     expect(status).toBe(429)
     await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
   } finally {
     expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  }
+  await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
+})
+
+test('a provider’s limit, set in Administration › AI › Limits, stops the agents on it and says where it is changed (AI-37, AI-38)', async ({ page }) => {
+  await open(page)
+  expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  try {
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=ai]').click()
+    // Limits comes right after Agents.
+    const sections = await page.getByTestId('settings-section').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')))
+    expect(sections[sections.indexOf('agents') + 1]).toBe('limits')
+    await page.locator('[data-testid=settings-section][data-section=limits]').click()
+    await expect(page.getByTestId('limit-daily')).toHaveValue('20')
+    await expect(page.getByTestId('limits-total')).toContainText('0 means no limit.')
+    await expect(page.locator('[data-testid=limits-agent][data-agent=sherlock]')).toBeVisible()
+    await page.locator('[data-testid=provider-limit-daily][data-provider=default]').fill('0.0001')
+    await page.getByTestId('limits-save').click()
+    await expect(page.getByTestId('save-bar')).toContainText('Saved.')
+    await open(page)
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('Administration › AI › Limits › Providers (', { timeout: 15_000 })
+  } finally {
+    expect(await put(page, '/api/v1/ai/limits', { dailyUSD: 20, monthlyUSD: 200, providers: { default: { dailyUSD: 0, monthlyUSD: 0 } } })).toBe(200)
   }
   await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
 })
@@ -396,9 +445,9 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
   const base = cfg.provider.endpoint.replace(/\/$/, '')
   try {
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=providers]').click()
-    await expect(page).toHaveURL(/#\/admin\/settings\/providers$/)
+    await expect(page).toHaveURL(/#\/admin\/ai\/providers$/)
     const pcard = page.locator('[data-testid=provider][data-provider=default]')
     await pcard.getByTestId('provider-edit').click()
     const s = page.getByTestId('provider-drawer')
@@ -489,7 +538,7 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     expect(await violations(), theme + ' maximized').toEqual([])
     await page.keyboard.press('Escape')
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=agents]').click()
     await expect(page.getByTestId('agents-table')).toBeVisible()
     expect(await violations(), theme + ' settings').toEqual([])
@@ -503,7 +552,7 @@ test('the administrators’ notes join Sherlock’s instructions as a draft, whi
   expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
   try {
     await page.getByTestId('admin-link').click()
-    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-admin-page=ai]').click()
     await page.locator('[data-testid=settings-section][data-section=agents]').click()
     await page.locator('[data-testid=agent-row][data-agent=sherlock] [data-testid=agent-open]').click()
     const drawer = page.getByTestId('agent-drawer')
@@ -518,7 +567,15 @@ test('the administrators’ notes join Sherlock’s instructions as a draft, whi
     await drawer.getByTestId('ins-test').click()
     await expect(drawer.getByTestId('ins-test-estimate')).toContainText('about $')
     await drawer.getByTestId('ins-test-run').click()
+    // The run opens in its dialog at once (Phase 12.1): each case as it runs, then the result; closing it leaves the drawer.
+    const dlg = page.getByTestId('test-dialog')
+    await expect(dlg).toBeVisible()
+    await expect(dlg.getByTestId('test-dialog-state')).toHaveAttribute('data-state', 'done', { timeout: 120_000 })
+    await expect(dlg.getByTestId('test-case-row').first()).toBeVisible()
+    await dlg.getByTestId('test-dialog-close').click()
+    await expect(dlg).toHaveCount(0)
     await expect(drawer.getByTestId('ins-last-test')).toContainText('recorded case', { timeout: 120_000 })
+    await expect(drawer.getByTestId('ins-test-results')).toBeVisible()
     await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Test')
     // The whole prompt has the notes after the cluster's description.
     const prompt = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/sherlock/prompt?draft=1')).json())) as { instructions: string; cluster: string }

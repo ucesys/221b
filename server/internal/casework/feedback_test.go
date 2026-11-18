@@ -362,15 +362,15 @@ func TestIncidentNumbersCF36(t *testing.T) {
 			t.Errorf("%q taken at creation", bad)
 		}
 	}
-	// The issue API: support and tokens set it, a reporter may not, and a
-	// reporter never sees it.
+	// The issue API: support sets it, a reporter may not, and a reporter
+	// never sees it.
 	if _, err := w.iss.Submit(ctx, rita, issues.Submission{Text: "Broken", Incident: "INC1"}); err == nil {
 		t.Error("a reporter set an incident number")
 	}
-	tok := issues.Caller{Person: issues.Person{ID: "system:servicenow", Name: "ServiceNow", System: true}, Report: true, Scopes: []string{issues.ScopeOnBehalf}}
+	tok := issues.Caller{Person: issues.Person{ID: "sam", Name: "Sam"}, Report: true, Operator: true}
 	rec, err := w.iss.Submit(ctx, tok, issues.Submission{Text: "The VPN drops", Incident: "INC7", Type: "availability", For: &issues.Person{ID: "rita", Name: "Rita"}})
 	if err != nil || rec.Report.Incident != "INC7" || rec.Report.Type != issues.TypeAvailability {
-		t.Fatalf("by a token: %+v %v", rec.Report, err)
+		t.Fatalf("by support: %+v %v", rec.Report, err)
 	}
 	h := w.iss.Handler(func(*http.Request) (issues.Caller, bool) { return rita, true })
 	rr := httptest.NewRecorder()

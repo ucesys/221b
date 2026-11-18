@@ -1,29 +1,43 @@
-// Mycroft's knowledge (Phase 12, KN-01 to KN-18): Settings › Knowledge
+// Mycroft's knowledge (Phase 12, KN-01 to KN-18): Administration › AI › Knowledge
 // lists the sources and keeps the wiki in the temporary ConfigMap store
 // until another is chosen (CF-57), saying it is temporary;
-// a source's token goes in and never comes back from any endpoint; the
-// webhook refuses a call without its token; and Settings › Issues has the
-// Confluence publisher's part. AIOps › Mycroft (Phase 12, wave 5, MY-01
+// a source names a credential of Administration › Credentials (0.12.1, CR-11),
+// whose token never comes back from any endpoint; the
+// webhook refuses a call without its token; and Administration › AI › Issues has no
+// Confluence publisher or API tokens any more (0.12.1). AIOps › Mycroft (Phase 12, wave 5, MY-01
 // to MY-10): its sub-tabs and addresses, the Wiki in the default store
-// (never "Loading…" for good), and, since MY-11, adding in Settings ›
-// Knowledge's Added in Mycroft card with a store (the simulator's fake S3
-// bucket): a note, a CSV document, and an address the console does not
-// read. A source's Test is in its dialog, with the values as typed (KN-26). A page's own actions (KN-23, KN-24): This is outdated…
+// (never "Loading…" for good), and, since MY-11, adding in Administration › AI ›
+// Knowledge's Uploaded documents section (0.12.1) with a store (the
+// simulator's fake S3 bucket): a note under Notes and a CSV document under
+// Documents, listed in AIOps › Mycroft › Sources, and removed again. An S3
+// bucket's item is excluded in Mycroft › Sources and included again. A source's Test is in its dialog, with the values as typed (KN-26). A page's own actions (KN-23, KN-24): This is outdated…
 // sends a correction, and a page retired by one person and approved by
 // another leaves the agents' index, then comes back the same way.
 import { createHash, createHmac } from 'node:crypto'
+import type { Page } from '@playwright/test'
 import { E2E_ADMIN2, signInAs } from './accounts'
 import { expect, test } from './test'
 import { cluster, inKind } from './cluster'
 
 const TOKEN = 'e2e-confluence-read-token-7f3a'
+const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin' }
 
-test('Settings › Knowledge takes a source whose token never comes back, and keeps the wiki in the temporary ConfigMap store by default', async ({ page }) => {
-  await page.goto('/#/admin/settings/knowledge')
+/** Adds a credential through the API, for a source to name; its id. */
+async function credential(page: Page, data: Record<string, unknown>): Promise<string> {
+  const r = await page.request.post('/api/v1/credentials', { data, headers: SAME_ORIGIN })
+  expect(r.status(), await r.text()).toBe(201)
+  return ((await r.json()) as { id: string }).id
+}
+
+test('Administration › AI › Knowledge takes a source whose token never comes back, and keeps the wiki in the temporary ConfigMap store by default', async ({ page }) => {
+  await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   await expect(section.locator('[data-testid=knowledge-source][data-source=console]')).toBeVisible()
-  await expect(section.locator('[data-testid=knowledge-source][data-source=documents]')).toBeVisible()
+  // The uploads are not a source to sync again (0.12.1): no row, but the Uploaded documents section.
+  await expect(section.locator('[data-testid=knowledge-source][data-source=documents]')).toHaveCount(0)
+  await expect(section.locator('[data-testid=knowledge-source][data-source=added]')).toHaveCount(0)
+  await expect(section.getByTestId('uploads-section')).toBeVisible()
   // The fixes proven in cases, there from the start, offered by the
   // housekeeping for a runbook (KN-34).
   await expect(section.locator('[data-testid=knowledge-source][data-source=fixes]')).toContainText('offered by the housekeeping for a runbook')
@@ -32,16 +46,18 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   await expect(page.getByTestId('knowledge-store-configmap')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('knowledge-no-store')).toHaveCount(0)
 
+  const credId = await credential(page, { name: 'E2E Confluence', kind: 'token', endpoint: 'https://e2e.atlassian.net', sendAs: { method: 'basic', username: 'e2e@example.com' }, secret: { token: TOKEN } })
   await page.getByTestId('knowledge-add').click()
   const drawer = page.getByTestId('knowledge-source-drawer')
   await drawer.getByTestId('knowledge-source-name').fill('E2E space')
   await drawer.getByTestId('knowledge-source-url').fill('https://e2e.atlassian.net')
-  await drawer.getByTestId('knowledge-source-email').fill('e2e@example.com')
   await drawer.getByTestId('knowledge-source-space').fill('E2E')
-  await drawer.getByTestId('knowledge-source-token').fill(TOKEN)
+  // No token of its own: the one credential that covers the site is preselected.
+  await expect(drawer.getByTestId('knowledge-source-token')).toHaveCount(0)
+  await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
   await drawer.getByTestId('knowledge-source-save').click()
   const row = section.locator('[data-testid=knowledge-source][data-source=e2e-space]')
-  await expect(row).toContainText('token in a Secret')
+  await expect(row).toContainText('credential E2E Confluence')
   for (const path of ['/api/v1/knowledge/settings', '/api/v1/knowledge/status']) {
     const body = await page.evaluate(async (p) => (await fetch(p)).text(), path)
     expect(body).not.toContain(TOKEN)
@@ -53,15 +69,74 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   const hook = await page.request.post('/api/v1/knowledge/hook/wiki', { data: {} })
   expect(hook.status()).toBe(401)
 
-  // Removed again, for the other tests.
+  // Removed again, for the other tests, and its credential with it.
   await row.getByText('Edit…').click()
   await page.getByTestId('knowledge-source-remove').click()
   await expect(row).toHaveCount(0)
+  expect((await page.request.delete(`/api/v1/credentials/${credId}`, { headers: SAME_ORIGIN })).status()).toBe(204)
 
-  // The Confluence publisher's part of Settings › Issues.
+  // Administration › AI › Issues: no Confluence publisher and no API tokens since 0.12.1.
   await page.locator('[data-testid=settings-section][data-section=issues]').click()
-  await expect(page.getByTestId('confluence-settings')).toContainText('Publish the known issues to Confluence')
-  await expect(page.getByTestId('confluence-token-state')).toContainText('No write token saved.')
+  await expect(page.getByTestId('issue-settings')).toContainText('issues.reportURL')
+  await expect(page.getByTestId('confluence-settings')).toHaveCount(0)
+  await expect(page.getByTestId('issue-tokens')).toHaveCount(0)
+})
+
+// A live source (0.12.1, KN-39): added with its address and a credential
+// whose bearer token never comes back; listed as Live, with no Wiki sync job.
+// Administration › Settings › Repositories (0.12.1, RP-03): a git source picks a git
+// repository of the list, keeps its own branch and directory, and the
+// repository says it uses it; it is not removed while it does.
+test('Administration › AI › Knowledge takes a git source from a repository of Administration › Settings › Repositories', async ({ page }) => {
+  await page.goto('/#/admin/ai/knowledge')
+  const listed = await page.request.put('/api/v1/helm-repositories/e2e-handbook', { data: { kind: 'git', url: 'https://git.e2e.invalid/ops/handbook', defaultBranch: 'trunk' }, headers: SAME_ORIGIN })
+  expect(listed.status(), await listed.text()).toBe(200)
+  try {
+    await page.getByTestId('knowledge-add').click()
+    const drawer = page.getByTestId('knowledge-source-drawer')
+    await drawer.getByTestId('knowledge-source-kind').selectOption('git')
+    await drawer.getByTestId('knowledge-source-name').fill('E2E handbook')
+    // No address or credential of its own: the repository's.
+    await expect(drawer.getByTestId('knowledge-source-url')).toHaveCount(0)
+    await expect(drawer.getByTestId('knowledge-source-credential')).toHaveCount(0)
+    await drawer.getByTestId('knowledge-source-repository-select').selectOption('e2e-handbook')
+    await drawer.getByTestId('knowledge-source-save').click()
+    const row = page.locator('[data-testid=knowledge-source][data-source=e2e-handbook]')
+    await expect(row.getByTestId('knowledge-source-git-line')).toContainText('e2e-handbook · https://git.e2e.invalid/ops/handbook')
+    await expect(row.getByTestId('knowledge-source-git-line')).toContainText('@ trunk')
+    const repos = await (await page.request.get('/api/v1/helm-repositories', { headers: SAME_ORIGIN })).json()
+    expect((repos as { repositories: { name: string; usedBy: string[] }[] }).repositories.find((r) => r.name === 'e2e-handbook')?.usedBy).toEqual(['knowledge source E2E handbook'])
+    expect((await page.request.delete('/api/v1/helm-repositories/e2e-handbook', { headers: SAME_ORIGIN })).status()).toBe(409)
+  } finally {
+    await page.request.delete('/api/v1/knowledge/sources/e2e-handbook', { headers: SAME_ORIGIN })
+    await page.request.delete('/api/v1/helm-repositories/e2e-handbook', { headers: SAME_ORIGIN })
+  }
+})
+
+test('Administration › AI › Knowledge takes a live source, listed as Live, never read into the wiki', async ({ page }) => {
+  const LIVE_TOKEN = 'e2e-live-bearer-token-5c1d'
+  await page.goto('/#/admin/ai/knowledge')
+  const section = page.getByTestId('knowledge-section')
+  await expect(section).toBeVisible({ timeout: 20_000 })
+  const credId = await credential(page, { name: 'E2E status page', kind: 'token', endpoint: 'https://status.e2e.example.com', secret: { token: LIVE_TOKEN } })
+  await page.getByTestId('knowledge-add').click()
+  const drawer = page.getByTestId('knowledge-source-drawer')
+  await drawer.getByTestId('knowledge-source-mode-select').selectOption('live')
+  await drawer.getByTestId('knowledge-source-name').fill('E2E known problems')
+  await drawer.getByTestId('knowledge-live-url').fill('https://status.e2e.example.com/known')
+  await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
+  await drawer.getByTestId('knowledge-source-save').click()
+  const row = section.locator('[data-testid=knowledge-source][data-source=e2e-known-problems]')
+  await expect(row.getByTestId('knowledge-source-mode')).toHaveText('Live')
+  await expect(row.getByTestId('knowledge-source-state')).toHaveText('Looked up when asked')
+  await expect(row.getByTestId('knowledge-source-job')).toHaveCount(0)
+  await expect(row).toContainText('credential E2E status page')
+  const body = await page.evaluate(async () => (await fetch('/api/v1/knowledge/settings')).text())
+  expect(body).not.toContain(LIVE_TOKEN)
+  await row.getByText('Edit…').click()
+  await page.getByTestId('knowledge-source-remove').click()
+  await expect(row).toHaveCount(0)
+  expect((await page.request.delete(`/api/v1/credentials/${credId}`, { headers: SAME_ORIGIN })).status()).toBe(204)
 })
 
 // --- Mycroft tab (Phase 12, wave 5) ---
@@ -78,10 +153,17 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   // asks for a store, and Add is open.
   await expect(page.getByTestId('knowledge-pages')).not.toContainText('Loading…', { timeout: 15_000 })
   await expect(page.getByTestId('wiki-no-store')).toHaveCount(0)
-  // Add is in Settings › Knowledge only (MY-11): the Wiki has no Add view.
+  // Add is in Administration › AI › Knowledge only (MY-11): the Wiki has no Add view.
   await expect(page.getByTestId('knowledge-view-add')).toHaveCount(0)
-  await page.getByTestId('knowledge-view-sources').click()
-  await expect(page.getByTestId('wiki-sources').locator('[data-testid=wiki-source][data-source=added]')).toContainText('Added in Mycroft')
+  // Sources is a sub-tab of its own (0.12.1); the Wiki has no Sources view.
+  await expect(page.getByTestId('knowledge-view-sources')).toHaveCount(0)
+  await page.getByTestId('mycroft-sub-sources').click()
+  await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources$/)
+  await expect(page.getByTestId('sources-table')).toBeVisible({ timeout: 20_000 })
+  // The old address opens the Sources sub-tab (the router maps it; the address stays as typed).
+  await page.goto('/#/aiops/mycroft/wiki/sources')
+  await expect(page.getByTestId('mycroft-sub-sources')).toHaveAttribute('aria-pressed', 'true')
+  await page.goto('/#/aiops/mycroft')
 
   for (const [sub, url, view] of [
     ['known', /#\/aiops\/mycroft\/known$/, 'known-tab'],
@@ -106,19 +188,19 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await page.goto('/#/cases/knowledge/drafts')
   await expect(page.getByTestId('mycroft-sub-wiki')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('knowledge-view-drafts')).toHaveAttribute('aria-pressed', 'true')
-  // The Add view's old address opens Settings › Knowledge's Added in Mycroft card (MY-11).
+  // The Add view's old address opens Administration › AI › Knowledge's Uploaded documents section (MY-11, 0.12.1).
   await page.goto('/#/cases/mycroft/wiki/add')
-  await expect(page.getByTestId('knowledge-added').getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('uploads-section').getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('knowledge-section')).toBeVisible()
-  await expect(page.getByTestId('wiki-add-refused')).toHaveCount(0)
+  await expect(page.getByTestId('uploads-refused')).toHaveCount(0)
 })
 
-test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV become sources the wiki quotes; a loopback address is refused', async ({ page }) => {
+test('Administration › AI › Knowledge › Uploaded documents with a store: a note under Notes and a CSV under Documents become sources the wiki quotes, listed in Mycroft › Sources, and are removed', async ({ page }) => {
   test.skip(inKind, 'the fake S3 bucket is the simulator’s')
   test.setTimeout(120_000)
-  await page.goto('/#/admin/settings/knowledge/added')
-  const card = page.getByTestId('knowledge-added')
-  await expect(card.getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
+  await page.goto('/#/admin/ai/knowledge/added')
+  const card = page.getByTestId('uploads-section')
+  await expect(card.getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
   const api = (path: string, method = 'GET', body?: unknown) =>
     page.evaluate(
       async ([p, m, b]) => {
@@ -127,65 +209,77 @@ test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV
       },
       [path, method, body] as const,
     )
+  // Mycroft reads them: an item is read once Mycroft was given it (a
+  // batch not sent is read again at the next run), so Sherlock is on.
+  const SHERLOCK = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+  expect((await api('/api/v1/sherlock/key', 'PUT', { key: 'sk-ant-e2e-fake-key-0123456789' })).status).toBe(200)
+  expect((await api('/api/v1/sherlock/config', 'PUT', SHERLOCK)).status).toBe(200)
   // The wiki is kept in the simulator's bucket for this test.
   const store = { kind: 's3', endpoint: SIM, region: 'us-east-1', bucket: 'sim-wiki', prefix: 'e2e/', pathStyle: true, credentials: 'keys' }
   const saved = await api('/api/v1/knowledge/store', 'PUT', { store, keys: { accessKeyId: 'sim-access-key', secretAccessKey: 'sim-secret-key' } })
   expect(saved.status, saved.body).toBe(200)
+  const row = (title: string) => card.getByTestId('uploads-row').filter({ hasText: title })
   try {
     await page.reload()
-    await expect(card.getByTestId('wiki-add')).toBeVisible({ timeout: 20_000 })
-    await expect(card.getByTestId('wiki-add-refused')).toHaveCount(0, { timeout: 15_000 })
+    await expect(card.getByTestId('uploads-note-open')).toBeVisible({ timeout: 20_000 })
+    await expect(card.getByTestId('uploads-refused')).toHaveCount(0, { timeout: 15_000 })
 
-    // A note, with a password that never reaches the wiki.
-    await card.getByTestId('wiki-add-title').fill('E2E zephyr backups')
-    await card.getByTestId('wiki-add-text').fill('The zephyr backups run nightly on nas-7 and are kept for 30 days.\n\npassword=e2e-hunter2-secret-value')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-result')).toContainText('“E2E zephyr backups” was added.')
-    await expect(card.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toBeVisible()
+    // A note, with a password that never reaches the wiki: listed under Notes.
+    await card.getByTestId('uploads-tab-notes').click()
+    await card.getByTestId('uploads-note-open').click()
+    await card.getByTestId('uploads-note-title').fill('E2E zephyr backups')
+    await card.getByTestId('uploads-note-text').fill('The zephyr backups run nightly on nas-7 and are kept for 30 days.\n\npassword=e2e-hunter2-secret-value')
+    await card.getByTestId('uploads-note-submit').click()
+    await expect(row('E2E zephyr backups')).toBeVisible({ timeout: 15_000 })
 
-    // A CSV document.
-    await card.getByTestId('wiki-add-kind-document').click()
-    await card.getByTestId('wiki-add-file').setInputFiles({ name: 'e2e-quokka-hosts.csv', mimeType: 'text/csv', buffer: Buffer.from('host,address,role\nquokka-1,10.9.0.1,cache\n') })
-    await expect(card.getByTestId('wiki-add-files')).toContainText('e2e-quokka-hosts.csv')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-result')).toContainText('“e2e-quokka-hosts.csv” was added.')
+    // A CSV document, listed under Documents and not under Notes.
+    await card.getByTestId('uploads-tab-documents').click()
+    await card.getByTestId('uploads-file').setInputFiles({ name: 'e2e-quokka-hosts.csv', mimeType: 'text/csv', buffer: Buffer.from('host,address,role\nquokka-1,10.9.0.1,cache\n') })
+    await expect(row('e2e-quokka-hosts.csv')).toBeVisible({ timeout: 15_000 })
+    await expect(row('E2E zephyr backups')).toHaveCount(0)
 
-    // An address inside the console's own pod is not read.
-    await card.getByTestId('wiki-add-kind-url').click()
-    await card.getByTestId('wiki-add-url').fill('http://127.0.0.1:8080/')
-    await card.getByTestId('wiki-add-submit').click()
-    await expect(card.getByTestId('wiki-add-error')).toContainText('does not read loopback')
-
-    // Both are read, listed under Sources, and quoted by the search.
+    // Both are read, and their rows say so.
     await expect
       .poll(
         async () => {
-          const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; lastRead?: string }[] }
-          return w.added.filter((a) => a.lastRead && /zephyr|quokka/.test(a.title)).length
+          const u = JSON.parse((await api('/api/v1/knowledge/uploads')).body) as { items: { title: string; state: string }[] }
+          return u.items.filter((a) => a.state === 'read' && /zephyr|quokka/.test(a.title)).length
         },
         { timeout: 60_000 },
       )
       .toBe(2)
-    await page.goto('/#/aiops/mycroft/wiki/sources')
-    const added = page.getByTestId('wiki-added')
-    await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toContainText('read ')
-    await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
-    await page.getByTestId('knowledge-view-pages').click()
-    await page.getByTestId('knowledge-search').fill('zephyr nightly')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('E2E zephyr backups')
-    await page.getByTestId('knowledge-search').fill('quokka cache')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('quokka-1 | 10.9.0.1 | cache')
+    await page.reload()
+    await card.getByTestId('uploads-tab-notes').click()
+    await expect(row('E2E zephyr backups').getByTestId('uploads-state')).toHaveAttribute('data-state', 'read')
+
+    // AIOps › Mycroft › Sources lists them under Uploaded documents; the search quotes them.
+    await page.goto('/#/aiops/mycroft/sources')
+    await page.getByTestId('sources-filter-source').selectOption('uploads')
+    const items = page.getByTestId('sources-item')
+    await expect(items.filter({ hasText: 'E2E zephyr backups' })).toBeVisible({ timeout: 20_000 })
+    await expect(items.filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
+    await page.getByTestId('mycroft-search').fill('zephyr nightly')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('E2E zephyr backups')
+    await page.getByTestId('mycroft-search').fill('quokka cache')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('quokka-1 | 10.9.0.1 | cache')
+    await page.getByTestId('mycroft-search').fill('')
     const search = await api('/api/v1/knowledge/search?q=zephyr')
     expect(search.body).not.toContain('e2e-hunter2-secret-value')
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.add'), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain('e2e-hunter2-secret-value')
 
-    // Removed again, from Sources.
-    await page.getByTestId('knowledge-view-sources').click()
-    for (const title of ['E2E zephyr backups', 'e2e-quokka-hosts.csv']) {
-      await added.getByTestId('wiki-added-item').filter({ hasText: title }).getByTestId('wiki-added-remove').click()
+    // Removed again, item by item, in Administration › AI › Knowledge: final, and said so.
+    await page.goto('/#/admin/ai/knowledge/added')
+    for (const [tab, title] of [
+      ['notes', 'E2E zephyr backups'],
+      ['documents', 'e2e-quokka-hosts.csv'],
+    ] as const) {
+      await card.getByTestId(`uploads-tab-${tab}`).click()
+      await row(title).getByTestId('uploads-remove').click()
+      await expect(page.getByTestId('uploads-remove-dialog')).toContainText('This is final')
       await page.getByTestId('confirm-ok').click()
-      await expect(added.getByTestId('wiki-added-item').filter({ hasText: title })).toHaveCount(0)
+      await expect(card.getByTestId('source-impact')).toContainText(`“${title}” was removed`)
+      await expect(row(title)).toHaveCount(0)
     }
   } finally {
     // Mycroft's drafts, if it wrote any, are rejected, and the wiki is
@@ -194,6 +288,7 @@ test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV
     for (const r of drafts.runs ?? []) await api(`/api/v1/knowledge/drafts/${r.id}/reject`, 'POST', { comment: 'e2e' })
     const back = await api('/api/v1/knowledge/store', 'PUT', { store: { kind: '' }, keys: {} })
     expect(back.status, back.body).toBe(200)
+    await api('/api/v1/sherlock/config', 'PUT', { ...SHERLOCK, clusters: {} })
   }
 })
 
@@ -332,15 +427,15 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
 
 // A bucket of documents (Phase 12, KN-25): the simulator's second fake
 // bucket, sim-docs (MY-10), holds a Markdown runbook and a CSV under docs/
-// and a picture Mycroft skips. Added in Settings › Knowledge with a
-// read-only access key that never comes back, and tested. Its Wiki sync
+// and a picture Mycroft skips. Added in Administration › AI › Knowledge naming a
+// credential of a read-only access key that never comes back, and tested. Its Wiki sync
 // job (KN-28) is in AIOps › Jobs › Schedule, nightly, and read the bucket
 // at once as a run of it: the fake model cut its answer to the batch of
 // both documents (the runbook carries its mark), so the batch was split
 // and each asked again (KN-27). Run now runs the job again. Settings
 // starts no sync; its items are listed under Mycroft › Wiki › Sources.
 // Removing the source removes its job.
-test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sync job in AIOps › Jobs', async ({ page }) => {
+test('Administration › AI › Knowledge reads an S3 bucket of documents through its Wiki sync job in AIOps › Jobs', async ({ page }) => {
   test.skip(inKind, 'the fake S3 bucket is the simulator’s')
   test.setTimeout(180_000)
   const SECRET = 'sim-secret-key'
@@ -361,28 +456,29 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
   await page.goto('/#/nodes')
   expect((await api('/api/v1/sherlock/key', 'PUT', { key: 'sk-ant-e2e-fake-key-0123456789' })).status).toBe(200)
   expect((await api('/api/v1/sherlock/config', 'PUT', SHERLOCK)).status).toBe(200)
-  await page.goto('/#/admin/settings/knowledge')
+  await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
   // No sync starts here: one line says where the syncs are.
   await expect(page.getByTestId('knowledge-sync')).toHaveCount(0)
   await expect(page.getByTestId('knowledge-jobs-line')).toHaveText('Each source is read by its Wiki sync job in AIOps › Jobs.')
+  const credId = await credential(page, { name: 'E2E sim bucket key', kind: 'accesskey', endpoint: `${SIM}/sim-docs`, secret: { accessKeyId: 'sim-access-key', secretAccessKey: SECRET } })
   await page.getByTestId('knowledge-add').click()
   const drawer = page.getByTestId('knowledge-source-drawer')
   await drawer.getByTestId('knowledge-source-kind').selectOption('s3')
   await expect(drawer.getByTestId('knowledge-source-token')).toHaveCount(0)
+  await expect(drawer.getByTestId('knowledge-source-secret')).toHaveCount(0)
   await drawer.getByTestId('knowledge-source-name').fill('E2E docs bucket')
   await drawer.getByTestId('knowledge-source-bucket').fill('sim-docs')
   await drawer.getByTestId('knowledge-source-prefix').fill('docs/')
   await drawer.getByTestId('knowledge-source-region').fill('us-east-1')
   await drawer.getByTestId('knowledge-source-endpoint').fill(SIM)
   await drawer.getByTestId('knowledge-source-pathstyle').check()
-  await drawer.getByTestId('knowledge-source-akid').fill('sim-access-key')
-  await drawer.getByTestId('knowledge-source-secret').fill(SECRET)
+  await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
 
   // Test in the dialog, as typed, before saving (KN-26): the first keys and
-  // what is skipped, kept until a field changes; a port where nothing
-  // listens is said plainly.
+  // what is skipped, kept until a field changes; an endpoint no credential
+  // covers is said plainly, and nothing is sent there.
   const result = drawer.getByTestId('knowledge-source-test-result')
   const reached = 'Reached: 2 items, e.g. docs/backup-windows.csv, docs/runbooks/restart-the-wombat-cache.md. 1 skipped: 1 not a kind Mycroft reads (.png).'
   await drawer.getByTestId('knowledge-source-test').click()
@@ -390,25 +486,27 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
   await expect(result).toHaveAttribute('data-state', 'ok')
   await drawer.getByTestId('knowledge-source-endpoint').fill('http://127.0.0.1:1')
   await expect(result).toHaveCount(0)
+  await expect(drawer.getByTestId('knowledge-source-credential-hint')).toContainText('No credential covers this address')
   await drawer.getByTestId('knowledge-source-test').click()
-  await expect(result).toContainText('Could not connect to 127.0.0.1:1', { timeout: 35_000 })
+  await expect(result).toContainText('access key', { timeout: 35_000 })
   await expect(result).toHaveAttribute('data-state', 'error')
   await drawer.getByTestId('knowledge-source-endpoint').fill(SIM)
+  await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
   expect((await api('/api/v1/knowledge/settings')).body).not.toContain(ID)
   await drawer.getByTestId('knowledge-source-save').click()
   const row = section.locator(`[data-testid=knowledge-source][data-source=${ID}]`)
   try {
-    await expect(row.getByTestId('knowledge-source-creds')).toHaveText('access key in a Secret')
+    await expect(row.getByTestId('knowledge-source-creds')).toHaveText('credential E2E sim bucket key')
     await expect(row.getByTestId('knowledge-source-bucket-line')).toContainText('s3://sim-docs/docs/')
     await expect(row.getByTestId('knowledge-source-job')).toHaveAttribute('href', `#/aiops/jobs/${JOB}`)
     for (const path of ['/api/v1/knowledge/settings', '/api/v1/knowledge/status', '/api/v1/knowledge/wiki', `/api/v1/jobs/${JOB}`]) {
       expect((await api(path)).body).not.toContain(SECRET)
     }
 
-    // Edit…: Test with the secret left blank uses the saved one, which never comes back.
+    // Edit…: Test with the credential it names, whose secret never comes back.
     await expect(row.getByTestId('knowledge-source-test')).toHaveCount(0)
     await row.getByText('Edit…').click()
-    await expect(drawer.getByTestId('knowledge-source-secret')).toHaveValue('')
+    await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
     await drawer.getByTestId('knowledge-source-test').click()
     await expect(result).toHaveText(reached, { timeout: 35_000 })
     await drawer.getByRole('button', { name: 'Cancel' }).click()
@@ -455,29 +553,59 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     await expect(fact('Items read')).toHaveText('0 changed items', { timeout: 20_000 })
     await expect(fact('Unchanged')).toHaveText('2 items')
 
-    // Settings › Knowledge counts it, and still starts no sync.
-    await page.goto('/#/admin/settings/knowledge')
+    // Administration › AI › Knowledge counts it, and still starts no sync.
+    await page.goto('/#/admin/ai/knowledge')
     await expect(row.getByTestId('knowledge-source-state')).toHaveText('Read · 2 items · 1 skipped', { timeout: 15_000 })
     await expect(page.getByTestId('knowledge-sync')).toHaveCount(0)
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.source' && String(r.target) === ID), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain(SECRET)
 
-    // Mycroft › Wiki › Sources lists it with its items; the search quotes it, by its s3:// address.
-    await page.goto('/#/aiops/mycroft')
-    await expect(page.getByTestId('mycroft-tab')).toBeVisible({ timeout: 20_000 })
-    await page.getByTestId('knowledge-view-sources').click()
-    const listed = page.getByTestId('wiki-sources').locator(`[data-testid=wiki-source][data-source=${ID}]`)
-    await expect(listed).toContainText('S3 bucket')
-    await expect(listed).toContainText('2')
-    await expect(listed.getByTestId('wiki-source-skipped')).toHaveText('1 skipped')
-    await page.getByTestId('knowledge-view-pages').click()
-    await page.getByTestId('knowledge-search').fill('wombat cache rollout')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('s3://sim-docs/docs/runbooks/restart-the-wombat-cache.md')
+    // Mycroft › Sources (0.12.1) lists its items, filtered by source.
+    await page.goto('/#/aiops/mycroft/sources')
+    await expect(page.getByTestId('mycroft-sources')).toBeVisible({ timeout: 20_000 })
+    await page.getByTestId('sources-filter-source').selectOption(ID)
+    const item = (key: string) => page.locator(`[data-testid=sources-item][data-id="${key}"]`)
+    await expect(item('docs/backup-windows.csv')).toBeVisible({ timeout: 20_000 })
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toBeVisible()
+    await expect(page.locator('[data-testid=sources-item][data-source]:not([data-source="' + ID + '"])')).toHaveCount(0)
+    await expect(item('docs/backup-windows.csv')).toContainText('S3 object')
+    // Shown relative to the prefix docs/, the source's name leading (KN-49).
+    await expect(item('docs/backup-windows.csv').getByTestId('sources-item-path')).toHaveText('E2E docs bucket › backup-windows.csv')
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md').getByTestId('sources-item-path')).toHaveText('E2E docs bucket › runbooks/restart-the-wombat-cache.md')
+
+    // Excluded by a SuperAdmin, with a reason: its excerpts are emptied at once; listed under Excluded.
+    // Directly under the prefix, nothing under it is offered: that is the whole source.
+    await item('docs/backup-windows.csv').getByTestId('sources-item-exclude').click()
+    await expect(page.getByTestId('sources-exclude-dialog')).toContainText('E2E docs bucket › backup-windows.csv')
+    await expect(page.getByTestId('sources-exclude-under')).toHaveCount(0)
+    await page.getByTestId('sources-exclude-this').check()
+    await page.getByTestId('sources-exclude-reason').fill('e2e: not needed')
+    await page.getByTestId('confirm-ok').click()
+    await expect(page.getByTestId('source-impact')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('sources-filter-state').selectOption('excluded')
+    await expect(item('docs/backup-windows.csv').getByTestId('sources-item-state')).toHaveAttribute('data-state', 'excluded', { timeout: 15_000 })
+    await expect(item('docs/backup-windows.csv')).toContainText('e2e: not needed')
+    await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toHaveCount(0)
+    await expect.poll(async () => (await api('/api/v1/knowledge/search?q=backup+windows')).body, { timeout: 15_000 }).not.toContain('backup-windows.csv')
+    expect((await api(`/api/v1/knowledge/settings`)).body).toContain('docs/backup-windows.csv')
+
+    // Included again: it is read at the next sync, or Run now.
+    await item('docs/backup-windows.csv').getByTestId('sources-item-include').click()
+    await expect(page.getByTestId('sources-notice')).toContainText('next sync')
+    await expect(item('docs/backup-windows.csv')).toHaveCount(0)
+    await expect.poll(async () => (await cluster.auditLog()).filter((r) => JSON.stringify(r).includes('docs/backup-windows.csv')).length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
+
+    // The search quotes it, by its s3:// address.
+    await page.getByTestId('mycroft-sub-wiki').click()
+    await page.getByTestId('mycroft-search').fill('wombat cache rollout')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('restart-the-wombat-cache.md')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('rollout restart of deploy/wombat-cache')
   } finally {
     // Mycroft's drafts are rejected, and the source removed, for the other tests; its job goes with it.
     const drafts = JSON.parse((await api('/api/v1/knowledge/drafts')).body) as { runs?: { id: string }[] }
     for (const r of drafts.runs ?? []) await api(`/api/v1/knowledge/drafts/${r.id}/reject`, 'POST', { comment: 'e2e' })
     await api(`/api/v1/knowledge/sources/${ID}`, 'DELETE')
+    await api(`/api/v1/credentials/${credId}`, 'DELETE')
   }
   expect((await api(`/api/v1/jobs/${JOB}`)).status).toBe(404)
   await api('/api/v1/sherlock/config', 'PUT', { ...SHERLOCK, clusters: {} })

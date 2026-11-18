@@ -72,7 +72,40 @@ test('Settings is a page under Administration: Escape goes back, and an old link
   await expect(page.getByTestId('admin-link')).toBeFocused()
   await page.goto('/#/settings/watson', { waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('settings-page')).toBeVisible()
+  await expect(page).toHaveURL(/#\/admin\/settings\/watson$/)
   await expect(page.locator('[data-testid=settings-section][data-section=watson]')).toHaveAttribute('aria-current', 'page')
+})
+
+// Administration in tabs (CU-18, CU-19): Auth, AI with its groups Agents
+// and AIOps, Credentials, Settings, Logs, Toolbox, Backup; an address of
+// before leads to its page, and the bar shows the address now.
+test('Administration has seven tabs, AI has the agents’ and AIOps’ pages, and the addresses of before lead there', async ({ page }) => {
+  await open(page)
+  await page.getByTestId('admin-link').click()
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  await expect(page.locator('[data-admin-page]')).toHaveText(['Auth', 'AI', /^Credentials/, 'Settings', 'Logs', 'Toolbox', 'Backup'])
+  await page.locator('[data-admin-page=ai]').click()
+  await expect(page).toHaveURL(/#\/admin\/ai$/)
+  await expect(page.getByTestId('settings-group')).toHaveText(['Agents', 'AIOps'])
+  await expect(page.locator('[data-testid=settings-section]')).toHaveCount(8)
+  await expect(page.locator('[data-testid=settings-section][data-section=providers]')).toHaveAttribute('aria-current', 'page')
+  await page.locator('[data-admin-page=settings]').click()
+  await expect(page.locator('[data-testid=settings-section]')).toHaveCount(4)
+  for (const [old, now] of <[string, string][]>[
+    ['#/admin/roles', '#/admin/auth/roles'],
+    ['#/admin/users', '#/admin/auth/users'],
+    ['#/admin/settings/agents/sherlock', '#/admin/ai/agents/sherlock'],
+    ['#/admin/settings/limits', '#/admin/ai/limits'],
+    ['#/admin/settings/sla', '#/admin/ai/sla'],
+    ['#/admin/settings/credentials', '#/admin/credentials'],
+    ['#/admin/settings/apps', '#/admin/settings/repositories'],
+  ]) {
+    await page.goto('/' + old, { waitUntil: 'domcontentloaded' })
+    await expect(page).toHaveURL(new RegExp(now.replace(/[/]/g, '\\/') + '$'))
+  }
+  await expect(page.locator('[data-admin-page=settings]')).toHaveAttribute('aria-current', 'page')
+  await page.goto('/#/admin/settings/agents/sherlock', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByTestId('agent-drawer')).toBeVisible()
 })
 
 test('the refresh rate is kept on the server and reaches every open console', async ({ browser, page, request }) => {

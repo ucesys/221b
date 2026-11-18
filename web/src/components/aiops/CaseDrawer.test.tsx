@@ -168,7 +168,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(screen.getByTestId('case-object').querySelector('[data-testid="object-link"]')).not.toBeNull()
     expect(txt(screen.getByTestId('case-fix-command'))).toContain('kubectl set resources')
     expect(txt(screen.getByTestId('case-late'))).toContain('Resolution late · target 4 h')
-    expect(screen.getByTestId('case-late').getAttribute('href')).toBe('#/admin/settings/sla')
+    expect(screen.getByTestId('case-late').getAttribute('href')).toBe('#/admin/ai/sla')
     expect(screen.queryByTestId('case-no-sla')).toBeNull()
     // No reporter: notes only.
     expect(screen.queryByTestId('case-send')).toBeNull()
@@ -797,7 +797,7 @@ describe('the parts around the drawer', () => {
     await waitFor(() => expect(api.saveSLA).toHaveBeenCalledWith({ ...targets, '0': { responseMinutes: 10, resolveMinutes: 240 } }))
   })
 
-  it('sets Settings › Cases within their ranges, and shows the duplicates counter', async () => {
+  it('sets Administration › AI › Cases within their ranges, and shows the duplicates counter', async () => {
     const s = { keepAgentClosedDays: 90, lookBackDays: 90, exceptionStaleDays: 90, exceptionsPerAgent: 50, newCasesPerRun: 50, duplicatesOfAgentCases: 7 }
     vi.mocked(api.fetchCasesSettings).mockResolvedValue(s)
     vi.mocked(api.saveCasesSettings).mockImplementation(async (x) => ({ ...x, duplicatesOfAgentCases: 7 }))
@@ -817,7 +817,7 @@ describe('the parts around the drawer', () => {
     expect(rangeError(1.5, 500)).toBe('From 1 to 500.')
   })
 
-  it('shows Settings › Cases read-only to who may not set them', async () => {
+  it('shows Administration › AI › Cases read-only to who may not set them', async () => {
     vi.mocked(api.fetchCasesSettings).mockResolvedValue({ keepAgentClosedDays: 90, lookBackDays: 90, exceptionStaleDays: 90, exceptionsPerAgent: 50, newCasesPerRun: 50, maySet: false })
     render(<CasesSettings />)
     expect(((await screen.findByTestId('cases-lookBackDays')) as HTMLInputElement).disabled).toBe(true)
@@ -1135,6 +1135,20 @@ describe('a case opened from an alert links its alert (CF-84)', () => {
     // Without the live alerts, the link alone.
     expect(screen.getByTestId('case-alert-link')).toBeTruthy()
     expect(screen.queryByTestId('case-alert-state')).toBeNull()
+  })
+
+  it('says a cause is likely when the agent could not confirm it, and what it ruled out (PM-J1d, PM-J5)', async () => {
+    const analysis = { at: '2026-11-12T10:01:00Z', run: 'run-21', summary: 'The node’s kernel log would confirm it.', cause: 'The node runs out of memory.', evidence: ['shop/Pod/web-0: OOMKilled'], fix: {} }
+    vi.mocked(api.fetchCase).mockResolvedValue(fromAlert({ analysis: { ...analysis, confidence: 'likely', ruledOut: ['shop/Deployment/web: image pulls fine', 'shop/Service/web: endpoints ready'] } }))
+    const { unmount } = render(<CaseDrawer id="12" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-analysis-cause'))).toBe('Likely cause: The node runs out of memory.')
+    expect([...screen.getByTestId('case-analysis-ruled-out').querySelectorAll('li')].map((li) => txt(li))).toEqual(['shop/Deployment/web: image pulls fine', 'shop/Service/web: endpoints ready'])
+    unmount()
+    // Confirmed, or an analysis of before the field: a cause, and no list.
+    vi.mocked(api.fetchCase).mockResolvedValue(fromAlert({ analysis }))
+    render(<CaseDrawer id="12" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-analysis-cause'))).toBe('Cause: The node runs out of memory.')
+    expect(screen.queryByTestId('case-analysis-ruled-out')).toBeNull()
   })
 })
 

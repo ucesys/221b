@@ -43,29 +43,39 @@ var readTools = []string{
 	"list_objects", "get_object", "get_yaml", "list_services", "get_service", "list_helm_releases", "get_helm_release",
 	"top", "list_fleets", "list_storage_classes", "list_volumes", "trace_ingress", "check_connection", "list_policies",
 	"who_can", "list_access", "review_cluster", "node_facts", "automation_runs",
+	// Phase 12.1 (SR-01 to SR-08): the console's own records.
+	"get_automation_run", "list_scripts", "get_script", "automation_variables", "watson_history", "audit_log",
+	"list_cases", "get_case", "list_job_runs", "get_job_run",
 }
 
 // Catalog is every agent, in the order the settings list them. Every
-// agent may ask Mycroft's wiki (ask_knowledge, Phase 12).
+// agent may ask Mycroft's wiki (ask_knowledge, Phase 12); the ones that
+// troubleshoot (Sherlock, the Troubleshooter and the Host doctor) look up
+// the live sources too (lookup_live_sources, 0.12.1).
 var Catalog = []Info{
-	{ID: Sherlock, Name: "Sherlock", Purpose: "Front desk: answers, routes to the other agents, writes the answer", Tools: append(append([]string(nil), readTools...), sherlock.ToolAskKnowledge), On: true, ViewControl: true},
+	{ID: Sherlock, Name: "Sherlock", Purpose: "Front desk: answers, routes to the other agents, writes the answer", Tools: append(append([]string(nil), readTools...), sherlock.ToolAskKnowledge, sherlock.ToolLookupLive), On: true, ViewControl: true},
 	{ID: Troubleshooter, Name: "Troubleshooter", Purpose: "Root cause of a failing pod, node, ingress, volume or alert", On: true, Tools: []string{
 		"cluster_overview", "list_alerts", "list_nodes", "get_node", "list_pods", "get_pod", "pod_logs", "list_events",
 		"list_objects", "get_object", "get_yaml", "list_services", "get_service", "trace_ingress", "check_connection",
-		"top", "list_volumes", "list_storage_classes", sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},
+		"top", "list_volumes", "list_storage_classes", "list_policies", "list_helm_releases", "get_helm_release", "automation_runs",
+		"get_automation_run", "watson_history", "audit_log", "list_cases", "get_case",
+		sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge, sherlock.ToolLookupLive}},
 	{ID: ChangePlanner, Name: "Change planner", Purpose: "Turns an intent into exact Watson actions, with their impact and risk", On: true, Tools: []string{
 		"cluster_overview", "list_nodes", "get_node", "list_pods", "get_pod", "list_objects", "get_object", "get_yaml",
 		"list_services", "get_service", "list_helm_releases", "get_helm_release", "list_policies", "list_fleets", sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},
 	{ID: Auditor, Name: "Auditor", Purpose: "Finds problems against best practices: RBAC, network policies, Pod Security, quotas, drift", On: true, Tools: []string{
 		"review_cluster", "list_access", "who_can", "list_policies", "cluster_overview", "list_nodes", "list_pods",
-		"list_objects", "get_object", "get_yaml", "list_helm_releases", "get_helm_release", "list_storage_classes", sherlock.ToolAskKnowledge}},
+		"list_objects", "get_object", "get_yaml", "list_helm_releases", "get_helm_release", "list_storage_classes", "list_volumes", "trace_ingress",
+		sherlock.ToolAskKnowledge}},
 	{ID: HostDoctor, Name: "Host doctor", Purpose: "Operating system checks on nodes and hosts", On: true, Tools: []string{
-		"list_nodes", "get_node", "list_events", "top", "list_fleets", "node_facts", "automation_runs", sherlock.ToolAskKnowledge}},
+		"list_nodes", "get_node", "list_events", "top", "list_fleets", "node_facts", "automation_runs", "get_automation_run", sherlock.ToolAskKnowledge, sherlock.ToolLookupLive}},
 	{ID: AutomationAuthor, Name: "Automation author", Purpose: "Drafts Automation scripts and their parameters", On: true, Tools: []string{
-		"node_facts", "list_nodes", "get_node", "list_fleets", "automation_runs", sherlock.ToolAskKnowledge}},
+		"node_facts", "list_nodes", "get_node", "list_fleets", "automation_runs", "get_automation_run", "list_scripts", "get_script",
+		"automation_variables", sherlock.ToolAskKnowledge}},
 	{ID: ScriptReviewer, Name: "Script reviewer", Purpose: "An independent second opinion on a script version", On: true, Tools: []string{"node_facts", sherlock.ToolAskKnowledge}},
 	{ID: Mycroft, Name: "Mycroft", Purpose: "Keeps the infrastructure's knowledge: wiki, runbooks, best practices", On: true, Tools: []string{sherlock.ToolAskKnowledge}},
-	{ID: Summarizer, Name: "Summarizer", Purpose: "Digests of changes, alerts and runs, on the cheapest model", On: false, Tools: []string{"cluster_overview", "list_alerts", "list_events", "automation_runs", sherlock.ToolAskKnowledge}},
+	{ID: Summarizer, Name: "Summarizer", Purpose: "Digests of changes, alerts and runs, on the cheapest model", On: false, Tools: []string{"cluster_overview", "list_alerts", "list_events", "automation_runs",
+		"list_job_runs", "get_job_run", "list_cases", sherlock.ToolAskKnowledge}},
 }
 
 // InfoOf finds an agent of the catalog.

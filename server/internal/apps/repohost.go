@@ -5,16 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // Which hosts the console fetches repositories from. Git servers on
@@ -51,13 +57,170 @@ func refusedName(host string) bool {
 	return host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal"
 }
 
-// CheckRepoHost refuses a repository whose host resolves to an address the
-// console does not connect to, when a source is saved. A name that does
-// not resolve now is left to the connection, which checks again.
+// --- The hosts a console fetches from (apps.allowedHosts) ---
+
+// errHostNotAllowed is a repository on a host the chart's apps.allowedHosts
+// does not list.
+var errHostNotAllowed = errors.New("the repository's host is not one this console fetches from: apps.allowedHosts in the chart's values lists them")
+
+// hostPattern is one entry of apps.allowedHosts: a host name, or with
+// suffix any name under it; with port, that port only.
+type hostPattern struct {
+	host   string
+	suffix bool
+	port   string
+}
+
+var (
+	allowedMu    sync.RWMutex
+	allowedHosts []hostPattern
+)
+
+// SetAllowedHosts sets the hosts the console fetches git repositories,
+// Helm repositories and OCI registries from: a host name
+// (git.example.com), or *.example.com for any name under example.com,
+// either with :port for that port only. Empty allows any host the other
+// checks do.
+func SetAllowedHosts(list []string) error {
+	var out []hostPattern
+	for _, s := range list {
+		if s = strings.TrimSpace(s); s == "" {
+			continue
+		}
+		p, err := parseHostPattern(s)
+		if err != nil {
+			return err
+		}
+		out = append(out, p)
+	}
+	allowedMu.Lock()
+	allowedHosts = out
+	allowedMu.Unlock()
+	return nil
+}
+
+func parseHostPattern(s string) (hostPattern, error) {
+	in := s
+	s = strings.ToLower(s)
+	var p hostPattern
+	if h, port, err := net.SplitHostPort(s); err == nil {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return p, fmt.Errorf("allowed host %q: the port is a number from 1 to 65535", in)
+		}
+		s, p.port = h, port
+	} else if _, err := netip.ParseAddr(strings.Trim(s, "[]")); err == nil {
+		s = strings.Trim(s, "[]")
+	}
+	s = strings.TrimSuffix(s, ".")
+	if rest, ok := strings.CutPrefix(s, "*."); ok {
+		s, p.suffix = rest, true
+	}
+	if s == "" || strings.ContainsAny(s, "*/@?#[] \t") || (strings.Contains(s, ":") && !isAddr(s)) {
+		return p, fmt.Errorf("allowed host %q: give a host name, *.domain, or either with :port", in)
+	}
+	p.host = s
+	return p, nil
+}
+
+func isAddr(s string) bool { _, err := netip.ParseAddr(s); return err == nil }
+
+// hostAllowed says whether apps.allowedHosts lets the console connect to
+// host on port.
+func hostAllowed(host, port string) bool {
+	allowedMu.RLock()
+	defer allowedMu.RUnlock()
+	if len(allowedHosts) == 0 {
+		return true
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, p := range allowedHosts {
+		if p.port != "" && p.port != port {
+			continue
+		}
+		if host == p.host && !p.suffix || p.suffix && strings.HasSuffix(host, "."+p.host) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkAllowed refuses an address whose host apps.allowedHosts does not
+// list; one that cannot be read is left to the other checks.
+func checkAllowed(u *url.URL) error {
+	if u == nil || u.Hostname() == "" {
+		return nil
+	}
+	port := u.Port()
+	if port == "" {
+		port = map[bool]string{true: "80", false: "443"}[strings.EqualFold(u.Scheme, "http")]
+	}
+	if !hostAllowed(u.Hostname(), port) {
+		return errHostNotAllowed
+	}
+	return nil
+}
+
+// allowedTransport refuses every request, each redirect's included, to a
+// host apps.allowedHosts does not list.
+type allowedTransport struct{ http.RoundTripper }
+
+func (t allowedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if err := checkAllowed(r.URL); err != nil {
+		return nil, err
+	}
+	return t.RoundTripper.RoundTrip(r)
+}
+
+// --- What a person is told of a fetch that failed ---
+
+// ErrNotFetched is what a person is told of a fetch that failed on the
+// way: a host that refused the connection or did not answer, a name that
+// did not resolve, a TLS failure, an HTTP status other than a refused
+// sign-in or a missing repository. Its cause goes to the server's log.
+var ErrNotFetched = errors.New("the repository could not be fetched")
+
+type notFetched struct{ cause error }
+
+func (e notFetched) Error() string        { return ErrNotFetched.Error() }
+func (e notFetched) Is(target error) bool { return target == ErrNotFetched }
+
+// FetchCause is the cause of an ErrNotFetched, for a log, or "".
+func FetchCause(err error) string {
+	var nf notFetched
+	if errors.As(err, &nf) && nf.cause != nil {
+		return nf.cause.Error()
+	}
+	return ""
+}
+
+// notFetchedFor logs a fetch's cause and returns ErrNotFetched for it.
+func notFetchedFor(cause error) error {
+	slog.Default().Warn("a repository could not be fetched", "component", "apps", "cause", cause.Error())
+	return notFetched{cause: cause}
+}
+
+// onTheWay says whether a fetch failed on the network, between the
+// console and the repository, rather than in what the repository said.
+func onTheWay(err error) bool {
+	var ue *url.Error
+	var ne net.Error
+	var he *githttp.Err
+	var ux *plumbing.UnexpectedError
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ue) || errors.As(err, &ne) || errors.As(err, &he) || errors.As(err, &ux) ||
+		strings.HasPrefix(err.Error(), "http redirect:")
+}
+
+// CheckRepoHost refuses a repository whose host apps.allowedHosts does not
+// list, or that resolves to an address the console does not connect to,
+// when a source is saved. A name that does not resolve now is left to the
+// connection, which checks again.
 func CheckRepoHost(ctx context.Context, repo string) error {
 	u, err := url.Parse(repo)
 	if err != nil || u.Hostname() == "" {
 		return nil
+	}
+	if err := checkAllowed(u); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -118,7 +281,9 @@ func (t cappedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func init() {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkConnect}).DialContext
-	c := githttp.NewClient(&http.Client{Transport: cappedTransport{base}})
+	// Each fetch's context carries the trust of its repository's
+	// credential or its own: a private CA, a pinned certificate (CR-17).
+	c := githttp.NewClient(&http.Client{Transport: cappedTransport{allowedTransport{&certpin.ContextTransport{Base: base}}}})
 	client.InstallProtocol("https", c)
 	client.InstallProtocol("http", c)
 }
@@ -127,8 +292,14 @@ func init() {
 // repository's, a Helm repository's or an OCI registry's (Phase 12, wave
 // 5). The tests' repositories on the loopback pass with AllowLocalRepos.
 func CheckSourceHost(ctx context.Context, address string) error {
+	address = strings.Replace(address, "oci://", "https://", 1)
+	if u, err := url.Parse(address); err == nil {
+		if err := checkAllowed(u); err != nil {
+			return err
+		}
+	}
 	if AllowLocalRepos {
 		return nil
 	}
-	return CheckRepoHost(ctx, strings.Replace(address, "oci://", "https://", 1))
+	return CheckRepoHost(ctx, address)
 }

@@ -195,7 +195,7 @@ func TestAUserComesBackWithTheirPassword(t *testing.T) {
 		if !ok || (u.PasswordHash == hash) != tc.same {
 			t.Fatalf("key %s: carl %+v", tc.key[:4], ok)
 		}
-		if listed := hasSecret(out.Secrets, "the password of the user carl", "Administration › Users › carl › Set password"); listed == tc.same {
+		if listed := hasSecret(out.Secrets, "the password of the user carl", "Administration › Auth › Users › carl › Set password"); listed == tc.same {
 			t.Fatalf("key %s: secrets %+v", tc.key[:4], out.Secrets)
 		}
 	}

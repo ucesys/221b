@@ -132,8 +132,8 @@ export function inboxKindOf(v: string | null): InboxKind | null {
   return OLD_KINDS[v] ?? null
 }
 
-/** Whose: everything, the person's own, or what nobody has taken. */
-export type Who = 'all' | 'mine' | 'unassigned'
+/** Whose: everything, the person's own, what nobody has taken, or the cases the person is involved in (EM-08). */
+export type Who = 'all' | 'mine' | 'unassigned' | 'involved'
 
 /** What the Inbox orders an item by (IB-03). */
 export interface InboxOrder {
@@ -171,7 +171,8 @@ export function inboxOrderKey(o: InboxOrder): number {
 
 /** The known issues an agent proposed, waiting for an operator to accept them. */
 export function knownDrafts(list: OpKnown[], me: string, who: Who = 'all'): OpKnown[] {
-  return list.filter((k) => k.draft && (who === 'all' || (who === 'mine' ? k.owner?.id === me : !k.owner)))
+  // Involvement is the cases' (EM-08): a known issue draft is none of it.
+  return list.filter((k) => k.draft && who !== 'involved' && (who === 'all' || (who === 'mine' ? k.owner?.id === me : !k.owner)))
 }
 
 /**

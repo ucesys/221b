@@ -10,6 +10,9 @@ NPM     ?= npm
 # The simulated cluster for dev-sim and e2e-sim.
 SIM_NODES ?= 40
 SIM_PODS  ?= 900
+# A fake SMTP server for Settings › Email (EM-10): host 127.0.0.1, port
+# 7525, security none; its messages at http://127.0.0.1:7443/fake-smtp/messages.
+SIM_SMTP  ?= -fake-smtp 127.0.0.1:7525
 
 PKG     := github.com/ucesys/221b/server/internal/version
 LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
@@ -103,22 +106,27 @@ SIM_SHERLOCK = -sherlock-api-url http://127.0.0.1:7443/claude
 SIM_WATSON = -local-mode write -toolbox-config hack/e2e-toolbox.json
 
 dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) & sim=$$!; \
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
 	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH)
 
+# E2E_PORT is where e2e-sim serves the console, for a machine where 8080 is taken.
+E2E_PORT ?= 8080
+# E2E_ARGS goes to Playwright, such as --shard=2/3 or one spec file.
+E2E_ARGS ?=
+
 # A second simulator on 7444 stands in for another cluster (P3-09); the
 # tests tell it which token to require.
 e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && curl -fs http://127.0.0.1:7444/version >/dev/null && break; sleep 0.2; done; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -health-interval 2s -log-format text $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -health-interval 2s -log-format text -listen 127.0.0.1:$(E2E_PORT) $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
 	trap 'kill $$sim $$sim2 $$srv 2>/dev/null' EXIT INT TERM; \
-	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
-	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e
+	for i in $$(seq 50); do curl -fs http://127.0.0.1:$(E2E_PORT)/readyz >/dev/null && break; sleep 0.2; done; \
+	cd web && E2E_BASE_URL=http://127.0.0.1:$(E2E_PORT) E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e -- $(E2E_ARGS)
 
 screenshots: build ## Take the README's screenshots (docs/screenshots) against a simulated cluster
 	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \

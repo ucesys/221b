@@ -54,7 +54,7 @@ func registerBackupParts(r *backup.Registry, agents *ai.Service, issueSvc *issue
 					if agents.KeysFor(c.id).Info().Set {
 						continue
 					}
-					name, where := "the credential of the AI provider "+c.name, "Settings › AI › Providers › "+c.name
+					name, where := "the credential of the AI provider "+c.name, "Administration › AI › Providers › "+c.name
 					key, _ := env.Open(c.sealed, name, where)
 					if key == "" {
 						continue
@@ -96,15 +96,14 @@ func registerBackupParts(r *backup.Registry, agents *ai.Service, issueSvc *issue
 
 // registerKnowledgeBackup adds Mycroft's knowledge to every backup (Phase
 // 12): its sources and where the wiki is kept, each credential sealed with
-// the install's backup key (ADR-137), the manifest of what was read, and the Confluence
-// publisher's settings and pages. The wiki's pages have their own history
+// the install's backup key (ADR-137), and the manifest of what was read. The wiki's pages have their own history
 // in git or S3, and the index is built again.
 func registerKnowledgeBackup(r *backup.Registry, svc *knowledge.Service) {
 	if svc == nil {
 		return
 	}
 	r.Register(backup.Part{Name: "knowledge", Label: "Knowledge", Order: 230,
-		How: "replace the current ones: Mycroft's sources and where the wiki is kept, the manifest of what was read, and the Confluence publisher's settings; a credential comes back where this console has none",
+		How: "replace the current ones: Mycroft's sources and where the wiki is kept, and the manifest of what was read; a credential comes back where this console has none",
 		LeftOut: []string{
 			"the wiki's pages, which keep their own history in git or S3, and the search index, which is built again",
 		},
@@ -345,6 +344,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 	registerFixesBackup(backup.Default, w.fixesSvc)
 	registerLessonsBackup(backup.Default, w.lessonsSvc)  // Findings, exceptions and RCAs (Phase 12)
 	registerHelmReposBackup(backup.Default, w.helmRepos) // Helm repositories (Phase 12, wave 5)
+	registerCredentialsBackup(backup.Default, w.creds)   // Administration › Credentials (0.12.1)
 	// Case work (Phase 12): the cases in every backup.
 	registerCaseworkBackup(backup.Default, w.caseSvc)
 	w.backups = backups

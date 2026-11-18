@@ -29,6 +29,9 @@ import (
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	chartutil "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/ignore"
+
+	"github.com/ucesys/221b/server/internal/certpin"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 // Refs is what a repository offers (HA-05): its branches and tags, and the
@@ -80,19 +83,54 @@ func fetchSlot(ctx context.Context) (release func(), err error) {
 	}
 }
 
-func auth(token string) transport.AuthMethod {
-	if token == "" {
-		return nil
+// GitAuth is how a git fetch signs in (CR-04): a user and a password or
+// token as Basic, or a token as Bearer; the zero value is anonymously.
+// It comes from a credential of Administration › Credentials, resolved for the
+// repository's address (GitAuthOf).
+type GitAuth struct {
+	Username, Password string
+	Bearer             string
+	// Trust is the credential's private CA and pinned certificate, or the
+	// repository's pinned certificate (CR-17): a fetch's context carries
+	// it to the console's git client (repohost.go).
+	Trust certpin.Trust
+}
+
+// None says it signs in with nothing.
+func (a GitAuth) None() bool { return a.Username == "" && a.Password == "" && a.Bearer == "" }
+
+func auth(a GitAuth) transport.AuthMethod {
+	switch {
+	case a.Bearer != "":
+		return &githttp.TokenAuth{Token: a.Bearer}
+	case a.Password != "":
+		// GitHub takes a token as the password of any user name; so do
+		// GitLab and Gitea.
+		user := a.Username
+		if user == "" {
+			user = "x-access-token"
+		}
+		return &githttp.BasicAuth{Username: user, Password: a.Password}
 	}
-	// GitHub takes a token as the password of any user name; so do GitLab
-	// and Gitea.
-	return &githttp.BasicAuth{Username: "x-access-token", Password: token}
+	return nil
+}
+
+// GitAuthOf is a credential resolved for a repository, as a fetch sends
+// it: Basic or Bearer (Credential.Supports refuses the others for git).
+func GitAuthOf(u *credentials.Use) GitAuth {
+	if user, pass, ok := u.Basic(); ok {
+		return GitAuth{Username: user, Password: pass, Trust: u.Trust()}
+	}
+	if tok, ok := u.Bearer(); ok {
+		return GitAuth{Bearer: tok, Trust: u.Trust()}
+	}
+	return GitAuth{Trust: u.Trust()}
 }
 
 // ListRefs asks the repository for its branches and tags, as git
 // ls-remote does, without fetching anything else.
-func ListRefs(ctx context.Context, repo, token string) (Refs, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+func ListRefs(ctx context.Context, repo string, token GitAuth) (Refs, error) {
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{repo}})
 	list, err := rem.ListContext(ctx, &git.ListOptions{Auth: auth(token), PeelingOption: git.IgnorePeeled})
@@ -353,8 +391,8 @@ func checkOut(r *git.Repository, st boundedStorage, fsys billy.Filesystem, hash 
 
 // Fetch clones the repository at the ref, shallow and in memory (HA-04),
 // within FetchLimits.
-func Fetch(ctx context.Context, s Source, token string) (*Checkout, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+func Fetch(ctx context.Context, s Source, token GitAuth) (*Checkout, error) {
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
 	if err != nil {
@@ -386,7 +424,7 @@ func Fetch(ctx context.Context, s Source, token string) (*Checkout, error) {
 // run what its card showed. A server that does not hand out commits by
 // their ids can still serve it while the ref points there; anything else
 // is refused, so the commit deployed is the one asked for or none.
-func FetchCommit(ctx context.Context, s Source, token, commit string) (*Checkout, error) {
+func FetchCommit(ctx context.Context, s Source, token GitAuth, commit string) (*Checkout, error) {
 	co, err := fetchExact(ctx, s, token, commit)
 	if !errors.Is(err, git.ErrExactSHA1NotSupported) {
 		return co, err
@@ -400,8 +438,8 @@ func FetchCommit(ctx context.Context, s Source, token, commit string) (*Checkout
 	return co, nil
 }
 
-func fetchExact(ctx context.Context, s Source, token, commit string) (*Checkout, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+func fetchExact(ctx context.Context, s Source, token GitAuth, commit string) (*Checkout, error) {
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
 	if err != nil {
@@ -430,17 +468,27 @@ func fetchExact(ctx context.Context, s Source, token, commit string) (*Checkout,
 }
 
 // describe makes go-git's errors readable: a wrong credential, a
-// repository that is not there, a host that does not answer.
+// repository that is not there, a host the console does not fetch from.
+// Every failure on the way there reads the same (ErrNotFetched), its cause
+// in the server's log.
 func describe(err error) error {
+	var ux *plumbing.UnexpectedError
+	if errors.As(err, &ux) && ux.Err != nil {
+		err = ux.Err
+	}
 	switch {
 	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed):
-		return errors.New("the repository needs a token, or the token is wrong")
+		return errors.New("the repository needs a credential, or refused the one given")
 	case errors.Is(err, transport.ErrRepositoryNotFound):
-		return errors.New("no repository at that URL (a private one needs a token)")
-	case errors.Is(err, context.DeadlineExceeded):
-		return errors.New("the repository did not answer in time")
+		return errors.New("no repository at that URL (a private one needs a credential)")
 	case errors.Is(err, errHostRefused):
 		return errHostRefused
+	case errors.Is(err, errHostNotAllowed):
+		return errHostNotAllowed
+	case errors.Is(err, ErrFetchLimit), errors.Is(err, ErrNotFetched):
+		return err
+	case onTheWay(err):
+		return notFetchedFor(err)
 	}
 	return err
 }

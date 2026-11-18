@@ -25,7 +25,7 @@ async function open(page: Page, hash: string) {
 }
 
 async function agents(page: Page) {
-  await open(page, '#/admin/settings/agents')
+  await open(page, '#/admin/ai/agents')
   await expect(page.getByTestId('agents-table')).toBeVisible()
 }
 
@@ -47,7 +47,7 @@ test('an in-house endpoint without a key is tested in its dialog, its models lis
   // The fake's address as the console reaches it: the default provider's.
   const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { provider: { endpoint: string } }
   const house = cfg.provider.endpoint.replace(/\/$/, '') + '/open/v1'
-  await open(page, '#/admin/settings/providers')
+  await open(page, '#/admin/ai/providers')
   await page.getByTestId('provider-add').click()
   const s = page.getByTestId('provider-drawer')
   await s.getByTestId('provider-name').fill('A5000')
@@ -110,15 +110,17 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   const drawer = page.getByTestId('agent-drawer')
   const part = drawer.getByTestId('ins-part')
   await expect(part).toHaveValue(/^You are the Auditor/)
-  await expect(part).toHaveValue(/Rules every agent of this console keeps/)
+  await expect(part).toHaveValue(/Rules for every agent of 221B/)
   await expect(drawer.getByTestId('ins-part-state')).toHaveText('Built-in')
-  // No draft: every step says why its action waits.
+  // No draft: every step says why its action waits, and none before Live reads as done.
   await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Live')
   await expect(drawer.getByTestId('ins-test')).toBeDisabled()
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=live] [data-testid=ins-step-why]')).toContainText('Nothing waits to go live')
+  await expect(drawer.locator('[data-testid=ins-stages] [data-stage=draft]')).toHaveAttribute('data-state', 'todo')
+  await expect(drawer.locator('[data-testid=ins-stages] [data-stage=test]')).toContainText('not started')
   // An edit of the built-in text, compared and saved as a draft.
   const text = await part.inputValue()
-  await part.fill('You are the Auditor of Acme. Weigh PCI findings first.\n\n' + text.slice(text.indexOf('Rules every agent')))
+  await part.fill('You are the Auditor of Acme. Weigh PCI findings first.\n\n' + text.slice(text.indexOf('Rules for every agent')))
   await expect(drawer.getByTestId('ins-part-state')).toHaveText('Edited, not saved')
   await drawer.getByTestId('ins-part-compare').click()
   await expect(drawer.getByTestId('ins-part-diff')).toContainText('+You are the Auditor of Acme.')
@@ -127,7 +129,24 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Draft')
   await expect(drawer.getByTestId('ins-test')).toBeEnabled()
   await expect(drawer.getByTestId('ins-pilot')).toBeDisabled()
+  // History (AI-32, AI-41): the draft just saved, compared with the version in force, as one unified diff.
+  await drawer.getByTestId('ins-history').click()
+  const history = page.getByTestId('history-dialog')
+  await expect(history.getByTestId('history-to').locator('option:checked')).toContainText('the draft now')
+  await expect(history.getByTestId('history-from').locator('option:checked')).toContainText('in force')
+  await expect(history.getByTestId('app-diff')).toContainText('→ Draft')
+  await expect(history.getByTestId('app-diff')).toContainText('+You are the Auditor of Acme.')
+  await history.getByTestId('history-close').click()
+  await expect(history).toHaveCount(0)
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=pilot] [data-testid=ins-step-why]')).toHaveText('Run the tests first: a pilot serves a tested draft.')
+  // An untested draft may go live only with a reason (Phase 12.1): the confirmation waits for one.
+  await drawer.getByTestId('ins-live-untested').click()
+  const confirm = page.getByTestId('confirm')
+  await expect(confirm.getByTestId('confirm-ok')).toBeDisabled()
+  await confirm.getByTestId('ins-untested-reason').fill('A hotfix for the outage.')
+  await expect(confirm.getByTestId('confirm-ok')).toBeEnabled()
+  await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(confirm).toHaveCount(0)
   const prompt = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/auditor/prompt?draft=1')).json())) as { instructions: string }
   expect(prompt.instructions.startsWith('You are the Auditor of Acme.')).toBe(true)
   // Reset to built-in puts the shipped text back in the field.

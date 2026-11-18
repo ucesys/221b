@@ -11,8 +11,8 @@ import (
 )
 
 // Mycroft's knowledge (Phase 12, ADR-94 to ADR-98) has an API of its own,
-// mounted here with who is calling: SuperAdmins change the sources, the
-// store and the Confluence publisher; Admins and SuperAdmins review the
+// mounted here with who is calling: SuperAdmins change the sources and
+// the store; Admins and SuperAdmins review the
 // wiki's changes; anyone signed in to the console reads the approved
 // pages. Every route runs on the leader, where the proxy forwards it.
 
@@ -44,7 +44,7 @@ func (s *Server) knowledgeCaller(r *http.Request) (knowledge.Caller, bool) {
 	return c, true
 }
 
-// knowledgeSummary is Settings › AI's line on Mycroft's knowledge.
+// knowledgeSummary is Administration › AI's line on Mycroft's knowledge.
 func (s *Server) knowledgeSummary() string {
 	k := s.opts.Knowledge
 	if k == nil {

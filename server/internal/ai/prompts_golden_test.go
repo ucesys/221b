@@ -34,6 +34,11 @@ func TestGoldenPrompts(t *testing.T) {
 	prompttest.Check(t, "agent.sherlock.cluster-block", cluster)
 	prompttest.Check(t, "sherlock.core-view-changes-off", Core(Sherlock, false))
 	prompttest.Check(t, "sherlock.compact", CompactCore())
+	// The work Sherlock does itself where its owner cannot be asked
+	// (PM-D1): all of it without the agents, as the engine's own built-in
+	// has it, and one lane with only its owner off.
+	prompttest.Check(t, "sherlock.own-work", OwnWork(nil))
+	prompttest.Check(t, "sherlock.built-in-without-agents", sherlock.BuiltIn(true, "Watson runs kubectl get."))
 	prompttest.Check(t, "skill.aiops", AIOpsSkill())
 	prompttest.Check(t, "skill.setup", SetupSkill())
 }

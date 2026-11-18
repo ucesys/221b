@@ -11,23 +11,33 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 // --- Helm repositories (Phase 12, wave 5, HR-01 to HR-12, ADR-123 to
 // ADR-125) ---
 //
 // The chart repositories and OCI registries the console installs charts
-// from besides git: Settings › Applications lists them, with Test; a
+// from besides git: Administration › Settings › Repositories lists them, with Test; a
 // SuperAdmin adds, changes and removes them, and those who manage
 // applications (Admin, SuperAdmin) read the list, a repository's charts
-// and a chart's versions for the new application's form. A password or
-// token is written, never read back: the list says whether one is kept.
+// and a chart's versions for the new application's form. Each signs in
+// with a credential of Administration › Credentials, named by id (0.12.1,
+// CR-11). Since 0.12.1 (RP-01 to RP-08) the list holds the git
+// repositories applications' Setup and Mycroft's git sources name too,
+// each with what uses it; one in use is not removed.
 
 // The audit log's actions of the repositories.
 const (
 	ActionHelmRepoSave   = "helmrepo.save"
 	ActionHelmRepoRemove = "helmrepo.remove"
 	ActionHelmRepoTest   = "helmrepo.test"
+	// ActionRepoMigration is the upgrade's list of git repositories
+	// dismissed (RP-05).
+	ActionRepoMigration = "helmrepo.migration"
+	// A certificate trusted, or let go (CR-16, CR-19).
+	ActionHelmRepoTrust  = "helmrepo.trust"
+	ActionHelmRepoForget = "helmrepo.forget"
 )
 
 func (s *Server) helmReposRoutes() {
@@ -38,14 +48,69 @@ func (s *Server) helmReposRoutes() {
 	s.handle("DELETE /api/v1/helm-repositories/{name}", "helm-repository-remove", s.deleteHelmRepo)
 	s.handle("POST /api/v1/helm-repositories/{name}/test", "helm-repository-retest", s.postHelmRepoRetest)
 	s.handle("GET /api/v1/helm-repositories/{name}/charts", "helm-repository-charts", s.getHelmRepoCharts)
+	s.handle("POST /api/v1/helm-repositories/migration/dismiss", "repository-migration-dismiss", s.postRepoMigrationDismiss)
+	s.handle("POST /api/v1/helm-repositories/{name}/rename", "repository-rename", s.postRepoRename)
+	s.handle("POST /api/v1/helm-repositories/{name}/trust", "repository-trust", s.postRepoTrust)
+	s.handle("DELETE /api/v1/helm-repositories/{name}/trust", "repository-forget", s.deleteRepoTrust)
+}
+
+// postRepoRename gives a repository a new name; what names it follows
+// (RP-05).
+func (s *Server) postRepoRename(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeRepo(w, r, &in) {
+		return
+	}
+	from := r.PathValue("name")
+	repo, err := s.opts.Repos.Rename(r.Context(), from, in.Name)
+	switch {
+	case errors.Is(err, apps.ErrNoRepository):
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	case errors.Is(err, apps.ErrInvalidRepo):
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+		return
+	case err != nil && repo.Name == "":
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	detail := repoWord(repo.Kind) + " renamed from " + from
+	if err != nil {
+		detail += "; " + err.Error()
+	}
+	s.record(r, ActionHelmRepoSave, repo.Name, detail)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	b, _ := json.Marshal(repo)
+	writeJSON(w, r, b)
 }
 
 // helmReposView is the list, with what the person may do.
 type helmReposView struct {
-	Repositories []apps.Repository `json:"repositories"`
+	Repositories []repoView `json:"repositories"`
 	// MayEdit says the person may add, change and remove them: a
 	// SuperAdmin.
 	MayEdit bool `json:"mayEdit"`
+	// Migration is what the upgrade made of the git addresses typed
+	// before 0.12.1, until a SuperAdmin dismisses it (RP-05).
+	Migration *apps.GitMigration `json:"migration,omitempty"`
+}
+
+// repoView is a repository with what names it (RP-02, RP-06), for a
+// SuperAdmin; empty for others (CR-06).
+type repoView struct {
+	apps.Repository
+	UsedBy []string `json:"usedBy"`
+	// Pinned is the certificate pinned for it, its own or its
+	// credential's (CR-19), for a SuperAdmin.
+	Pinned *apps.Pinned `json:"pinned,omitempty"`
 }
 
 // mayReadRepos lets through those who manage applications, and
@@ -74,8 +139,44 @@ func (s *Server) getHelmRepos(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	b, _ := json.Marshal(helmReposView{Repositories: list, MayEdit: s.isSuperAdmin(r)})
+	view := helmReposView{Repositories: make([]repoView, 0, len(list)), MayEdit: s.isSuperAdmin(r)}
+	var users map[string][]string
+	if view.MayEdit {
+		if users, err = s.opts.Repos.Users(r.Context()); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	for _, x := range list {
+		v := repoView{Repository: x, UsedBy: []string{}}
+		if view.MayEdit {
+			// What uses each is a SuperAdmin's to see: it names
+			// applications in namespaces others may not open (CR-06).
+			v.UsedBy = append(v.UsedBy, users[x.Name]...)
+			v.Pinned = s.opts.Repos.PinOf(r.Context(), x)
+		}
+		view.Repositories = append(view.Repositories, v)
+	}
+	if view.MayEdit {
+		if m, err := s.opts.Repos.Migration(r.Context()); err == nil && !m.Dismissed && (len(m.Created) > 0 || len(m.Notes) > 0) {
+			view.Migration = &m
+		}
+	}
+	b, _ := json.Marshal(view)
 	writeJSON(w, r, b)
+}
+
+// postRepoMigrationDismiss hides the list of what the upgrade made.
+func (s *Server) postRepoMigrationDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	if err := s.opts.Repos.DismissMigration(r.Context()); err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.record(r, ActionRepoMigration, "repositories", "the list of git repositories made at the upgrade dismissed")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func decodeRepo(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -103,14 +204,34 @@ func repoBy(r *http.Request) string {
 	return "someone"
 }
 
-// repoAudit is a repository as the audit log names it: never its
-// password or token.
-func repoAudit(repo apps.Repository) string {
-	kept := ""
-	if repo.HasSecret {
-		kept = ", one kept"
+// repoAudit is a repository as the audit log names it: its credential
+// by name, never a secret.
+func (s *Server) repoAudit(r *http.Request, repo apps.Repository) string {
+	if !repo.CredMigrated {
+		kept := ""
+		if repo.HasSecret {
+			kept = ", one kept"
+		}
+		return repo.Kind + " " + repo.URL + ", sign-in " + repo.Auth + kept
 	}
-	return repo.Kind + " " + repo.URL + ", sign-in " + repo.Auth + kept
+	cred := "none"
+	if repo.Credential != "" && s.opts.Credentials != nil {
+		cred = s.credentialLabel(r.Context(), repo.Credential)
+	}
+	out := repo.Kind + " " + repo.URL + ", credential " + cred
+	if repo.DefaultBranch != "" {
+		out += ", default branch " + repo.DefaultBranch
+	}
+	return out
+}
+
+// repoWord names a repository's kind in the audit log: "chart
+// repository" as before, "git repository".
+func repoWord(kind string) string {
+	if kind == apps.KindGit {
+		return "git repository"
+	}
+	return "chart repository"
 }
 
 func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +262,7 @@ func (s *Server) putHelmRepo(w http.ResponseWriter, r *http.Request) {
 	if created {
 		verb = "added"
 	}
-	s.record(r, ActionHelmRepoSave, repo.Name, "chart repository "+verb+": "+repoAudit(repo))
+	s.record(r, ActionHelmRepoSave, repo.Name, repoWord(repo.Kind)+" "+verb+": "+s.repoAudit(r, repo))
 	b, _ := json.Marshal(repo)
 	writeJSON(w, r, b)
 }
@@ -151,7 +272,7 @@ func (s *Server) deleteHelmRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	old, _, err := s.opts.Repos.Get(r.Context(), name)
+	old, err := s.opts.Repos.Raw(r.Context(), name)
 	if errors.Is(err, apps.ErrNoRepository) {
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
@@ -159,16 +280,21 @@ func (s *Server) deleteHelmRepo(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.opts.Repos.Delete(r.Context(), name)
 	}
+	if errors.Is(err, apps.ErrInUse) {
+		s.recordOutcome(r, ActionHelmRepoRemove, name, repoWord(old.Kind)+" not removed: "+strings.TrimPrefix(err.Error(), apps.ErrInUse.Error()+": "), audit.OutcomeDenied)
+		jsonError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), apps.ErrInUse.Error()+": "))
+		return
+	}
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.record(r, ActionHelmRepoRemove, name, "chart repository removed: "+repoAudit(old))
+	s.record(r, ActionHelmRepoRemove, name, repoWord(old.Kind)+" removed: "+s.repoAudit(r, old))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// repoTestInput is a repository as typed, tested before it is saved; a
-// name of a saved one with no secret given tests with the one kept.
+// repoTestInput is a repository as typed, tested before it is saved with
+// the credential chosen (CR-11).
 type repoTestInput struct {
 	Name string `json:"name,omitempty"`
 	apps.RepositoryInput
@@ -193,17 +319,16 @@ func (s *Server) postHelmRepoTest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	secret := ""
-	if in.Secret != nil {
-		secret = strings.TrimSpace(*in.Secret)
-	} else if in.Name != "" {
-		// The kept secret goes only to the address it was kept for.
-		if old, kept, err := s.opts.Repos.Get(r.Context(), in.Name); err == nil && old.URL == repo.URL {
-			secret = kept
-		}
+	// The saved repository's pinned certificate, while the address is the
+	// same (CR-16).
+	if saved, err := s.opts.Repos.Raw(r.Context(), in.Name); err == nil && saved.URL == repo.URL {
+		repo.PinnedCert = saved.PinnedCert
 	}
-	if repo.Auth == apps.AuthNone {
-		secret = ""
+	// The credential goes only to an address it covers (CR-04).
+	repo, secret, err := s.opts.Repos.Signed(r.Context(), repo)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+		return
 	}
 	s.answerRepoTest(w, r, repo, secret, false)
 }
@@ -241,6 +366,67 @@ func (s *Server) answerRepoTest(w http.ResponseWriter, r *http.Request, repo app
 	s.recordOutcome(r, ActionHelmRepoTest, repo.Name, repo.Kind+" "+repo.URL+": "+res.Text, outcome)
 	b, _ := json.Marshal(res)
 	writeJSON(w, r, b)
+}
+
+// postRepoTrust pins the certificate a saved repository presents, when it
+// is the one its Test showed (CR-16).
+func (s *Server) postRepoTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	var in struct {
+		SHA256 string `json:"sha256"`
+	}
+	if !decodeRepo(w, r, &in) {
+		return
+	}
+	name := r.PathValue("name")
+	repo, p, err := s.opts.Repos.Trust(r.Context(), name, in.SHA256, repoBy(r))
+	if err != nil {
+		if !errors.Is(err, apps.ErrNoRepository) {
+			s.recordOutcome(r, ActionHelmRepoTrust, name, "certificate not trusted: "+strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "), audit.OutcomeFailed)
+		}
+		repoTrustFailed(w, err)
+		return
+	}
+	with := "the repository"
+	if p.With == "credential" {
+		with = "the credential " + p.CredentialName
+	}
+	s.record(r, ActionHelmRepoTrust, repo.Name, "certificate trusted with "+with+" for "+pinAudit(repo.URL, p.Pin))
+	b, _ := json.Marshal(p)
+	writeJSON(w, r, b)
+}
+
+// deleteRepoTrust lets a repository's pinned certificate go (CR-19).
+func (s *Server) deleteRepoTrust(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditRepos(w, r) {
+		return
+	}
+	repo, p, err := s.opts.Repos.Forget(r.Context(), r.PathValue("name"))
+	if err != nil {
+		repoTrustFailed(w, err)
+		return
+	}
+	with := "the repository"
+	if p.With == "credential" {
+		with = "the credential " + p.CredentialName
+	}
+	s.record(r, ActionHelmRepoForget, repo.Name, "pinned certificate of "+with+" forgotten for "+pinAudit(repo.URL, p.Pin))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func repoTrustFailed(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, apps.ErrNoRepository):
+		jsonError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, apps.ErrInvalidRepo):
+		jsonError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), apps.ErrInvalidRepo.Error()+": "))
+	case errors.Is(err, credentials.ErrNotSeen):
+		jsonError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), credentials.ErrNotSeen.Error()+": "))
+	default:
+		jsonError(w, http.StatusBadGateway, err.Error())
+	}
 }
 
 func (s *Server) getHelmRepoCharts(w http.ResponseWriter, r *http.Request) {

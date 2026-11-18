@@ -11,6 +11,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -22,7 +23,7 @@ import (
 // ConfigMap (the key apps.RepositoriesKey), their passwords and tokens
 // in the Secret <release>-helm-repositories when the console keeps its
 // connections in Secrets, in memory otherwise.
-func openHelmRepos(cfg config.Config, restCfg *rest.Config, settings kv.Backend) (*apps.Repos, error) {
+func openHelmRepos(cfg config.Config, restCfg *rest.Config, settings kv.Backend, creds *credentials.Service) (*apps.Repos, error) {
 	var secrets apps.RepoSecrets = &apps.MemorySecret{}
 	if cfg.ConnectionsSecrets != "" {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
@@ -32,7 +33,7 @@ func openHelmRepos(cfg config.Config, restCfg *rest.Config, settings kv.Backend)
 		}
 		secrets = sk
 	}
-	return apps.NewRepos(apps.RepoOptions{Backend: settings, Secrets: secrets}), nil
+	return apps.NewRepos(apps.RepoOptions{Backend: settings, Secrets: secrets, Credentials: creds}), nil
 }
 
 // registerHelmReposBackup adds the chart repositories to every backup
@@ -40,7 +41,7 @@ func openHelmRepos(cfg config.Config, restCfg *rest.Config, settings kv.Backend)
 // with the install's backup key (ADR-137). A restore adds the ones
 // missing, by name, and leaves the ones the console has; a repository
 // whose password or token the backup's key does not open is restored
-// without one, and listed to be given again in Settings › Applications.
+// without one, and listed to be given again in Administration › Settings › Repositories.
 func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 	if repos == nil {
 		return
@@ -91,10 +92,21 @@ func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 				if names[e.Name] {
 					continue
 				}
+				// A repository that names its credential (0.12.1, CR-11)
+				// comes back naming it; the credentials' part restored it
+				// first.
+				if e.CredMigrated {
+					if _, _, err := repos.Save(ctx, e.Name, apps.RepositoryInput{Kind: e.Kind, URL: e.URL, Credential: e.Credential, DefaultBranch: e.DefaultBranch}, env.By); err != nil {
+						env.Note("Helm repository %s: %v", e.Name, err)
+						continue
+					}
+					n++
+					continue
+				}
 				in := apps.RepositoryInput{Kind: e.Kind, URL: e.URL, Auth: e.Auth, Username: e.Username}
 				if e.HasSecret || e.Auth != apps.AuthNone {
 					name := fmt.Sprintf("the %s of the Helm repository %s", map[bool]string{true: "token", false: "password"}[e.Auth == apps.AuthToken], e.Name)
-					where := "Settings › Applications › Repositories › " + e.Name
+					where := "Administration › Settings › Repositories › " + e.Name
 					secret, _ := env.Open(e.Secret, name, where)
 					if secret != "" {
 						in.Secret = &secret
@@ -107,7 +119,7 @@ func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 						}
 					}
 				}
-				if _, _, err := repos.Save(ctx, e.Name, in, env.By); err != nil {
+				if _, _, err := repos.RestoreLegacy(ctx, e.Name, in, env.By); err != nil {
 					env.Note("Helm repository %s: %v", e.Name, err)
 					continue
 				}
@@ -125,10 +137,11 @@ func (w *wiring) wireHelmRepos() error {
 	// chart repositories and OCI registries applications install from
 	// besides git; the list beside the settings, each password or token
 	// in the Secret <release>-helm-repositories.
-	helmRepos, err := openHelmRepos(cfg, w.restCfg, w.spendBackend)
+	helmRepos, err := openHelmRepos(cfg, w.restCfg, w.spendBackend, w.creds)
 	if err != nil {
 		return err
 	}
 	w.helmRepos = helmRepos
+	w.wireGitRepositories() // Administration › Settings › Repositories (0.12.1, RP-03)
 	return nil
 }

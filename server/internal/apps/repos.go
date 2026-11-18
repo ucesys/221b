@@ -5,11 +5,12 @@ package apps
 //
 // Charts come from Helm repositories and OCI registries as well as from
 // git (ADR-123). The repositories the console knows are a list that
-// SuperAdmins keep in Settings › Applications: a name, the address, and
-// how to sign in. The list is a key of the settings ConfigMap; each
-// password or token is a key of the Secret <release>-helm-repositories,
-// and nowhere else: not in a record, a card, a log, an audit record, a
-// backup or a browser's response (X-01).
+// SuperAdmins keep in Administration › Settings › Repositories: a name, the address, and
+// the credential of Administration › Credentials it signs in with (0.12.1,
+// CR-11). The list is a key of the settings ConfigMap. Before 0.12.1 each
+// password or token was a key of the Secret <release>-helm-repositories;
+// the upgrade made credentials of them (CR-12), and a repository it
+// switched never reads its old key again.
 //
 // A chart is fetched as an archive: a repository's index.yaml says where
 // each version is and its digest, a registry's manifest names the chart's
@@ -48,6 +49,8 @@ import (
 	"helm.sh/helm/v4/pkg/chart/loader/archive"
 	"sigs.k8s.io/yaml"
 
+	"github.com/ucesys/221b/server/internal/certpin"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -55,9 +58,9 @@ import (
 // DefaultRepositoriesBytes the most it holds.
 const (
 	RepositoriesKey          = "helm-repositories.json"
-	DefaultRepositoriesBytes = 16 << 10
+	DefaultRepositoriesBytes = 32 << 10
 	// MaxRepositories is how many the list holds.
-	MaxRepositories = 50
+	MaxRepositories = 100
 )
 
 // How a repository is signed in to (HR-02).
@@ -85,24 +88,49 @@ var repoName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 // ErrNoRepository is a chart of a repository the console does not know.
 var ErrNoRepository = errors.New("no such chart repository")
 
-// Repository is a Helm repository or an OCI registry the console knows,
-// as Settings › Applications lists it (HR-02).
+// Repository is a git repository, a Helm repository or an OCI registry
+// the console knows, as Administration › Settings › Repositories lists it (HR-02, RP-02).
 type Repository struct {
 	Name string `json:"name"`
-	// Kind is helm (a chart repository over HTTPS, with its index.yaml)
-	// or oci (an OCI registry).
+	// Kind is git (a git repository over HTTPS, which applications' Setup
+	// and Mycroft's git sources name, 0.12.1, RP-02), helm (a chart
+	// repository over HTTPS, with its index.yaml) or oci (an OCI
+	// registry).
 	Kind string `json:"kind"`
-	// URL is https://charts.example.com/stable, or
+	// URL is https://github.com/org/app (git, as GitAddress writes it),
+	// https://charts.example.com/stable, or
 	// oci://registry.example.com[/path]: an OCI registry's entry covers
 	// the charts under its path.
 	URL string `json:"url"`
-	// Auth is none, basic (a user name and a password) or token (a bearer
-	// token, or a registry's access token).
+	// DefaultBranch is a git repository's branch offered first; "" leaves
+	// it to the repository's HEAD.
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	// Credential is the credential of Administration › Credentials it signs in
+	// with, by id; "" is none (0.12.1, CR-11).
+	Credential string `json:"credential,omitempty"`
+	// CredMigrated says the repository names a credential, its own secret
+	// of before 0.12.1 moved to one or never kept (CR-12): its Auth,
+	// Username and HasSecret are not read again.
+	CredMigrated bool `json:"credMigrated,omitempty"`
+	// Auth, Username and HasSecret are how a repository signed in before
+	// 0.12.1: none, basic (a user name and a password) or token (a bearer
+	// token, or a registry's access token), the password or token in the
+	// Secret. Get fills them in from the credential for a fetch.
 	Auth     string `json:"auth"`
 	Username string `json:"username,omitempty"`
 	// HasSecret says a password or token is kept; it never leaves the
 	// server.
 	HasSecret bool `json:"hasSecret"`
+	// PinnedCert is the repository's certificate a SuperAdmin trusted, for
+	// a repository without a credential (CR-16); a credential keeps its
+	// own.
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
+	// trust is what a fetch trusts, as Signed resolved it: the
+	// credential's private CA and pin, or the repository's pin.
+	trust certpin.Trust
+	// use is the credential as Signed resolved it, nil for none: a file
+	// is signed only at an address under its endpoint (CR-04).
+	use *credentials.Use
 	// The last test (HR-03): when, whether it answered, and what it said.
 	TestedAt time.Time `json:"testedAt,omitzero"`
 	TestOK   bool      `json:"testOk,omitempty"`
@@ -111,15 +139,19 @@ type Repository struct {
 	SetAt    time.Time `json:"setAt,omitzero"`
 }
 
-// RepositoryInput is a repository as Settings › Applications sends it.
+// RepositoryInput is a repository as Administration › Settings › Repositories sends it:
+// its kind, address and credential (CR-11).
 type RepositoryInput struct {
-	Kind     string `json:"kind"`
-	URL      string `json:"url"`
-	Auth     string `json:"auth,omitempty"`
-	Username string `json:"username,omitempty"`
-	// Secret is the password or token: a value replaces the kept one, ""
-	// removes it, nil keeps it.
-	Secret *string `json:"secret,omitempty"`
+	Kind          string `json:"kind"`
+	URL           string `json:"url"`
+	Credential    string `json:"credential,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	// Auth, Username and Secret are a repository of before 0.12.1, as a
+	// backup of then restores it: its own password or token, which the
+	// upgrade moves to a credential at the next start (Restore only).
+	Auth     string  `json:"-"`
+	Username string  `json:"-"`
+	Secret   *string `json:"-"`
 }
 
 // TestResult is what a test of a repository found (HR-03).
@@ -128,6 +160,9 @@ type TestResult struct {
 	Text string `json:"text"`
 	// Charts counts a Helm repository's charts.
 	Charts int `json:"charts,omitempty"`
+	// Certificate is the certificate the repository presented, when it
+	// is not trusted or is the pinned one (CR-15).
+	Certificate *certpin.Cert `json:"certificate,omitempty"`
 }
 
 // ChartInfo is a chart a Helm repository's index lists.
@@ -192,6 +227,8 @@ type RepoOptions struct {
 	// connects where a git fetch may (repohost.go). Tests give their own.
 	Client *http.Client
 	Now    func() time.Time
+	// Credentials resolves the repositories' credentials (CR-11).
+	Credentials *credentials.Service
 }
 
 // Repos are the chart repositories the console knows, and the fetching
@@ -201,6 +238,11 @@ type Repos struct {
 	mu sync.Mutex
 	// index are the repositories' indexes, read a little while ago.
 	index map[string]cachedIndex
+	// users list what names the repositories (RP-06).
+	users repoUsers
+	// git are the git repositories by name, read a moment ago: every
+	// application and source naming one reads it (RP-03).
+	git gitCache
 }
 
 type cachedIndex struct {
@@ -230,6 +272,9 @@ func (r *Repos) Backend() kv.Backend { return r.o.Backend }
 
 type repoRecord struct {
 	Repositories []Repository `json:"repositories"`
+	// Migration is what the upgrade to 0.12.1 made of the git addresses
+	// applications and Mycroft's sources typed (RP-05).
+	Migration GitMigration `json:"migration,omitzero"`
 }
 
 func (r *Repos) load(ctx context.Context) (repoRecord, string, error) {
@@ -262,6 +307,7 @@ func (r *Repos) update(ctx context.Context, f func(*repoRecord) error) error {
 		if _, err = r.o.Backend.SaveKey(ctx, RepositoriesKey, b, version); errors.Is(err, kv.ErrConflict) {
 			continue
 		}
+		r.git.forget()
 		return err
 	}
 	return errors.New("the chart repositories' record kept changing")
@@ -277,8 +323,56 @@ func (r *Repos) List(ctx context.Context) ([]Repository, error) {
 		return nil, err
 	}
 	out := append([]Repository{}, rec.Repositories...)
+	for i := range out {
+		if out[i].CredMigrated {
+			out[i].Auth, out[i].Username, out[i].HasSecret = "", "", false
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// Legacy is the repositories with their own password or token of before
+// 0.12.1, not yet moved to a credential (CR-12), each with it.
+func (r *Repos) Legacy(ctx context.Context) ([]Repository, []string, error) {
+	if r == nil {
+		return nil, nil, nil
+	}
+	rec, _, err := r.load(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []Repository
+	var secrets []string
+	for _, repo := range rec.Repositories {
+		if repo.CredMigrated || !repo.HasSecret || repo.Auth == AuthNone || repo.Auth == "" {
+			continue
+		}
+		b, _, found, err := r.o.Secrets.LoadKey(ctx, secretKey(repo.Name))
+		if err != nil {
+			return nil, nil, err
+		}
+		if found && len(b) > 0 {
+			out, secrets = append(out, repo), append(secrets, string(b))
+		}
+	}
+	return out, secrets, nil
+}
+
+// SwitchCredential has a repository of before 0.12.1 name the credential
+// made of its password or token (CR-12); the old one stays in the Secret,
+// no longer read.
+func (r *Repos) SwitchCredential(ctx context.Context, name, credential string) error {
+	err := r.update(ctx, func(rec *repoRecord) error {
+		i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == name })
+		if i < 0 {
+			return fmt.Errorf("%w %q", ErrNoRepository, name)
+		}
+		rec.Repositories[i].Credential, rec.Repositories[i].CredMigrated = credential, true
+		return nil
+	})
+	r.forget(name)
+	return err
 }
 
 // Get is one repository, with its password or token ("" for none).
@@ -292,9 +386,12 @@ func (r *Repos) Get(ctx context.Context, name string) (Repository, string, error
 	}
 	i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == name })
 	if i < 0 {
-		return Repository{}, "", fmt.Errorf("%w %q: Settings › Applications lists the repositories the console knows", ErrNoRepository, name)
+		return Repository{}, "", fmt.Errorf("%w %q: Administration › Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
 	}
 	repo := rec.Repositories[i]
+	if repo.CredMigrated {
+		return r.Signed(ctx, repo)
+	}
 	secret := ""
 	if repo.HasSecret {
 		b, _, found, err := r.o.Secrets.LoadKey(ctx, secretKey(name))
@@ -308,21 +405,88 @@ func (r *Repos) Get(ctx context.Context, name string) (Repository, string, error
 	return repo, secret, nil
 }
 
+// Raw is a repository as it is kept, without resolving its credential.
+func (r *Repos) Raw(ctx context.Context, name string) (Repository, error) {
+	if r == nil {
+		return Repository{}, fmt.Errorf("%w %q: this console keeps no chart repositories", ErrNoRepository, name)
+	}
+	rec, _, err := r.load(ctx)
+	if err != nil {
+		return Repository{}, err
+	}
+	i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == name })
+	if i < 0 {
+		return Repository{}, fmt.Errorf("%w %q: Administration › Settings › Repositories lists the repositories the console knows", ErrNoRepository, name)
+	}
+	return rec.Repositories[i], nil
+}
+
+// Signed is a repository with how its credential signs in, resolved for
+// its address (CR-04): Basic for a user and password or a token sent as
+// Basic, token for one sent as Bearer (also offered at a registry's token
+// service, as before), none without a credential.
+func (r *Repos) Signed(ctx context.Context, repo Repository) (Repository, string, error) {
+	repo.Auth, repo.Username, repo.HasSecret = AuthNone, "", false
+	repo.trust = repo.OwnTrust()
+	if repo.Credential == "" {
+		return repo, "", nil
+	}
+	if r == nil || r.o.Credentials == nil {
+		return Repository{}, "", errors.New("this console keeps no credentials")
+	}
+	use, err := r.o.Credentials.Resolve(ctx, repo.Credential, credentialUseOf(repo.Kind), repo.URL)
+	if err != nil {
+		return Repository{}, "", fmt.Errorf("%s's credential: %w", repo.Name, err)
+	}
+	repo.trust = use.Trust().Or(repo.trust)
+	repo.use = use
+	if user, pass, ok := use.Basic(); ok {
+		repo.Auth, repo.Username, repo.HasSecret = AuthBasic, user, true
+		return repo, pass, nil
+	}
+	if tok, ok := use.Bearer(); ok {
+		repo.Auth, repo.Username, repo.HasSecret = AuthToken, use.SendAs.Username, true
+		return repo, tok, nil
+	}
+	return repo, "", nil
+}
+
+// OwnTrust is the repository's own pinned certificate (CR-16), for a
+// fetch.
+func (r Repository) OwnTrust() certpin.Trust {
+	return certpin.Trust{Pin: r.PinnedCert.Fingerprint()}
+}
+
 // CheckRepository checks a repository as typed and returns it cleaned:
 // its name, its kind and address, and how it is signed in to.
 func CheckRepository(name string, in RepositoryInput) (Repository, error) {
-	repo := Repository{Name: strings.TrimSpace(name), Kind: strings.TrimSpace(in.Kind), Auth: strings.TrimSpace(in.Auth), Username: strings.TrimSpace(in.Username)}
+	repo := Repository{Name: strings.TrimSpace(name), Kind: strings.TrimSpace(in.Kind), Credential: strings.TrimSpace(in.Credential), Auth: strings.TrimSpace(in.Auth), Username: strings.TrimSpace(in.Username)}
 	if !repoName.MatchString(repo.Name) {
 		return repo, errors.New("a repository's name is lowercase letters, digits and dashes, up to 63, as a helm line names it (name/chart)")
 	}
-	if repo.Kind != KindHelm && repo.Kind != KindOCI {
-		return repo, errors.New("a repository is a Helm repository (helm) or an OCI registry (oci)")
+	if repo.Kind != KindGit && repo.Kind != KindHelm && repo.Kind != KindOCI {
+		return repo, errors.New("a repository is a git repository (git), a Helm repository (helm) or an OCI registry (oci)")
 	}
-	u, err := RepoURL(repo.Kind, in.URL)
+	var u string
+	var err error
+	if repo.Kind == KindGit {
+		u, err = GitAddress(in.URL)
+	} else {
+		u, err = RepoURL(repo.Kind, in.URL)
+	}
 	if err != nil {
 		return repo, err
 	}
 	repo.URL = u
+	if b := strings.TrimSpace(in.DefaultBranch); b != "" {
+		if repo.Kind != KindGit {
+			return repo, errors.New("a default branch is a git repository's")
+		}
+		if !refName.MatchString(b) || strings.Contains(b, "..") || strings.HasSuffix(b, ".lock") || strings.HasSuffix(b, "/") {
+			return repo, fmt.Errorf("%q is not a branch name", b)
+		}
+		repo.DefaultBranch = b
+	}
 	switch repo.Auth {
 	case "", AuthNone:
 		repo.Auth, repo.Username = AuthNone, ""
@@ -343,10 +507,79 @@ func CheckRepository(name string, in RepositoryInput) (Repository, error) {
 	return repo, nil
 }
 
-// Save adds or changes a repository (HR-02) and says whether it added
-// it. A password or token belongs to its address: one moved elsewhere
-// takes a new one or none.
+// Save adds or changes a repository (HR-02) with the credential it signs
+// in with (CR-11), and says whether it added it. The credential must
+// serve a Helm repository and cover the address.
 func (r *Repos) Save(ctx context.Context, name string, in RepositoryInput, by string) (Repository, bool, error) {
+	repo, err := CheckRepository(name, in)
+	if err != nil {
+		return Repository{}, false, fmt.Errorf("%w: %v", ErrInvalidRepo, err)
+	}
+	if repo.Credential != "" {
+		if r.o.Credentials == nil {
+			return Repository{}, false, fmt.Errorf("%w: this console keeps no credentials", ErrInvalidRepo)
+		}
+		if _, err := r.o.Credentials.CheckChoice(ctx, repo.Credential, credentialUseOf(repo.Kind), repo.URL); err != nil {
+			return Repository{}, false, fmt.Errorf("%w: %v", ErrInvalidRepo, credentialText(err))
+		}
+	}
+	repo.Auth, repo.Username, repo.HasSecret, repo.CredMigrated = AuthNone, "", false, true
+	repo.SetBy, repo.SetAt = by, r.o.Now().UTC()
+	rec, _, err := r.load(ctx)
+	if err != nil {
+		return Repository{}, false, err
+	}
+	created := true
+	if i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == repo.Name }); i >= 0 {
+		old := rec.Repositories[i]
+		created = false
+		// A repository keeps its kind: what names it expects one.
+		if old.Kind != repo.Kind {
+			return Repository{}, false, fmt.Errorf("%w: %s is a %s; remove it and add a new one to change its kind", ErrInvalidRepo, repo.Name, KindWord(old.Kind))
+		}
+		if old.URL == repo.URL && old.Credential == repo.Credential && old.CredMigrated {
+			repo.TestedAt, repo.TestOK, repo.Tested = old.TestedAt, old.TestOK, old.Tested
+		}
+		// A pinned certificate is set by Trust alone, and kept while the
+		// address is the same (CR-16).
+		if old.URL == repo.URL {
+			repo.PinnedCert = old.PinnedCert
+		}
+	}
+	if err := r.put(ctx, repo); err != nil {
+		return Repository{}, false, err
+	}
+	return repo, created, nil
+}
+
+// credentialText is a credential's refusal without its sentinel.
+func credentialText(err error) string {
+	return strings.TrimPrefix(err.Error(), credentials.ErrInvalid.Error()+": ")
+}
+
+func (r *Repos) put(ctx context.Context, repo Repository) error {
+	err := r.update(ctx, func(rec *repoRecord) error {
+		i := slices.IndexFunc(rec.Repositories, func(x Repository) bool { return x.Name == repo.Name })
+		if i < 0 {
+			if len(rec.Repositories) >= MaxRepositories {
+				return fmt.Errorf("%w: at most %d repositories; remove one first", ErrInvalidRepo, MaxRepositories)
+			}
+			rec.Repositories = append(rec.Repositories, repo)
+			return nil
+		}
+		rec.Repositories[i] = repo
+		return nil
+	})
+	r.forget(repo.Name)
+	return err
+}
+
+// RestoreLegacy restores a repository of a backup made before 0.12.1,
+// with its own password or token as then (in.Auth, in.Username,
+// in.Secret): the upgrade moves it to a credential at the next start
+// (CR-12).
+func (r *Repos) RestoreLegacy(ctx context.Context, name string, in RepositoryInput, by string) (Repository, bool, error) {
+	in.Credential = ""
 	repo, err := CheckRepository(name, in)
 	if err != nil {
 		return Repository{}, false, fmt.Errorf("%w: %v", ErrInvalidRepo, err)
@@ -415,15 +648,20 @@ func (r *Repos) saveSecret(ctx context.Context, name, secret string) error {
 	return errors.New("the repositories' Secret kept changing")
 }
 
-// Delete removes a repository and its password or token. The
-// applications made from it keep their records; their next deploy says
-// the repository is gone.
+// Delete removes a repository and its password or token; one an
+// application or a Mycroft source names is refused (RP-06).
 func (r *Repos) Delete(ctx context.Context, name string) error {
-	old, _, err := r.Get(ctx, name)
+	old, err := r.Raw(ctx, name)
 	if err != nil {
 		return err
 	}
-	if old.HasSecret {
+	// One in use stays (RP-06): say by whom.
+	if users, err := r.UsersOf(ctx, name); err != nil {
+		return err
+	} else if len(users) > 0 {
+		return fmt.Errorf("%w: %s is used by %s; have them name another repository first", ErrInUse, name, strings.Join(users, ", "))
+	}
+	if old.HasSecret && !old.CredMigrated {
 		if err := r.saveSecret(ctx, name, ""); err != nil {
 			return err
 		}
@@ -465,6 +703,9 @@ func (r *Repos) Resolve(ctx context.Context, src Source) (Source, error) {
 		repo, _, err := r.Get(ctx, src.Repository)
 		if err != nil {
 			return src, err
+		}
+		if repo.Kind == KindGit {
+			return src, fmt.Errorf("%w: %s is a git repository: name it with --git %s", ErrInvalidRepo, repo.Name, repo.Name)
 		}
 		if repo.Kind != KindHelm {
 			return src, fmt.Errorf("%w: %s is an OCI registry: name its charts as oci://%s/chart", ErrInvalidRepo, repo.Name, strings.TrimPrefix(repo.URL, "oci://"))
@@ -508,9 +749,13 @@ func (r *Repos) credentials(ctx context.Context, src Source) (Repository, string
 // Fetch fetches a source: a git repository at its ref with token, or a
 // repository's chart at its version (the newest when none is named),
 // with its repository's credentials.
-func (r *Repos) Fetch(ctx context.Context, src Source, token string) (*Checkout, error) {
+func (r *Repos) Fetch(ctx context.Context, src Source, token GitAuth) (*Checkout, error) {
 	if !src.FromRepository() {
-		return Fetch(ctx, src, token)
+		src, err := r.gitSource(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		return Fetch(ctx, src, r.gitTrust(ctx, src, token))
 	}
 	if r == nil {
 		return nil, errors.New("this console keeps no chart repositories")
@@ -538,9 +783,13 @@ func (r *Repos) Fetch(ctx context.Context, src Source, token string) (*Checkout,
 
 // FetchDigest fetches what a card showed: a git commit, or a
 // repository's chart whose archive has the digest, or nothing.
-func (r *Repos) FetchDigest(ctx context.Context, src Source, token, digest string) (*Checkout, error) {
+func (r *Repos) FetchDigest(ctx context.Context, src Source, token GitAuth, digest string) (*Checkout, error) {
 	if !src.FromRepository() {
-		return FetchCommit(ctx, src, token, digest)
+		src, err := r.gitSource(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		return FetchCommit(ctx, src, r.gitTrust(ctx, src, token), digest)
 	}
 	co, err := r.Fetch(ctx, src, token)
 	if err != nil {
@@ -566,9 +815,13 @@ func ShortDigest(d string) string {
 // Refs are what a source offers to deploy: a git repository's branches
 // and tags, or a repository chart's versions as tags, newest first, the
 // newest stable one its default.
-func (r *Repos) Refs(ctx context.Context, src Source, token string) (Refs, error) {
+func (r *Repos) Refs(ctx context.Context, src Source, token GitAuth) (Refs, error) {
 	if !src.FromRepository() {
-		return ListRefs(ctx, src.Repo, token)
+		src, err := r.gitSource(ctx, src)
+		if err != nil {
+			return Refs{}, err
+		}
+		return ListRefs(ctx, src.Repo, r.gitTrust(ctx, src, token))
 	}
 	versions, err := r.Versions(ctx, src)
 	if err != nil {
@@ -620,6 +873,9 @@ func (r *Repos) Charts(ctx context.Context, name string) ([]ChartInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if repo.Kind == KindGit {
+		return nil, fmt.Errorf("%w: %s is a git repository: its charts are directories, chosen with their path", ErrInvalidRepo, repo.Name)
+	}
 	if repo.Kind != KindHelm {
 		return nil, fmt.Errorf("%w: an OCI registry does not list its charts; type the chart's name", ErrInvalidRepo)
 	}
@@ -655,8 +911,17 @@ func (r *Repos) Charts(ctx context.Context, name string) ([]ChartInfo, error) {
 // Test asks a repository whether it answers, with its credentials (HR-03):
 // a Helm repository for its index, an OCI registry at /v2/.
 func (r *Repos) Test(ctx context.Context, repo Repository, secret string) TestResult {
+	res := r.test(ctx, repo, secret)
+	r.noteCertificate(ctx, repo, &res)
+	return res
+}
+
+func (r *Repos) test(ctx context.Context, repo Repository, secret string) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if repo.Kind == KindGit {
+		return r.testGit(ctx, repo)
+	}
 	if repo.Kind == KindOCI {
 		host := ociHost(repo.URL)
 		if _, err := r.ociGet(ctx, host, "/v2/", "", "", repo, secret, maxSmall); err != nil {
@@ -751,7 +1016,8 @@ func (r *Repos) fetchIndex(ctx context.Context, repo Repository, secret string) 
 
 // helmGet reads a Helm repository's file: with its credentials when the
 // file is on the repository's own host, without them anywhere else (as
-// helm does unless told to pass them on).
+// helm does unless told to pass them on); a credential of Administration
+// › Credentials only under its endpoint (CR-04).
 func (r *Repos) helmGet(ctx context.Context, repo Repository, secret, target string, limit int64) ([]byte, error) {
 	u, err := url.Parse(target)
 	if err != nil || u.Host == "" || !(u.Scheme == "https" || AllowLocalRepos && u.Scheme == "http") {
@@ -760,12 +1026,12 @@ func (r *Repos) helmGet(ctx context.Context, repo Repository, secret, target str
 	if refusedName(u.Hostname()) && !AllowLocalRepos {
 		return nil, errHostRefused
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
 	base, _ := url.Parse(repo.URL)
-	if base != nil && strings.EqualFold(base.Host, u.Host) {
+	if base != nil && strings.EqualFold(base.Host, u.Host) && (repo.use == nil || repo.use.Covers(target)) {
 		authorize(req, repo, secret)
 	}
 	res, err := r.o.Client.Do(req)
@@ -1018,7 +1284,7 @@ func (r *Repos) ociGet(ctx context.Context, host, p, accept, scope string, repo 
 	// never travel in the clear.
 	target := "https://" + host + p
 	do := func(auth string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1070,7 +1336,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 	switch scheme {
 	case "basic":
 		if secret == "" {
-			return "", errors.New("the registry needs a user name and password: add them to the repository in Settings › Applications")
+			return "", errors.New("the registry needs a user name and password: choose a credential for the repository in Administration › Settings › Repositories")
 		}
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+secret)), nil
 	case "bearer":
@@ -1092,7 +1358,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 			q.Set("scope", scope)
 		}
 		u.RawQuery = q.Encode()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		req, err := http.NewRequestWithContext(certpin.With(ctx, repo.trust), http.MethodGet, u.String(), nil)
 		if err != nil {
 			return "", err
 		}
@@ -1106,12 +1372,12 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 		defer res.Body.Close()
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 			if secret == "" {
-				return "", errors.New("the registry needs credentials: add them to the repository in Settings › Applications")
+				return "", errors.New("the registry needs credentials: choose a credential for the repository in Administration › Settings › Repositories")
 			}
 			return "", errors.New("the registry's token service refused the credentials")
 		}
 		if res.StatusCode/100 != 2 {
-			return "", fmt.Errorf("the registry's token service answered %s", res.Status)
+			return "", notFetchedFor(fmt.Errorf("the registry's token service answered %s", res.Status))
 		}
 		b, err := readCapped(res.Body, maxSmall)
 		if err != nil {
@@ -1130,7 +1396,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 		return "Bearer " + tok.Token, nil
 	}
 	if secret == "" {
-		return "", errors.New("the registry needs credentials: add them to the repository in Settings › Applications")
+		return "", errors.New("the registry needs credentials: choose a credential for the repository in Administration › Settings › Repositories")
 	}
 	return "", errors.New("the registry refused the credentials")
 }
@@ -1171,7 +1437,7 @@ var repoTransport http.RoundTripper
 func init() {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkConnect}).DialContext
-	repoTransport = base
+	repoTransport = allowedTransport{&certpin.ContextTransport{Base: base}}
 }
 
 // readCapped reads a body of at most limit bytes.
@@ -1193,26 +1459,31 @@ func statusError(res *http.Response, repo Repository) error {
 		return nil
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
 		if repo.Auth == AuthNone || repo.Auth == "" {
-			return errors.New("the repository needs credentials: add them to it in Settings › Applications")
+			return errors.New("the repository needs credentials: choose a credential for it in Administration › Settings › Repositories")
 		}
 		return errors.New("the repository refused the credentials")
 	case res.StatusCode == http.StatusNotFound:
 		return errors.New("not found there (404)")
 	}
-	return fmt.Errorf("the repository answered %s", res.Status)
+	where := "the repository"
+	if res.Request != nil && res.Request.URL != nil {
+		where = res.Request.URL.Host
+	}
+	return notFetchedFor(fmt.Errorf("%s answered %s", where, res.Status))
 }
 
-// describeHTTP makes a connection's errors readable.
+// describeHTTP makes a connection's errors readable: every failure on the
+// way reads the same (ErrNotFetched), its cause in the server's log.
 func describeHTTP(err error) error {
 	switch {
 	case errors.Is(err, errHostRefused):
 		return errHostRefused
-	case errors.Is(err, context.DeadlineExceeded):
-		return errors.New("the repository did not answer in time")
-	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return fmt.Errorf("the repository could not be reached: %v", ue.Err)
+	case errors.Is(err, errHostNotAllowed):
+		return errHostNotAllowed
+	case errors.Is(err, ErrFetchLimit), errors.Is(err, ErrNotFetched):
+		return err
+	case onTheWay(err):
+		return notFetchedFor(err)
 	}
 	return err
 }

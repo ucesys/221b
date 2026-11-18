@@ -318,7 +318,7 @@ func TestOldExceptionPage(t *testing.T) {
 }
 
 // An exception counts the findings it dropped and when it last did; one
-// that matched nothing for the days Settings › Cases names is stale, and
+// that matched nothing for the days Administration › AI › Cases names is stale, and
 // the list filters the stale ones (CF-13).
 func TestExceptionMatchesAndStale(t *testing.T) {
 	w := setup(t)

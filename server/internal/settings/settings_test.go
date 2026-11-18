@@ -411,6 +411,17 @@ func TestTheRound2SettingsValidate(t *testing.T) {
 	if err := (settings.Watson{ApproveAllMinutes: settings.MaxApproveAll + 1}).Validate(); err == nil {
 		t.Error("a standing approval above the bound passed")
 	}
+	for _, m := range []int{-1, 4, settings.MaxWaitingRunMinutes + 1} {
+		if err := (settings.Watson{WaitingRunMinutes: m}).Validate(); err == nil {
+			t.Errorf("waitingRunMinutes %d accepted", m)
+		}
+	}
+	if w := (settings.Watson{}); w.Validate() != nil || w.WaitingRunFor() != time.Hour {
+		t.Errorf("the default wait: %v", w.WaitingRunFor())
+	}
+	if w := (settings.Watson{WaitingRunMinutes: settings.MaxWaitingRunMinutes}); w.Validate() != nil || w.WaitingRunFor() != 7*24*time.Hour {
+		t.Errorf("seven days: %v %v", w.Validate(), w.WaitingRunFor())
+	}
 	if err := (settings.Watson{ApproveAllMinutes: 30}).Validate(); err != nil {
 		t.Error(err)
 	}
@@ -421,6 +432,10 @@ func TestTheRound2SettingsValidate(t *testing.T) {
 	off := false
 	s := settings.Default
 	s.FleetsPage = &off
+	s.ImageChecks = &off
+	if s.ChecksImages() || !settings.Default.ChecksImages() {
+		t.Error("the check for newer images is on unless turned off (HA-23)")
+	}
 	if s.ShowsFleets() || settings.Default.ShowsFleets() != true {
 		t.Error("the Fleets page switch")
 	}

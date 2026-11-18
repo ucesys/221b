@@ -34,7 +34,7 @@ render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --s
 render k8s-console --set clusterName=ci --set sherlock.provider.kind=bedrock --set sherlock.provider.region=eu-west-1 --set sherlock.lockProvider=true | tee "$WORK/chart-provider.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render k8s-console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
-  --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
+  --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' --set 'apps.allowedHosts[0]=*.git.example.com' \
   --set 'imagePullSecrets[0].name=ghcr' | tee "$WORK/chart-options.yaml" | validate
 echo "--- exposed with a LoadBalancer on every node"
 render k8s-console --set clusterName=ci --set service.type=LoadBalancer --set service.nodePort=30081 \
@@ -89,7 +89,7 @@ render k8s-console --set clusterName=ci --set sherlock.egress=false --set 'netwo
 render k8s-console --set clusterName=ci --set 'backup.s3.egressCIDRs[0]=10.20.0.0/16' --set 'backup.s3.egressPorts={9000}' | tee "$WORK/chart-backup-s3.yaml" | validate
 render k8s-console --set clusterName=ci --set backup=null | tee "$WORK/chart-backup-reuse.yaml" | validate
 # --- Knowledge (Phase 12): its egress, and values from before it.
-render k8s-console --set clusterName=ci --set 'knowledge.egressCIDRs[0]=10.30.0.0/16' --set 'knowledge.egressPorts={7990}' --set knowledge.consoleURL=https://221b.example.com | tee "$WORK/chart-knowledge.yaml" | validate
+render k8s-console --set clusterName=ci --set 'knowledge.egressCIDRs[0]=10.30.0.0/16' --set 'knowledge.egressPorts={7990}' | tee "$WORK/chart-knowledge.yaml" | validate
 render k8s-console --set clusterName=ci --set knowledge=null | tee "$WORK/chart-knowledge-reuse.yaml" | validate
 render k8s-console --set clusterName=ci --set knowledge.configMapStore.enabled=false | tee "$WORK/chart-knowledge-nowiki.yaml" | validate
 # --- Helm repositories (Phase 12, wave 5): their egress, and values from before it.
@@ -166,7 +166,6 @@ knowledge_values() {
     grep -A2 'name: knowledge$' "$out" | has 'sizeLimit: "512Mi"' &&
     grep -B1 'mountPath: /var/lib/221b/knowledge' "$out" | has 'name: knowledge' &&
     ! grep -q 'name: CONSOLE_URL' "$out" &&
-    grep -A1 'name: CONSOLE_URL' "$WORK/chart-knowledge.yaml" | has '"https://221b.example.com"' &&
     grep -A1 'name: KNOWLEDGE_REFRESH_S3' "$WORK/chart-knowledge-reuse.yaml" | has '"5m"' &&
     netpol "$WORK/chart-knowledge.yaml" | grep -A6 'port: 7990$' | has 'cidr: "10.30.0.0/16"' &&
     ! netpol "$out" | has 'cidr: "10.30.0.0/16"' &&
@@ -221,6 +220,17 @@ issues_values() {
   has '"reporterGroups": \[' <<<"$reporters" && has '"role": "reporter"' <<<"$reporters" && ! grep -q 'RoleBinding.*helpdesk\|221b-reporter-' <<<"$reporters" || return 1
   ! render k8s-console --set clusterName=ci --set 'issues.operatorRoles[0]=reporter' >/dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=helpdesk' --set 'auth.local.groups[0].role=reporter' --set 'auth.local.groups[0].namespaces[0]=web' >/dev/null 2>&1
+}
+# The report page's address (issues.reportURL, 0.12.1): no env by default,
+# so the console links to /report; set, it reaches ISSUES_REPORT_URL, and
+# values from an older release without it render as the default.
+issues_report_url() {
+  local set reuse
+  ! grep -q 'name: ISSUES_REPORT_URL' "$out" || return 1
+  set=$(render k8s-console --set clusterName=ci --set issues.reportURL=https://help.example.com/report)
+  grep -A1 'name: ISSUES_REPORT_URL' <<<"$set" | has '"https://help.example.com/report"' || return 1
+  reuse=$(render k8s-console --set clusterName=ci --set issues=null)
+  ! grep -q 'name: ISSUES_REPORT_URL' <<<"$reuse"
 }
 # The AI agents (Phase 12): their records in a ConfigMap of their own, named
 # in the env and the Role; the baselines from values in another, mounted,
@@ -659,6 +669,7 @@ check "Admin forwards ports and starts debug pods, and opens shells only when as
 check "Automation keeps its records in a ConfigMap of its own, named in the env and the Role; off, neither" automation_configmap
 check "the AI agents keep their records in a ConfigMap of their own, and their baselines come from values, mounted" ai_configmaps
 check "the issue service keeps its records in a ConfigMap of its own, named in the env and the Role, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
+check "the report page's address reaches the console from issues.reportURL, and none is set by default" issues_report_url
 check "Mycroft's knowledge keeps its records in a ConfigMap of its own, its local copy in an emptyDir, and reaches its sources only at knowledge.egressCIDRs" knowledge_values
 check "the temporary wiki store has a ConfigMap of its own, named in the env and the Role, and none when knowledge.configMapStore.enabled is false" wiki_configmap
 check "the jobs keep their runs in a ConfigMap of their own, named in the env and the Role; the time zone of new schedules when set" jobs_configmap

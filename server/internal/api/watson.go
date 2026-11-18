@@ -21,6 +21,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -34,6 +35,7 @@ func (s *Server) watsonRoutes() {
 		s.handle("GET "+base+"watson/events", "watson-events", s.watsonEvents)
 		s.handle("POST "+base+"watson/commands", "watson-submit", s.postWatsonCommands)
 		s.handle("GET "+base+"watson/commands/{id}", "watson-command", s.getWatsonCommand)
+		s.handle("GET "+base+"watson/history", "watson-history", s.getWatsonHistory)
 		s.handle("POST "+base+"watson/commands/{id}/approve", "watson-approve", s.postWatsonApprove)
 		s.handle("POST "+base+"watson/commands/{id}/discard", "watson-discard", s.postWatsonDiscard)
 		s.handle("POST "+base+"watson/commands/{id}/stop", "watson-stop", s.postWatsonStop)
@@ -490,6 +492,12 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		from = cards.ChatSession(pid)
 	}
+	// From Sherlock means from an answer in the person's own conversation
+	// on this cluster: anything else is a command like any typed one.
+	fromSherlock := strings.EqualFold(from, "Sherlock")
+	if fromSherlock && !s.sherlockWrote(r, c.ID, in.Command) {
+		fromSherlock, from = false, "Typed"
+	}
 	items := s.opts.Watson.Submit(r.Context(), c, who, in.Command, from, why, in.Run)
 	if fromCase {
 		s.logCaseCommands(r, caller, caseN, items)
@@ -499,7 +507,7 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	// Phase 12: a change Sherlock proposed in a chat is kept as a durable
 	// card as well (ADR-99).
-	if strings.EqualFold(from, "Sherlock") {
+	if fromSherlock {
 		s.proposeFromChat(r, c, who, items, why)
 	}
 	out := make([]watsonItem, 0, len(items))
@@ -511,6 +519,16 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	w.Write(b)
+}
+
+// sherlockWrote says whether the command is in one of Sherlock's answers
+// in the person's own conversation on the cluster.
+func (s *Server) sherlockWrote(r *http.Request, cluster, command string) bool {
+	if s.opts.Sherlock == nil {
+		return false
+	}
+	sess, _ := auth.SessionFrom(r.Context())
+	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.ID, Cluster: cluster}, command)
 }
 
 // watsonAnswer turns the service's answer into a response.
@@ -552,6 +570,36 @@ func (s *Server) getWatsonCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
+	writeJSON(w, r, b)
+}
+
+// maxHistoryLines bounds the output lines of each command in Watson's
+// history.
+const maxHistoryLines = 200
+
+// getWatsonHistory is the person's commands on a cluster, the ones their
+// Watson panel lists, newest first, read once rather than streamed: for
+// Sherlock's watson_history (Phase 12.1, SR-03). lines says how many of
+// each command's last output lines come with it, none by default and at
+// most maxHistoryLines.
+func (s *Server) getWatsonHistory(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	n, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	n = max(0, min(n, maxHistoryLines))
+	items := s.opts.Watson.Items(c, who)
+	out := make([]watsonItem, 0, len(items))
+	for i := len(items) - 1; i >= 0; i-- {
+		snap, lines, ok := s.opts.Watson.Snapshot(items[i].ID, 0)
+		if !ok {
+			continue
+		}
+		start := max(0, len(lines)-n)
+		out = append(out, s.watsonView(snap, who, c, lines[start:], start))
+	}
+	b, _ := json.Marshal(map[string]any{"commands": out})
 	writeJSON(w, r, b)
 }
 
@@ -674,7 +722,9 @@ func (s *Server) getWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.watsonAdmin(w, r) {
 		return
 	}
-	b, _ := json.Marshal(s.opts.Settings.Current().WatsonOrDefault())
+	cfg := s.opts.Settings.Current().WatsonOrDefault()
+	cfg.WaitingRunMinutes = int(cfg.WaitingRunFor() / time.Minute)
+	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
 }
 
@@ -691,6 +741,10 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
+		return
+	}
+	if err := in.Validate(); err != nil {
+		jsonError(w, http.StatusBadRequest, "The settings were not saved: "+err.Error())
 		return
 	}
 	before := s.opts.Settings.Current().WatsonOrDefault()
@@ -711,10 +765,31 @@ func watsonChange(a, b settings.Watson) string {
 	if a.ApproveAllMinutes != b.ApproveAllMinutes {
 		parts = append(parts, "standing approvals up to "+strconv.Itoa(b.ApproveAllMinutes)+" minutes")
 	}
+	if a.WaitingRunFor() != b.WaitingRunFor() {
+		parts = append(parts, "Automation runs waiting for approval expire after "+waitText(b.WaitingRunFor()))
+	}
 	if len(parts) == 0 {
 		return "no change"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// waitText is a wait in words: "1 hour", "90 minutes", "2 days".
+func waitText(d time.Duration) string {
+	m := int(d / time.Minute)
+	plural := func(n int, unit string) string {
+		if n == 1 {
+			return "1 " + unit
+		}
+		return strconv.Itoa(n) + " " + unit + "s"
+	}
+	switch {
+	case m >= 24*60 && m%(24*60) == 0:
+		return plural(m/(24*60), "day")
+	case m >= 60 && m%60 == 0:
+		return plural(m/60, "hour")
+	}
+	return plural(m, "minute")
 }
 
 // ActionWatsonSettings is the audit action of a change to Watson's settings.

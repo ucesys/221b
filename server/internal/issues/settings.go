@@ -17,19 +17,16 @@ type Target struct {
 
 // Settings are the issue service's own (IS-29), kept with its records.
 type Settings struct {
-	// Company is the name in the report page's header ("Example Corp IT").
+	// Company is the name in the report page's header ("Example Corp IT"),
+	// set in Administration › Settings › General. The report page's address is the chart's
+	// issues.reportURL (Options.ReportURL) since 0.12.1, and the status
+	// page is gone; values saved here before are ignored.
 	Company string `json:"company"`
-	// StatusPage is where every known problem is published, on Confluence
-	// say; empty hides the link.
-	StatusPage string `json:"statusPage"`
-	// ReportURL is the report page's address other pages link to; empty is
-	// /report on the console's own address.
-	ReportURL string `json:"reportURL"`
 	// MatchThreshold is the confidence, 0 to 100, at which a report is
 	// linked to a known issue without asking anyone (IS-10).
 	MatchThreshold int `json:"matchThreshold"`
 	// Targets are the SLA: P0 to P4's, by "0".."4", for every case with an
-	// SLA clock (Settings › SLA, CU-06, CF-02).
+	// SLA clock (Administration › AI › SLA, CU-06, CF-02).
 	Targets map[string]Target `json:"targets"`
 	// RetentionDays is how long a closed report's text is kept (IS-17).
 	RetentionDays int `json:"retentionDays"`
@@ -48,6 +45,16 @@ type Settings struct {
 	BumpP1At int `json:"bumpP1At"`
 	// Webhook is told of changes, with summaries only (IS-30).
 	Webhook Webhook `json:"webhook"`
+	// ReportURL and StatusPage are what was saved here before 0.12.1:
+	// kept as stored, never read, shown or changed.
+	ReportURL  string `json:"reportURL,omitempty"`
+	StatusPage string `json:"statusPage,omitempty"`
+}
+
+// shown is the settings without what is kept unread.
+func (s Settings) shown() Settings {
+	s.ReportURL, s.StatusPage = "", ""
+	return s
 }
 
 // Webhook is the outgoing notification: generic JSON with a text field a
@@ -118,11 +125,6 @@ func invalid(format string, a ...any) error {
 func (s Settings) Validate() error {
 	if len(s.Company) > 120 {
 		return invalid("the company name is longer than 120 characters")
-	}
-	for _, u := range []struct{ name, v string }{{"the status page", s.StatusPage}, {"the report page", s.ReportURL}} {
-		if u.v != "" && !webURL(u.v) {
-			return invalid("%s must be an http or https address", u.name)
-		}
 	}
 	if s.Webhook.URL != "" && !webURL(s.Webhook.URL) {
 		return invalid("the webhook must be an http or https address")

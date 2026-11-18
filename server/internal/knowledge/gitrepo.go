@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // repo is a git repository the console reads and writes by HTTPS (or a
@@ -28,25 +30,33 @@ import (
 type repo struct {
 	url, branch string
 	user, token string
-	ca          []byte
-	dir         string
-	mu          sync.Mutex
-	r           *git.Repository
+	// bearer sends the token as Bearer rather than Basic (CR-11).
+	bearer bool
+	// trust is the private CA and the pinned certificate (CR-17), carried
+	// by each fetch's and push's context to the console's git client
+	// (apps' repohost.go).
+	trust certpin.Trust
+	dir   string
+	mu    sync.Mutex
+	r     *git.Repository
 }
 
 // maxFile bounds a file read from a repository.
 const maxFile = 8 << 20
 
-func newRepo(dir, url, branch, user, token, ca string) *repo {
+func newRepo(dir, url, branch, user, token string, trust certpin.Trust) *repo {
 	if branch == "" {
 		branch = "main"
 	}
-	return &repo{url: url, branch: branch, user: user, token: token, ca: []byte(ca), dir: dir}
+	return &repo{url: url, branch: branch, user: user, token: token, trust: trust, dir: dir}
 }
 
 func (g *repo) auth() transport.AuthMethod {
 	if g.token == "" {
 		return nil
+	}
+	if g.bearer {
+		return &githttp.TokenAuth{Token: g.token}
 	}
 	user := g.user
 	if user == "" {
@@ -57,12 +67,8 @@ func (g *repo) auth() transport.AuthMethod {
 	return &githttp.BasicAuth{Username: user, Password: g.token}
 }
 
-func (g *repo) caBundle() []byte {
-	if len(strings.TrimSpace(string(g.ca))) == 0 {
-		return nil
-	}
-	return g.ca
-}
+// with is ctx carrying the repository's trust.
+func (g *repo) with(ctx context.Context) context.Context { return certpin.With(ctx, g.trust) }
 
 // open opens the bare clone, making it the first time.
 func (g *repo) open() (*git.Repository, error) {
@@ -105,7 +111,7 @@ func (g *repo) fetch(ctx context.Context) (*git.Repository, *object.Commit, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	err = r.FetchContext(ctx, &git.FetchOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{"+refs/heads/*:refs/remotes/origin/*"}, Auth: g.auth(), CABundle: g.caBundle(), Force: true})
+	err = r.FetchContext(g.with(ctx), &git.FetchOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{"+refs/heads/*:refs/remotes/origin/*"}, Auth: g.auth(), Force: true})
 	switch {
 	case err == nil, errors.Is(err, git.NoErrAlreadyUpToDate):
 	case errors.Is(err, transport.ErrEmptyRemoteRepository):
@@ -280,7 +286,7 @@ func (g *repo) push(ctx context.Context, r *git.Repository, h plumbing.Hash, bra
 	if force {
 		spec = "+" + spec
 	}
-	err := r.PushContext(ctx, &git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{config.RefSpec(spec)}, Auth: g.auth(), CABundle: g.caBundle()})
+	err := r.PushContext(g.with(ctx), &git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{config.RefSpec(spec)}, Auth: g.auth()})
 	switch {
 	case err == nil, errors.Is(err, git.NoErrAlreadyUpToDate):
 		return nil
@@ -295,7 +301,7 @@ var errNotFastForward = errors.New("the branch moved on")
 // deleteBranch removes a branch of the repository; one not there is no
 // error.
 func (g *repo) deleteBranch(ctx context.Context, r *git.Repository, branch string) error {
-	err := r.PushContext(ctx, &git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{config.RefSpec(":refs/heads/" + branch)}, Auth: g.auth(), CABundle: g.caBundle()})
+	err := r.PushContext(g.with(ctx), &git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{config.RefSpec(":refs/heads/" + branch)}, Auth: g.auth()})
 	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
 		_ = r.Storer.RemoveReference(plumbing.ReferenceName("refs/remotes/origin/" + branch))
 		return nil

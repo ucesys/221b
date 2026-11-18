@@ -1,7 +1,7 @@
 // Package confluence is the little of Confluence's REST API the console
 // needs (Phase 12, ADR-97): reading a space's pages for Mycroft's
-// knowledge, and writing the known-issue and wiki page trees the
-// publisher keeps. Confluence Cloud is reached through REST v2 with an
+// knowledge. The publisher that wrote page trees was removed in 0.12.1
+// (ADR-160). Confluence Cloud is reached through REST v2 with an
 // account's email and API token; Data Center through REST v1
 // (/rest/api) with a personal access token. Every call retries what
 // Confluence asks to be retried: 429 after its Retry-After, and 5xx with
@@ -11,7 +11,6 @@ package confluence
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -22,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // Flavors of Confluence.
@@ -42,6 +43,9 @@ type Config struct {
 	Token string
 	// CAPEM, when set, is a PEM bundle trusted besides the system's.
 	CAPEM string
+	// Pin, when set, is the fingerprint of the one certificate accepted
+	// besides those verified normally (certpin, CR-17).
+	Pin string
 	// HTTP replaces the client (tests); CAPEM is then not used.
 	HTTP *http.Client
 	// Retries is how often a call is tried again (default 4); Backoff the
@@ -79,6 +83,10 @@ type Page struct {
 	Modified time.Time `json:"modified,omitzero"`
 	Body     string    `json:"body,omitempty"`
 	URL      string    `json:"url,omitempty"`
+
+	// Ancestors are its ancestors' ids, where a listing gives them (Data
+	// Center's).
+	Ancestors []string `json:"ancestors,omitempty"`
 }
 
 // Error is Confluence's refusal.
@@ -102,13 +110,6 @@ func NotFound(err error) bool {
 	return errors.As(err, &e) && e.Status == http.StatusNotFound
 }
 
-// VersionConflict says whether err is a write refused because the page's version
-// moved on since it was read.
-func VersionConflict(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Status == http.StatusConflict
-}
-
 // New checks the configuration and makes the client.
 func New(c Config) (*Client, error) {
 	if c.Flavor != Cloud && c.Flavor != DataCenter {
@@ -127,15 +128,11 @@ func New(c Config) (*Client, error) {
 	hc := c.HTTP
 	if hc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		if strings.TrimSpace(c.CAPEM) != "" {
-			pool, err := x509.SystemCertPool()
-			if err != nil || pool == nil {
-				pool = x509.NewCertPool()
-			}
-			if !pool.AppendCertsFromPEM([]byte(c.CAPEM)) {
-				return nil, errors.New("the CA certificate is not PEM")
-			}
-			tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		if strings.TrimSpace(c.CAPEM) != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(c.CAPEM)) {
+			return nil, errors.New("the CA certificate is not PEM")
+		}
+		if t := (certpin.Trust{CAPEM: c.CAPEM, Pin: c.Pin}); !t.Empty() {
+			tr.TLSClientConfig = certpin.Config(nil, t)
 		}
 		hc = &http.Client{Transport: tr, Timeout: time.Minute}
 	}
@@ -182,6 +179,25 @@ func (c *Client) api(v2 bool, path string, q url.Values) string {
 	return u.String()
 }
 
+// onSite says an address is the site's: its scheme, host and port, and
+// at or under its path (a Data Center's context), with no . or ..
+// segment and no encoded / or \ to climb out of it.
+func (c *Client) onSite(u *url.URL) bool {
+	if !strings.EqualFold(u.Scheme, c.base.Scheme) || !strings.EqualFold(u.Host, c.base.Host) || u.User != nil {
+		return false
+	}
+	esc := strings.ToLower(u.EscapedPath())
+	if strings.Contains(esc, "%2f") || strings.Contains(esc, "%5c") || strings.Contains(u.Path, `\`) {
+		return false
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return c.base.Path == "" || u.Path == c.base.Path || strings.HasPrefix(u.Path, c.base.Path+"/")
+}
+
 // do sends a request, retrying 429 and 5xx, and decodes the answer into
 // out when given.
 func (c *Client) do(ctx context.Context, method, addr string, body, out any) error {
@@ -197,6 +213,11 @@ func (c *Client) do(ctx context.Context, method, addr string, body, out any) err
 		req, err := http.NewRequestWithContext(ctx, method, addr, bytes.NewReader(payload))
 		if err != nil {
 			return err
+		}
+		// The token goes to the site only: an address an answer gave
+		// (the next page's) elsewhere is not asked.
+		if !c.onSite(req.URL) {
+			return fmt.Errorf("Confluence pointed at %s, outside %s: not asked", req.URL.Redacted(), c.base.Redacted())
 		}
 		if body == nil {
 			req.Body, req.GetBody, req.ContentLength = http.NoBody, nil, 0
@@ -355,6 +376,9 @@ func (c *Client) fromV1(p v1Content) Page {
 	if n := len(p.Ancestors); n > 0 {
 		out.ParentID = p.Ancestors[n-1].ID
 	}
+	for _, a := range p.Ancestors {
+		out.Ancestors = append(out.Ancestors, a.ID)
+	}
 	return out
 }
 
@@ -485,56 +509,14 @@ func (c *Client) listV1(ctx context.Context, path string, q url.Values, since ti
 	return out, nil
 }
 
-// Create writes a new page under parentID (the space's home when empty).
-func (c *Client) Create(ctx context.Context, space Space, parentID, title, body string) (Page, error) {
-	if c.cfg.Flavor == Cloud {
-		in := map[string]any{"spaceId": space.ID, "status": "current", "title": title, "body": map[string]string{"representation": "storage", "value": body}}
-		if parentID != "" {
-			in["parentId"] = parentID
-		}
-		var p v2Page
-		if err := c.do(ctx, http.MethodPost, c.api(true, "/pages", nil), in, &p); err != nil {
-			return Page{}, err
-		}
-		return c.fromV2(p, space.Key), nil
+// clip cuts s to n bytes at most, on a character's boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	in := map[string]any{"type": "page", "title": title, "space": map[string]string{"key": space.Key},
-		"body": map[string]any{"storage": map[string]string{"value": body, "representation": "storage"}}}
-	if parentID != "" {
-		in["ancestors"] = []map[string]string{{"id": parentID}}
+	cut := n
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
 	}
-	var p v1Content
-	if err := c.do(ctx, http.MethodPost, c.api(false, "/content", nil), in, &p); err != nil {
-		return Page{}, err
-	}
-	return c.fromV1(p), nil
-}
-
-// Update writes a page as its next version: version is the number it
-// was read at, and Confluence refuses (Conflict) when it moved on.
-// parentID, when set, moves the page under another.
-func (c *Client) Update(ctx context.Context, space Space, id string, version int, parentID, title, body, note string) (Page, error) {
-	if c.cfg.Flavor == Cloud {
-		in := map[string]any{"id": id, "status": "current", "title": title,
-			"body": map[string]string{"representation": "storage", "value": body}, "version": map[string]any{"number": version + 1, "message": note}}
-		if parentID != "" {
-			in["parentId"] = parentID
-		}
-		var p v2Page
-		if err := c.do(ctx, http.MethodPut, c.api(true, "/pages/"+url.PathEscape(id), nil), in, &p); err != nil {
-			return Page{}, err
-		}
-		return c.fromV2(p, space.Key), nil
-	}
-	in := map[string]any{"id": id, "type": "page", "title": title, "space": map[string]string{"key": space.Key},
-		"version": map[string]any{"number": version + 1, "message": note},
-		"body":    map[string]any{"storage": map[string]string{"value": body, "representation": "storage"}}}
-	if parentID != "" {
-		in["ancestors"] = []map[string]string{{"id": parentID}}
-	}
-	var p v1Content
-	if err := c.do(ctx, http.MethodPut, c.api(false, "/content/"+url.PathEscape(id), nil), in, &p); err != nil {
-		return Page{}, err
-	}
-	return c.fromV1(p), nil
+	return s[:cut] + "…"
 }

@@ -1,20 +1,34 @@
 import { useEffect, useState } from 'react'
-import { fetchAI, saveAgent, saveLimits, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
+import { currentRoute, navigate, withParams } from '../../lib/router'
+import { fetchAI, saveAgent, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
 import { AgentDrawer } from './AgentDrawer'
+import { LIMITS_HREF } from './LimitsSection'
 import { ShowCostsSection } from './ShowCosts'
 
 /**
- * Settings › AI › Agents (Phase 12): every agent with its purpose, model,
+ * Administration › AI › Agents (Phase 12): every agent with its purpose, model,
  * budget, clusters and where its instructions stand; one opens in a drawer
- * to change it. The overall limits, every agent's spend together, are
- * Sherlock's spending caps of before.
+ * to change it. The spending limits, the total (Sherlock's caps of before)
+ * and each provider's, are on Administration › AI › Limits (AI-37).
  */
 export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) => void; initial?: string }) {
   const [ov, setOv] = useState<AIOverview | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(initial ?? null)
+  // An agent named in the address (#/admin/ai/agents/sherlock), as
+  // Sherlock's view_admin opens it (SR-12), opens its drawer.
+  const [opened, setOpened] = useState(initial)
+  if (initial !== opened) {
+    setOpened(initial)
+    if (initial) setOpen(initial)
+  }
+  const close = () => {
+    setOpen(null)
+    const r = currentRoute()
+    if (r.view === 'admin' && r.path.length > 2) navigate(withParams({ ...r, path: r.path.slice(0, 2) }, {}), true)
+  }
   const costs = useShowCosts()
   useEffect(() => {
     fetchAI()
@@ -41,7 +55,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
   return (
     <>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Each agent has one purpose and its own model, from any provider. Agents hand work to each other; every change goes to Watson as a card a person approves.
+        Each agent has one purpose and its own model; every change it asks for goes to Watson for approval.
       </p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} aria-label="Agents now" data-testid="agents-summary">
         <span className="rk-pill" data-tone={on ? 'ok' : 'muted'}>
@@ -53,7 +67,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
         </span>
         {costs && (
           <span className="rk-pill" data-tone="muted" data-testid="agents-limit">
-            Overall limit {ov.dailyUSD ? `${usd(ov.dailyUSD)} a day` : 'none a day'}
+            Total limit {ov.dailyUSD ? `${usd(ov.dailyUSD)} a day` : 'none a day'}
             {ov.monthlyUSD ? `, ${usd(ov.monthlyUSD)} a month` : ''} · spent {usd(ov.spend.dayUSD)} today
           </span>
         )}
@@ -149,13 +163,19 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
       <p className="rk-fhint" style={{ margin: 0 }}>
         An agent that is off is not asked: Sherlock does that part itself, or says it cannot. Sherlock is on for the clusters ticked in its drawer. Open an agent to change its model, instructions, tools, budget and clusters.
       </p>
-      <Limits ov={ov} onSaved={setOv} />
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="agents-limits-link">
+        Spending limits are in{' '}
+        <a className="rk-link" href={LIMITS_HREF}>
+          Administration › AI › Limits
+        </a>
+        .
+      </p>
       <ShowCostsSection />
       {agent && (
         <AgentDrawer
           agent={agent}
           ov={ov}
-          onClose={() => setOpen(null)}
+          onClose={close}
           onSaved={(next, msg) => {
             setOv(next)
             if (msg) onToast?.(msg)
@@ -172,60 +192,4 @@ export function worksOn(a: AgentView, ov: AIOverview): string {
   const name = (id: string) => ov.clusters.find((c) => c.id === id)?.name ?? id
   if (a.id === 'sherlock') return a.clusters?.length ? a.clusters.map(name).join(', ') : 'No cluster'
   return a.clusters?.length ? a.clusters.map(name).join(', ') : 'All clusters'
-}
-
-/** The overall limits: what every agent may spend together, a day and a month. */
-function Limits({ ov, onSaved }: { ov: AIOverview; onSaved: (o: AIOverview) => void }) {
-  const [daily, setDaily] = useState(ov.dailyUSD)
-  const [monthly, setMonthly] = useState(ov.monthlyUSD)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<{ text: string; tone: string } | null>(null)
-  const changed = daily !== ov.dailyUSD || monthly !== ov.monthlyUSD
-  const costs = useShowCosts()
-  return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Overall limits">
-      <h3 className="rk-h">Overall limits</h3>
-      <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
-          A day (US$)
-          <span className="rk-field" style={{ width: 140 }}>
-            <input type="number" min={0} step={1} value={daily} onChange={(e) => setDaily(Math.max(0, Number(e.target.value) || 0))} data-testid="limit-daily" />
-          </span>
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
-          A month (US$)
-          <span className="rk-field" style={{ width: 140 }}>
-            <input type="number" min={0} step={1} value={monthly} onChange={(e) => setMonthly(Math.max(0, Number(e.target.value) || 0))} data-testid="limit-monthly" />
-          </span>
-        </label>
-        <button
-          className="rk-btn"
-          data-primary="true"
-          disabled={!changed || busy}
-          data-testid="limits-save"
-          onClick={async () => {
-            setBusy(true)
-            try {
-              onSaved(await saveLimits(daily, monthly))
-              setMsg({ text: 'Saved.', tone: 'ok' })
-            } catch (e) {
-              setMsg({ text: e instanceof Error ? e.message : String(e), tone: 'err' })
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          Save limits
-        </button>
-        {msg && (
-          <span className="rk-t" data-tone={msg.tone} style={{ fontSize: 12.5 }}>
-            {msg.text}
-          </span>
-        )}
-      </div>
-      <p className="rk-fhint" style={{ margin: 0 }}>
-        Every agent’s spend counts here, besides its own caps: once a limit is reached no agent answers until it lifts, tomorrow or next month (UTC). 0 is no limit.{costs ? ` Spent this month: ${usd(ov.spend.monthUSD)}.` : ''}
-      </p>
-    </section>
-  )
 }

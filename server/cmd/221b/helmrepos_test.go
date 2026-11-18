@@ -19,7 +19,8 @@ func TestHelmRepositoriesBackup(t *testing.T) {
 	ctx := context.Background()
 	repos := apps.NewRepos(apps.RepoOptions{})
 	pw := "s3cret-value"
-	if _, _, err := repos.Save(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
+	// A repository of before 0.12.1, with its own password (CR-12).
+	if _, _, err := repos.RestoreLegacy(ctx, "private", apps.RepositoryInput{Kind: apps.KindHelm, URL: "https://charts.example.com/private", Auth: apps.AuthBasic, Username: "reader", Secret: &pw}, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repos.Save(ctx, "public", apps.RepositoryInput{Kind: apps.KindOCI, URL: "oci://registry.example.com/charts"}, "alice"); err != nil {
@@ -39,7 +40,7 @@ func TestHelmRepositoriesBackup(t *testing.T) {
 	reg2 := backup.NewRegistry()
 	registerHelmReposBackup(reg2, into)
 	rep := reg2.Restore(ctx, f, map[string]bool{"helmRepositories": true}, &backup.Env{By: "bob"})
-	if rep.Restored["helmRepositories"] != 2 || len(rep.Secrets) != 1 || rep.Secrets[0].Name != "the password of the Helm repository private" || rep.Secrets[0].Where != "Settings › Applications › Repositories › private" {
+	if rep.Restored["helmRepositories"] != 2 || len(rep.Secrets) != 1 || rep.Secrets[0].Name != "the password of the Helm repository private" || rep.Secrets[0].Where != "Administration › Settings › Repositories › private" {
 		t.Fatalf("restored: %+v", rep)
 	}
 	got, _, err := into.Get(ctx, "private")

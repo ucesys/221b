@@ -8,6 +8,7 @@
 // the conversation is deleted, and each case it resolves keeps the change
 // for closing as Fixed.
 import type { Page } from '@playwright/test'
+import { askSherlockFor } from './sherlockAsk'
 import { expect, test } from './test'
 import { cluster, consoleNode, nodeRows, snapshot } from './cluster'
 
@@ -80,6 +81,7 @@ test('a proposed change is troubleshot in its drawer, and approved in its Watson
   }
   // A change Sherlock proposed in a chat, kept as a card, linked to both.
   const command = `kubectl cordon ${node}`
+  await askSherlockFor(page, api, command)
   const sent = await api(page, 'POST', '/api/v1/watson/commands', { command, from: 'Sherlock', why: 'e2e: a change asked for in a chat' })
   expect(sent.status, JSON.stringify(sent.json)).toBe(202)
   await expect

@@ -154,6 +154,8 @@ export interface Finding {
   /** The agent found the system working as intended, and why, with its evidence (CF-82). */
   expected?: boolean
   expectedWhy?: string
+  /** How sure the agent is of the cause: confirmed when it read the evidence, likely when it could not confirm it (PM-J1d). */
+  confidence?: 'confirmed' | 'likely'
 }
 
 /** How many findings of a run did each thing, and the fixes it verified. */

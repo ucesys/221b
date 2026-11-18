@@ -10,7 +10,7 @@ import (
 
 // --- Show costs (Phase 12, wave 6c, CF-40) ---
 //
-// A SuperAdmin switch, Settings › AI › Show costs, on by default: off, no
+// A SuperAdmin switch, Administration › AI › Agents › Show costs, on by default: off, no
 // page shows a dollar amount to anyone (runs, jobs, spend, Sherlock's
 // usage, agents, setup, cards, case analysis), but the budget fields where
 // budgets are set. The budgets are kept all the same. Every signed-in

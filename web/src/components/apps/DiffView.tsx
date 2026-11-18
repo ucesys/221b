@@ -1,11 +1,11 @@
 import type { AppDiff } from '../../api/apps'
 
-/** A unified diff, line by line: additions green, removals red, hunks muted (HA-17). */
-export function DiffView({ diff, fill = false }: { diff: AppDiff; fill?: boolean }) {
+/** A unified diff, line by line: additions green, removals red, hunks muted (HA-17); `same` says what alike means for what is compared. */
+export function DiffView({ diff, fill = false, same = 'render the same objects' }: { diff: AppDiff; fill?: boolean; same?: string }) {
   if (diff.same) {
     return (
       <p className="rk-callout" data-tone="info" style={{ margin: 0, fontSize: 12.5 }} data-testid="app-diff-same">
-        {diff.from} and {diff.to} render the same objects.
+        {diff.from} and {diff.to} {same}.
       </p>
     )
   }

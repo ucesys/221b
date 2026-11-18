@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 func serve(t *testing.T, s *Service, c *Caller, method, path, body string, header map[string]string) *httptest.ResponseRecorder {
@@ -42,7 +43,11 @@ func TestTheAPIKeepsItsRoles(t *testing.T) {
 	if w := serve(t, f.s, &viewer, "GET", "settings", "", nil); w.Code != http.StatusForbidden {
 		t.Fatalf("a viewer's settings: %d", w.Code)
 	}
-	body := `{"source":{"id":"ops","name":"Ops space","kind":"confluence","baseURL":"https://ops.atlassian.net","flavor":"cloud","email":"ann@example.com","space":"OPS"},"token":"secret-token-abcdef"}`
+	cr, err := f.creds.Create(ctx, credentials.Credential{Name: "ops", Kind: credentials.KindToken, Endpoint: "https://ops.atlassian.net", SendAs: credentials.SendAs{Method: credentials.SendBasic, Username: "ann@example.com"}}, credentials.Secret{Token: "secret-token-abcdef"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"source":{"id":"ops","name":"Ops space","kind":"confluence","baseURL":"https://ops.atlassian.net","flavor":"cloud","email":"ann@example.com","space":"OPS","credential":"` + cr.ID + `"}}`
 	if w := serve(t, f.s, &bob, "POST", "sources", body, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("an Admin adds a source: %d", w.Code)
 	}
@@ -55,8 +60,12 @@ func TestTheAPIKeepsItsRoles(t *testing.T) {
 	}
 	var v View
 	_ = json.Unmarshal(w.Body.Bytes(), &v)
-	if !v.Creds["ops"].Token || len(v.Settings.Sources) != 5 {
-		t.Fatalf("the token shows as set, the console, documents and what is added in Mycroft are listed: %+v", v)
+	if x, _ := v.Settings.source("ops"); x.Credential != cr.ID || !x.CredMigrated || len(v.Settings.Sources) != 5 {
+		t.Fatalf("the source names its credential, the console, documents and what is added in Mycroft are listed: %+v", v)
+	}
+	// Used by names it (CR-06).
+	if uses, _ := f.s.Uses(ctx); len(uses) != 1 || uses[0].Credential != cr.ID || uses[0].What != "knowledge source Ops space" {
+		t.Fatalf("uses: %+v", uses)
 	}
 	if w := serve(t, f.s, &viewer, "GET", "pages", "", nil); w.Code != http.StatusOK {
 		t.Fatalf("a viewer reads the pages: %d", w.Code)

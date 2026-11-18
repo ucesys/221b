@@ -64,6 +64,15 @@ func NewConfigMapStore(b kv.Backend, limit int) *ConfigMapStore {
 
 func (c *ConfigMapStore) Kind() string { return StoreConfigMap }
 
+// Used is how many bytes the store holds now, of its limit (KN-37).
+func (c *ConfigMapStore) Used(ctx context.Context) (int, error) {
+	raw, _, err := c.b.LoadKey(ctx, WikiKey)
+	if errors.Is(err, kv.ErrNotFound) {
+		return 0, nil
+	}
+	return len(raw), err
+}
+
 func (w *cmWiki) version() string { w.Seq++; return "c" + strconv.Itoa(w.Seq) }
 
 // load reads the document, its version and its size.
@@ -120,7 +129,7 @@ func (c *ConfigMapStore) edit(ctx context.Context, fn func(*cmWiki) error) error
 			return err
 		}
 		if len(raw) > c.limit && len(raw) > size {
-			return fmt.Errorf("%w (%d KiB): move the wiki to Git or S3 in Settings › Knowledge", ErrStoreFull, c.limit>>10)
+			return fmt.Errorf("%w (%d KiB): move the wiki to Git or S3 in Administration › AI › Knowledge", ErrStoreFull, c.limit>>10)
 		}
 		if _, err := c.b.SaveKey(ctx, WikiKey, raw, version); errors.Is(err, kv.ErrConflict) {
 			continue

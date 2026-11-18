@@ -15,7 +15,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -28,13 +30,24 @@ func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Se
 
 func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *lockedBuffer, *source, *sherlock.Service) {
 	t.Helper()
+	srv, c, fake, auditOut, local, svc, _, _ := sherlockConsole(t, who, deny, mod, nil)
+	return srv, c, fake, auditOut, local, svc
+}
+
+// sherlockConsole is sherlockSetupWith with the console's options too
+// (opts), and its cluster store.
+func sherlockConsole(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options), opts func(*Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *lockedBuffer, *source, *sherlock.Service, *clusters.Manager, *live.Store) {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = time.Millisecond
 	api := httptest.NewServer(fake)
 	t.Cleanup(api.Close)
 	keys := sherlock.NewKeys(nil, "", nil)
 	var svc *sherlock.Service
-	srv, c, _, auditOut, local, _ := multiSetupWith(t, who, deny, func(o *Options) {
+	srv, c, m, auditOut, local, store := multiSetupWith(t, who, deny, func(o *Options) {
+		if opts != nil {
+			opts(o)
+		}
 		so := sherlock.Options{
 			Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
 			Settings: func() sherlock.Settings {
@@ -55,7 +68,7 @@ func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(
 	if err := keys.Set(context.Background(), "sk-ant-test-key-0123456789", "test"); err != nil {
 		t.Fatal(err)
 	}
-	return srv, c, fake, auditOut, local, svc
+	return srv, c, fake, auditOut, local, svc, m, store
 }
 
 func enableSherlock(t *testing.T, srv *httptest.Server, admin *http.Client, body string) {
@@ -245,11 +258,11 @@ func TestSherlockCaps(t *testing.T) {
 	askAndRead(t, srv, ops, svc, "Tell me about pod web/shop")
 	b, _ := json.Marshal(map[string]string{"question": "And now?"})
 	r, text := send(t, ops, http.MethodPost, srv.URL+"/api/v1/sherlock/ask", string(b))
-	if r.StatusCode != http.StatusTooManyRequests || !strings.Contains(text, "daily spending cap of $0.00") && !strings.Contains(text, "daily spending cap") {
+	if r.StatusCode != http.StatusTooManyRequests || !strings.Contains(text, "total daily limit of $0.00") {
 		t.Fatalf("over the cap: %d %s", r.StatusCode, text)
 	}
 	_, text = send(t, ops, http.MethodGet, srv.URL+"/api/v1/sherlock", "")
-	if !strings.Contains(text, `"capped":"Sherlock has reached the daily spending cap`) || !strings.Contains(text, `"available":false`) {
+	if !strings.Contains(text, `"capped":"All agents together have reached the total daily limit`) || !strings.Contains(text, `"available":false`) {
 		t.Fatalf("status: %s", text)
 	}
 	// Raising the cap lets questions in again.

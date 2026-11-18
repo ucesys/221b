@@ -314,7 +314,7 @@ func (s *Server) registerBackupParts() {
 			}
 		}})
 	r.Register(backup.Part{Name: "apps", Label: "Helm applications", Order: 40,
-		How: "are added or replaced: source, values, parameters, commands; a repository token comes back when the backup's key opens it and this console has none. One this console would refuse is left out and named",
+		How: "are added or replaced: source, values, parameters, commands; a repository token of before 0.12.1 comes back when the backup's key opens it and this console has none, and moves to a credential at the next start; a credential is named by id. One this console would refuse is left out and named",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			if s.opts.Apps == nil {
 				return nil, nil
@@ -326,7 +326,12 @@ func (s *Server) registerBackupParts() {
 			var out []backupApp
 			for _, rec := range recs {
 				a := backupApp{Record: rec}
-				if rec.HasToken {
+				// A record that names its credential (CR-11) carries no
+				// token: the credentials' part holds the secret.
+				if rec.CredMigrated {
+					a.Record.HasToken = false
+				}
+				if rec.HasToken && !rec.CredMigrated {
 					_, tok, err := s.opts.Apps.Get(ctx, rec.Cluster, rec.Namespace, rec.Name)
 					if err != nil {
 						return nil, fmt.Errorf("reading the application %s/%s: %w", rec.Namespace, rec.Name, err)
@@ -779,7 +784,7 @@ func (s *Server) restoreApps(ctx context.Context, list []backupApp, env *backup.
 		cur, _, err := s.opts.Apps.Get(ctx, rec.Cluster, rec.Namespace, rec.Name)
 		// A token here stays; the file's is taken only where there is
 		// none, and only when the backup's key opens it.
-		hadToken := rec.HasToken || a.RepoToken != ""
+		hadToken := !rec.CredMigrated && (rec.HasToken || a.RepoToken != "")
 		rec.HasToken = err == nil && cur.HasToken
 		var token *string
 		if hadToken && !rec.HasToken {
@@ -1000,7 +1005,7 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 			}
 			// Created with a password nobody knows; the backup's, when its
 			// key opens it, replaces it (ADR-137).
-			name, where := "the password of the user "+u.Username, "Administration › Users › "+u.Username+" › Set password"
+			name, where := "the password of the user "+u.Username, "Administration › Auth › Users › "+u.Username+" › Set password"
 			hash, err := env.Open(u.Password, name, where)
 			switch {
 			case err != nil:

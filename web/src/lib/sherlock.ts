@@ -99,11 +99,14 @@ export type PopMessage =
   /** window: the main window it is for, the one the assistants' window follows; '' when that one has closed. */
   | { type: 'open'; cluster: string; target: RefTarget; window: string }
   /** Sherlock's window asks the main window it follows for its view (P6U-03), and it answers. */
-  | { type: 'view?'; req: string; window: string }
+  | { type: 'view?'; req: string; window: string; cluster?: string }
   | { type: 'view'; req: string; window: string; view: string }
   /** Undo of an answer's view changes, asked from any window (P6U-10), and its result. */
   | { type: 'undo'; cluster: string; answer: number }
   | { type: 'undone'; cluster: string; answer: number }
+  /** Show in 221B (SR-15): the changes an answer left undone, for the main window to apply, and how it went. */
+  | { type: 'show'; req: string; window: string; changes: { action: string; input: unknown }[]; force: boolean }
+  | { type: 'shown'; req: string; applied: number; failed: string[]; unsaved?: string[] }
   /** A question for the box in Sherlock's window, for the person to send. */
   | { type: 'fill'; cluster: string; text: string; pane?: 'sherlock' | 'watson' }
 

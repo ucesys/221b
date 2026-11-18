@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api/cards'
-import { NotificationChannels } from './NotificationChannels'
+import * as watson from '../api/watson'
 import { StandingApprovals } from './StandingApprovals'
+import { WatsonSettings } from './WatsonSettings'
 
 vi.mock('../api/cards', async (original) => ({
   ...(await original<typeof import('../api/cards')>()),
@@ -15,13 +16,14 @@ vi.mock('../api/cards', async (original) => ({
   saveNotifications: vi.fn(),
   testChannel: vi.fn(),
 }))
+vi.mock('../api/watson', async (original) => ({ ...(await original<typeof import('../api/watson')>()), fetchWatsonConfig: vi.fn(), saveWatsonConfig: vi.fn() }))
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
 })
 
-describe('Settings › Watson: standing approvals', () => {
+describe('Administration › Settings › Watson: standing approvals', () => {
   it('adds one with its class, clusters and rate', async () => {
     vi.mocked(api.fetchStanding).mockResolvedValue([])
     vi.mocked(api.saveStanding).mockImplementation(async (st) => ({ ...st, id: 's1' }))
@@ -59,13 +61,15 @@ describe('Settings › Watson: standing approvals', () => {
   })
 })
 
-describe('Settings › Watson: notifications', () => {
-  it('never shows an address, sends one only when typed, and tests a channel', async () => {
+describe('Administration › Settings › Watson: notifications', () => {
+  it('never shows an address, sends one only when typed, and tests a channel; the page’s one Save saves only what changed (CU-16)', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: false, approveAllMinutes: 0 })
     const saved: api.Notifications = { link: 'https://221b.example.com', inSecret: true, channels: [{ id: 'n1', kind: 'slack', name: 'ops', on: true, urlSet: true, lastAt: '2026-11-05T03:12:00Z' }] }
     vi.mocked(api.fetchNotifications).mockResolvedValue(saved)
     vi.mocked(api.saveNotifications).mockImplementation(async (link, chans) => ({ link, inSecret: true, channels: chans.map((c, i) => ({ id: c.id ?? `n${i + 2}`, kind: c.kind, name: c.name, on: c.on, urlSet: true })) }))
     vi.mocked(api.testChannel).mockResolvedValue({ sent: true })
-    render(<NotificationChannels />)
+    render(<WatsonSettings open />)
     const url = (await screen.findByTestId('notify-url')) as HTMLInputElement
     expect(url.value).toBe('')
     expect(url.type).toBe('password')
@@ -77,12 +81,68 @@ describe('Settings › Watson: notifications', () => {
     fireEvent.change(names[1]!, { target: { value: 'alerts' } })
     fireEvent.change(screen.getAllByLabelText('Kind')[1]!, { target: { value: 'teams' } })
     fireEvent.change(screen.getAllByTestId('notify-url')[1]!, { target: { value: 'https://example.webhook.office.com/x' } })
-    fireEvent.click(screen.getByTestId('notify-save'))
+    expect(screen.queryByTestId('notify-save')).toBeNull()
+    expect(screen.getAllByTestId('save-bar')).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('watson-settings-save'))
     await waitFor(() => expect(api.saveNotifications).toHaveBeenCalled())
+    expect(watson.saveWatsonConfig).not.toHaveBeenCalled()
     const [link, chans] = vi.mocked(api.saveNotifications).mock.calls[0]!
     expect(link).toBe('https://221b.example.com')
     expect(chans[0]).toEqual({ id: 'n1', kind: 'slack', name: 'ops', on: true, url: undefined, clearUrl: undefined })
     expect(chans[1]).toMatchObject({ kind: 'teams', name: 'alerts', on: true, url: 'https://example.webhook.office.com/x' })
     await waitFor(() => expect((screen.getAllByTestId('notify-url')[1] as HTMLInputElement).value).toBe(''))
+  })
+})
+
+describe('Administration › Settings › Watson: how long a run waits (FU-05a)', () => {
+  it('shows the wait as saved, an hour by default, and saves a new one with the approvals', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: true, approveAllMinutes: 0 })
+    vi.mocked(watson.saveWatsonConfig).mockImplementation(async (c) => c)
+    render(<WatsonSettings open />)
+    const wait = (await screen.findByTestId('watson-waiting-run')) as HTMLSelectElement
+    expect(wait.value).toBe('60')
+    expect(wait.selectedOptions[0]!.textContent).toBe('1 hour')
+    expect([...wait.options].map((o) => o.textContent)).toEqual(['5 minutes', '15 minutes', '30 minutes', '1 hour', '2 hours', '4 hours', '8 hours', '1 day', '3 days', '7 days'])
+    expect(screen.queryByTestId('save-bar')).toBeTruthy()
+    fireEvent.change(wait, { target: { value: '1440' } })
+    fireEvent.click(screen.getByTestId('watson-settings-save'))
+    await waitFor(() => expect(watson.saveWatsonConfig).toHaveBeenCalledWith({ twoPerson: true, approveAllMinutes: 0, waitingRunMinutes: 1440 }))
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+  })
+
+  it('keeps a saved wait that is not one of the choices', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: false, approveAllMinutes: 0, waitingRunMinutes: 90 })
+    render(<WatsonSettings open />)
+    const wait = (await screen.findByTestId('watson-waiting-run')) as HTMLSelectElement
+    expect(wait.value).toBe('90')
+    expect(wait.selectedOptions[0]!.textContent).toBe('90 minutes')
+  })
+})
+
+describe('Administration › Settings › Watson: one Save (CU-16)', () => {
+  it('saves the approvals and the channels together; a part that fails is named and kept, the other stays saved', async () => {
+    vi.mocked(api.fetchStanding).mockResolvedValue([])
+    vi.mocked(api.fetchNotifications).mockResolvedValue({ link: '', inSecret: true, channels: [] })
+    vi.mocked(api.saveNotifications)
+      .mockRejectedValueOnce(new Error('the address is https'))
+      .mockImplementation(async (link) => ({ link, inSecret: true, channels: [] }))
+    vi.mocked(watson.fetchWatsonConfig).mockResolvedValue({ twoPerson: false, approveAllMinutes: 0 })
+    vi.mocked(watson.saveWatsonConfig).mockImplementation(async (c) => c)
+    render(<WatsonSettings open />)
+    fireEvent.click(await screen.findByTestId('watson-two-person'))
+    fireEvent.change(await screen.findByTestId('notify-link'), { target: { value: 'http://221b' } })
+    fireEvent.click(screen.getByTestId('watson-settings-save'))
+    expect((await screen.findByTestId('save-error')).textContent).toBe('Notifications not saved: the address is https')
+    expect(watson.saveWatsonConfig).toHaveBeenCalledWith({ twoPerson: true, approveAllMinutes: 0, waitingRunMinutes: 60 })
+    expect((screen.getByTestId('notify-link') as HTMLInputElement).value).toBe('http://221b')
+    fireEvent.change(screen.getByTestId('notify-link'), { target: { value: 'https://221b' } })
+    fireEvent.click(screen.getByTestId('watson-settings-save'))
+    await waitFor(() => expect(api.saveNotifications).toHaveBeenCalledTimes(2))
+    expect(watson.saveWatsonConfig).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Saved.')).toBeTruthy()
   })
 })

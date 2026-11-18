@@ -1,6 +1,7 @@
 package sherlock
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,9 +30,13 @@ type Spend struct {
 	// 12): what an agent spends counts against its own caps and, with
 	// every other agent's, against the overall ones.
 	Agents map[string]AgentSpend `json:"agents,omitempty"`
+	// Providers is each provider's share, by its id (Phase 12.1): what
+	// every agent spent while on it, counted against its limits.
+	Providers map[string]AgentSpend `json:"providers,omitempty"`
 }
 
-// AgentSpend is one agent's share of the spend, of the same day and month.
+// AgentSpend is one agent's, or one provider's, share of the spend, of the
+// same day and month.
 type AgentSpend struct {
 	DayUSD     float64 `json:"dayUSD"`
 	DayAsked   int     `json:"dayAsked"`
@@ -41,6 +46,9 @@ type AgentSpend struct {
 
 // Agent is an agent's share; nothing spent is zero.
 func (s Spend) Agent(id string) AgentSpend { return s.Agents[id] }
+
+// Provider is a provider's share; nothing spent is zero.
+func (s Spend) Provider(id string) AgentSpend { return s.Providers[id] }
 
 // Ledger counts the spend and keeps it next to the settings, so a
 // restart does not reset it. With several replicas (P7-02) it never saves
@@ -93,7 +101,7 @@ func NewLedger(b kv.Backend, now func() time.Time, log *slog.Logger) *Ledger {
 }
 
 // rolled is the spend as of t: a new day or month starts from zero, the
-// agents' shares too.
+// agents' and providers' shares too.
 func rolled(s Spend, t time.Time) Spend {
 	t = t.UTC()
 	day, month := t.Format("2006-01-02"), t.Format("2006-01")
@@ -104,59 +112,77 @@ func rolled(s Spend, t time.Time) Spend {
 	if newDay {
 		s.Day, s.DayUSD, s.DayAsked = day, 0, 0
 	}
-	if (newMonth || newDay) && s.Agents != nil {
-		agents := make(map[string]AgentSpend, len(s.Agents))
-		for id, a := range s.Agents {
-			if newMonth {
-				a.MonthUSD, a.MonthAsked = 0, 0
-			}
-			if newDay {
-				a.DayUSD, a.DayAsked = 0, 0
-			}
-			if a != (AgentSpend{}) {
-				agents[id] = a
-			}
-		}
-		s.Agents = agents
+	if newMonth || newDay {
+		s.Agents = rolledShares(s.Agents, newDay, newMonth)
+		s.Providers = rolledShares(s.Providers, newDay, newMonth)
 	}
 	return s
+}
+
+// rolledShares starts the shares' new day or month from zero, dropping
+// those left with nothing.
+func rolledShares(m map[string]AgentSpend, newDay, newMonth bool) map[string]AgentSpend {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]AgentSpend, len(m))
+	for id, a := range m {
+		if newMonth {
+			a.MonthUSD, a.MonthAsked = 0, 0
+		}
+		if newDay {
+			a.DayUSD, a.DayAsked = 0, 0
+		}
+		if a != (AgentSpend{}) {
+			out[id] = a
+		}
+	}
+	return out
 }
 
 // plus adds counts of the same day and month to s.
 func plus(s, p Spend) Spend {
-	if len(p.Agents) > 0 {
-		agents := make(map[string]AgentSpend, len(s.Agents)+len(p.Agents))
-		for id, a := range s.Agents {
-			agents[id] = a
-		}
-		s.Agents = agents
-	}
 	if p.Day == s.Day {
 		s.DayUSD += p.DayUSD
 		s.DayAsked += p.DayAsked
-		for id, a := range p.Agents {
-			x := s.Agents[id]
-			x.DayUSD += a.DayUSD
-			x.DayAsked += a.DayAsked
-			s.Agents[id] = x
-		}
 	}
 	if p.Month == s.Month {
 		s.MonthUSD += p.MonthUSD
 		s.MonthAsked += p.MonthAsked
-		for id, a := range p.Agents {
-			x := s.Agents[id]
+	}
+	s.Agents = plusShares(s.Agents, p.Agents, p.Day == s.Day, p.Month == s.Month)
+	s.Providers = plusShares(s.Providers, p.Providers, p.Day == s.Day, p.Month == s.Month)
+	return s
+}
+
+// plusShares adds shares of the same day and month, in a new map so s's
+// own is never changed.
+func plusShares(s, p map[string]AgentSpend, day, month bool) map[string]AgentSpend {
+	if len(p) == 0 {
+		return s
+	}
+	out := make(map[string]AgentSpend, len(s)+len(p))
+	for id, a := range s {
+		out[id] = a
+	}
+	for id, a := range p {
+		x := out[id]
+		if day {
+			x.DayUSD += a.DayUSD
+			x.DayAsked += a.DayAsked
+		}
+		if month {
 			x.MonthUSD += a.MonthUSD
 			x.MonthAsked += a.MonthAsked
-			s.Agents[id] = x
 		}
+		out[id] = x
 	}
-	return s
+	return out
 }
 
 // empty says whether nothing was counted.
 func (s Spend) empty() bool {
-	return s.DayUSD == 0 && s.DayAsked == 0 && s.MonthUSD == 0 && s.MonthAsked == 0 && len(s.Agents) == 0
+	return s.DayUSD == 0 && s.DayAsked == 0 && s.MonthUSD == 0 && s.MonthAsked == 0 && len(s.Agents) == 0 && len(s.Providers) == 0
 }
 
 // read loads the saved spend and its version.
@@ -211,11 +237,12 @@ func (l *Ledger) Now(ctx context.Context) Spend {
 
 // Add counts a cost; asked counts a new question. Save writes it.
 func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
-	return l.AddFor(ctx, "", usd, asked)
+	return l.AddFor(ctx, "", "", usd, asked)
 }
 
-// AddFor counts a cost as an agent's too (Phase 12); "" is no agent's.
-func (l *Ledger) AddFor(ctx context.Context, agent string, usd float64, asked bool) Spend {
+// AddFor counts a cost as an agent's too (Phase 12), and as the provider's
+// it was spent on (Phase 12.1); "" is no agent's, or no provider's.
+func (l *Ledger) AddFor(ctx context.Context, agent, provider string, usd float64, asked bool) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.refreshLocked(ctx)
@@ -227,20 +254,28 @@ func (l *Ledger) AddFor(ctx context.Context, agent string, usd float64, asked bo
 		l.pending.DayAsked++
 		l.pending.MonthAsked++
 	}
-	if agent != "" {
-		if l.pending.Agents == nil {
-			l.pending.Agents = map[string]AgentSpend{}
-		}
-		a := l.pending.Agents[agent]
-		a.DayUSD += usd
-		a.MonthUSD += usd
-		if asked {
-			a.DayAsked++
-			a.MonthAsked++
-		}
-		l.pending.Agents[agent] = a
-	}
+	l.pending.Agents = addShare(l.pending.Agents, agent, usd, asked)
+	l.pending.Providers = addShare(l.pending.Providers, provider, usd, asked)
 	return plus(rolled(l.saved, t), l.pending)
+}
+
+// addShare counts a cost in id's share; "" is nobody's.
+func addShare(m map[string]AgentSpend, id string, usd float64, asked bool) map[string]AgentSpend {
+	if id == "" {
+		return m
+	}
+	if m == nil {
+		m = map[string]AgentSpend{}
+	}
+	a := m[id]
+	a.DayUSD += usd
+	a.MonthUSD += usd
+	if asked {
+		a.DayAsked++
+		a.MonthAsked++
+	}
+	m[id] = a
+	return m
 }
 
 // Save adds what was counted since the last save to what is saved now,
@@ -284,12 +319,23 @@ type Caps struct {
 	MonthlyUSD float64 `json:"monthlyUSD"`
 }
 
+// The places in Settings where each limit is changed, as the messages
+// name them (Phase 12.1).
+const (
+	WhereTotal    = "Administration › AI › Limits › Total"
+	WhereProvider = "Administration › AI › Limits › Providers"
+	WhereAgents   = "Administration › AI › Agents"
+)
+
 // ErrCap is the error for a question refused or stopped at a cap.
 type ErrCap struct {
 	Which string
 	Cap   float64
-	// Agent names the agent whose own cap it is; "" is the overall cap.
-	Agent string
+	// Agent names the agent whose own cap it is; Provider the provider
+	// whose limit it is (Phase 12.1); both "" is the total limit, of every
+	// agent on every provider together.
+	Agent    string
+	Provider string
 }
 
 func (e *ErrCap) Error() string {
@@ -297,10 +343,15 @@ func (e *ErrCap) Error() string {
 	if e.Which == "monthly" {
 		when = "next month"
 	}
-	if e.Agent != "" {
-		return fmt.Sprintf("%s has reached its %s spending cap of $%.2f an administrator set. It works again %s, or when an administrator raises the cap in Settings › Agents.", e.Agent, e.Which, e.Cap, when)
+	// Each message says which limit it is and where it is changed (AI-28,
+	// AI-38): the total, a provider's, or the agent's own.
+	switch {
+	case e.Agent != "":
+		return fmt.Sprintf("%s has reached its own %s spending cap of $%.2f an administrator set. It works again %s, or when an administrator raises it in %s › %s (its own cap).", e.Agent, e.Which, e.Cap, when, WhereAgents, e.Agent)
+	case e.Provider != "":
+		return fmt.Sprintf("The agents on the provider %s have reached its %s limit of $%.2f an administrator set. They answer on it again %s, or when an administrator raises it in %s (%s).", e.Provider, e.Which, e.Cap, when, WhereProvider, e.Provider)
 	}
-	return fmt.Sprintf("Sherlock has reached the %s spending cap of $%.2f an administrator set. It answers again %s, or when an administrator raises the cap in Settings.", e.Which, e.Cap, when)
+	return fmt.Sprintf("All agents together have reached the total %s limit of $%.2f an administrator set, across all providers. Sherlock answers again %s, or when an administrator raises it in %s.", e.Which, e.Cap, when, WhereTotal)
 }
 
 // Check says whether the spend is under the caps.
@@ -325,4 +376,35 @@ func (c Caps) CheckAgent(s Spend, id, name string) error {
 		return &ErrCap{Which: "monthly", Cap: c.MonthlyUSD, Agent: name}
 	}
 	return nil
+}
+
+// CheckProvider says whether a provider's share of the spend is under its
+// limits (Phase 12.1); name names it in the message.
+func (c Caps) CheckProvider(s Spend, id, name string) error {
+	p := s.Provider(id)
+	if c.DailyUSD > 0 && p.DayUSD >= c.DailyUSD {
+		return &ErrCap{Which: "daily", Cap: c.DailyUSD, Provider: name}
+	}
+	if c.MonthlyUSD > 0 && p.MonthUSD >= c.MonthlyUSD {
+		return &ErrCap{Which: "monthly", Cap: c.MonthlyUSD, Provider: name}
+	}
+	return nil
+}
+
+// CheckAll checks the limits an agent answers under, in order: the total,
+// its provider's, then its own (AI-37). A nil agent is checked against
+// the total alone.
+func CheckAll(total Caps, s Spend, a *Agent) error {
+	if err := total.Check(s); err != nil {
+		return err
+	}
+	if a == nil {
+		return nil
+	}
+	if a.Provider != "" {
+		if err := a.ProviderCaps.CheckProvider(s, a.Provider, cmp.Or(a.ProviderName, a.Provider)); err != nil {
+			return err
+		}
+	}
+	return a.Caps.CheckAgent(s, a.ID, a.Name)
 }

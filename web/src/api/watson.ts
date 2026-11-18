@@ -22,6 +22,10 @@ export interface WatsonPlan {
   dryRunning?: boolean
   /** The YAML of what a session creates or patches (TB-36). */
   object?: string
+  /** warn: a deploy removes values the release has; danger: a change to the release that runs this console. */
+  tone?: 'warn' | 'danger'
+  /** What the card says before anything else: the release runs this console. */
+  alert?: string
 }
 
 export type WatsonStatusName = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lapsed' | 'discarded' | 'refused'
@@ -76,10 +80,24 @@ export interface WatsonSettings {
   twoPerson: boolean
   /** The longest standing approval a person may give, in minutes; 0 or absent offers none. */
   approveAllMinutes?: number
+  /** How long an Automation run whose own values need approval may wait, in minutes: 5 to 10080, 60 when absent (FU-05a). */
+  waitingRunMinutes?: number
 }
 
 /** The lengths a standing approval may have, in minutes (R2-04). */
 export const APPROVE_ALL_CHOICES = [5, 15, 30, 60, 120, 240] as const
+
+/** How long a run may wait for approval, in minutes (FU-05a): an hour unless set. */
+export const WAITING_RUN_DEFAULT = 60
+export const WAITING_RUN_CHOICES = [5, 15, 30, 60, 120, 240, 480, 1440, 4320, 10080] as const
+
+/** A wait in words: "5 minutes", "1 hour", "3 days". */
+export function waitText(m: number): string {
+  const unit = (n: number, u: string) => `${n} ${u}${n === 1 ? '' : 's'}`
+  if (m >= 1440 && m % 1440 === 0) return unit(m / 1440, 'day')
+  if (m >= 60 && m % 60 === 0) return unit(m / 60, 'hour')
+  return unit(m, 'minute')
+}
 
 export class WatsonError extends Error {
   constructor(

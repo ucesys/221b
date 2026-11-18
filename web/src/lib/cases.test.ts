@@ -4,7 +4,7 @@ import type { Me } from '../api/types'
 import { casesAccess, inboxOrder, knownDrafts, knownPending, knownReopened, mayReport } from './cases'
 
 const me = (over: Partial<Me> = {}): Me => ({ mode: 'oidc', user: { subject: 's', username: 'ann' }, admin: false, roles: ['viewer'], method: 'oidc', sessionIdleSeconds: 0, ...over })
-const im = (over: Partial<IssueMe> = {}): IssueMe => ({ person: { id: 'ann' }, report: false, operator: false, admin: false, company: '', statusPage: '', reportURL: '/report', ...over })
+const im = (over: Partial<IssueMe> = {}): IssueMe => ({ person: { id: 'ann' }, report: false, operator: false, admin: false, company: '', reportURL: '/report', ...over })
 
 describe('who sees Cases (CS-01, CS-02, ADR-88)', () => {
   it('offers a SuperAdmin who operates every tab', () => {

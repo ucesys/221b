@@ -217,7 +217,8 @@ func (s *Service) saveKnown(ctx context.Context, by Person, from, id string, in 
 		var k *KnownIssue
 		before := KnownStatus("")
 		if id == "" {
-			st.known.Known = append(st.known.Known, KnownIssue{ID: fmt.Sprintf("KI-%d", st.known.Next), Status: KnownInvestigating, Kind: KindNormal, Source: SourceOperator, Created: now})
+			creator := by
+			st.known.Known = append(st.known.Known, KnownIssue{ID: fmt.Sprintf("KI-%d", st.known.Next), Status: KnownInvestigating, Kind: KindNormal, Source: SourceOperator, CreatedBy: &creator, Created: now})
 			st.known.Next++
 			k = &st.known.Known[len(st.known.Known)-1]
 		} else if k = st.knownIssue(id); k == nil {
@@ -600,7 +601,7 @@ func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return st.settings(), nil
+	return st.settings().shown(), nil
 }
 
 // SaveSettings replaces the settings (IS-29), for an administrator.
@@ -608,13 +609,17 @@ func (s *Service) SaveSettings(ctx context.Context, c Caller, set Settings) (Set
 	if !c.Admin {
 		return Settings{}, fmt.Errorf("%w: only a SuperAdmin changes the issue settings", ErrDenied)
 	}
-	set.Company, set.StatusPage, set.ReportURL, set.Webhook.URL = strings.TrimSpace(set.Company), strings.TrimSpace(set.StatusPage), strings.TrimSpace(set.ReportURL), strings.TrimSpace(set.Webhook.URL)
+	set.Company, set.Webhook.URL = strings.TrimSpace(set.Company), strings.TrimSpace(set.Webhook.URL)
 	if err := set.Validate(); err != nil {
 		return Settings{}, err
 	}
+	set = set.shown()
 	err := s.update(ctx, func(st *state, ch *change) (int, error) {
 		before := st.settings()
-		st.config.Settings = &set
+		// What was saved before 0.12.1 is kept as it is.
+		kept := set
+		kept.ReportURL, kept.StatusPage = before.ReportURL, before.StatusPage
+		st.config.Settings = &kept
 		ch.audit(AuditRecord{Action: ActionSettings, Who: c.Person, Target: "issue settings", Detail: settingsChanges(before, set), From: c.From})
 		return saveConfig, nil
 	})
@@ -627,12 +632,6 @@ func settingsChanges(a, b Settings) string {
 	var out []string
 	if a.Company != b.Company {
 		out = append(out, "company name")
-	}
-	if a.StatusPage != b.StatusPage {
-		out = append(out, "status page")
-	}
-	if a.ReportURL != b.ReportURL {
-		out = append(out, "report page address")
 	}
 	if a.MatchThreshold != b.MatchThreshold {
 		out = append(out, fmt.Sprintf("match threshold %d", b.MatchThreshold))

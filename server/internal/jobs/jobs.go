@@ -133,7 +133,7 @@ type When struct {
 
 // Budget is what a job may spend, in US dollars: on one run, and on all its
 // runs of a day (UTC). Zero is no limit of the job's own; the agent's caps
-// and the overall limits still hold.
+// and the total and provider limits still hold.
 type Budget struct {
 	RunUSD float64 `json:"runUSD,omitempty"`
 	DayUSD float64 `json:"dayUSD,omitempty"`
@@ -279,6 +279,11 @@ type Finding struct {
 	// joins none, whatever its severity.
 	Expected    bool   `json:"expected,omitempty"`
 	ExpectedWhy string `json:"expectedWhy,omitempty"`
+	// Confidence is how sure the agent is of the cause (PM-J1d): confirmed
+	// when it read the evidence, likely when the cause fits and it could
+	// not confirm it; "" on a finding of before the field, or when the
+	// agent gave neither word.
+	Confidence string `json:"confidence,omitempty"`
 	// CheckWhy is the agent's description of a check id it made up
 	// (other.<slug>): what the id means, and why no rule on the list
 	// fitted (CF-86). Only kept with an other.<slug> check; one missing is

@@ -110,7 +110,7 @@ test('the home page shows what is next, and a step leads to its screen (GS-02, G
   await expect(step(page, next.id)).toHaveAttribute('aria-current', 'step')
   await step(page, next.id).getByTestId('setup-open').click()
   await expect(page).toHaveURL(new RegExp(next.link.replace(/[/?]/g, '\\$&') + '$'))
-  if (next.link.startsWith('#/admin/settings/')) await expect(page.getByTestId('settings-page')).toBeVisible()
+  if (/^#\/admin\/(ai|settings)\//.test(next.link)) await expect(page.getByTestId('settings-page')).toBeVisible()
 })
 
 test('a step is dismissed and brought back, each audited (GS-04)', async ({ page }) => {

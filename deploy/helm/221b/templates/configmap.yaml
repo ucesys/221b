@@ -44,8 +44,9 @@ metadata:
     {{- include "b221.labels" . | nindent 4 }}
 ---
 # Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): its sources, the wiki's
-# drafts waiting for review, the syncs' status and the Confluence
-# publisher's outbox and pages. Created empty, like the ones above;
+# drafts waiting for review and the syncs' status (a key
+# knowledge-publisher.json from before 0.12.1 is no longer read). Created
+# empty, like the ones above;
 # credentials are never here, but in the Secret <release>-knowledge.
 apiVersion: v1
 kind: ConfigMap
@@ -57,7 +58,7 @@ metadata:
 {{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
 ---
 # The temporary wiki store (CF-57): Mycroft's wiki itself, in one key,
-# while Settings › Knowledge names no store, so the wiki can be tried
+# while Administration › AI › Knowledge names no store, so the wiki can be tried
 # without a repository or a bucket. At most 900 KiB; it will be removed:
 # move the wiki to Git or S3 before relying on it. Created empty; the
 # console writes its key, and helm upgrade keeps it.

@@ -12,7 +12,7 @@ Passwords, keys and tokens are always typed into their own field on the screen, 
 
 ### 1. Sign-in
 
-Done when people sign in through OIDC or LDAP, or with local users the console keeps: those in the chart's values, and those added on **Administration › Users** while the console keeps them in a Secret. Open when sign-in is off (`auth.mode: none`), when everyone holds the anonymous role and SSH, Automation and Secret values stay off; or when users added in the console are kept in memory only. Sign-in comes first because roles, approvals and the audit log all name a person. See [roles-and-users.md](roles-and-users.md).
+Done when people sign in through OIDC or LDAP, or with local users the console keeps: those in the chart's values, and those added on **Administration › Auth › Users** while the console keeps them in a Secret. Open when sign-in is off (`auth.mode: none`), when everyone holds the anonymous role and SSH, Automation and Secret values stay off; or when users added in the console are kept in memory only. Sign-in comes first because roles, approvals and the audit log all name a person. See [roles-and-users.md](roles-and-users.md).
 
 ### 2. Clusters
 
@@ -20,23 +20,27 @@ Done when the console has a connected cluster. The cluster it runs in counts; ad
 
 ### 3. AI provider and default model
 
-Done when the default provider has its credential and a default model, on **Administration › Settings › Providers**. The key is typed into the provider's credential field; the console keeps it in a Secret and shows only whether it is set. Other providers can be added there for agents that should use another model.
+Done when the default provider has its credential and a default model, on **Administration › AI › Providers**. The key is typed into the provider's credential field; the console keeps it in a Secret and shows only whether it is set. Other providers can be added there for agents that should use another model.
 
 ### 4. Agents
 
-Done when Sherlock is on for at least one cluster and the overall limits (a day's and a month's spend) are set, on **Administration › Settings › Agents**. Choices worth making here:
+Done when Sherlock is on for at least one cluster, on **Administration › AI › Agents**, and the total limits (a day's and a month's spend, all agents on all providers) are set, on **Administration › AI › Limits**; a provider can have limits of its own there too, and 0 means no limit. Choices worth making here:
 
 - **Which model.** Sherlock and the Change planner do well on a balanced model; the Troubleshooter on the strongest reasoning model; the Auditor on a strong model with a long context, since it reads a whole cluster's review at once; the Summarizer on the cheapest. The Script reviewer runs on another provider than the Automation author, so its second opinion is independent.
 - **What acting on its own costs.** A job runs an agent with no person asking; every run is charged to the agent's own budget and to the job's daily budget, and stops when either is spent. Start small, read what the first runs cost on **AIOps › Jobs › Runs**, then raise it.
-- **Which role an agent on its own reads with.** An agent asked by a person reads as that person. On its own it reads as a reserved identity with the role a SuperAdmin picks in **Settings › Jobs**: Viewer unless a job needs to read more, and never a role that may change anything.
+- **Which role an agent on its own reads with.** An agent asked by a person reads as that person. On its own it reads as a reserved identity with the role a SuperAdmin picks in **Administration › AI › Jobs**: Viewer unless a job needs to read more, and never a role that may change anything.
 
 ### 5. Knowledge
 
-Done when the wiki has a store (a git repository or an S3 bucket) and at least one source besides the console itself is connected: a Confluence space, a git repository of runbooks, or an uploaded document, on **Administration › Settings › Knowledge**. A source's token is typed into its own field. Mycroft reads a new source at once and proposes the hosts and the groups of hosts it lists, with their labels, as cards in **AIOps › Inbox** (its *first import*); approved hosts are then paired in the Add host flow. That is why knowledge comes before fleets and hosts.
+Done when the wiki has a store (a git repository or an S3 bucket) and at least one source besides the console itself is connected: a Confluence space, a git repository of runbooks, an S3 bucket, a web site (since 0.12.1), an uploaded document or note, or a live source, on **Administration › AI › Knowledge**. A source's token is typed into its own field. A source or store at an `https://` address whose certificate no known CA signed (a lab MinIO, an internal Gitea): give its private CA, or *Test* it and, after checking the fingerprint shown with the server's owner, **Trust this certificate** (since 0.12.1): exactly that certificate is accepted from then on, with the source's credential or with the source or store, until it is renewed and trusted again; the *Pinned certificate* note has *Forget*. A source in mode **Live** (since 0.12.1) is never copied into the wiki: its pages, such as a known-problems page, a Confluence page or a search of a Confluence space, are read when the agents troubleshoot (`lookup_live_sources`) and when a report no known issue explains comes in; with the network policy on, their hosts must be listed under the chart's `knowledge.egressCIDRs`. Mycroft reads a new source at once and proposes the hosts and the groups of hosts it lists, with their labels, as cards in **AIOps › Inbox** (its *first import*); approved hosts are then paired in the Add host flow. That is why knowledge comes before fleets and hosts.
 
 ### 6. Jobs and notifications
 
 Done when an agent's job is on (the nightly audit, an alert's diagnosis, the report triage) on **AIOps › Jobs**, and a notification channel is on with its address set on **Administration › Settings › Watson**. A webhook's address is typed into its own field and kept in a Secret. Jobs only read; what they propose waits for a person in Cases.
+
+#### Email about cases
+
+Optional, and not a step of the checklist. In the **Email** section of **Administration › Settings › General** (its own page before 0.12.1, whose address still leads there) a SuperAdmin gives the SMTP server, its port and security (STARTTLS, TLS, or none for a relay inside the network that needs no sign-in), a user name and password, and the From address, saves, and presses **Send test email** (to their own address unless another is typed). Email is on only once that test got through, and any change of those settings turns it off until the next test. From then on the people involved in a case (who reported or opened it, its assignee, who follows it, wrote in its conversation or approved its fix) are emailed when it is opened and when its status, assignee or priority changes or someone writes in it: one email per case and minute, never about their own changes, with a link to the case and to **AIOps › Inbox › I'm involved**, every case they are involved in. The links start with the console's address set in Administration › Settings › Watson. The password is kept in the Secret `<release>-cases` and never shown again. With the chart's network policy on, the console reaches the SMTP server only once its address is listed under `networkPolicy.outboundCIDRs` and its port (587, 465 or 25) under `networkPolicy.outboundPorts`.
 
 ### 7. Fleets
 

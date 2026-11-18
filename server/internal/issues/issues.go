@@ -229,6 +229,9 @@ type Case struct {
 	// that a run reopened is VerifyNotHeld too (CF-107).
 	AppliedBy    *AppliedChange `json:"appliedBy,omitempty"`
 	Verification string         `json:"verification,omitempty"`
+	// Approvers are the people who approved a change that fixed it, by
+	// their ids (EM-05): they are involved in it.
+	Approvers []Person `json:"approvers,omitempty"`
 	// --- end of resolves.
 	// --- The owner's feedback on Cases (Phase 12, wave 6c, CF-32 to
 	// CF-37) ---
@@ -481,8 +484,12 @@ type KnownIssue struct {
 	// Draft marks one an agent proposed, until an operator accepts it.
 	Draft bool `json:"draft,omitempty"`
 	// Link is the full page, on Confluence say.
-	Link      string     `json:"link,omitempty"`
-	Followers []Person   `json:"followers,omitempty"`
+	Link      string   `json:"link,omitempty"`
+	Followers []Person `json:"followers,omitempty"`
+	// CreatedBy is who wrote it: the operator, or for one from outside a
+	// person's hands the source's system account ("system:agent"). The
+	// Inbox's From column shows it (FU-02); empty on one older than that.
+	CreatedBy *Person    `json:"createdBy,omitempty"`
 	Created   time.Time  `json:"created"`
 	Updated   time.Time  `json:"updated"`
 	Resolved  *time.Time `json:"resolved,omitempty"`

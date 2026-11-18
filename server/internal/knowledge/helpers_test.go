@@ -19,6 +19,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/confluence/confluencetest"
+	"github.com/ucesys/221b/server/internal/credentials"
 )
 
 var ctx = context.Background()
@@ -140,6 +141,8 @@ type fixture struct {
 	audits  []audit.Event
 	mu      sync.Mutex
 	conf    *confluencetest.Fake
+	// creds are Administration › Credentials (CR-11).
+	creds *credentials.Service
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -148,7 +151,8 @@ func newFixture(t *testing.T) *fixture {
 	f.conf = confluencetest.NewTLS("ann@example.com", "read-token-123456")
 	t.Cleanup(f.conf.Close)
 	f.conf.Now = f.clock.now
-	f.s = New(Options{Store: f.store, Model: f.model, Console: f.console, Proposer: f.props, Dir: t.TempDir(), HTTP: f.conf.Client(), Now: f.clock.now,
+	f.creds = credentials.New(credentials.Options{HTTP: f.conf.Client()})
+	f.s = New(Options{Credentials: f.creds, Store: f.store, Model: f.model, Console: f.console, Proposer: f.props, Dir: t.TempDir(), HTTP: f.conf.Client(), Now: f.clock.now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Audit:  func(e audit.Event) { f.mu.Lock(); f.audits = append(f.audits, e); f.mu.Unlock() }})
 	// Registered after t.TempDir, so it runs first: the background work

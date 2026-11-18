@@ -70,7 +70,7 @@ describe('Show costs (CF-40)', () => {
     expect(showCosts()).toBe(true)
   })
 
-  it('is switched off in Settings › AI › Agents with its own route, and every dollar amount there goes but the budget fields', async () => {
+  it('is switched off in Administration › AI › Agents with its own route, and every dollar amount there goes but the budget fields', async () => {
     render(<AgentsSection />)
     const table = await screen.findByTestId('agents-table')
     expect(screen.getByTestId('agents-limit').textContent).toContain('$60.00 a day')
@@ -83,9 +83,8 @@ describe('Show costs (CF-40)', () => {
     expect(screen.queryByTestId('agents-limit')).toBeNull()
     expect(within(screen.getByTestId('agents-table')).queryByText('Daily cap')).toBeNull()
     expect(screen.getByTestId('agents-table').textContent).not.toContain('$')
-    // The budget fields where budgets are set keep their amounts.
-    expect((screen.getByTestId('limit-daily') as HTMLInputElement).value).toBe('60')
-    expect(screen.getByRole('region', { name: 'Overall limits' }).textContent).not.toContain('Spent this month')
+    // The limits are on a page of their own (AI-37).
+    expect(screen.getByTestId('agents-limits-link').textContent).toBe('Spending limits are in Administration › AI › Limits.')
   })
 
   it('says why it could not be switched (a SuperAdmin’s), and keeps it as it was', async () => {

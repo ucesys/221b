@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/automation"
@@ -260,9 +261,15 @@ func (s *Server) weighChange(r *http.Request, cluster string, before, after auto
 	if err != nil {
 		return nil, "the scripts could not be read: " + err.Error()
 	}
-	joined := after
-	joined.Sensitive = append(append([]string(nil), before.Sensitive...), after.Sensitive...)
-	items := automation.Impact(scripts, joined, changed)
+	return s.weighScripts(r, cluster, scripts, append(append([]string(nil), before.Sensitive...), after.Sensitive...), changed, true)
+}
+
+// weighScripts weighs changed values for the scripts given, with the
+// names marked sensitive: a fleet's change for every script, a run's own
+// values for its version alone (FU-05). Without sherlock it is the rule
+// alone, for a preview, and the note says Sherlock weighs it later.
+func (s *Server) weighScripts(r *http.Request, cluster string, scripts []automation.Script, sensitive, changed []string, sherlock bool) ([]automation.ImpactItem, string) {
+	items := automation.Impact(scripts, automation.FleetVariables{Sensitive: sensitive}, changed)
 	safe := 0
 	for _, i := range items {
 		if i.Decision == automation.ImpactSafe {
@@ -274,6 +281,9 @@ func (s *Server) weighChange(r *http.Request, cluster string, before, after auto
 	}
 	if s.opts.Sherlock == nil || !s.sherlockStatusFor(r, cluster).Available {
 		return items, "Sherlock did not weigh this change: it is off for this cluster."
+	}
+	if !sherlock {
+		return items, "Sherlock weighs these values again when the run is asked for, and may still ask for approval."
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Changed parameters: %s\n", strings.Join(changed, ", "))
@@ -659,6 +669,94 @@ func readSecrets(ctx context.Context, cl Cluster, p kube.Person, h automation.He
 		}
 	}
 	return out, nil
+}
+
+// --- Run parameters with suggestions (FU-03) ---
+
+// maxSecretRefs bounds the Secrets the Run dialog is offered.
+const maxSecretRefs = 2000
+
+// secretRef is a Secret a secret parameter may name, as
+// secret:namespace/name/key: where it is and its keys, never a value
+// (X-01). The cache holds none to give.
+type secretRef struct {
+	Namespace string   `json:"namespace"`
+	Name      string   `json:"name"`
+	Keys      []string `json:"keys"`
+}
+
+// getAutomationSecretRefs lists the Secrets the Run dialog suggests for a
+// secret parameter: those in the namespaces where Kubernetes lets the
+// person list Secrets, since a run reads them as that person
+// (readSecrets). Helm's release records are left out. Off says why there
+// are none when the chart turned reading Secrets off.
+func (s *Server) getAutomationSecretRefs(w http.ResponseWriter, r *http.Request) {
+	if !s.automationReady(w, r) {
+		return
+	}
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	out := struct {
+		Secrets []secretRef `json:"secrets"`
+		Off     string      `json:"off,omitempty"`
+		More    bool        `json:"more,omitempty"`
+	}{Secrets: []secretRef{}}
+	if !cl.SecretsRead() {
+		out.Off = "Secrets are not read: reading Secrets is off (secrets.read in the chart)"
+		answerJSON(w, r, out)
+		return
+	}
+	var all []secretRef
+	seen := map[string]bool{}
+	for _, o := range cl.Objects("secrets", "") {
+		sec, ok := o.(*kube.SecretSummary)
+		if !ok || sec.Release != nil || sec.Type == "helm.sh/release.v1" {
+			continue
+		}
+		ref := secretRef{Namespace: sec.Namespace, Name: sec.Name, Keys: []string{}}
+		for _, k := range sec.Keys {
+			ref.Keys = append(ref.Keys, k.Key)
+		}
+		sort.Strings(ref.Keys)
+		all = append(all, ref)
+		seen[sec.Namespace] = true
+	}
+	if a := s.access(r, cl); a != nil {
+		pairs := make([]access.Pair, 0, len(seen))
+		for ns := range seen {
+			pairs = append(pairs, access.Pair{Group: groupOf("secrets"), Resource: "secrets", Namespace: ns})
+		}
+		if a.Stale(pairs) {
+			ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+			defer cancel()
+			if _, err := a.Prepare(ctx, pairs, 0); err != nil {
+				jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+				return
+			}
+		}
+		kept := all[:0]
+		for _, ref := range all {
+			if a.Namespaced("secrets", ref.Namespace) {
+				kept = append(kept, ref)
+			}
+		}
+		all = kept
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Namespace != all[j].Namespace {
+			return all[i].Namespace < all[j].Namespace
+		}
+		return all[i].Name < all[j].Name
+	})
+	if len(all) > maxSecretRefs {
+		all, out.More = all[:maxSecretRefs], true
+	}
+	if all != nil {
+		out.Secrets = all
+	}
+	answerJSON(w, r, out)
 }
 
 // automationKube runs Kubernetes scripts and hooks through Watson.

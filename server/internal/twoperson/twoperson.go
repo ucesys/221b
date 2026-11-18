@@ -91,6 +91,9 @@ type Request struct {
 	Agent     string `json:"agent,omitempty"`
 	AgentName string `json:"agentName,omitempty"`
 	Rev       int    `json:"rev,omitempty"`
+	// Untested is the reason the draft goes live without its test (Phase
+	// 12.1); "" for a tested one.
+	Untested string `json:"untested,omitempty"`
 
 	By        Who        `json:"by"`
 	At        time.Time  `json:"at"`
@@ -99,6 +102,10 @@ type Request struct {
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
 	// Comment is the reason given with a rejection.
 	Comment string `json:"comment,omitempty"`
+	// Withdrawn says the console withdrew it, rejected, because what it
+	// asked for no longer stands: a draft discarded for a newer one (AI-26).
+	// DecidedBy is the person whose change did it; Comment says why.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 }
 
 // What says what the request changes, in words.
@@ -120,6 +127,9 @@ func (r Request) What() string {
 		}
 		return fmt.Sprintf("%s becomes a SuperAdmin (%s)", r.User, strings.Join(how, " and "))
 	case KindPrompt:
+		if r.Untested != "" {
+			return fmt.Sprintf("%s: instructions, draft %d, go live untested (reason: %s)", r.AgentName, r.Rev, r.Untested)
+		}
 		return fmt.Sprintf("%s: instructions, draft %d, go live", r.AgentName, r.Rev)
 	}
 	return r.Kind
@@ -349,6 +359,45 @@ func (s *Store) Decide(ctx context.Context, id int, approve bool, comment string
 	return out, err
 }
 
+// Withdraw withdraws every waiting request match picks (AI-26): what it
+// asked for no longer stands, as a draft of instructions discarded for a
+// newer one, so it could never be approved and would only block a request
+// for what replaced it. Each is kept, rejected and marked withdrawn, with
+// by as the person whose change did it and why as its comment. It returns
+// those it withdrew.
+func (s *Store) Withdraw(ctx context.Context, match func(Request) bool, by Who, why string) ([]Request, error) {
+	if by.Key == "" {
+		return nil, fmt.Errorf("%w: nobody withdraws it", ErrInvalid)
+	}
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
+	var out []Request
+	err := s.change(ctx, func(rec *record) error {
+		out = nil
+		now := s.now().UTC()
+		for i := range rec.Requests {
+			x := &rec.Requests[i]
+			if x.State != Waiting || !match(*x) {
+				continue
+			}
+			who := by
+			x.State, x.DecidedBy, x.DecidedAt, x.Comment, x.Withdrawn = Rejected, &who, &now, why, true
+			out = append(out, *x)
+		}
+		if len(out) == 0 {
+			return errNone
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errNone) {
+		return nil, err
+	}
+	return out, nil
+}
+
+// errNone ends a change with nothing to write.
+var errNone = errors.New("nothing to change")
+
 // DecidedText says who decided a request and when: "already approved by
 // Sam at 2026-11-06 14:03:07 UTC", or withdrawn when the person who asked
 // rejected it.
@@ -357,7 +406,7 @@ func DecidedText(r Request) string {
 	switch {
 	case r.State == Waiting:
 		return "it still waits"
-	case r.State == Rejected && r.DecidedBy != nil && r.DecidedBy.Key == r.By.Key:
+	case r.State == Rejected && (r.Withdrawn || r.DecidedBy != nil && r.DecidedBy.Key == r.By.Key):
 		what = "withdrawn"
 	case r.State == Rejected:
 		what = "rejected"

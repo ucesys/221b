@@ -17,7 +17,7 @@ describe('221B’s own roles in the Access tab (RB-49)', () => {
     const { getByTestId } = render(<>{ROLE_COLUMNS[0]!.cell(role, 0)}</>)
     const tag = getByTestId('own-role')
     expect(tag.textContent).toBe('221B role')
-    expect(tag.getAttribute('href')).toBe('#/admin/roles/admin')
+    expect(tag.getAttribute('href')).toBe('#/admin/auth/roles/admin')
     const plain = render(<>{ROLE_COLUMNS[0]!.cell({ name: 'edit', kind: 'ClusterRole' } as RoleView, 0)}</>)
     expect(within(plain.container).queryByTestId('own-role')).toBeNull()
   })

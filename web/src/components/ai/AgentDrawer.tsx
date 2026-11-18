@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ALL_CLUSTERS,
   backToDraft,
@@ -7,9 +7,10 @@ import {
   fetchInstructions,
   fetchModels,
   fetchPilot,
+  fetchTestRun,
   makeLive,
+  MAX_UNTESTED_REASON,
   MAX_WORDS,
-  ratePilot,
   resolveBaseline,
   restoreVersion,
   saveAgent,
@@ -19,6 +20,7 @@ import {
   stateLabel,
   stateTone,
   stopPilot,
+  testComplete,
   testLine,
   tokensText,
   words,
@@ -27,19 +29,25 @@ import {
   type AgentView,
   type AIOverview,
   type Instructions,
-  type PilotEntry,
   type PromptPart,
   type TestRun,
 } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { copyText } from '../../lib/clipboard'
-import { lineDiff } from '../../lib/linediff'
 import { fmtTs } from '../../lib/format'
 import { Card, Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { AgentJobs } from '../aiops/AgentJobs'
 import { ModelPicker } from './ModelPicker'
+import { TestDialog } from './TestDialog'
+import { PilotHistoryDialog } from './PilotHistoryDialog'
+import { HistoryDialog } from './HistoryDialog'
+import { TextDiff } from './TextDiff'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { useShowCosts } from '../../lib/costs'
+import { Unsaved, useUnsaved } from '../../lib/unsaved'
+import { navigate } from '../../lib/router'
+import { LIMITS_HREF } from './LimitsSection'
 
 /** What each tool lets an agent do, for its checkbox. */
 export const TOOL_LABELS: Record<string, string> = {
@@ -71,6 +79,7 @@ export const TOOL_LABELS: Record<string, string> = {
   node_facts: 'Facts of nodes and hosts',
   automation_runs: 'Automation runs (read only)',
   ask_knowledge: 'Ask knowledge',
+  lookup_live_sources: 'Look up live sources',
   check_command: 'Check commands with Watson',
 }
 
@@ -85,7 +94,7 @@ export function stageIndex(ins: Instructions | null): number {
   const d = ins?.draft
   if (!d) return 3
   if (piloting(ins)) return 2
-  return d.test && d.test.rev === d.rev ? 1 : 0
+  return d.test && d.test.rev === d.rev && testComplete(d.test) ? 1 : 0
 }
 
 /** Settings as text to compare, whatever order their keys were set in; an unset key is no key. */
@@ -137,6 +146,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   const author = ov.agents.find((a) => a.id === 'automationAuthor')
   const sameAsAuthor = agent.id === 'scriptReviewer' && (author?.providerId ?? 'default') === providerId && !ov.singleProvider
   const changed = canon(set) !== canon({ ...agent.settings, ...(sherlock ? { sherlockClusters: agent.clusters ?? [], viewControl: ov.viewControl } : {}) })
+  useUnsaved(changed, 'the agent drawer')
   const tools = set.tools ?? agent.tools
   const save = async () => {
     setBusy(true)
@@ -183,14 +193,17 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
       }
     >
       <Card title="Model">
-        <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '1 1 200px' }}>
+        {/* Provider, model and the refresh icon on one line, their fields at one height: the labels above them are alike. */}
+        <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="agent-model-row">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 200px' }}>
             Provider
-            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width="100%" />
+            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width={200} />
           </label>
           {/* --- AI settings, round 2 (Phase 12, wave 5): the provider's models in a dropdown, and the model's context. --- */}
+          {/* --- FU-01: listed as the drawer opens and again when the provider changes; typed only when they cannot be listed. --- */}
           <ModelPicker
             label="Model"
+            listOnly
             value={set.model || provider?.model || ''}
             disabled={!set.model}
             onChange={(model, listed) => setSet({ ...set, model: model || undefined, contextWindow: listed?.contextWindow || set.contextWindow })}
@@ -321,8 +334,24 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           </label>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
-          0 is no cap of its own. Its spend counts toward the overall limits too{costs ? ` (${usd(ov.dailyUSD)} a day). Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : '.'}
+          0 means no cap of its own. Its spend counts toward the total limits and its provider’s too, set in Administration › AI › Limits.{costs ? ` Spent: ${usd(agent.spend.dayUSD)} today, ${usd(agent.spend.monthUSD)} this month.` : ''}
         </p>
+        {/* --- AI-28, AI-39: the total and the provider's limits stop every agent under them, whatever its own cap says. --- */}
+        {overallHints(set, ov, costs ? usd : undefined, set.provider ? ov.providers.find((p) => p.id === set.provider) : ov.providers.find((p) => p.default)).map((h) => (
+          <p
+            key={h.which}
+            className="rk-callout"
+            data-tone={h.higher ? 'warn' : 'info'}
+            style={{ margin: 0, fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+            data-testid="agent-overall-hint"
+            data-which={h.which}
+          >
+            <span>{h.text}</span>
+            <button className="rk-link" style={{ fontSize: 12.5 }} disabled={changed} title={changed ? 'Save or cancel your changes first.' : undefined} onClick={() => toOverallLimits(onClose)} data-testid="agent-overall-link">
+              Go to Administration › AI › Limits
+            </button>
+          </p>
+        ))}
         {sherlock ? (
           <div role="group" aria-label="Clusters Sherlock answers about" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 12.5, fontWeight: 600 }}>On for</span>
@@ -372,6 +401,45 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   )
 }
 
+/**
+ * What the drawer says of the limits above the agent's own caps (AI-28,
+ * AI-39): the total, all agents together, and its provider's, every agent
+ * on it. With no cap of its own they still apply; with a cap above one of
+ * them, that one stops it first. The amounts show only with money, as
+ * costs are shown (CF-40).
+ */
+export function overallHints(
+  set: { dailyUSD?: number; monthlyUSD?: number },
+  ov: { dailyUSD: number; monthlyUSD: number },
+  money?: (n: number) => string,
+  provider?: { name: string; limit?: { dailyUSD: number; monthlyUSD: number } | null },
+): { which: 'daily' | 'monthly'; higher: boolean; text: string }[] {
+  const out: { which: 'daily' | 'monthly'; higher: boolean; text: string }[] = []
+  const cap = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`
+  const one = (which: 'daily' | 'monthly', own: number, total: number, ofProvider: number, per: string) => {
+    const limits: { amount: number; name: string; who: string }[] = []
+    if (total > 0) limits.push({ amount: total, name: money ? `the total limit of ${money(total)} a ${per}` : `the total ${which} limit`, who: 'all agents together' })
+    if (ofProvider > 0 && provider)
+      limits.push({ amount: ofProvider, name: money ? `the limit of ${money(ofProvider)} a ${per} of its provider ${provider.name}` : `the ${which} limit of its provider ${provider.name}`, who: `every agent on ${provider.name}` })
+    if (!limits.length) return
+    if (own <= 0) {
+      out.push({ which, higher: false, text: limits.map((l) => `${cap(l.name)} still applies to ${l.who}.`).join(' ') })
+      return
+    }
+    const lower = limits.filter((l) => own > l.amount)
+    if (lower.length) out.push({ which, higher: true, text: `Its ${which} cap${money ? ` of ${money(own)}` : ''} is higher than ${lower.map((l) => `${l.name}, which counts ${l.who}`).join(', and ')}, and stops it first.` })
+  }
+  one('daily', set.dailyUSD ?? 0, ov.dailyUSD, provider?.limit?.dailyUSD ?? 0, 'day')
+  one('monthly', set.monthlyUSD ?? 0, ov.monthlyUSD, provider?.limit?.monthlyUSD ?? 0, 'month')
+  return out
+}
+
+/** Closes the drawer and opens Administration › AI › Limits, where the total and the providers' limits are changed (AI-39). */
+export function toOverallLimits(close: () => void) {
+  close()
+  navigate(LIMITS_HREF)
+}
+
 /** "about 10,259 tokens (3,449 of instructions, 6,810 for 38 tools)". */
 function sizeText(f: { instructions: number; tools: number; toolCount: number }): string {
   return `about ${tokensText(f.instructions + f.tools)} (${f.instructions.toLocaleString('en')} of instructions, ${f.tools.toLocaleString('en')} for ${f.toolCount} tool${f.toolCount === 1 ? '' : 's'})`
@@ -395,7 +463,7 @@ export function ContextLine({ agent }: { agent: AgentView }) {
   const of = f.window ? ` of ${agent.model}’s ${tokensText(f.window)} (${Math.round((100 * total) / f.window)}%)` : ''
   const parts = [`Instructions and tools: ${sizeText(f)}${of}.`]
   const tone = !f.compact && f.window && whole > f.share * f.window ? 'warn' : undefined
-  if (!f.window) parts.push(agent.defaultModel ? 'The model’s context window is not known: set it on its provider, in Settings › Providers.' : 'The model’s context window is not known: set it above.')
+  if (!f.window) parts.push(agent.defaultModel ? 'The model’s context window is not known: set it on its provider, in Administration › AI › Providers.' : 'The model’s context window is not known: set it above.')
   if (agent.id === 'sherlock') {
     if (f.compact && f.mode === 'always') parts.push(`Sherlock answers in its compact form, as chosen; its whole form is ${sizeText(f.whole)}.`)
     else if (f.compact) parts.push(`Its whole form, ${sizeText(f.whole)}, takes more than ${Math.round(f.share * 100)}% of the context, so Sherlock answers in its compact form.`)
@@ -424,7 +492,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
   const [cluster, setCluster] = useState(ALL_CLUSTERS)
   const [compare, setCompare] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [panel, setPanel] = useState<'' | 'test' | 'pilot' | 'live'>('')
+  const [panel, setPanel] = useState<'' | 'test' | 'pilot' | 'live' | 'untested'>('')
   const [warnings, setWarnings] = useState<string[]>([])
   // --- AI settings, round 2 (Phase 12, wave 5): the built-in text, pre-filled and editable. ---
   const [parts, setParts] = useState<Record<string, string> | null>(null)
@@ -443,17 +511,61 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
   useEffect(() => {
     fetchInstructions(agent.id).then(setIns, (e: Error) => setError(e.message))
   }, [agent.id])
-  // While its tests run, the result is read again every few seconds.
-  const testing = useRef(false)
+  // While its tests run, their progress is read every few seconds (Phase
+  // 12.1); when they end, the instructions are read again for the result.
+  const [watch, setWatch] = useState(!!agent.testing)
+  const [running, setRunning] = useState<TestRun | null>(null)
+  const [dialog, setDialog] = useState(false)
+  // The pilot's answers open in a dialog of their own (AI-27); the drawer
+  // shows how many there are.
+  const [history, setHistory] = useState(false)
+  const [historyCount, setHistoryCount] = useState<number | null>(null)
+  // The versions and drafts, to compare (AI-32): open on a version's Diff…, else on the draft against the version in force (AI-41).
+  const [diffOf, setDiffOf] = useState<{ version?: number } | null>(null)
+  const piloted = ins?.draft?.pilot?.started
   useEffect(() => {
-    if (!agent.testing && !testing.current) return
-    const t = window.setInterval(() => {
-      void load().then((v) => {
-        if (v?.draft?.test && v.draft.test.rev === v.draft.rev) testing.current = false
-      })
-    }, 2000)
-    return () => window.clearInterval(t)
-  }, [agent.testing, load, panel])
+    if (!piloted) return
+    let live = true
+    fetchPilot(agent.id).then(
+      (r) => {
+        if (live) setHistoryCount(r.entries?.length ?? 0)
+      },
+      () => {
+        if (live) setHistoryCount(null)
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [agent.id, piloted])
+  // What the last save discarded (AI-26), said until the next action.
+  const [discarded, setDiscarded] = useState('')
+  useEffect(() => {
+    if (!watch) return
+    let live = true
+    const tick = () =>
+      fetchTestRun(agent.id).then(
+        (r) => {
+          if (!live) return
+          if (r.state === 'running') {
+            setRunning(r)
+            return
+          }
+          setRunning(null)
+          setWatch(false)
+          void load()
+        },
+        () => {
+          if (live) setWatch(false)
+        },
+      )
+    void tick()
+    const t = window.setInterval(() => void tick(), 2000)
+    return () => {
+      live = false
+      window.clearInterval(t)
+    }
+  }, [watch, agent.id, load])
   if (!ins)
     return (
       <Card title="Instructions">
@@ -474,6 +586,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
   const act = async (fn: () => Promise<Instructions | void>, msg?: string) => {
     setBusy(true)
     setError('')
+    setDiscarded('')
     try {
       const v = await fn()
       if (v) setIns(v)
@@ -491,6 +604,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
       title="Instructions"
       aside={
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Unsaved when={edited} what="the agent’s instructions" />
           <span className="rk-pill" data-tone={stateTone(ins.state)} data-testid="ins-state">
             {stateLabel(ins.state)}
           </span>
@@ -629,19 +743,51 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         ins={ins}
         edited={edited}
         busy={busy}
-        testing={!!agent.testing}
+        testing={watch}
         panel={panel}
         onPanel={(p) => setPanel(panel === p ? '' : p)}
         onBack={() => void act(() => backToDraft(agent.id), 'The draft is back at its first stage: test it again.')}
         onStopPilot={() => void act(() => stopPilot(agent.id), 'Stopped the pilot.')}
+        onUntested={() => setPanel('untested')}
+        history={d?.pilot ? { count: historyCount, onShow: () => setHistory(true) } : undefined}
       />
+      {discarded && (
+        <p className="rk-callout" data-tone="info" role="status" style={{ margin: 0, fontSize: 12.5 }} data-testid="ins-discarded">
+          {discarded}
+        </p>
+      )}
+      {running && (
+        <p className="rk-fhint" style={{ margin: 0, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }} data-testid="ins-test-running">
+          <span aria-live="polite">
+            Tests running: {running.cases} of {running.planned?.length ?? running.cases} cases…
+          </span>
+        </p>
+      )}
       {d?.test && (
         <p className="rk-fhint" style={{ margin: 0 }} data-testid="ins-last-test">
           Last test {fmtTs(d.test.at)}: {testLine(d.test, costs ? usd : undefined)}
           {d.test.rev !== d.rev ? ' (of an earlier draft)' : ''}
+          {d.test.rev === d.rev && !testComplete(d.test) && <span data-testid="ins-test-incomplete"> · it did not run every case, so the draft is still untested: run the tests again, or make it live untested</span>}
+          {d.test.rev === d.rev && d.test.cases > d.test.passed && (
+            <span data-tone="err" data-testid="ins-test-failed">
+              {' '}
+              · {d.test.cases - d.test.passed} failed
+            </span>
+          )}
         </p>
       )}
-      {d?.test?.results?.some((r) => !r.passed) && d.test.rev === d.rev && <Failures run={d.test} />}
+      {dialog && (
+        <TestDialog
+          agentId={agent.id}
+          agentName={agent.name}
+          draftRev={d?.rev}
+          onClose={() => setDialog(false)}
+          onEnded={() => {
+            setRunning(null)
+            void load()
+          }}
+        />
+      )}
       {ins.baselineCheck && (
         <p className="rk-fhint" style={{ margin: 0 }}>
           The chart’s new baseline was tested at start, {fmtTs(ins.baselineCheck.at)}: {testLine(ins.baselineCheck, costs ? usd : undefined)}
@@ -664,15 +810,32 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
               setNotes(null)
               setParts(null)
               setWarnings(v.warnings ?? [])
+              // A new draft discards the earlier ones (AI-26): say which, and the pilot and requests that went with them.
+              setDiscarded(v.discarded?.notice ?? '')
+              onToast?.(v.discarded ? `Saved draft ${v.draft?.rev}. ${v.discarded.notice}` : 'Saved the draft.')
               return v
-            }, 'Saved the draft.')
+            })
           }
           data-testid="ins-save-draft"
         >
           Save draft
         </button>
+        {running ? (
+          <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDialog(true)} data-testid="ins-test-show">
+            Show tests
+          </button>
+        ) : (
+          d?.test && (
+            <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDialog(true)} data-testid="ins-test-results">
+              Show results
+            </button>
+          )
+        )}
+        <button className="rk-btn" aria-haspopup="dialog" onClick={() => setDiffOf({})} data-testid="ins-history">
+          History
+        </button>
         {d && (
-          <button className="rk-link" disabled={busy} onClick={() => void act(() => discardDraft(agent.id), 'Discarded the draft.')} data-testid="ins-discard" style={{ fontSize: 12.5 }}>
+          <button className="rk-btn" disabled={busy} onClick={() => void act(() => discardDraft(agent.id), 'Discarded the draft.')} data-testid="ins-discard">
             Discard the draft
           </button>
         )}
@@ -694,10 +857,10 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         <TestPanel
           id={agent.id}
           onStarted={() => {
-            testing.current = true
+            // The run shows in its dialog at once; closing it leaves the run going.
             setPanel('')
-            onToast?.('The tests run in the background; their result shows here.')
-            void load()
+            setWatch(true)
+            setDialog(true)
           }}
         />
       )}
@@ -739,7 +902,30 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
           </span>
         </div>
       )}
-      {d?.stage === 'pilot' && d.pilot && <PilotLog id={agent.id} />}
+      {panel === 'untested' && d && (
+        <UntestedConfirm
+          agentName={agent.name}
+          version={(ins.versions[0]?.n ?? 0) + 1}
+          busy={busy}
+          error={error}
+          localEnv={ov.clusters.find((c) => c.id === 'local')?.env}
+          onCancel={() => {
+            setPanel('')
+            setError('')
+          }}
+          onConfirm={(reason) =>
+            void act(async () => {
+              const r = await makeLive(agent.id, { reason })
+              setPanel('')
+              onToast?.(r.waiting ? `Waiting for another SuperAdmin to approve request ${r.request?.id} on Approvals; it goes live untested.` : `Live, untested, as version ${r.live?.n}.`)
+            })
+          }
+        />
+      )}
+      {history && <PilotHistoryDialog agentId={agent.id} agentName={agent.name} onClose={() => setHistory(false)} onCount={setHistoryCount} />}
+      {diffOf && (
+        <HistoryDialog agentId={agent.id} agentName={agent.name} clusterName={(id) => (id === ALL_CLUSTERS ? 'every cluster' : (ov.clusters.find((c) => c.id === id)?.name ?? id))} version={diffOf.version} onClose={() => setDiffOf(null)} />
+      )}
       {ins.versions.length > 0 && (
         <details>
           <summary style={{ fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Versions ({ins.versions.length})</summary>
@@ -750,6 +936,9 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
                 <span className="rk-fhint">
                   {v.why ?? 'made live'} by {v.by}, {fmtTs(v.at)}
                 </span>
+                <button className="rk-btn" aria-haspopup="dialog" title="What this version changed against the one before it" onClick={() => setDiffOf({ version: v.n })} data-testid="ins-version-diff">
+                  Diff…
+                </button>
                 {v.n === ins.live ? (
                   <span className="rk-pill" data-tone="ok">
                     In force
@@ -758,6 +947,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
                   <button
                     className="rk-btn"
                     disabled={busy || edited}
+                    title={edited ? 'Save or undo your edits first.' : busy ? 'Wait for the change under way.' : undefined}
                     onClick={() =>
                       void act(async () => {
                         const r = await restoreVersion(agent.id, v.n)
@@ -863,7 +1053,7 @@ function PartEditor({
 const STAGE_TEXT: Record<string, string> = {
   draft: 'Edits saved as a draft change nothing for anyone yet.',
   test: 'The draft answers the recorded cases and recent questions again; nothing reads the cluster.',
-  pilot: 'The tested draft answers for chosen people or clusters for a while; both versions are logged, to rate.',
+  pilot: 'The tested draft answers for chosen people or clusters for a while; both versions are logged, to compare.',
   live: 'In force for everyone; the version before is kept, to restore in one click. A second SuperAdmin approves where there is one.',
 }
 
@@ -881,6 +1071,8 @@ function Stepper({
   onPanel,
   onBack,
   onStopPilot,
+  onUntested,
+  history,
 }: {
   ins: Instructions
   edited: boolean
@@ -890,12 +1082,19 @@ function Stepper({
   onPanel: (p: 'test' | 'pilot' | 'live') => void
   onBack: () => void
   onStopPilot: () => void
+  /** Opens the confirmation to make an untested draft live, with a reason (Phase 12.1). */
+  onUntested: () => void
+  /** The pilot's answers, to open in their dialog (AI-27); none before a pilot. */
+  history?: { count: number | null; onShow: () => void }
 }) {
   const d = ins.draft
   const stage = stageIndex(ins)
   const pil = piloting(ins)
   const common = edited ? 'Save your edits first.' : !d ? 'Save a draft first: edit the instructions above.' : ''
-  const steps: { name: string; action: string; testId: string; why: string; onClick: () => void; open?: boolean; note?: string }[] = [
+  // A SuperAdmin may make a draft live without its test, giving a reason
+  // (Phase 12.1): offered only while the draft is untested.
+  const untested = !!d && !edited && !d.request && !d.restored && stage < 1
+  const steps: { name: string; action: string; testId: string; why: string; onClick: () => void; open?: boolean; note?: string; extra?: { label: string; testId: string; onClick: () => void; open?: boolean; enabled?: boolean } }[] = [
     { name: 'Draft', action: 'Back to draft', testId: 'ins-back', why: common || (stage === 0 ? 'The draft is at this stage now.' : ''), onClick: onBack, note: d ? `Draft ${d.rev}, saved by ${d.by}, ${fmtTs(d.at)}.` : undefined },
     { name: 'Test', action: d?.test ? 'Run tests again' : 'Run tests', testId: 'ins-test', why: common || (testing ? 'The tests are running.' : ''), onClick: () => onPanel('test'), open: panel === 'test' },
     {
@@ -906,6 +1105,7 @@ function Stepper({
       onClick: pil ? onStopPilot : () => onPanel('pilot'),
       open: panel === 'pilot',
       note: pil && d?.pilot ? `In pilot until ${fmtTs(d.pilot.until)}.` : undefined,
+      extra: history ? { label: history.count === null ? 'Show pilot history' : `Show pilot history (${history.count})`, testId: 'pilot-history-show', onClick: history.onShow, enabled: true } : undefined,
     },
     {
       name: 'Live',
@@ -922,12 +1122,15 @@ function Stepper({
               : '',
       onClick: () => onPanel('live'),
       open: panel === 'live',
+      extra: untested ? { label: 'Make live untested', testId: 'ins-live-untested', onClick: onUntested, open: panel === 'untested' } : undefined,
     },
   ]
   return (
     <ol aria-label="Draft, test, pilot, live" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: 8, listStyle: 'none', margin: 0, padding: 0 }} data-testid="ins-stages">
       {steps.map((st, i) => {
-        const state = i < stage ? 'done' : i === stage ? 'current' : 'todo'
+        // With no draft, nothing on the way to live has started: only Live
+        // is where things stand.
+        const state = i === stage ? 'current' : i < stage && d ? 'done' : 'todo'
         return (
           <li
             key={st.name}
@@ -953,13 +1156,19 @@ function Stepper({
               <strong data-testid="ins-step-name">{st.name}</strong>
               {state === 'done' && <span className="rk-fhint">done</span>}
               {state === 'current' && <span className="rk-fhint">now</span>}
+              {state === 'todo' && !d && <span className="rk-fhint">not started</span>}
             </span>
             <span className="rk-fhint">{STAGE_TEXT[st.name.toLowerCase()]}</span>
             {st.note && <span className="rk-fhint">{st.note}</span>}
-            <span>
+            <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button className="rk-btn" data-primary={!st.why && i === stage + 1 ? 'true' : undefined} disabled={busy || !!st.why} aria-expanded={st.open} title={st.why || undefined} onClick={st.onClick} data-testid={st.testId}>
                 {st.action}
               </button>
+              {st.extra && (
+                <button className="rk-btn" disabled={busy && !st.extra.enabled} aria-haspopup="dialog" onClick={st.extra.onClick} data-testid={st.extra.testId}>
+                  {st.extra.label}
+                </button>
+              )}
             </span>
             {st.why && (
               <span className="rk-fhint" data-testid="ins-step-why">
@@ -973,37 +1182,68 @@ function Stepper({
   )
 }
 
-/** A line diff of two texts, as Automation shows a script's versions. */
+/** A line diff of two texts, as Helm › History shows a revision's (AI-32). */
 function Diff({ label, from, to, testId }: { label: string; from: string; to: string; testId: string }) {
-  const d = lineDiff(from, to)
-  return (
-    <div data-testid={testId}>
-      <div className="rk-fhint">
-        {label}: {d.added || d.removed ? `+${d.added} −${d.removed} lines` : 'no change'}
-      </div>
-      {d.text && (
-        <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
-          {d.text}
-        </pre>
-      )}
-    </div>
-  )
+  return <TextDiff label={label} from={from} to={to} testId={testId} />
 }
 
-function Failures({ run }: { run: TestRun }) {
+/**
+ * Making an untested draft live (Phase 12.1): a SuperAdmin says why it
+ * cannot wait for a test. Its version and the audit log keep the reason;
+ * a second SuperAdmin approves it where there is one, as any other, unless
+ * the console's own cluster is not production (AI-34): then it goes live
+ * at once.
+ */
+function UntestedConfirm({
+  agentName,
+  version,
+  busy,
+  error,
+  localEnv,
+  onConfirm,
+  onCancel,
+}: {
+  agentName: string
+  version: number
+  busy: boolean
+  error: string
+  /** The environment of the console's own cluster, when known. */
+  localEnv?: string
+  onConfirm: (reason: string) => void
+  onCancel: () => void
+}) {
+  // Only a cluster chosen as staging or development is not production;
+  // other counts as production.
+  const offProduction = localEnv === 'staging' || localEnv === 'development'
+  const [reason, setReason] = useState('')
   return (
-    <details>
-      <summary style={{ fontSize: 12.5, cursor: 'pointer' }}>What failed</summary>
-      <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }} data-testid="ins-failures">
-        {run
-          .results!.filter((r) => !r.passed)
-          .map((r) => (
-            <li key={r.id || r.name}>
-              <strong>{r.name}</strong>: {(r.why ?? []).join('; ')}
-            </li>
-          ))}
-      </ul>
-    </details>
+    <ConfirmDialog title="Make the draft live untested?" confirm="Make live untested" danger busy={busy} disabled={!reason.trim()} error={error} onConfirm={() => onConfirm(reason.trim())} onCancel={onCancel}>
+      <span>
+        The draft becomes the {agentName}’s instructions for everyone, as version {version}, without a test. Its version and the audit log say it went live untested, with your reason.{' '}
+        {offProduction ? (
+          <span data-testid="ins-untested-direct">The console’s own cluster is {localEnv}, not production, so it goes live at once: no second SuperAdmin approves it.</span>
+        ) : (
+          'Where there is another SuperAdmin, they approve it first.'
+        )}
+      </span>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 600 }}>
+        Why it cannot wait for a test
+        <textarea
+          className="rk-area"
+          rows={3}
+          required
+          aria-required="true"
+          maxLength={MAX_UNTESTED_REASON}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          data-testid="ins-untested-reason"
+          style={{ width: '100%', boxSizing: 'border-box', fontWeight: 400, fontSize: 12.5, resize: 'vertical' }}
+        />
+        <span className="rk-fhint" style={{ fontWeight: 400 }}>
+          Required; {reason.length} of {MAX_UNTESTED_REASON} characters.
+        </span>
+      </label>
+    </ConfirmDialog>
   )
 }
 
@@ -1070,7 +1310,7 @@ function PilotPanel({ id, ins, ov, onDone }: { id: string; ins: Instructions; ov
         </>
       ) : (
         <>
-          <span>The draft answers for the people or clusters chosen, for a while; the answers of both versions are logged meanwhile, to rate.</span>
+          <span>The draft answers for the people or clusters chosen, for a while; the answers of both versions are logged meanwhile, to compare.</span>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             People (their email addresses or user names, separated by commas)
             <span className="rk-field">
@@ -1128,51 +1368,5 @@ function PilotPanel({ id, ins, ov, onDone }: { id: string; ins: Instructions; ov
         </span>
       )}
     </div>
-  )
-}
-
-/** The answers logged during a pilot, both versions', to rate. */
-function PilotLog({ id }: { id: string }) {
-  const costs = useShowCosts()
-  const [entries, setEntries] = useState<PilotEntry[]>([])
-  useEffect(() => {
-    fetchPilot(id)
-      .then((r) => setEntries(r.entries))
-      .catch(() => setEntries([]))
-  }, [id])
-  if (!entries.length)
-    return (
-      <p className="rk-fhint" style={{ margin: 0 }}>
-        No answer logged in this pilot yet.
-      </p>
-    )
-  const rate = async (e: PilotEntry, r: number) => {
-    await ratePilot(e.n, e.rating === r ? 0 : r)
-    setEntries(entries.map((x) => (x.n === e.n ? { ...x, rating: e.rating === r ? 0 : r } : x)))
-  }
-  return (
-    <details>
-      <summary style={{ fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Answers in this pilot ({entries.length})</summary>
-      <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="ins-pilot-log">
-        {entries.slice(0, 30).map((e) => (
-          <li key={e.n} style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4, borderBottom: '1px solid var(--line)', paddingBottom: 6 }}>
-            <span className="rk-fhint">
-              {fmtTs(e.at)} · {e.who} · {e.version.includes('pilot') ? 'the draft' : 'the live version'} · {e.model}
-              {costs ? ` · ${usd(e.costUSD)}` : ''}
-            </span>
-            <strong>{e.question}</strong>
-            <span style={{ whiteSpace: 'pre-wrap' }}>{e.answer}</span>
-            <span style={{ display: 'flex', gap: 6 }}>
-              <button className="rk-btn" aria-pressed={e.rating === 1} onClick={() => void rate(e, 1)}>
-                Good
-              </button>
-              <button className="rk-btn" aria-pressed={e.rating === -1} onClick={() => void rate(e, -1)}>
-                Poor
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </details>
   )
 }

@@ -166,6 +166,43 @@ func TestWatsonReadsAndApprovedChanges(t *testing.T) {
 	}
 }
 
+// Watson's history, read once for Sherlock's watson_history (SR-03), is
+// the commands the person's own panel lists, newest first, with as many
+// of each command's last output lines as asked for and no more than 200.
+func TestWatsonHistoryIsThePersons(t *testing.T) {
+	srv, c, _, _, _ := watsonSetup(t, "ops@corp.example", clusters.EnvStaging, clusters.ModeWrite)
+	read := submit(t, srv, c, "kubectl get nodes", true)
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[read.ID].Status == watson.StatusDone })
+	ch := submit(t, srv, c, "kubectl cordon worker-002", false)
+	history := func(c *http.Client, q string) []watsonItem {
+		t.Helper()
+		r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/watson/history"+q, "")
+		var out struct {
+			Commands []watsonItem `json:"commands"`
+		}
+		if r.StatusCode != http.StatusOK || json.Unmarshal([]byte(b), &out) != nil {
+			t.Fatalf("history %d %s", r.StatusCode, b)
+		}
+		return out.Commands
+	}
+	got := history(c, "?lines=2")
+	if len(got) != 2 || got[0].ID != ch.ID || got[1].ID != read.ID {
+		t.Fatalf("not the person's commands, newest first: %+v", got)
+	}
+	if n := len(got[1].Lines); n != 2 || got[1].LineStart == 0 || !strings.Contains(got[1].Lines[1].T, "worker-") {
+		t.Fatalf("the last two lines: %+v from %d", got[1].Lines, got[1].LineStart)
+	}
+	if got := history(c, ""); len(got[1].Lines) != 0 {
+		t.Fatalf("lines unasked for: %+v", got[1].Lines)
+	}
+	if got := history(c, "?lines=100000"); len(got[1].Lines) == 0 || len(got[1].Lines) > maxHistoryLines {
+		t.Fatalf("%d lines", len(got[1].Lines))
+	}
+	if got := history(signIn(t, srv, "viewer@corp.example"), "?lines=5"); len(got) != 0 {
+		t.Fatalf("another person's commands: %+v", got)
+	}
+}
+
 func TestWatsonReadOnlyClusterRefusesChanges(t *testing.T) {
 	srv, c, s, auditOut, _ := watsonSetup(t, "ops@corp.example", clusters.EnvStaging, clusters.ModeRead)
 	it := submit(t, srv, c, "kubectl cordon worker-002", true)

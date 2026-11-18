@@ -63,9 +63,8 @@ const (
 	MaxShort    = 300
 	// MaxUpdates bounds a known issue's log.
 	MaxUpdates = 100
-	// MaxServices and MaxTokens bound the configuration.
+	// MaxServices bounds the configuration.
 	MaxServices = 300
-	MaxTokens   = 50
 )
 
 func (l Limits) withDefaults() Limits {
@@ -146,6 +145,10 @@ type Line struct {
 	LastBy         *Actor     `json:"lastBy,omitempty"`
 	LastAt         *time.Time `json:"lastAt,omitempty"`
 	AnalysisQueued *time.Time `json:"analysisQueued,omitempty"`
+	// Involved are the ids of the people involved in it that the line
+	// names nowhere else (EM-05, EM-08): who opened, closed, wrote in or
+	// approved a fix of it.
+	Involved []string `json:"involved,omitempty"`
 }
 
 // lineOf is a case's line in the index.
@@ -172,6 +175,7 @@ func lineOf(r *Case) Line {
 	for _, w := range r.Watchers {
 		l.Watchers = append(l.Watchers, w.ID)
 	}
+	l.Involved = involvedIDs(r, &l)
 	return l
 }
 
@@ -233,7 +237,9 @@ type knownDoc struct {
 type configDoc struct {
 	Settings *Settings    `json:"settings,omitempty"`
 	Services []ServiceDef `json:"services,omitempty"`
-	Tokens   []Token      `json:"tokens,omitempty"`
+	// Tokens are the intake's API tokens from before 0.12.1, which
+	// nothing reads any more; kept as they are, never rewritten.
+	Tokens json.RawMessage `json:"tokens,omitempty"`
 }
 
 // loaded is a case object read in one change: its record, the bytes it
@@ -463,6 +469,9 @@ func (s *Service) load(ctx context.Context, fresh bool) (*state, error) {
 			if err == nil {
 				if err := json.Unmarshal(b, k.v); err != nil {
 					return nil, fmt.Errorf("%s cannot be read: %w", k.key, err)
+				}
+				if k.key == ConfigKey {
+					s.noteMoved(b)
 				}
 			}
 		}
@@ -732,5 +741,5 @@ func (s *Service) fitConfig(d *configDoc) ([]byte, error) {
 	if err != nil || len(b) <= s.limits.ConfigBytes {
 		return b, err
 	}
-	return nil, fmt.Errorf("%w: the services and tokens would take %d KiB, over their %d KiB: delete services no longer used, or revoke tokens no longer used", ErrFull, (len(b)+1023)>>10, s.limits.ConfigBytes>>10)
+	return nil, fmt.Errorf("%w: the services would take %d KiB, over their %d KiB: delete services no longer used", ErrFull, (len(b)+1023)>>10, s.limits.ConfigBytes>>10)
 }

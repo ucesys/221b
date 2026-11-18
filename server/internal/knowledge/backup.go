@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/ucesys/221b/server/internal/confluence"
 )
 
 // A backup holds the knowledge's connections (sources and where the wiki
 // is kept, each credential sealed with the install's backup key, ADR-137,
-// or a placeholder), the manifest of what was read, and the publisher's
-// settings and pages. The wiki's pages have their own history in git or
+// or a placeholder) and the manifest of what was read. A backup made
+// before 0.12.1 may hold the Confluence publisher's settings too; they are
+// ignored. The wiki's pages have their own history in git or
 // S3, and the index is built again, so neither is in it.
 
 // Placeholder stands where a credential was (backup.Placeholder).
@@ -35,7 +34,6 @@ type BackupPart struct {
 	// sealed (its JSON), or the placeholder, never in clear.
 	Credentials map[string]string `json:"credentials,omitempty"`
 	Manifest    *Manifest         `json:"manifest,omitempty"`
-	Publisher   *confluence.Saved `json:"publisher,omitempty"`
 }
 
 // Export is the backup part, nil when there is nothing to keep.
@@ -47,7 +45,11 @@ func (s *Service) Export(ctx context.Context, seal Seal) (*BackupPart, error) {
 	out := &BackupPart{Settings: set, Credentials: map[string]string{}}
 	keys := []string{storeKey, hookKey}
 	for _, x := range set.Sources {
-		keys = append(keys, sourceKey(x.ID))
+		// A source that names its credential (CR-11) has it in the
+		// credentials' part.
+		if !x.CredMigrated {
+			keys = append(keys, sourceKey(x.ID))
+		}
 	}
 	for _, k := range keys {
 		c, err := s.creds(ctx, k)
@@ -67,13 +69,6 @@ func (s *Service) Export(ctx context.Context, seal Seal) (*BackupPart, error) {
 		out.Manifest = s.manifest.clone()
 	}
 	s.mu.RUnlock()
-	if s.o.Publisher != nil {
-		p, err := s.o.Publisher.Export(ctx, seal)
-		if err != nil {
-			return nil, err
-		}
-		out.Publisher = p
-	}
 	return out, nil
 }
 
@@ -91,9 +86,9 @@ func sealedOrPlaceholder(v string) bool {
 func credName(k string, set Settings) (string, string) {
 	switch {
 	case k == storeKey:
-		return "the wiki store's credential", "Settings › Knowledge › Wiki"
+		return "the wiki store's credential", "Administration › AI › Knowledge › Wiki"
 	case k == hookKey:
-		return "the knowledge webhook's token", "Settings › Knowledge › Webhook"
+		return "the knowledge webhook's token", "Administration › AI › Knowledge › Webhook"
 	case strings.HasPrefix(k, "source-"):
 		id := strings.TrimPrefix(k, "source-")
 		name, what := id, "the token"
@@ -105,16 +100,15 @@ func credName(k string, set Settings) (string, string) {
 				what = "the access key"
 			}
 		}
-		return what + " of the knowledge source " + name, "Settings › Knowledge › Sources › " + name
+		return what + " of the knowledge source " + name, "Administration › AI › Knowledge › Sources › " + name
 	}
-	return "the knowledge credential " + k, "Settings › Knowledge"
+	return "the knowledge credential " + k, "Administration › AI › Knowledge"
 }
 
 // Import restores the part: the settings replace the console's, every
 // credential the console has is kept, one it lacks is taken from the file
 // when the backup's key opens it (open), and listed to give again when not;
-// the manifest is written to the wiki's store when there is one, and the
-// publisher's settings and pages are restored. It returns what is left to
+// the manifest is written to the wiki's store when there is one. It returns what is left to
 // do by hand.
 func (s *Service) Import(ctx context.Context, raw json.RawMessage, open Open) (int, []string, error) {
 	var in BackupPart
@@ -173,15 +167,6 @@ func (s *Service) Import(ctx context.Context, raw json.RawMessage, open Open) (i
 			}
 		} else {
 			notes = append(notes, "knowledge: the manifest was not restored, since the wiki's store cannot be reached; Mycroft reads every source again at its next sync")
-		}
-	}
-	if in.Publisher != nil && s.o.Publisher != nil {
-		more, err := s.o.Publisher.Import(ctx, *in.Publisher, open)
-		if err != nil {
-			notes = append(notes, "knowledge: the Confluence publisher's settings were not restored: "+err.Error())
-		} else {
-			n++
-			notes = append(notes, more...)
 		}
 	}
 	return n, notes, nil

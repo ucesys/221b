@@ -5,7 +5,7 @@ import { GettingStartedCard, GettingStartedSection } from './GettingStarted'
 
 const ids = ['signin', 'clusters', 'provider', 'agents', 'knowledge', 'jobs', 'fleets', 'hosts', 'backup']
 const where: Record<string, [string, string]> = {
-  knowledge: ['#/admin/settings/knowledge', 'Administration › Settings › Knowledge'],
+  knowledge: ['#/admin/ai/knowledge', 'Administration › AI › Knowledge'],
   jobs: ['#/aiops/jobs', 'AIOps › Jobs, and Administration › Settings › Watson for the notification channels'],
 }
 
@@ -60,7 +60,7 @@ describe('Getting started', () => {
     expect(knowledge.getAttribute('aria-current')).toBe('step')
     const open = within(knowledge).getByTestId('setup-open')
     expect(open.textContent).toBe('Open Knowledge')
-    expect(open.getAttribute('href')).toBe('#/admin/settings/knowledge')
+    expect(open.getAttribute('href')).toBe('#/admin/ai/knowledge')
     expect(within(steps[5]!).getByTestId('setup-open').textContent).toBe('Open')
     expect(within(steps[0]!).getByText('Done')).toBeTruthy()
     // Nothing is ticked by hand: a done step has no control at all.
@@ -86,7 +86,7 @@ describe('Getting started', () => {
   it('puts a card on the home page until every step is done or dismissed', async () => {
     render(<GettingStartedCard />)
     expect((await screen.findByTestId('home-setup-next')).textContent).toBe('Next: Step knowledge')
-    expect(screen.getByTestId('home-setup-open').getAttribute('href')).toBe('#/admin/settings/knowledge')
+    expect(screen.getByTestId('home-setup-open').getAttribute('href')).toBe('#/admin/ai/knowledge')
     expect(screen.getByTestId('home-setup-all').getAttribute('href')).toBe('#/admin/settings/start')
     expect(screen.getByTestId('home-setup-all').textContent).toBe('2 steps left')
     cleanup()

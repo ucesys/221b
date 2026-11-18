@@ -118,7 +118,7 @@ func TestTheCasesThatCoverAnAlertCF77(t *testing.T) {
 	}
 }
 
-// The safety net (CF-78): a critical alert still going after Settings ›
+// The safety net (CF-78): a critical alert still going after Administration › AI ›
 // Cases' minutes opens a case like its New Case, P0, an outage from the
 // alert, opened by the console and audited; not before, not for a
 // warning, not when an open case covers it, not twice while it goes on,
@@ -208,7 +208,7 @@ func TestTheSafetyNetCF78(t *testing.T) {
 	}
 }
 
-// Settings › Cases' minutes for the safety net (CF-78): 15 by default,
+// Administration › AI › Cases' minutes for the safety net (CF-78): 15 by default,
 // 0 to 1440, kept when settings are sent without them, and audited.
 func TestTheSafetyNetsSettingCF78(t *testing.T) {
 	w := setup(t)

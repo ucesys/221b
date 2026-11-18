@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/confluence"
 	"github.com/ucesys/221b/server/internal/s3"
 )
@@ -23,12 +25,15 @@ const (
 	SourceConsole    = "console"
 	// SourceS3 is a bucket of documents (Phase 12, KN-25).
 	SourceS3 = "s3"
+	// SourceWeb is a web site, crawled from a start address (0.12.1,
+	// KN-44, websource.go).
+	SourceWeb = "web"
 )
 
 // ConsoleSourceID is the console's own source, there from the start.
 const ConsoleSourceID = "console"
 
-// AddedSourceID is the source of what people add in Mycroft (Settings ›
+// AddedSourceID is the source of what people add in Mycroft (Administration › AI ›
 // Knowledge's Added in Mycroft card, MY-11):
 // notes, web pages read from an address, and documents (MY-04); a source
 // of uploaded documents, there from the start.
@@ -55,6 +60,10 @@ type Source struct {
 	Branch   string `json:"branch,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Username string `json:"username,omitempty"`
+	// Repository names the git repository of Administration › Settings › Repositories the
+	// source reads (0.12.1, RP-03): URL and Credential are the
+	// repository's then, read from the list (gitrepos.go).
+	Repository string `json:"repository,omitempty"`
 	// A bucket of documents (KN-25): its name, the prefix to read under
 	// ("" for all), its region, its endpoint ("" for AWS) and path-style
 	// addressing for MinIO or another S3-compatible store, and its
@@ -66,11 +75,65 @@ type Source struct {
 	Endpoint    string `json:"endpoint,omitempty"`
 	PathStyle   bool   `json:"pathStyle,omitempty"`
 	Credentials string `json:"credentials,omitempty"`
+	// A live source (0.12.1, KN-39): its addresses, never copied, read
+	// when an agent looks them up, and how it signs in: Auth is "",
+	// LiveAuthBearer (the token in the Secret) or LiveAuthBasic (Username
+	// and the token in the Secret as the password or API token).
+	Addresses []LiveAddress `json:"addresses,omitempty"`
+	Auth      string        `json:"auth,omitempty"`
+	// A web site (0.12.1, KN-44): its start address is URL, and Depth and
+	// Pages how many links away and how many pages a read goes; it signs
+	// in as a live source does (Auth, Username, the token in the Secret).
+	Depth int `json:"depth,omitempty"`
+	Pages int `json:"pages,omitempty"`
+	// Excluded are the items of a web site, Confluence space, repository
+	// or bucket that are never read (0.12.1, KN-45, exclude.go): set from
+	// AIOps › Mycroft › Sources, kept when the source is edited.
+	Excluded []Exclusion `json:"excluded,omitempty"`
+	// MigratedFrom are the web pages of Added in Mycroft this web site was
+	// made from at the upgrade (KN-46): their excerpts stay until its first
+	// read reads them again.
+	MigratedFrom []string `json:"migratedFrom,omitempty"`
 	// CAPEM is a private CA for the source's TLS.
-	CAPEM   string    `json:"caPEM,omitempty"`
-	Added   time.Time `json:"added,omitzero"`
-	AddedBy string    `json:"addedBy,omitempty"`
+	CAPEM string `json:"caPEM,omitempty"`
+	// PinnedCert is the source's certificate a SuperAdmin trusted, for a
+	// source without a credential (CR-16); a source's credential keeps
+	// its own.
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
+	Added      time.Time    `json:"added,omitzero"`
+	AddedBy    string       `json:"addedBy,omitempty"`
+	// Credential is the credential of Administration › Credentials a Confluence
+	// space, repository, bucket, web site or live source signs in with, by
+	// id; "" is none, or a bucket's pod identity (0.12.1, CR-11).
+	Credential string `json:"credential,omitempty"`
+	// CredMigrated says the source names its credential: the one it kept
+	// in the knowledge Secret before 0.12.1 was moved to Administration ›
+	// Credentials, or it had none (CR-12). Its Auth and Username, and that
+	// kept credential, are not read again.
+	CredMigrated bool `json:"credMigrated,omitempty"`
+	// cert is a web site's or live source's client certificate, from its
+	// credential, as it is read; never kept.
+	cert *tls.Certificate
+	// credPin and repoPin are the certificates pinned with its credential
+	// and with the repository it names, as it is read; never kept.
+	credPin string
+	repoPin *certpin.Pin
 }
+
+// pin is the certificate pinned for the source: its own, its
+// credential's, or its repository's.
+func (x Source) pin() string {
+	if p := x.PinnedCert.Fingerprint(); p != "" {
+		return p
+	}
+	if x.credPin != "" {
+		return x.credPin
+	}
+	return x.repoPin.Fingerprint()
+}
+
+// trust is what the source's TLS trusts besides the system's CAs.
+func (x Source) trust() certpin.Trust { return certpin.Trust{CAPEM: x.CAPEM, Pin: x.pin()} }
 
 // Store kinds.
 const (
@@ -111,6 +174,8 @@ type StoreSettings struct {
 	KMSKeyID    string `json:"kmsKeyId,omitempty"`
 	// CAPEM is a private CA for the store's TLS.
 	CAPEM string `json:"caPEM,omitempty"`
+	// PinnedCert is the store's certificate a SuperAdmin trusted (CR-16).
+	PinnedCert *certpin.Pin `json:"pinnedCert,omitempty"`
 	// RefreshMinutes is how often the local copy is read again; 0 is the
 	// default (15 for git, 5 for S3).
 	RefreshMinutes int       `json:"refreshMinutes,omitempty"`
@@ -125,6 +190,8 @@ type Settings struct {
 	// StaleDays is how long a page's sources may go unseen before it is
 	// marked stale (default 30).
 	StaleDays int `json:"staleDays,omitempty"`
+	// Migrated are the one-time migrations done (KN-46).
+	Migrated []string `json:"migrated,omitempty"`
 }
 
 // DefaultStaleDays is when a page is marked stale.
@@ -150,7 +217,7 @@ func (s Settings) withDefaults() Settings {
 		s.Sources = append(s.Sources, Source{ID: "documents", Name: "Uploaded documents", Kind: SourceUpload})
 	}
 	// --- Mycroft tab (Phase 12, wave 5) ---
-	// What people add in Settings › Knowledge's Added in Mycroft card (MY-04, MY-11).
+	// What people add in Administration › AI › Knowledge's Added in Mycroft card (MY-04, MY-11).
 	if !slices.ContainsFunc(s.Sources, func(x Source) bool { return x.ID == AddedSourceID }) {
 		s.Sources = append(s.Sources, Source{ID: AddedSourceID, Name: "Added in Mycroft", Kind: SourceUpload})
 	}
@@ -217,7 +284,9 @@ func (x Source) Validate() error {
 		if x.Flavor != confluence.Cloud && x.Flavor != confluence.DataCenter {
 			return invalid("Confluence is cloud or datacenter")
 		}
-		if x.Flavor == confluence.Cloud && !strings.Contains(x.Email, "@") {
+		// A credential named gives the account's email (CR-11); a token
+		// of its own needs it here.
+		if x.Flavor == confluence.Cloud && !x.CredMigrated && x.Credential == "" && !strings.Contains(x.Email, "@") {
 			return invalid("Confluence Cloud needs the email of the account the API token belongs to")
 		}
 		if !regexp.MustCompile(`^~?[A-Za-z0-9_]{1,255}$`).MatchString(x.Space) {
@@ -237,9 +306,19 @@ func (x Source) Validate() error {
 		if x.Credentials != CredentialsKeys && x.Credentials != CredentialsIdentity {
 			return invalid("a bucket's credentials are an access key or the pod's identity")
 		}
+	case SourceLive:
+		if x.CredMigrated {
+			x.Auth, x.Username = "", ""
+		}
+		return x.validateLive()
+	case SourceWeb:
+		if x.CredMigrated {
+			x.Auth, x.Username = "", ""
+		}
+		return x.validateWeb()
 	case SourceUpload, SourceConsole, SourceFixes:
 	default:
-		return invalid("a source is confluence, git, s3, upload or console")
+		return invalid("a source is confluence, git, s3, web, live, upload or console")
 	}
 	return nil
 }
@@ -312,6 +391,23 @@ func (st StoreSettings) Validate() error {
 	return nil
 }
 
+// trust is what the store's TLS trusts besides the system's CAs.
+func (st StoreSettings) trust() certpin.Trust {
+	return certpin.Trust{CAPEM: st.CAPEM, Pin: st.PinnedCert.Fingerprint()}
+}
+
+// addr is the address the store is reached at, as sourceAddr writes it;
+// nil for one it does not connect to.
+func (st StoreSettings) addr() *url.URL {
+	switch st.Kind {
+	case StoreGit:
+		return sourceAddr(Source{Kind: SourceGit, URL: st.URL})
+	case StoreS3:
+		return sourceAddr(Source{Kind: SourceS3, Endpoint: st.Endpoint, Region: st.Region, Bucket: st.Bucket, PathStyle: st.PathStyle})
+	}
+	return nil
+}
+
 // normalized trims what a person typed.
 func (st StoreSettings) normalized() StoreSettings {
 	st.URL, st.Endpoint, st.Bucket = strings.TrimSpace(st.URL), strings.TrimRight(strings.TrimSpace(st.Endpoint), "/"), strings.TrimSpace(st.Bucket)
@@ -332,12 +428,23 @@ func (st StoreSettings) normalized() StoreSettings {
 // fingerprint tells one store's settings from another's, credentials
 // apart, for when the client must be made again.
 func (st StoreSettings) fingerprint() string {
-	st.SavedBy, st.SavedAt = "", time.Time{}
-	return fmt.Sprintf("%+v", st)
+	pin := st.PinnedCert.Fingerprint()
+	st.SavedBy, st.SavedAt, st.PinnedCert = "", time.Time{}, nil
+	return fmt.Sprintf("%+v", st) + pin
 }
 
-// Settings reads the settings.
+// Settings reads the settings, the git sources that name a repository of
+// Administration › Settings › Repositories with its address and credential (RP-03).
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
+	set, err := s.rawSettings(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	return s.withRepos(ctx, set)
+}
+
+// rawSettings are the settings as kept.
+func (s *Service) rawSettings(ctx context.Context) (Settings, error) {
 	var set Settings
 	if _, err := load(ctx, s.kv, SettingsKey, &set); err != nil {
 		return Settings{}, err
@@ -369,6 +476,31 @@ func (x Source) normalized() Source {
 	if x.Kind == SourceGit && x.Branch == "" {
 		x.Branch = "main"
 	}
+	if x.Kind == SourceLive {
+		x.Addresses, x.Username = normalizedLive(x.Addresses), strings.TrimSpace(x.Username)
+		if x.Auth != LiveAuthBasic {
+			x.Username = ""
+		}
+	} else {
+		x.Addresses = nil
+		if x.Kind != SourceWeb {
+			x.Auth = ""
+		}
+	}
+	if x.Kind == SourceWeb {
+		x.Username = strings.TrimSpace(x.Username)
+		if x.Auth != LiveAuthBasic {
+			x.Username = ""
+		}
+		if x.Pages == 0 {
+			x.Pages = DefaultCrawlPages
+		}
+	} else {
+		x.Depth, x.Pages, x.MigratedFrom = 0, 0, nil
+	}
+	if !excludable(x.Kind) {
+		x.Excluded = nil
+	}
 	if x.Kind == SourceS3 {
 		x.Bucket, x.Region, x.Prefix = strings.TrimSpace(x.Bucket), strings.TrimSpace(x.Region), strings.TrimSpace(x.Prefix)
 		x.Endpoint = strings.TrimRight(strings.TrimSpace(x.Endpoint), "/")
@@ -391,17 +523,48 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	if err := s.leads(); err != nil {
 		return Source{}, err
 	}
+	x, err := s.fillRepo(ctx, x)
+	if err != nil {
+		return Source{}, err
+	}
 	x = x.normalized()
 	if err := x.Validate(); err != nil {
 		return Source{}, err
 	}
-	if x.Kind == SourceS3 && x.Credentials == CredentialsKeys {
-		have, err := s.creds(ctx, sourceKey(x.ID))
-		if err != nil {
-			return Source{}, err
+	if s.keepsOwnCredential(ctx, x, ch, create) {
+		// A credential of its own, kept in the knowledge Secret as before
+		// 0.12.1: typed through the Go API, or kept by a source the
+		// upgrade has not switched, edited without naming one. The
+		// upgrade moves it (CR-12).
+		x.CredMigrated = false
+		if x.Kind == SourceS3 && x.Credentials == CredentialsKeys {
+			have, err := s.creds(ctx, sourceKey(x.ID))
+			if err != nil {
+				return Source{}, err
+			}
+			if k := ch.apply(have); k.AccessKeyID == "" || k.SecretAccessKey == "" {
+				return Source{}, invalid("an access key is needed: give its ID and secret, or use the pod's identity")
+			}
 		}
-		if k := ch.apply(have); k.AccessKeyID == "" || k.SecretAccessKey == "" {
-			return Source{}, invalid("an access key is needed: give its ID and secret, or use the pod's identity")
+	} else {
+		// A source saved names its credential from then on (CR-11),
+		// checked against what it serves and the addresses it covers.
+		ch = CredsChange{}
+		x.CredMigrated = true
+		if !signsIn(x.Kind) {
+			x.Credential = ""
+		}
+		if x.Kind == SourceWeb || x.Kind == SourceLive {
+			x.Auth, x.Username = "", ""
+		}
+		if x.Kind == SourceS3 && x.Credentials == CredentialsKeys && x.Credential == "" {
+			return Source{}, invalid("choose the access key's credential, or use the pod's identity")
+		}
+		if x.Kind == SourceS3 && x.Credentials == CredentialsIdentity {
+			x.Credential = ""
+		}
+		if err := s.checkCredential(ctx, x); err != nil {
+			return Source{}, err
 		}
 	}
 	if create && (x.Kind == SourceConsole || x.Kind == SourceUpload || x.Kind == SourceFixes) {
@@ -411,7 +574,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	// renamedOnly says an edit changed the name alone: its job is renamed,
 	// and the source is not read again for it.
 	renamedOnly := false
-	_, err := s.editSettings(ctx, func(set *Settings) error {
+	_, err = s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == x.ID })
 		switch {
 		case create && i >= 0:
@@ -421,8 +584,13 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		case create && len(set.Sources) >= MaxSources:
 			return invalid("at most %d sources", MaxSources)
 		}
+		// A pinned certificate is set by Trust alone, and kept while the
+		// source is reached at the same address (CR-16).
+		x.PinnedCert = nil
 		if create {
 			x.Added, x.AddedBy = s.o.Now().UTC(), c.label()
+			// Exclusions are made in AIOps › Mycroft › Sources only.
+			x.Excluded, x.MigratedFrom = nil, nil
 			set.Sources = append(set.Sources, x)
 		} else {
 			old := set.Sources[i]
@@ -430,8 +598,13 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 				return invalid("a source keeps its kind; add a new one instead")
 			}
 			x.Added, x.AddedBy = old.Added, old.AddedBy
+			// The dialog does not hold the exclusions: they stay as they are.
+			x.Excluded, x.MigratedFrom = old.Excluded, old.MigratedFrom
+			if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {
+				x.PinnedCert = old.PinnedCert
+			}
 			same := old
-			same.Name = x.Name
+			same.Name, same.CredMigrated = x.Name, x.CredMigrated
 			renamedOnly = reflect.DeepEqual(same, x) && ch.none()
 			set.Sources[i] = x
 		}
@@ -444,6 +617,13 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	detail := fmt.Sprintf("source %s (%s) %s", x.ID, x.Kind, map[bool]string{true: "added", false: "changed"}[create])
 	if x.Kind == SourceS3 {
 		detail += fmt.Sprintf(": the bucket %s under %q, credentials %s", x.Bucket, x.Prefix, x.Credentials)
+	}
+	if x.Credential != "" {
+		detail += "; credential " + x.Credential
+	}
+	if x.Kind == SourceLive {
+		detail += fmt.Sprintf(": live, %d addresses, never copied", len(x.Addresses))
+		s.live.forget(x.ID)
 	}
 	if !ch.none() {
 		if err := s.saveCreds(ctx, sourceKey(x.ID), ch); err != nil {
@@ -462,6 +642,28 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: x.ID, Detail: detail, Outcome: audit.OutcomeOK, From: c.From})
 	s.sourceSaved(ctx, c, x, create, !renamedOnly)
 	return saved, nil
+}
+
+// keepsOwnCredential says a source saved keeps a credential of its own in
+// the knowledge Secret, as before 0.12.1, rather than naming one of
+// Administration › Credentials: one typed with it, or, for a source not switched
+// yet edited without naming one, the one it keeps.
+func (s *Service) keepsOwnCredential(ctx context.Context, x Source, ch CredsChange, create bool) bool {
+	if x.Credential != "" || !signsIn(x.Kind) || x.namesRepo() {
+		return false
+	}
+	if !ch.none() {
+		return true
+	}
+	if create {
+		return false
+	}
+	set, err := s.Settings(ctx)
+	if err != nil {
+		return false
+	}
+	old, ok := set.source(x.ID)
+	return ok && !old.CredMigrated && old.Credential == ""
 }
 
 // firstRead reads a source just added, in the background, once the wiki
@@ -509,6 +711,7 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 	if id == ConsoleSourceID || id == FixesSourceID {
 		return invalid("the console's own sources can be switched off, not removed")
 	}
+	live := false
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == id })
 		if i < 0 {
@@ -517,6 +720,7 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 		if set.Sources[i].Kind == SourceUpload {
 			return invalid("remove the documents one by one instead")
 		}
+		live = set.Sources[i].Kind == SourceLive
 		set.Sources = slices.Delete(set.Sources, i, i+1)
 		return nil
 	})
@@ -527,7 +731,10 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 		s.o.Logger.Warn("a removed source's token stays in the Secret", "source", id, "err", err)
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + " removed", Outcome: audit.OutcomeOK, From: c.From})
-	s.sourceRemoved(ctx, c, id)
+	s.live.forget(id)
+	if !live {
+		s.sourceRemoved(ctx, c, id)
+	}
 	return nil
 }
 
@@ -539,17 +746,21 @@ func (s *Service) SetSourceOn(ctx context.Context, c Caller, id string, on bool)
 	if err := s.leads(); err != nil {
 		return err
 	}
+	live := false
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == id })
 		if i < 0 {
 			return wrapf(ErrNotFound, "no source %q", id)
 		}
 		set.Sources[i].Off = !on
+		live = set.Sources[i].Kind == SourceLive
 		return nil
 	})
 	if err == nil {
 		s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + map[bool]string{true: " switched on", false: " switched off"}[on], Outcome: audit.OutcomeOK, From: c.From})
-		s.sourceSwitched(ctx, c, id, on)
+		if !live {
+			s.sourceSwitched(ctx, c, id, on)
+		}
 	}
 	return err
 }

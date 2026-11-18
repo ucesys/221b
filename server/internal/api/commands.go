@@ -138,7 +138,7 @@ func (s *Server) putAppCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" params="+strconv.Itoa(len(params)))
-	b, _ := json.Marshal(appView{Record: rec})
+	b, _ := json.Marshal(s.viewOf(rec))
 	writeJSON(w, r, b)
 }
 
@@ -161,7 +161,7 @@ func (s *Server) deleteAppCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" deleted")
-	b, _ := json.Marshal(appView{Record: rec})
+	b, _ := json.Marshal(s.viewOf(rec))
 	writeJSON(w, r, b)
 }
 

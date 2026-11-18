@@ -468,6 +468,7 @@ func syncReply(question string) (reply, bool) {
 func uiSummary(last string) string {
 	var r struct {
 		Applied bool   `json:"applied"`
+		Held    bool   `json:"held"`
 		Error   string `json:"error"`
 		Note    string `json:"note"`
 		Link    string `json:"link"`
@@ -485,6 +486,9 @@ func uiSummary(last string) string {
 	switch {
 	case r.Error != "":
 		b.WriteString("I could not: " + r.Error)
+	case r.Held:
+		// A view change is made once the answer is done (SR-18).
+		b.WriteString("I will show it once this answer is done.")
 	case r.Note != "":
 		b.WriteString("You changed the view yourself, so I left it as it is.")
 	case r.Applied:
@@ -535,6 +539,10 @@ func script(question string, round int, results []string) reply {
 		last = results[0]
 	}
 	switch {
+	case strings.HasPrefix(q, "suggest the command "):
+		// An answer that hands a command on, to send to Watson.
+		cmd := strings.TrimSpace(question[len("suggest the command "):])
+		return reply{text: []string{"Run this:\n\n```sh\n" + cmd + "\n```\n"}}
 	case strings.Contains(q, "slowly"):
 		var parts []string
 		for i := 1; i <= 50; i++ {
@@ -1186,9 +1194,9 @@ func setupReply(question string, round int, last string) (reply, bool) {
 		if next == "" {
 			return reply{text: []string{"Every step of Getting started is done or dismissed."}}, true
 		}
-		return reply{text: []string{"Next is " + next + " The other open steps are on Settings › Getting started. A password, key or token goes into its own field on that screen, never into this chat."}}, true
+		return reply{text: []string{"Next is " + next + " The other open steps are on Administration › Settings › Getting started. A password, key or token goes into its own field on that screen, never into this chat."}}, true
 	case strings.Contains(q, "token") && strings.Contains(q, "set it up"):
-		return reply{text: []string{"I will not take a token in the chat. Type it into the token field of the source on [Settings › Knowledge](#/admin/settings/knowledge), which keeps it in a Kubernetes Secret, and replace it if others could have seen it here."}}, true
+		return reply{text: []string{"I will not take a token in the chat. Type it into the token field of the source on [Administration › AI › Knowledge](#/admin/ai/knowledge), which keeps it in a Kubernetes Secret, and replace it if others could have seen it here."}}, true
 	case strings.Contains(q, "which model") && strings.Contains(q, "auditor"):
 		if round == 0 {
 			return reply{text: []string{"Asking the knowledge base."}, tool: "ask_knowledge", input: map[string]any{"question": "Which model should the Auditor use?"}}, true

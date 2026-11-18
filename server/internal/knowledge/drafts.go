@@ -382,9 +382,6 @@ func (s *Service) Approve(ctx context.Context, c Caller, id string) (Run, error)
 	if err := s.Refresh(ctx); err != nil {
 		s.o.Logger.Warn("reading the wiki after an approval failed", "err", err)
 	}
-	if s.o.Publisher != nil && len(readyPaths) > len(conflicts) {
-		s.o.Publisher.EnqueueWiki(published(readyPaths, conflicts)...)
-	}
 	detail := fmt.Sprintf("run %s approved by %s: %d pages published", id, c.label(), len(readyPaths)-len(conflicts))
 	if len(conflicts) > 0 {
 		detail += fmt.Sprintf(", %d changed in the store meanwhile and wait for a person (%s)", len(conflicts), strings.Join(conflicts, ", "))
@@ -394,16 +391,6 @@ func (s *Service) Approve(ctx context.Context, c Caller, id string) (Run, error)
 	}
 	s.audit(audit.Event{Action: ActionReview, Who: c.who(), Target: id, Outcome: audit.OutcomeOK, Detail: detail, From: c.From})
 	return run, nil
-}
-
-func published(paths, conflicts []string) []string {
-	var out []string
-	for _, p := range paths {
-		if !slices.Contains(conflicts, p) {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // settle records what publishing did: pages published, or in conflict.

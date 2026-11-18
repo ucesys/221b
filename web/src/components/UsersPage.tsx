@@ -3,7 +3,7 @@ import { changeGroups, changeUser, deleteUser, endSessions, fetchUsers, refreshL
 import { USER_COLUMNS, userTerms } from '../columns/admin'
 import { holdingParts, joinable, passwordProblem, ROLE_NAME, SOURCE_NAME, SUPER_ROLES } from '../lib/admin'
 import { fmtAge, fmtClock, fmtTs, localTimes, nWord } from '../lib/format'
-import { adminHref, navigate } from '../lib/router'
+import { navigate, authHref } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import type { AdminProps } from './AdminPage'
 import { AddToGroup } from './AddToGroup'
@@ -41,16 +41,16 @@ export function UsersPage({ route, now, cluster, onToast }: AdminProps) {
   const all = useMemo(() => data?.users ?? [], [data])
   const rows = useMemo(() => all.filter((u) => source === 'all' || u.source === source), [all, source])
   const table = useTable<UserRow>({ id: 'admin-users', columns: USER_COLUMNS, rows, terms: userTerms, now, defaultSort: { col: 'name', dir: 'asc' } })
-  const selected = all.find((u) => u.id === route.path[1] || u.username === route.path[1]) ?? null
+  const selected = all.find((u) => u.id === route.path[2] || u.username === route.path[2]) ?? null
   const [creating, setCreating] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)
   const sources = useMemo(() => (['ldap', 'local', 'oidc'] as const).filter((s) => all.some((u) => u.source === s)), [all])
 
   const open = (id: string) => {
     const u = all.find((x) => x.id === id)
-    if (u) navigate(adminHref('users', selected?.id === id ? [] : [u.username]), true)
+    if (u) navigate(authHref('users', selected?.id === id ? [] : [u.username]), true)
   }
-  const close = () => navigate(adminHref('users'), true)
+  const close = () => navigate(authHref('users'), true)
   const done = (m: string) => {
     setCreating(false)
     setAdding(null)
@@ -366,7 +366,7 @@ function UserDrawer({
               )}
               {p.via && <span style={{ color: 'var(--fg3)' }}>{p.via}</span>}
               <span style={{ flex: '1 1 auto' }} />
-              <a className="rk-link" href={adminHref('roles', [h.role])}>
+              <a className="rk-link" href={authHref('roles', [h.role])}>
                 Open in Roles
               </a>
             </div>

@@ -67,7 +67,7 @@ func TestAFetchPastItsLimitsIsRefusedInPlainWords(t *testing.T) {
 	// Half a megabyte of one byte: small as sent, large unpacked.
 	dir, _ := localRepo(t, map[string]string{"a.txt": "a", "b.txt": "b", "big.bin": strings.Repeat("x", 512<<10)})
 	ctx := context.Background()
-	if _, err := apps.Fetch(ctx, master(dir), ""); err != nil {
+	if _, err := apps.Fetch(ctx, master(dir), apps.GitAuth{}); err != nil {
 		t.Fatalf("within the limits: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -82,7 +82,7 @@ func TestAFetchPastItsLimitsIsRefusedInPlainWords(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			withLimits(t, c.set)
-			_, err := apps.Fetch(ctx, master(dir), "")
+			_, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 			if !errors.Is(err, apps.ErrFetchLimit) || !strings.Contains(err.Error(), c.says) {
 				t.Fatalf("%v", err)
 			}
@@ -99,12 +99,12 @@ func TestACommitIsFetchedByItsIdWhileTheBranchHasMoved(t *testing.T) {
 	cfg.WriteString("[uploadpack]\n\tallowAnySHA1InWant = true\n")
 	cfg.Close()
 	ctx := context.Background()
-	first, err := apps.Fetch(ctx, master(dir), "")
+	first, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addCommit(t, dir, r, map[string]string{"f.txt": "second"})
-	co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit)
+	co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,15 +123,15 @@ func TestACommitIsFetchedByItsIdWhileTheBranchHasMoved(t *testing.T) {
 func TestACommitIsRefusedWhenTheServerCannotServeItAndTheBranchMoved(t *testing.T) {
 	dir, r := localRepo(t, map[string]string{"f.txt": "first"})
 	ctx := context.Background()
-	first, err := apps.Fetch(ctx, master(dir), "")
+	first, err := apps.Fetch(ctx, master(dir), apps.GitAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit); err != nil || co.Commit != first.Commit {
+	if co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit); err != nil || co.Commit != first.Commit {
 		t.Fatalf("while the branch is there: %v", err)
 	}
 	addCommit(t, dir, r, map[string]string{"f.txt": "second"})
-	if co, err := apps.FetchCommit(ctx, master(dir), "", first.Commit); err == nil || !strings.Contains(err.Error(), "moved") {
+	if co, err := apps.FetchCommit(ctx, master(dir), apps.GitAuth{}, first.Commit); err == nil || !strings.Contains(err.Error(), "moved") {
 		t.Fatalf("%+v %v", co, err)
 	}
 }
@@ -159,10 +159,10 @@ func TestAHostIsCheckedWhereItResolvesAndAgainAtEveryConnection(t *testing.T) {
 	if err := apps.CheckRepoHost(ctx, "https://name.invalid/x/y"); err != nil {
 		t.Errorf("a name that does not resolve now is left to the connection: %v", err)
 	}
-	if _, err := apps.ListRefs(ctx, "https://localhost:1/x/y", ""); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
+	if _, err := apps.ListRefs(ctx, "https://localhost:1/x/y", apps.GitAuth{}); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
 		t.Errorf("listing refs: %v", err)
 	}
-	if _, err := apps.Fetch(ctx, apps.Source{Repo: "https://127.0.0.1:1/x/y", Ref: "main", RefKind: apps.RefBranch}, ""); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
+	if _, err := apps.Fetch(ctx, apps.Source{Repo: "https://127.0.0.1:1/x/y", Ref: "main", RefKind: apps.RefBranch}, apps.GitAuth{}); err == nil || !strings.Contains(err.Error(), "does not fetch from") {
 		t.Errorf("fetching: %v", err)
 	}
 }
@@ -215,33 +215,86 @@ func TestARenderLargerThanTheLimitIsRefused(t *testing.T) {
 	}
 }
 
-func TestARenderThatDoesNotEndIsLeftBehindAndHoldsItsSlot(t *testing.T) {
-	stuck := make(chan struct{})
-	run := func(context.Context) (string, error) {
-		<-stuck
-		return "", nil
+func TestARenderPastItsMemoryIsRefusedAndTheConsoleGoesOn(t *testing.T) {
+	doubling := `{{ $s := "a" }}{{ range until 40 }}{{ $s = printf "%s%s" $s $s }}{{ end }}# {{ len $s }}`
+	_, err := apps.Render(context.Background(), templateChart(doubling), nil, "x", "default", "")
+	if !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "more memory or time than allowed") {
+		t.Fatalf("%v", err)
 	}
-	for range 4 {
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		if _, err := apps.Bounded(ctx, run); !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "in time") {
+	if r, err := apps.Render(context.Background(), templateChart("# {{ .Release.Name }}"), nil, "after", "default", ""); err != nil || !strings.Contains(r.Manifest, "# after") {
+		t.Fatalf("a render after: %q %v", r.Manifest, err)
+	}
+}
+
+func TestARenderThatDoesNotEndIsStoppedAndGivesBackItsSlot(t *testing.T) {
+	defer apps.SetRenderTimeout(2 * time.Second)()
+	endless := templateChart(`{{ range 2000000000 }}{{ range 2000000000 }}{{ end }}{{ end }}`)
+	n := apps.RenderSlots()
+	errs := make(chan error, n)
+	start := time.Now()
+	for range n {
+		go func() {
+			_, err := apps.Render(context.Background(), endless, nil, "x", "default", "")
+			errs <- err
+		}()
+	}
+	for range n {
+		if err := <-errs; !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "in time") {
 			t.Fatalf("%v", err)
 		}
 	}
-	short, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer stop()
-	if _, err := apps.Bounded(short, run); !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "still rendering") {
-		t.Fatalf("with every slot held: %v", err)
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("the renders were stopped after %s", d)
 	}
-	close(stuck)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		v, err := apps.Bounded(context.Background(), func(context.Context) (string, error) { return "done", nil })
-		if err == nil && v == "done" {
-			return
+	// Every slot is free again: a render takes one at once.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if r, err := apps.Render(ctx, templateChart("# {{ .Release.Name }}"), nil, "after", "default", ""); err != nil || !strings.Contains(r.Manifest, "# after") {
+		t.Fatalf("a render after: %q %v", r.Manifest, err)
+	}
+}
+
+func TestARenderInItsOwnProcessIsTheRenderOfBefore(t *testing.T) {
+	sub := &chart.Chart{Metadata: &chart.Metadata{APIVersion: "v2", Name: "sub", Version: "0.1.0"},
+		Values:    map[string]any{"port": int64(8080)},
+		Templates: []*common.File{{Name: "templates/svc.yaml", Data: []byte("apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ .Release.Name }}-sub\nspec:\n  ports:\n  - port: {{ .Values.port }}\n")}}}
+	top := &chart.Chart{Metadata: &chart.Metadata{APIVersion: "v2", Name: "top", Version: "1.0.0", Dependencies: []*chart.Dependency{{Name: "sub", Version: "0.1.0"}}},
+		Values: map[string]any{"replicas": float64(1), "list": []any{"a", map[string]any{"b": true}}},
+		Templates: []*common.File{
+			{Name: "templates/cm.yaml", Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\ndata:\n  big: {{ .Values.big | quote }}\n  replicas: {{ .Values.replicas | quote }}\n  list: {{ toJson .Values.list | quote }}\n  upgrade: {{ .Release.IsUpgrade | quote }}\n  revision: {{ .Release.Revision | quote }}\n  kube: {{ .Capabilities.KubeVersion.Version | quote }}\n  file: {{ .Files.Get \"f.txt\" | quote }}\n")},
+			{Name: "templates/NOTES.txt", Data: []byte("installed {{ .Release.Name }}")},
+		},
+		Files: []*common.File{{Name: "f.txt", Data: []byte("from a file")}}}
+	top.SetDependencies(sub)
+	vals := map[string]any{"big": int64(12345678901), "replicas": int64(3)}
+	for _, o := range []apps.ReleaseOptions{
+		{Name: "r", Namespace: "ns", KubeVersion: "v1.31.2"},
+		{Name: "r", Namespace: "ns", Upgrade: true, Revision: 7, Previous: map[string]any{"replicas": int64(2)}},
+	} {
+		here, err := apps.RenderHere(context.Background(), top, vals, o)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the slots came back: %v", err)
+		there, err := apps.RenderRelease(context.Background(), top, vals, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if here != there {
+			t.Fatalf("in this process:\n%s\nin its own:\n%s", here.Manifest, there.Manifest)
+		}
+		for _, want := range []string{"big: \"12345678901\"", "replicas: \"3\"", "port: 8080", "file: \"from a file\"", `list: "[\"a\",{\"b\":true}]"`} {
+			if !strings.Contains(there.Manifest, want) {
+				t.Errorf("%s is not in\n%s", want, there.Manifest)
+			}
+		}
+		if o.Upgrade && !strings.Contains(there.Manifest, `upgrade: "true"`) || o.Upgrade && !strings.Contains(there.Manifest, `revision: "7"`) {
+			t.Errorf("an upgrade:\n%s", there.Manifest)
+		}
+		if !o.Upgrade && !strings.Contains(there.Manifest, `kube: "v1.31.2"`) {
+			t.Errorf("the cluster's version:\n%s", there.Manifest)
+		}
+		if there.Notes != "installed r" {
+			t.Errorf("notes %q", there.Notes)
 		}
 	}
 }

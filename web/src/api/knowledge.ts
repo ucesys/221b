@@ -1,11 +1,26 @@
-// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): Settings › Knowledge,
-// the wiki's pages and the drafts in Cases, and the Confluence publisher's
-// part of Settings › Issues. Credentials go in and never come back: the
-// server says only whether each is set.
+// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): Administration › AI › Knowledge,
+// the wiki's pages and the drafts in Cases. Credentials go in and never
+// come back: the server says only whether each is set.
 import { call, post } from './call'
+import type { CertPin, PinnedWith, PresentedCert } from './certificates'
 
-/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. */
-export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes'
+/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. live: never copied, looked up when the agents troubleshoot (KN-39). web: a web site crawled from a start address (0.12.1). */
+export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes' | 'live' | 'web'
+
+/**
+ * An item, or items, a SuperAdmin left out of a syncable source (0.12.1):
+ * its id (a web page's path, a file's path, an object's key, a Confluence
+ * page's id), a glob with * (/blog/*), or a prefix ending in / (a folder,
+ * an S3 prefix); under, for Confluence, is the page and its children.
+ */
+export interface Exclusion {
+  pattern: string
+  under?: boolean
+  title?: string
+  reason?: string
+  by: string
+  at: string
+}
 
 export interface KnowledgeSource {
   id: string
@@ -20,6 +35,8 @@ export interface KnowledgeSource {
   branch?: string
   path?: string
   username?: string
+  /** A git source's repository of Administration › Settings › Repositories, by name (0.12.1, RP-03): url and credential are its own then. */
+  repository?: string
   /** A bucket of documents (KN-25): its name, the prefix read under, region, endpoint (empty for AWS), path-style, and an access key in the Secret or the pod's identity. */
   bucket?: string
   prefix?: string
@@ -28,8 +45,52 @@ export interface KnowledgeSource {
   pathStyle?: boolean
   credentials?: 'keys' | 'identity'
   caPEM?: string
+  /** The source's certificate a SuperAdmin trusted, for one without a credential (CR-16); set by Trust only. */
+  pinnedCert?: CertPin
+  /** A live source's addresses and how it signs in (KN-39): none, a bearer token, or the user (username) with a password or API token. A web site signs in the same way. */
+  addresses?: LiveAddress[]
+  auth?: '' | 'bearer' | 'basic'
+  /** A web site (0.12.1): its start address is url; how many links away it is read (0–3) and at most how many pages (1–200). */
+  depth?: number
+  pages?: number
+  /** What a SuperAdmin left out of the source, in AIOps › Mycroft › Sources; kept by the server on Edit. */
+  excluded?: Exclusion[]
+  /** The web items of Added in Mycroft this web site was made from at the upgrade. */
+  migratedFrom?: string[]
   added?: string
   addedBy?: string
+  /** The credential of Administration › Credentials it signs in with, by id (0.12.1, CR-11); none when absent, or a bucket's pod identity. */
+  credential?: string
+  /** It names its credential; before the upgrade moves it, the one kept in the knowledge Secret is used. */
+  credMigrated?: boolean
+}
+
+/** One address of a live source: a web page, a Confluence page, or a search of a Confluence space (its site, with /wiki for Cloud, and the space's key). */
+export interface LiveAddress {
+  kind: 'page' | 'confluencePage' | 'confluenceSearch'
+  url: string
+  space?: string
+}
+
+export const LIVE_ADDRESS_LABEL: Record<LiveAddress['kind'], string> = {
+  page: 'Web page',
+  confluencePage: 'Confluence page',
+  confluenceSearch: 'Confluence space search',
+}
+
+/** Whether a source is read into the wiki (Ingest) or looked up when the agents troubleshoot (Live, KN-39). */
+export const sourceMode = (s: Pick<KnowledgeSource, 'kind'>): 'Ingest' | 'Live' => (s.kind === 'live' ? 'Live' : 'Ingest')
+
+/** One address of a live source as its Test read it (KN-42). */
+export interface LiveCheck {
+  url: string
+  kind: LiveAddress['kind']
+  ok: boolean
+  pages?: number
+  bytes?: number
+  title?: string
+  cut?: boolean
+  error?: string
 }
 
 /** The temporary ConfigMap store's name wherever a person sees it (CF-57). */
@@ -50,6 +111,8 @@ export interface StoreSettings {
   sse?: '' | 'AES256' | 'aws:kms'
   kmsKeyId?: string
   caPEM?: string
+  /** The store's certificate a SuperAdmin trusted (CR-16); set by Trust only. */
+  pinnedCert?: CertPin
   refreshMinutes?: number
   savedBy?: string
   savedAt?: string
@@ -83,6 +146,10 @@ export interface SourceTestResult {
   skipped?: number
   skippedWhy?: string
   error?: string
+  /** A live source's addresses, each read once (KN-42). */
+  live?: LiveCheck[]
+  /** The certificate the source's address presented, when it is not trusted or is the pinned one (CR-15). */
+  certificate?: PresentedCert
 }
 
 export interface SyncResult {
@@ -133,6 +200,8 @@ export interface KnowledgeView {
   console: boolean
   /** Whether the temporary ConfigMap store can be chosen (CF-57). */
   configMapStore?: boolean
+  /** The certificates pinned for the sources, by id: their own, their credential's or their repository's (CR-19). */
+  pins?: Record<string, PinnedWith>
 }
 
 export interface StoreCheck {
@@ -280,68 +349,29 @@ export interface DraftRun {
   mine?: boolean
 }
 
-export interface ConfluenceSettings {
-  on: boolean
-  baseURL: string
-  flavor: 'cloud' | 'datacenter'
-  email?: string
-  caPEM?: string
-  space: string
-  root?: string
-  wiki?: boolean
-  wikiSpace?: string
-  wikiRoot?: string
-  checkAt?: string
-  savedBy?: string
-  savedAt?: string
-}
-
-export interface ConfluenceView {
-  settings: ConfluenceSettings
-  token: boolean
-  outbox: number
-  failing: number
-  lastError?: string
-  lastWrite?: string
-  lastCheck?: string
-  nextCheck?: string
-  checkReport?: string[]
-  conflicts: number
-  pages: number
-  wikiPages: number
-}
-
-export interface ConfluenceConflict {
-  id: string
-  kind: 'known' | 'wiki' | 'status' | 'tree'
-  issue?: string
-  title: string
-  url?: string
-  their: string
-  at: string
-  owner?: string
-  ownerName?: string
-  mine?: boolean
-}
-
 const base = '/api/v1/knowledge/'
 const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
-export const addSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources', post(keys ? { source, keys } : { source, token }))
-export const saveSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify(keys ? { source, keys } : { source, token }) })
+/** Adds a source, naming its credential (CR-11): no secret goes with it. */
+export const addSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources', post({ source }))
+export const saveSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify({ source }) })
 export const removeSource = (id: string) => call<{ removed: boolean }>(base + 'sources/' + enc(id), { method: 'DELETE' })
 export const setSourceOn = (id: string, on: boolean) => call<{ on: boolean }>(base + 'sources/' + enc(id) + '/on', post({ on }))
 /**
  * Tests a source's values as typed in its dialog, before they are saved
- * (KN-26). saved is the id of the source being edited: a credential left
- * blank is its saved one, read on the server and never sent back.
+ * (KN-26), with the credential it names. saved is the id of the source
+ * being edited.
  */
-export const testTypedSource = (source: KnowledgeSource, token?: string, keys?: KeysChange, saved?: string) => call<SourceTestResult>(base + 'sources/test', post({ source, token, keys, saved }))
+export const testTypedSource = (source: KnowledgeSource, saved?: string) => call<SourceTestResult>(base + 'sources/test', post({ source, saved }))
 
 /** A source's Test, in words: what it reached, the first few items, and what is skipped; or what is wrong. */
 export function sourceTestText(r: SourceTestResult): string {
+  if (r.live) {
+    const read = r.live.filter((c) => c.ok).length
+    return `${read} of ${r.live.length} ${r.live.length === 1 ? 'address' : 'addresses'} read.`
+  }
   if (!r.ok) return r.error ?? 'The test failed.'
   const n = r.items ?? 0
   let text = `Reached: ${n} ${n === 1 ? 'item' : 'items'}`
@@ -356,22 +386,29 @@ export const isWebUrl = (url?: string) => !!url && /^https?:\/\//i.test(url)
 export const uploadDocument = (source: string, name: string, data: string) => call<{ version: string }>(base + 'sources/' + enc(source) + '/documents', post({ name, data }))
 export const removeDocument = (source: string, name: string) => call<{ removed: boolean }>(base + 'sources/' + enc(source) + '/documents/' + enc(name), { method: 'DELETE' })
 export const saveStore = (store: StoreSettings, keys: KeysChange) => call<KnowledgeView>(base + 'store', { method: 'PUT', body: JSON.stringify({ store, keys }) })
-export const testStore = (store: StoreSettings, keys: KeysChange) => call<{ ok: boolean; check?: StoreCheck; error?: string }>(base + 'store/test', post({ store, keys }))
+export const testStore = (store: StoreSettings, keys: KeysChange) => call<{ ok: boolean; check?: StoreCheck; error?: string; certificate?: PresentedCert }>(base + 'store/test', post({ store, keys }))
+/**
+ * Trusts the certificate a source's address presents, when it is the one
+ * its Test showed (CR-16): with its credential when it names one,
+ * otherwise with the saved source.
+ */
+export const trustSourceCert = (sha256: string, source: KnowledgeSource, saved?: string) => call<PinnedWith>(base + 'sources/trust', post({ sha256, source, saved }))
+/** Lets a source's pinned certificate go: its own, or its credential's (CR-19). */
+export const forgetSourceCert = (id: string) => call<{ forgotten: boolean }>(base + 'sources/' + enc(id) + '/trust', { method: 'DELETE' })
+/** Trusts the certificate the saved store presents (CR-16). */
+export const trustStoreCert = (sha256: string) => call<PinnedWith>(base + 'store/trust', post({ sha256 }))
+/** Lets the store's pinned certificate go (CR-19). */
+export const forgetStoreCert = () => call<{ forgotten: boolean }>(base + 'store/trust', { method: 'DELETE' })
 export const moveStore = (store: StoreSettings, keys: KeysChange) => call<{ files: number }>(base + 'store/move', post({ store, keys }))
 export const saveHookToken = (token: string) => call<{ hook: boolean }>(base + 'hook', { method: 'PUT', body: JSON.stringify({ token }) })
 export const fetchPages = () => call<{ pages: WikiPage[]; retired?: WikiPage[]; connected: boolean }>(base + 'pages')
 export const fetchPage = (path: string) => call<PageView>(base + 'page?path=' + enc(path))
+/** Searches the approved pages and the sources' excerpts only; the Mycroft search (findInMycroft) searches the records too. */
 export const searchKnowledge = (q: string) => call<{ hits: SearchHit[] }>(base + 'search?q=' + enc(q))
 export const fetchDrafts = (all = false) => call<{ runs: DraftRun[] }>(base + 'drafts' + (all ? '?all=1' : ''))
 export const fetchDraftsCount = () => call<{ count: number }>(base + 'drafts/count', {}, true)
 export const approveDraft = (id: string) => call<DraftRun>(base + 'drafts/' + enc(id) + '/approve', post({}))
 export const rejectDraft = (id: string, comment: string) => call<DraftRun>(base + 'drafts/' + enc(id) + '/reject', post({ comment }))
-export const fetchConfluence = () => call<ConfluenceView>(base + 'confluence')
-export const saveConfluence = (settings: ConfluenceSettings, token?: string) => call<ConfluenceView>(base + 'confluence', { method: 'PUT', body: JSON.stringify({ settings, token }) })
-export const testConfluence = (settings: ConfluenceSettings, token?: string) => call<{ ok: boolean; spaces?: string[]; error?: string }>(base + 'confluence/test', post({ settings, token }))
-export const checkConfluence = () => call<{ started: boolean }>(base + 'confluence/check', post({}))
-export const fetchConflicts = () => call<{ conflicts: ConfluenceConflict[] }>(base + 'confluence/conflicts')
-export const resolveConflict = (id: string, action: 'keep' | 'replace') => call<{ resolved: boolean }>(base + 'confluence/conflicts/' + enc(id), post({ action }))
 
 // --- Mycroft tab (Phase 12, wave 5, MY-01 to MY-10) ---
 
@@ -429,6 +466,8 @@ export interface WikiState {
   sources: SourceBrief[]
   added: AddedItem[]
   limits: AddLimits
+  /** The ConfigMap store's room, in bytes, when the wiki is kept there (KN-37). */
+  usage?: { used: number; limit: number }
 }
 
 export type AddKind = 'text' | 'url' | 'document'
@@ -458,7 +497,13 @@ export interface AddResult {
 export const pageHref = (path: string) => '#/aiops/mycroft/wiki/' + path.split('/').map(encodeURIComponent).join('/')
 
 /** The Wiki's views' addresses. */
-export const wikiHref = (view: 'pages' | 'drafts' | 'sources' = 'pages') => '#/aiops/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+export const wikiHref = (view: 'pages' | 'drafts' = 'pages') => '#/aiops/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+
+/** The Wiki's page list showing only these pages: Review those pages, after a source item was removed or excluded. */
+export const wikiPagesHref = (paths: string[]) => '#/aiops/mycroft/wiki?pages=' + paths.map(encodeURIComponent).join(',')
+
+/** AIOps › Mycroft › Sources: every item the agents can draw on (0.12.1). */
+export const SOURCES_HREF = '#/aiops/mycroft/sources'
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))
@@ -495,4 +540,216 @@ export const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   upload: 'Uploaded documents',
   console: 'This console',
   fixes: 'Fixes',
+  live: 'Live pages',
+  web: 'Web site',
 }
+
+/** A live address's Test, in words: "OK · 12 KiB · Title", or what was wrong. */
+export function liveCheckText(c: LiveCheck): string {
+  if (!c.ok) return c.error ?? 'not read'
+  const kib = Math.max(1, Math.round((c.bytes ?? 0) / 1024))
+  let text = `OK · ${kib} KiB`
+  if ((c.pages ?? 1) > 1) text += ` · ${c.pages} pages`
+  if (c.title) text += ` · ${c.title}`
+  if (c.cut) text += ' · read up to 200 KiB'
+  return text
+}
+
+// --- One search across Mycroft (Phase 12.1, KN-35) ---
+
+/** What the Mycroft search finds: a wiki page, a source's excerpt, a known issue, a fix or an accepted exception. */
+export type FindKind = 'page' | 'excerpt' | 'knownIssue' | 'fix' | 'exception'
+
+/** One hit of the Mycroft search, ranked with the others whatever its kind. */
+export interface FindHit {
+  kind: FindKind
+  title: string
+  /** A page's path. */
+  path?: string
+  /** A record's id: "KI-3", "F-2", "EX-4"; status its state. */
+  id?: string
+  status?: string
+  pageKind?: string
+  date?: string
+  stale?: boolean
+  source?: string
+  version?: string
+  url?: string
+  /** The snippet: one line around the first word matched. */
+  text: string
+  score: number
+  /** The query's words the hit holds, lower case and stemmed, for the snippet to mark. */
+  terms?: string[]
+}
+
+export interface FindResult {
+  hits: FindHit[]
+  /** How many hits of each kind match, whichever kinds were asked. */
+  counts: Partial<Record<FindKind, number>>
+  /** The kinds the person may search. */
+  kinds: FindKind[]
+}
+
+/** Searches what AIOps › Mycroft holds, as the person may read it (GET /api/v1/aiops/mycroft/search). */
+export const findInMycroft = (q: string, kinds: FindKind[] = [], limit = 30) => call<FindResult>('/api/v1/aiops/mycroft/search?q=' + enc(q) + (kinds.length > 0 ? '&kind=' + kinds.map(enc).join(',') : '') + '&limit=' + limit, {}, true)
+
+// --- Uploaded documents, Mycroft › Sources and exclusions (0.12.1) ---
+
+/** A wiki page, by its path and title. */
+export interface PageBrief {
+  path: string
+  title: string
+}
+
+/** A note or a document people uploaded: in the built-in sources 'documents' and 'added'. */
+export interface UploadItem {
+  source: string
+  id: string
+  type: 'note' | 'document'
+  title: string
+  by?: string
+  at?: string
+  state: 'reading' | 'read' | 'error'
+  error?: string
+  lastRead?: string
+  /** The wiki pages Mycroft wrote that drew on it. */
+  pages?: string[]
+  /** The page a correction (This is outdated…) is for. */
+  corrects?: string
+  reported?: string
+}
+
+export interface UploadsView {
+  items: UploadItem[]
+  limits: AddLimits
+  mayAdd: boolean
+  maySetup: boolean
+  store: string
+  model: boolean
+  /** The built-in sources of uploads switched off: nothing in them is read until a SuperAdmin turns them on. */
+  off: { id: string; name: string }[]
+}
+
+export const fetchUploads = (background = false) => call<UploadsView>(base + 'uploads', {}, background)
+export const removeUpload = (source: string, name: string) => call<{ removed: boolean; pages?: PageBrief[] }>(base + 'uploads/' + enc(source) + '/' + enc(name), { method: 'DELETE' })
+
+/** The types of a source's item. */
+export type ItemType = 'note' | 'document' | 'webPage' | 'confluencePage' | 'gitFile' | 's3Object' | 'record' | 'fix' | 'liveAddress'
+export type ItemStateName = 'reading' | 'read' | 'error' | 'skipped' | 'excluded' | 'live'
+
+export const ITEM_TYPE_LABEL: Record<ItemType, string> = {
+  note: 'Note',
+  document: 'Document',
+  webPage: 'Web page',
+  confluencePage: 'Confluence page',
+  gitFile: 'Git file',
+  s3Object: 'S3 object',
+  record: 'Console record',
+  fix: 'Fix',
+  liveAddress: 'Live address',
+}
+
+export const ITEM_STATE_LABEL: Record<ItemStateName, string> = {
+  reading: 'Reading',
+  read: 'Read',
+  error: 'Error',
+  skipped: 'Skipped',
+  excluded: 'Excluded',
+  live: 'Looked up when asked',
+}
+
+/** One item a source holds, as AIOps › Mycroft › Sources lists it. */
+export interface SourceItem {
+  source: string
+  sourceName: string
+  kind: SourceKind
+  type: ItemType
+  id: string
+  title: string
+  url?: string
+  by?: string
+  at?: string
+  lastRead?: string
+  state: ItemStateName
+  why?: string
+  /** How many wiki pages drew on it. */
+  pages?: number
+  /** The rule that leaves it out, when it is excluded. */
+  exclusion?: Exclusion
+  /** Its source is a web site, a Confluence space, a git repository or an S3 bucket. */
+  excludable?: boolean
+  /**
+   * Where it is in its source, relative to the bucket's prefix, the repository's path or the web site's
+   * start address (KN-49); shown after the source's name. Absent for what is shown by its title.
+   */
+  path?: string
+  /** The exclusion's pattern as shown, with the source's name, when it is a pattern. */
+  rule?: string
+  /** The full pattern of everything under it, and that in words relative to its source, for Exclude everything under …; none at the source's root. */
+  under?: string
+  underLabel?: string
+}
+
+/** A source as the Sources filter offers it; 'uploads' is both built-in sources of uploads. */
+export interface ItemSource {
+  id: string
+  name: string
+  kind: SourceKind | 'uploads'
+  off?: boolean
+}
+
+export interface ItemsPage {
+  items: SourceItem[]
+  total: number
+  offset: number
+  limit: number
+  sources: ItemSource[]
+  mayExclude: boolean
+  mayRemove: boolean
+}
+
+export interface ItemsQuery {
+  source?: string
+  type?: string
+  state?: string
+  q?: string
+  offset?: number
+  limit?: number
+}
+
+/** The address of a page of items: only what is set is sent. */
+export function itemsUrl(q: ItemsQuery): string {
+  const p = new URLSearchParams()
+  for (const k of ['source', 'type', 'state', 'q'] as const) if (q[k]) p.set(k, q[k])
+  if (q.offset) p.set('offset', String(q.offset))
+  if (q.limit) p.set('limit', String(q.limit))
+  const qs = p.toString()
+  return base + 'items' + (qs ? '?' + qs : '')
+}
+
+export const fetchItems = (q: ItemsQuery) => call<ItemsPage>(itemsUrl(q))
+
+export interface ItemDetail {
+  item: SourceItem
+  excerpts: string[]
+  excerptCount: number
+  pages: PageBrief[]
+  /** Whether the wiki records which pages drew on the item. */
+  provenance: boolean
+}
+
+export const fetchItemDetail = (source: string, id: string) => call<ItemDetail>(base + 'items/detail?source=' + enc(source) + '&id=' + enc(id))
+
+export interface ExcludeResult {
+  exclusion: Exclusion
+  items: number
+  pages: PageBrief[]
+  text: string
+}
+
+export const excludeItems = (source: string, input: { item?: string; pattern?: string; under?: boolean; reason?: string }) => call<ExcludeResult>(base + 'sources/' + enc(source) + '/exclusions', post(input))
+export const includeAgain = (source: string, pattern: string, under = false) =>
+  call<{ included: boolean; text: string }>(base + 'sources/' + enc(source) + '/exclusions?pattern=' + enc(pattern) + (under ? '&under=1' : ''), { method: 'DELETE' })
+
+/** Ask Mycroft to rewrite without it: one correction per page, each redraft waiting for review. */
+export const askRewrite = (pages: string[], title: string, why: 'removed' | 'excluded') => call<{ sent: number; failed?: string[]; text: string }>(base + 'rewrite', post({ pages, title, why }))

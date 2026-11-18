@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchJobsSettings, saveJobsSettings, type JobsSettings as Settings } from '../../api/jobs'
 import { fmtTs } from '../../lib/format'
 import { Select } from '../Select'
+import { Unsaved } from '../../lib/unsaved'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -12,7 +13,7 @@ const EDITORS: [string, string][] = [
 ]
 
 /**
- * Settings › Jobs (Phase 12, JB-04, JB-07): who may edit jobs besides a
+ * Administration › AI › Jobs (Phase 12, JB-04, JB-07): who may edit jobs besides a
  * SuperAdmin, and the read-only role agents on their own read the
  * clusters with (Viewer by default), for SuperAdmins.
  */
@@ -64,12 +65,13 @@ export function JobsSettings() {
   const changed = JSON.stringify({ e: [...editors].sort(), r: role, g: draft.readerGroup ?? '' }) !== JSON.stringify({ e: [...(saved.editors ?? [])].sort(), r: saved.readerRole ?? 'viewer', g: saved.readerGroup ?? '' })
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 18 }} aria-label="Jobs" data-testid="jobs-settings">
+      <Unsaved when={changed} what="Administration › AI › Jobs" />
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Jobs start agents with nobody at the screen, in{' '}
+        Jobs start agents on schedule or events, in{' '}
         <a className="rk-link" href="#/aiops/jobs">
           AIOps › Jobs
         </a>
-        . Every change to a job is in the audit log with its old and new values.
+        ; every change to one is audited.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 600 }}>Who may edit jobs</span>

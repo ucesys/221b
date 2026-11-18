@@ -158,7 +158,11 @@ export interface CaseAnalysis {
   at: string
   summary?: string
   cause?: string
+  /** How sure the agent is of the cause: confirmed when it read the evidence, likely when the cause fits and it could not confirm it (PM-J1d). */
+  confidence?: 'confirmed' | 'likely'
   evidence?: string[]
+  /** What the agent checked and found healthy, each with its object (PM-J5). */
+  ruledOut?: string[]
   fix: CaseFix
   /**
    * The analysis's verdict that there is no problem, the system working as
@@ -250,6 +254,8 @@ export interface CaseBrief extends CaseRef {
   rcaCause?: string
   /** It waits for the reporter's answer to a question. */
   askedReporter?: boolean
+  /** The person asking is involved in it (EM-08): reported, filed, opened, follows or closed it, it is assigned to them, they wrote in its conversation or approved its fix. */
+  involved?: boolean
   /** "C-12": a case closed as fixed this one is the problem of again. */
   regressionOf?: string
   /** "C-12": an open case on the same object with a like title, for a person to confirm. */
@@ -459,7 +465,7 @@ export interface Similar {
   recentFixed: SimilarCase[]
 }
 
-/** Settings › Cases: how long things are kept and how much a run may do. */
+/** Administration › AI › Cases: how long things are kept and how much a run may do. */
 export interface CasesSettings {
   keepAgentClosedDays: number
   lookBackDays: number
@@ -613,6 +619,8 @@ export interface RCADraft {
   cause: string
   fix: string
   prevention: string
+  /** The timeline, how the problem was detected and what it affected, a line each, for the RCA's free text (PM-J6). */
+  text?: string
   run?: string
 }
 

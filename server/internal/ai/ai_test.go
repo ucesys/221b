@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"slices"
@@ -61,9 +62,19 @@ type world struct {
 // for the local cluster, and a key saved.
 func setup(t *testing.T, baselines map[string]string) *world {
 	t.Helper()
+	return setupWith(t, baselines, nil)
+}
+
+// setupWith is setup with the fake API behind wrap, to hold its answers.
+func setupWith(t *testing.T, baselines map[string]string, wrap func(http.Handler) http.Handler) *world {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = 0
-	api := httptest.NewServer(fake)
+	var h http.Handler = fake
+	if wrap != nil {
+		h = wrap(fake)
+	}
+	api := httptest.NewServer(h)
 	t.Cleanup(api.Close)
 	w := &world{fake: fake, kv: &kv.Memory{}, audit: &bytes.Buffer{}}
 	w.set = &fakeSettings{sh: settings.Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200, Clusters: map[string]bool{"local": true}}}
@@ -219,11 +230,11 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 		t.Fatal(err)
 	}
 	core, cluster := sherlock.AgentPromptText(a, sherlock.Question{Cluster: "local", Version: "v1.37.1"}, time.Now())
-	iCore, iRules, iRoster, iHouse := strings.Index(core, "You are the Troubleshooter"), strings.Index(core, "Rules every agent"), strings.Index(core, "hand work to with hand_over"), strings.Index(core, "Cite our runbooks by name.")
+	iCore, iRules, iRoster, iHouse := strings.Index(core, "You are the Troubleshooter"), strings.Index(core, "Rules for every agent"), strings.Index(core, "hand work to with hand_over"), strings.Index(core, "Cite our runbooks by name.")
 	if iCore != 0 || iRules < iCore || iRoster < iRules || iHouse < iRoster {
 		t.Fatalf("the order: core %d, rules %d, roster %d, house %d\n%s", iCore, iRules, iRoster, iHouse, core)
 	}
-	if !strings.Contains(core, sherlock.ClusterTextRule) || !strings.Contains(core, "Secrets never leave the console") {
+	if !strings.Contains(core, sherlock.ClusterTextRule) || !strings.Contains(core, "Never ask for, repeat or output a credential") {
 		t.Fatal("the core lost a rule")
 	}
 	if strings.Contains(core, "Every cluster runs RKE2.") || !strings.Contains(cluster, "Every cluster runs RKE2.\n\nMaintenance on Sundays.") || strings.Index(cluster, "Kubernetes v1.37.1") > strings.Index(cluster, "RKE2") {
@@ -236,10 +247,10 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 	// Sherlock's core keeps its built-in instructions, with the front
 	// desk's part; only Sherlock is told it may change the view.
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
-	if !strings.HasPrefix(s.Instructions, sherlock.BuiltIn(true, watson.Commands())) || !strings.Contains(s.Instructions, "front desk") {
+	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true)) || !strings.Contains(s.Instructions, "Hand over with hand_over") {
 		t.Fatal("Sherlock's core")
 	}
-	if strings.Contains(a.Instructions, "The view_* tools") {
+	if strings.Contains(a.Instructions, "Your view changes are made together") {
 		t.Fatal("another agent was told it may change the view")
 	}
 }
@@ -517,7 +528,7 @@ func TestTheTestRunnerUsesRecordedResults(t *testing.T) {
 }
 
 // A pilot serves the draft to the people and clusters named, until it
-// ends; every answer of the agent meanwhile is logged and can be rated.
+// ends; every answer of the agent meanwhile is logged, to compare.
 func TestAPilotServesTheDraftToItsPeople(t *testing.T) {
 	w := setup(t, nil)
 	ctx := context.Background()
@@ -562,17 +573,26 @@ func TestAPilotServesTheDraftToItsPeople(t *testing.T) {
 	if len(log) != 2 || !strings.Contains(log[0].Version+log[1].Version, "pilot") || !strings.Contains(log[0].Version+log[1].Version, "live") {
 		t.Fatalf("the log: %+v", log)
 	}
-	if err := w.ai.Rate(ctx, log[0].N, 1, "ann"); err != nil {
-		t.Fatal(err)
-	}
-	if log, _ = w.ai.Pilot(ctx, Sherlock); log[0].Rating != 1 || log[0].RatedBy != "ann" {
-		t.Fatalf("rated: %+v", log[0])
-	}
 	if err := w.ai.StopPilot(ctx, Sherlock); err != nil {
 		t.Fatal(err)
 	}
 	if a := ask("bob@corp.example"); a.Version != "live" {
 		t.Fatal("the pilot outlived its stop")
+	}
+}
+
+// A pilot log an older console kept with ratings reads as before (AI-29):
+// the ratings are ignored, and dropped when the log is next written.
+func TestAPilotLogWithRatingsStillReads(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	old := `{"next":2,"entries":[{"n":1,"agent":"sherlock","version":"pilot","who":"bob","question":"Why?","answer":"Because.","rating":1,"ratedBy":"ann"},{"n":2,"agent":"sherlock","version":"live","who":"eve","question":"Why?","answer":"So.","rating":-1,"ratedBy":"ann"}]}`
+	if _, err := w.kv.SaveKey(ctx, PilotKey, []byte(old), ""); err != nil {
+		t.Fatal(err)
+	}
+	log, err := w.ai.Pilot(ctx, Sherlock)
+	if err != nil || len(log) != 2 || log[0].N != 2 || log[1].Answer != "Because." {
+		t.Fatalf("the log: %+v %v", log, err)
 	}
 }
 
@@ -697,10 +717,10 @@ func TestTheCatalog(t *testing.T) {
 	}
 }
 
-// Sherlock, its compact form and the Troubleshooter are told every command
-// Watson runs, from Watson's own list, so the list cannot fall behind it
-// (S-1, P-1); and the Troubleshooter may check its commands, as the
-// Change planner does.
+// Sherlock, when the commands are its own work, and its compact form are
+// told every command Watson runs, from Watson's own list, so the list
+// cannot fall behind it (S-1, P-1). The Troubleshooter and the Change
+// planner check theirs with check_command instead (PM-D7).
 func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 	w := setup(t, nil)
 	assembled := func(id string) string {
@@ -711,11 +731,11 @@ func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 		return a.Instructions
 	}
 	for name, text := range map[string]string{
-		"Sherlock":                   assembled(Sherlock),
-		"Sherlock, view changes off": Core(Sherlock, false),
-		"Sherlock's compact form":    CompactCore(),
-		"the Troubleshooter":         assembled(Troubleshooter),
-		"the Change planner":         assembled(ChangePlanner),
+		// Sherlock is told when the commands are its own work (PM-D6):
+		// with no Change planner to ask, and without the agents.
+		"Sherlock without a Change planner": Core(Sherlock, true) + "\n\n" + OwnWork([]sherlock.RosterEntry{{ID: Troubleshooter}}),
+		"Sherlock without the agents":       sherlock.BuiltIn(false, watson.Commands()),
+		"Sherlock's compact form":           CompactCore(),
 	} {
 		if strings.Count(text, watson.Commands()) != 1 {
 			t.Errorf("%s is not told once what Watson runs:\n%s", name, text)
@@ -724,9 +744,11 @@ func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 			t.Errorf("%s is not told that Watson runs %s", name, cmd)
 		}
 	}
-	info, _ := InfoOf(Troubleshooter)
-	if !slices.Contains(info.Tools, sherlock.ToolCheckCommand) || !strings.Contains(Core(Troubleshooter, false), "with check_command before you give it") {
-		t.Errorf("the Troubleshooter cannot check its commands: %v", info.Tools)
+	for _, id := range []string{Troubleshooter, ChangePlanner} {
+		info, _ := InfoOf(id)
+		if !slices.Contains(info.Tools, sherlock.ToolCheckCommand) || !strings.Contains(assembled(id), "check_command") {
+			t.Errorf("%s cannot check its commands: %v", id, info.Tools)
+		}
 	}
 }
 

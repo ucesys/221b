@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ClusterInfo, Me, Settings } from '../api/types'
-import { ADMIN_PAGES, adminHref, currentRoute, HOME, navigate, type AdminPage as Page, type Route } from '../lib/router'
+import { ADMIN_PAGES, adminHref, AUTH_PAGES, authHref, currentRoute, HOME, navigate, withParams, type AdminPage as Page, type AuthPage, type Route } from '../lib/router'
 import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
@@ -8,7 +8,9 @@ import { UsersPage } from './UsersPage'
 import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
-import { AddedInMycroft } from './ai/AddedInMycroft'
+import { UploadedDocuments } from './ai/UploadedDocuments'
+import { expiringSoon, fetchCredentials } from '../api/credentials'
+import { authPagesFor, isSuperAdmin, pagesFor } from '../lib/adminAccess'
 
 export interface AdminProps {
   route: Route
@@ -18,33 +20,29 @@ export interface AdminProps {
   onToast: (msg: string) => void
 }
 
-const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
-  { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them', superOnly: false },
-  { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
-  { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
-  { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
+// The tabs (CU-18, 0.12.1): Auth, AI (the agents' pages and AIOps'; not a
+// tab named AIOps, which the main app's area is), Credentials, Settings,
+// Logs, Toolbox and Backup.
+const PAGES: { id: Page; label: string; tip: string }[] = [
+  { id: 'auth', label: 'Auth', tip: 'Roles, Permissions and, for SuperAdmins, Users: who may do what' },
+  { id: 'ai', label: 'AI', tip: 'SuperAdmin only: the agents’ providers, agents, limits and knowledge, and AIOps’ SLA, issues, cases and jobs' },
+  { id: 'credentials', label: 'Credentials', tip: 'SuperAdmin only: the tokens and keys the console signs in with' },
+  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: getting started, general, Watson and repositories' },
   // Approvals moved to AIOps › Inbox (Phase 12, CS-06); #/admin/approvals opens it there.
-  { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
-  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: general, AI, changes and AIOps settings', superOnly: true },
-  { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
+  { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what' },
+  { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox' },
+  { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore' },
 ]
 
-/** Whether this person is a SuperAdmin; with sign-in off nobody is. */
-export function isSuperAdmin(me: Me | null): boolean {
-  return !!me && me.admin
-}
+const AUTH: { id: AuthPage; label: string; tip: string }[] = [
+  { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them' },
+  { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change' },
+  { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows' },
+]
 
-/**
- * The pages this person is offered (RB-41): Roles and Permissions for
- * everyone, Users and Settings for a SuperAdmin. With sign-in off there are
- * no users and no roles to list, and nobody is a SuperAdmin, so it offers
- * Permissions alone.
- */
-export function pagesFor(me: Me | null): Page[] {
-  if (!me) return []
-  if (me.mode === 'none') return ['permissions']
-  return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
-}
+// Who is offered which page lives in lib/adminAccess, which Sherlock's
+// view_admin asks too (SR-13).
+export { authPagesFor, isSuperAdmin, pagesFor }
 
 type Log = 'sessions' | 'audit'
 
@@ -71,11 +69,40 @@ function Logs(props: AdminProps) {
   )
 }
 
+/** The link of one of Auth's pages: Roles and Permissions describe the cluster open, Users the console. */
+const authLink = (page: AuthPage, cluster: string) => authHref(page, [], page === 'users' ? 'local' : cluster)
+
+/**
+ * Administration › Auth (CU-18): Roles, Permissions and Users, which were
+ * tabs of their own. A page the person's role does not open is refused
+ * as before; the pages read their item at route.path[2].
+ */
+function Auth(props: AdminProps & { sub: AuthPage; offered: AuthPage[] }) {
+  const { route, sub, offered } = props
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="admin-auth">
+      {offered.length > 1 && (
+        <div className="rk-seg" role="group" aria-label="Auth" style={{ alignSelf: 'flex-start' }}>
+          {AUTH.filter((p) => offered.includes(p.id)).map((p) => (
+            <button key={p.id} type="button" aria-pressed={sub === p.id} title={p.tip} onClick={() => navigate(authLink(p.id, route.cluster))} data-testid={`auth-${p.id}`}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {!offered.includes(sub) && <Refusal label={AUTH.find((p) => p.id === sub)!.label} signedIn />}
+      {offered.includes(sub) && sub === 'roles' && <RolesPage {...props} />}
+      {offered.includes(sub) && sub === 'permissions' && <PermissionsPage {...props} />}
+      {offered.includes(sub) && sub === 'users' && <UsersPage {...props} />}
+    </div>
+  )
+}
+
 // Where Administration was opened from, to go back to.
 let back = HOME
 
-/** Opens a page of the Administration area, remembering the page to return to. */
-export function openAdmin(page: Page = 'roles'): void {
+/** Opens a tab of the Administration area, remembering the page to return to. */
+export function openAdmin(page: Page = 'auth'): void {
   if (currentRoute().view !== 'admin') back = location.hash || HOME
   navigate(adminHref(page))
 }
@@ -92,8 +119,20 @@ interface Props extends AdminProps {
   refreshedAt: Date | null
 }
 
-function Refusal({ page, signedIn }: { page: Page; signedIn: boolean }) {
-  const label = PAGES.find((p) => p.id === page)!.label
+/**
+ * SEC-30: requests came through a proxy the console does not trust, so it
+ * sees the proxy's address for everyone behind it.
+ */
+export function UntrustedProxyNotice({ me }: { me: Me | null }) {
+  if (!me?.admin || !me.untrustedProxy) return null
+  return (
+    <p className="rk-callout" data-tone="warn" role="status" style={{ margin: 0 }} data-testid="untrusted-proxy">
+      Requests reach the console through a proxy it does not trust (from {me.untrustedProxy}): the sign-in limit per address and the audit log see the proxy’s address. List the proxy under <code>auth.trustedProxies</code>.
+    </p>
+  )
+}
+
+function Refusal({ label, signedIn }: { label: string; signedIn: boolean }) {
   return (
     <section className="rk-card" aria-label={`${label}, not available`} style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="admin-refusal">
       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{label} is for SuperAdmins</h2>
@@ -103,20 +142,21 @@ function Refusal({ page, signedIn }: { page: Page; signedIn: boolean }) {
 }
 
 /**
- * Settings › Knowledge for someone who is not a SuperAdmin: the Added in
- * Mycroft card alone, for an Admin (MY-11); anyone else is refused, as for
- * the rest of Settings.
+ * Administration › AI › Knowledge for someone who is not a SuperAdmin:
+ * the Uploaded documents section alone, for an Admin (MY-11, 0.12.1): the
+ * notes and documents they add and remove; anyone else is refused, as for
+ * the rest of AI.
  */
 function AdminKnowledge({ onToast, focus }: { onToast: (msg: string) => void; focus: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="admin-knowledge-added">
-      <AddedInMycroft
+      <UploadedDocuments
         onToast={onToast}
         focus={focus}
-        fallback={<Refusal page="settings" signedIn />}
+        fallback={<Refusal label="AI" signedIn />}
         after={
           <p className="rk-fhint" style={{ margin: 0 }}>
-            The rest of Settings › Knowledge, Mycroft’s sources and where the wiki is kept, is for SuperAdmins.
+            The rest of Administration › AI › Knowledge, Mycroft’s sources and where the wiki is kept, is for SuperAdmins.
           </p>
         }
       />
@@ -124,16 +164,46 @@ function AdminKnowledge({ onToast, focus }: { onToast: (msg: string) => void; fo
   )
 }
 
+/** How many credentials expire within 14 days, for the Credentials tab (CR-08); 0 for whoever does not see it. */
+function useCredentialsSoon(on: boolean, page: Page): number {
+  const [soon, setSoon] = useState(0)
+  useEffect(() => {
+    if (!on) return
+    let stop = false
+    fetchCredentials().then(
+      (v) => !stop && setSoon(expiringSoon(v.credentials ?? []).length),
+      () => undefined,
+    )
+    return () => {
+      stop = true
+    }
+  }, [on, page])
+  return on ? soon : 0
+}
+
 /**
- * The Administration area (RB-41): Roles, Permissions, Users and Settings
- * under one heading. Back or Escape returns to where it was opened from.
+ * The Administration area (RB-41; CU-18): Auth, AI, Credentials, Settings,
+ * Logs, Toolbox and Backup under one heading. Back or Escape returns to
+ * where it was opened from. An address of before shows the page it leads
+ * to, and the address bar is put right (CU-19).
  */
 export function AdminPageView({ route, me, now, cluster, onToast, settings, refreshedAt }: Props) {
   const offered = pagesFor(me)
   const asked = route.path[0] as Page | undefined
-  const page: Page = asked && ADMIN_PAGES.includes(asked) ? asked : (offered[0] ?? 'roles')
+  const page: Page = asked && ADMIN_PAGES.includes(asked) ? asked : (offered[0] ?? 'auth')
   const refused = !!me && !offered.includes(page)
+  const authOffered = authPagesFor(me)
+  const askedAuth = route.path[1] as AuthPage | undefined
+  const sub: AuthPage = page === 'auth' && askedAuth && AUTH_PAGES.includes(askedAuth) ? askedAuth : (authOffered[0] ?? 'permissions')
   const heading = useRef<HTMLHeadingElement>(null)
+  const credsSoon = useCredentialsSoon(isSuperAdmin(me), page)
+
+  // An address of before (#/admin/roles, #/admin/settings/agents/…) is
+  // put in the bar as it is now.
+  const canonical = withParams(route, {})
+  useEffect(() => {
+    if (location.hash !== canonical) navigate(canonical, true)
+  }, [canonical])
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
@@ -155,6 +225,9 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
   }, [])
 
   const props: AdminProps = { route, me, now, cluster, onToast }
+  const label = PAGES.find((p) => p.id === page)!.label
+  // AI › Knowledge's Uploaded documents section is where Admins add to the wiki too (MY-04, MY-11): the rest of AI stays closed to them.
+  const knowledge = page === 'ai' && route.path[1] === 'knowledge'
   return (
     <main
       className="rk-main"
@@ -176,30 +249,33 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
               <a
                 key={p.id}
                 className="rk-tab"
-                href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')}
+                href={p.id === 'auth' ? authLink(authOffered[0] ?? 'permissions', route.cluster) : adminHref(p.id, [], p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')}
                 aria-current={p.id === page ? 'page' : undefined}
-                title={p.tip}
+                title={p.id === 'credentials' && credsSoon > 0 ? `${credsSoon} ${credsSoon === 1 ? 'expires' : 'expire'} within 14 days` : p.tip}
                 data-admin-page={p.id}
                 style={{ height: 36 }}
               >
                 {p.label}
+                {p.id === 'credentials' && credsSoon > 0 && (
+                  <span className="rk-tag" data-tone="warn" style={{ marginLeft: 6 }} data-testid="admin-credentials-soon">
+                    {credsSoon}
+                  </span>
+                )}
               </a>
             ))}
           </nav>
         </div>
         <h2 ref={heading} tabIndex={-1} className="rk-sr" style={{ outline: 'none' }}>
-          {PAGES.find((p) => p.id === page)!.label}
+          {label}
         </h2>
         {me === null && <p style={{ margin: 0, color: 'var(--fg3)' }}>Loading…</p>}
-        {/* Settings › Knowledge's Added in Mycroft card is where Admins add to the wiki too (MY-04, MY-11): the rest of Settings stays closed to them. */}
-        {me && refused && page === 'settings' && route.path[1] === 'knowledge' && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added'} />}
-        {me && refused && !(page === 'settings' && route.path[1] === 'knowledge') && <Refusal page={page} signedIn />}
-        {me && !refused && page === 'roles' && <RolesPage {...props} />}
-        {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}
-        {me && !refused && page === 'users' && <UsersPage {...props} />}
+        <UntrustedProxyNotice me={me} />
+        {me && refused && knowledge && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added' || route.path[2] === 'uploads'} />}
+        {me && refused && !knowledge && <Refusal label={label} signedIn />}
+        {me && !refused && page === 'auth' && <Auth {...props} sub={sub} offered={authOffered} />}
         {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
         {me && !refused && page === 'logs' && <Logs {...props} />}
-        {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} onToast={onToast} />}
+        {me && !refused && (page === 'ai' || page === 'credentials' || page === 'settings') && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} onToast={onToast} />}
         {me && !refused && page === 'backup' && <AdminBackup {...props} />}
       </div>
     </main>

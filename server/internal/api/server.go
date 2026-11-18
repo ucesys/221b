@@ -37,8 +37,10 @@ import (
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -46,6 +48,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -162,7 +165,7 @@ type Options struct {
 	// SherlockKeys holds the Claude API key.
 	SherlockKeys *sherlock.Keys
 	// AI is the agents (Phase 12): providers, agents, their instructions,
-	// tests and pilots; nil leaves Settings › AI out.
+	// tests and pilots; nil leaves Administration › AI out.
 	AI *ai.Service
 	// Watson runs kubectl and helm commands (Phase 6); nil leaves it out.
 	Watson *watson.Service
@@ -191,6 +194,9 @@ type Options struct {
 	Standby func() bool
 	// Proxies are the proxies whose X-Forwarded-For is believed.
 	Proxies auth.Proxies
+	// ProxyWatch notices forwarding headers from anyone else (SEC-30); nil
+	// takes the sign-in's, so that /api/v1/me can tell a SuperAdmin.
+	ProxyWatch *auth.ProxyWatch
 	// ProxyToken is shared by the replicas: a forwarded request carries it,
 	// and only then is its client address believed.
 	ProxyToken string
@@ -235,10 +241,19 @@ type Options struct {
 	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
 	// leaves the Helm1 page's routes out.
 	Apps apps.Store
+	// SelfRelease is the Helm release that runs this console: its panel
+	// and its cards say so (asked November 17, 2026).
+	SelfRelease apps.SelfRelease
+	// ImageChecks looks for newer images than the releases run (HA-21,
+	// ADR-154); nil leaves the check out.
+	ImageChecks *imagecheck.Checker
 	// --- Helm repositories (Phase 12, wave 5) ---
 	// Repos are the chart repositories and OCI registries applications
 	// install from besides git (HR-01); nil is git alone.
 	Repos *apps.Repos
+	// Credentials are Administration › Credentials (0.12.1, CR-01): nil leaves
+	// the page out, and applications fetch without one.
+	Credentials *credentials.Service
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
@@ -282,13 +297,16 @@ type Options struct {
 	// nil serves none.
 	Fixes *fixes.Service
 	// --- Knowledge (Phase 12) ---
-	// Knowledge is Mycroft's knowledge and the Confluence publisher,
-	// served under /api/v1/knowledge/; nil leaves them out.
+	// Knowledge is Mycroft's knowledge, served under /api/v1/knowledge/;
+	// nil leaves it out.
 	Knowledge *knowledge.Service
 	// --- Case work (Phase 12, CW-10) ---
 	// Casework keeps the cases, served under /api/v1/aiops/cases; nil
 	// leaves AIOps › Cases out.
 	Casework *casework.Service
+	// Mail is Settings › Email (EM-01), served under
+	// /api/v1/settings/email; nil leaves it out.
+	Mail *mail.Service
 	// --- end of Watson cards.
 }
 
@@ -410,6 +428,14 @@ func New(o Options) *Server {
 	if o.Roles.Monitor == nil {
 		o.Roles.Monitor = &roles.Monitor{}
 	}
+	if o.ProxyWatch == nil {
+		if a, ok := o.Auth.(interface{ ProxyWatch() *auth.ProxyWatch }); ok {
+			o.ProxyWatch = a.ProxyWatch()
+		}
+	}
+	if o.ProxyWatch == nil {
+		o.ProxyWatch = auth.NewProxyWatch(o.Logger, o.Now)
+	}
 	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks, roleCheck: make(chan struct{}, 1)}
 	if s.backups = o.Backup; s.backups == nil {
 		s.backups = backup.NewRegistry()
@@ -430,6 +456,9 @@ func New(o Options) *Server {
 		s.data("pods/{namespace}/{name}/log", "pod-log", s.podLog)
 		s.data("services/{namespace}/{name}", "service", s.service)
 		s.data("helm/{namespace}/{name}", "release", s.release)
+		if o.ImageChecks != nil {
+			s.data("helm/newer-images", "release-newer-images", s.getNewerImages)
+		}
 		s.data("objects/{kind}/{namespace}/{name}", "object", s.object)
 		s.data("yaml/{kind}/{name}", "yaml", s.yaml)
 		s.data("yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
@@ -497,6 +526,16 @@ func New(o Options) *Server {
 		}
 	}
 	s.secretsRoutes()
+	if o.Credentials != nil {
+		s.credentialsRoutes()
+		// What names a credential, for its Used by (CR-06).
+		if o.Apps != nil {
+			o.Credentials.Register(apps.CredentialUses(o.Apps))
+		}
+		if o.Repos != nil {
+			o.Credentials.Register(o.Repos.CredentialUses)
+		}
+	}
 	if o.Watson != nil && o.Sessions != nil {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)
@@ -530,6 +569,10 @@ func New(o Options) *Server {
 	if o.Fixes != nil {
 		s.fixesRoutes()
 	}
+	// --- One search across Mycroft (Phase 12.1, KN-35) ---
+	if o.Knowledge != nil || o.Issues != nil || o.Lessons != nil || o.Fixes != nil {
+		s.mycroftSearchRoutes()
+	}
 	// --- Watson cards (Phase 12) ---
 	if o.Cards != nil {
 		s.cardsRoutes()
@@ -537,6 +580,9 @@ func New(o Options) *Server {
 	// --- Case work (Phase 12) ---
 	if o.Casework != nil {
 		s.caseworkRoutes()
+	}
+	if o.Mail != nil {
+		s.mailRoutes()
 	}
 	// --- end of Watson cards.
 	// --- Getting started (Phase 12): the checklist, and Sherlock's setup
@@ -721,6 +767,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A request another replica forwarded says whose it is (P7-02).
 	forwarded := s.trustForwarded(r)
 	if !forwarded {
+		s.opts.ProxyWatch.Check(s.opts.Proxies, r)
 		r = s.opts.Proxies.Resolve(r)
 	}
 	h := w.Header()
@@ -744,10 +791,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A port forward's CLI carries the forward's token, not a cookie
-	// (TB-20), and so does a system filing an issue (IS-24), and a git host
-	// or bucket calling the knowledge webhook (Phase 12); their
-	// handlers check it.
-	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) && !issues.IntakePath(r.URL.Path) && !knowledge.HookPath(r.URL.Path) {
+	// (TB-20), and so does a git host or bucket calling the knowledge
+	// webhook (Phase 12); their handlers check it.
+	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) && !knowledge.HookPath(r.URL.Path) {
 		if r = s.opts.Auth.Gate(w, r); r == nil {
 			s.observeOnly("gate", http.StatusUnauthorized)
 			return
@@ -1068,7 +1114,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Show costs is a SuperAdmin's, on its own route (CF-40).
 	if in.HideCosts {
-		jsonError(w, http.StatusBadRequest, "Show costs is changed in Settings › AI, by a SuperAdmin")
+		jsonError(w, http.StatusBadRequest, "Show costs is changed in Administration › AI › Agents, by a SuperAdmin")
 		return
 	}
 	// Sherlock's and Watson's settings change on their own routes, which
@@ -1095,6 +1141,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if b := st.AlertBanners; b != nil && !*b {
 		detail += ", alert banners hidden"
+	}
+	if !st.ChecksImages() {
+		detail += ", newer images not checked"
 	}
 	detail += changedByCluster("fleets", before.Fleets, st.Fleets) + changedByCluster("acknowledged alerts", before.Acks, st.Acks)
 	s.record(r, audit.ActionSettings, "settings", detail)

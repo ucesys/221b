@@ -27,6 +27,13 @@ type Item struct {
 	// Check is the agents' check the item is about, when it has one (a
 	// fix's, KN-34): the fixes of that check are given with it first.
 	Check string
+	// Type is what people added (AddText, AddDocument), and Parent a
+	// Confluence page's parent (KN-45).
+	Type, Parent string
+	// Ancestors are a Confluence page's ancestors as Confluence lists
+	// them, where it does: an exclusion of a page and its children
+	// covers a grandchild whose parent was never read.
+	Ancestors []string
 }
 
 // reader reads one source.
@@ -91,12 +98,9 @@ type ConsoleHost struct {
 
 // readerFor makes a source's reader, with its saved credential.
 func (s *Service) readerFor(ctx context.Context, x Source) (reader, error) {
-	var c Creds
-	if x.Kind == SourceConfluence || x.Kind == SourceGit || x.Kind == SourceS3 {
-		var err error
-		if c, err = s.creds(ctx, sourceKey(x.ID)); err != nil {
-			return nil, err
-		}
+	x, c, err := s.sourceAuth(ctx, x)
+	if err != nil {
+		return nil, err
 	}
 	return s.readerWith(x, c)
 }
@@ -107,21 +111,25 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 	switch x.Kind {
 	case SourceConfluence:
 		if c.Token == "" {
-			return nil, invalid("no read token is saved for %s", x.Name)
+			return nil, invalid("%s names no credential: choose one in Administration › AI › Knowledge", x.Name)
 		}
 		hc := s.o.HTTP
-		if x.CAPEM != "" {
+		if !x.trust().Empty() {
 			hc = nil
 		}
-		client, err := confluence.New(confluence.Config{BaseURL: x.BaseURL, Flavor: x.Flavor, Email: x.Email, Token: c.Token, CAPEM: x.CAPEM, HTTP: hc})
+		client, err := confluence.New(confluence.Config{BaseURL: x.BaseURL, Flavor: x.Flavor, Email: x.Email, Token: c.Token, CAPEM: x.CAPEM, Pin: x.pin(), HTTP: hc})
 		if err != nil {
 			return nil, invalid("%v", err)
 		}
 		return &confluenceReader{c: client, key: x.Space}, nil
 	case SourceGit:
-		return &gitReader{g: newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.CAPEM), dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
+		g := newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.trust())
+		g.bearer = c.bearer
+		return &gitReader{g: g, dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
 	case SourceS3:
 		return s.bucketReader(x, c)
+	case SourceWeb:
+		return &webReader{s: s, x: x, c: c}, nil
 	case SourceUpload:
 		return &uploadReader{s: s, source: x.ID}, nil
 	case SourceConsole:
@@ -131,8 +139,10 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 		return &consoleReader{c: s.o.Console}, nil
 	case SourceFixes:
 		return &fixesReader{s: s}, nil
+	case SourceLive:
+		return nil, invalid("%s is live: it is looked up when the agents troubleshoot, never read into the wiki", x.Name)
 	}
-	return nil, invalid("a source is confluence, git, s3, upload or console")
+	return nil, invalid("a source is confluence, git, s3, web, live, upload or console")
 }
 
 // confluenceReader reads a Confluence space's pages.
@@ -156,7 +166,7 @@ func (r *confluenceReader) List(ctx context.Context, since time.Time) ([]Item, b
 	}
 	out := make([]Item, 0, len(pages))
 	for _, p := range pages {
-		out = append(out, Item{ID: p.ID, Title: p.Title, Version: strconv.Itoa(p.Version), Modified: p.Modified, URL: p.URL})
+		out = append(out, Item{ID: p.ID, Title: p.Title, Version: strconv.Itoa(p.Version), Modified: p.Modified, URL: p.URL, Parent: p.ParentID, Ancestors: p.Ancestors})
 	}
 	return out, since.IsZero(), nil
 }
@@ -263,6 +273,8 @@ type pendingDoc struct {
 	title, url string
 	// corrects is the page a correction is for (KN-23).
 	corrects string
+	// kind is AddText or AddDocument (MY-12).
+	kind string
 }
 
 // label is how the document is named: its title, or its file's name.
@@ -290,13 +302,14 @@ func (r *uploadReader) List(context.Context, time.Time) ([]Item, bool, error) {
 	var out []Item
 	for _, p := range r.s.pending {
 		if p.source == r.source {
-			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url, By: p.by, Corrects: p.corrects})
+			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url, By: p.by, Corrects: p.corrects, Type: p.kind})
 			seen[p.name] = true
 		}
 	}
 	for _, st := range m.bySource(r.source) {
-		if !seen[st.ID] && !st.Gone {
-			out = append(out, Item{ID: st.ID, Title: st.Title, Version: st.Version, Modified: st.Modified, URL: st.URL, By: st.By, Corrects: st.Corrects})
+		// A document whose read failed is let go: it is uploaded again.
+		if !seen[st.ID] && !st.Gone && !st.record() {
+			out = append(out, Item{ID: st.ID, Title: st.Title, Version: st.Version, Modified: st.Modified, URL: st.URL, By: st.By, Corrects: st.Corrects, Type: st.Type})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

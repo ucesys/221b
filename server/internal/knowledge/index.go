@@ -35,6 +35,13 @@ type Hit struct {
 	Score   float64 `json:"score"`
 	// Sources are a page's.
 	Sources []SourceRef `json:"sources,omitempty"`
+	// --- One search across Mycroft (Phase 12.1, KN-35) ---
+	// ID is a record's: "KI-3", "F-2", "EX-4"; Status its state.
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status,omitempty"`
+	// Terms are the query's words the hit holds, as searched (lower
+	// case, stemmed), for the snippet to mark.
+	Terms []string `json:"terms,omitempty"`
 }
 
 type doc struct {
@@ -50,6 +57,7 @@ type Index struct {
 	docs  []doc
 	df    map[string]int
 	avg   float64
+	total int
 	pages []Page
 	// retired are the pages people retired (KN-24): kept to be shown,
 	// never searched.
@@ -167,6 +175,7 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 			idx.df[t]++
 		}
 	}
+	idx.total = total
 	if len(idx.docs) > 0 {
 		idx.avg = float64(total) / float64(len(idx.docs))
 	}
@@ -209,15 +218,7 @@ func (x *Index) Search(query, kind string, limit int) []Hit {
 		if kind != "" && d.hit.Kind != kind {
 			continue
 		}
-		score := 0.0
-		for _, t := range q {
-			tf := float64(d.terms[t])
-			if tf == 0 {
-				continue
-			}
-			idf := math.Log(1 + (n-float64(x.df[t])+0.5)/(float64(x.df[t])+0.5))
-			score += idf * tf * (bm25K1 + 1) / (tf + bm25K1*(1-bm25B+bm25B*float64(d.len)/math.Max(x.avg, 1)))
-		}
+		score := bm25(&d, q, n, x.avg, func(t string) int { return x.df[t] })
 		if score <= 0 {
 			continue
 		}
@@ -246,6 +247,22 @@ func (x *Index) Search(query, kind string, limit int) []Hit {
 		}
 	}
 	return out
+}
+
+// bm25 is a document's score for a query's terms, among n documents of
+// average length avg, df giving how many hold a term.
+func bm25(d *doc, q []string, n, avg float64, df func(string) int) float64 {
+	score := 0.0
+	for _, t := range q {
+		tf := float64(d.terms[t])
+		if tf == 0 {
+			continue
+		}
+		f := float64(df(t))
+		idf := math.Log(1 + (n-f+0.5)/(f+0.5))
+		score += idf * tf * (bm25K1 + 1) / (tf + bm25K1*(1-bm25B+bm25B*float64(d.len)/math.Max(avg, 1)))
+	}
+	return score
 }
 
 // bestText is the part of a document that holds most of the query's

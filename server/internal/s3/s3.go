@@ -9,7 +9,6 @@ package s3
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/xml"
 	"errors"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/awsv4"
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // Server-side encryption, as S3 names it.
@@ -45,6 +45,9 @@ type Config struct {
 	PathStyle bool
 	// CAPEM, when set, is a PEM bundle trusted besides the system's.
 	CAPEM string
+	// Pin, when set, is the fingerprint of the one certificate accepted
+	// besides those verified normally (certpin, CR-17).
+	Pin string
 	// Credentials signs each request.
 	Credentials func(ctx context.Context) (awsv4.Credentials, error)
 	// HTTP replaces the client (tests); CAPEM is then not used.
@@ -121,15 +124,11 @@ func New(c Config) (*Client, error) {
 	hc := c.HTTP
 	if hc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		if strings.TrimSpace(c.CAPEM) != "" {
-			pool, err := x509.SystemCertPool()
-			if err != nil || pool == nil {
-				pool = x509.NewCertPool()
-			}
-			if !pool.AppendCertsFromPEM([]byte(c.CAPEM)) {
-				return nil, errors.New("the CA certificate is not PEM")
-			}
-			tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		if strings.TrimSpace(c.CAPEM) != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(c.CAPEM)) {
+			return nil, errors.New("the CA certificate is not PEM")
+		}
+		if t := (certpin.Trust{CAPEM: c.CAPEM, Pin: c.Pin}); !t.Empty() {
+			tr.TLSClientConfig = certpin.Config(nil, t)
 		}
 		hc = &http.Client{Transport: tr, Timeout: 10 * time.Minute}
 	}

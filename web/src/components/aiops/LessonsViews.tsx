@@ -306,7 +306,7 @@ export function ExceptionsView({ open, onToast, onCount }: { open: string; onToa
                         {label}
                       </span>
                       {e.stale && e.state === 'active' && (
-                        <span className="rk-pill" data-tone="warn" title="Never matched, or not lately (Settings › Cases)" data-testid="exception-stale">
+                        <span className="rk-pill" data-tone="warn" title="Never matched, or not lately (Administration › AI › Cases)" data-testid="exception-stale">
                           Stale
                         </span>
                       )}

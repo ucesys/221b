@@ -29,6 +29,7 @@ import (
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -37,6 +38,7 @@ import (
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -48,6 +50,11 @@ import (
 )
 
 func main() {
+	// The console starts itself again to render one chart (apps/child.go);
+	// it is not a command for people, so help does not list it.
+	if len(os.Args) > 1 && os.Args[1] == apps.RenderChartCommand {
+		os.Exit(apps.RenderChartMain(os.Stdin, os.Stdout))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
 		if err := hashPassword(); err != nil {
 			fmt.Fprintln(os.Stderr, "221b:", err)
@@ -114,7 +121,9 @@ type wiring struct {
 	exceptionsSvc *lessons.Service
 
 	// Watson, the toolbox, SSH and Automation.
-	helmRepos   *apps.Repos
+	helmRepos *apps.Repos
+	// creds are Administration › Credentials (0.12.1, credentials.go).
+	creds       *credentials.Service
 	watsonSvc   *watson.Service
 	toolboxCfg  toolbox.Config
 	hosts       *nodessh.Hosts
@@ -134,6 +143,7 @@ type wiring struct {
 	cardsStored      *kv.Limited
 	caseSvc          *casework.Service
 	caseStored       *kv.Limited
+	mailSvc          *mail.Service
 	lessonsSvc       *lessons.Service
 
 	// The backups and the HTTP API.
@@ -148,6 +158,10 @@ func run(args []string) error {
 	}
 	log := newLogger(parsed)
 	slog.SetDefault(log)
+	// The hosts applications' charts are fetched from (apps.allowedHosts).
+	if err := apps.SetAllowedHosts(parsed.AppsAllowedHosts); err != nil {
+		return fmt.Errorf("apps.allowedHosts: %w", err)
+	}
 
 	// The audit log (P3-10) owns standard output; the ordinary logs go to
 	// standard error.
@@ -205,6 +219,9 @@ func run(args []string) error {
 	if err := w.wireSherlock(ctx); err != nil {
 		return err
 	}
+	if err := w.wireCredentials(); err != nil {
+		return err
+	}
 	if err := w.wireHelmRepos(); err != nil {
 		return err
 	}
@@ -237,6 +254,9 @@ func run(args []string) error {
 	if err := w.wireAPI(); err != nil {
 		return err
 	}
+	// Administration › Credentials (0.12.1, CR-12): the secrets kept with what
+	// used them move to credentials, on the leader.
+	go w.migrateCredentials(ctx)
 	// Jobs (Phase 12): the agents read through the handler's tools as
 	// the reader identity; the schedules and alerts are looked at on the
 	// leader.
@@ -249,10 +269,15 @@ func run(args []string) error {
 	w.activity.OnChange(func(active bool) {
 		if active {
 			w.handler.CheckRolesSoon()
-		} else if w.autoEngine != nil {
-			// Runs live on the leader: one that loses the lead stops its
-			// runs, so the next leader never meets one still going.
+			return
+		}
+		// Runs live on the leader: one that loses the lead stops its
+		// runs, so the next leader never meets one still going.
+		if w.autoEngine != nil {
 			w.autoEngine.StopAll("the console running it lost the lead and stopped it; nodes mid-script were stopped, and nothing was retried")
+		}
+		if w.aiSvc.Service != nil {
+			w.aiSvc.StopAllTests()
 		}
 	})
 	srv := &http.Server{

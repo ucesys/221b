@@ -22,7 +22,7 @@ import (
 func (s *Service) openStore(st StoreSettings, c Creds) (Store, error) {
 	switch st.Kind {
 	case StoreGit:
-		return NewGitStore(s.dir(), st.URL, st.Branch, st.Username, c.Token, st.CAPEM), nil
+		return NewGitStore(s.dir(), st.URL, st.Branch, st.Username, c.Token, st.trust()), nil
 	case StoreS3:
 		creds := func(ctx context.Context) (awsv4.Credentials, error) {
 			if st.Credentials == CredentialsIdentity {
@@ -34,10 +34,10 @@ func (s *Service) openStore(st StoreSettings, c Creds) (Store, error) {
 			return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey}, nil
 		}
 		var hc = s.o.HTTP
-		if st.CAPEM != "" {
+		if !st.trust().Empty() {
 			hc = nil
 		}
-		client, err := s3.New(s3.Config{Endpoint: st.Endpoint, Region: st.Region, Bucket: st.Bucket, PathStyle: st.PathStyle, CAPEM: st.CAPEM, Credentials: creds, HTTP: hc, Now: s.o.Now})
+		client, err := s3.New(s3.Config{Endpoint: st.Endpoint, Region: st.Region, Bucket: st.Bucket, PathStyle: st.PathStyle, CAPEM: st.CAPEM, Pin: st.PinnedCert.Fingerprint(), Credentials: creds, HTTP: hc, Now: s.o.Now})
 		if err != nil {
 			return nil, invalid("%v", err)
 		}
@@ -218,12 +218,9 @@ func (s *Service) refreshEvery(ctx context.Context) time.Duration {
 	return s.o.RefreshGit
 }
 
-// Run keeps the local copy current on every replica, and on the leader
-// runs the publisher's outbox and nightly check. It returns when ctx ends.
+// Run keeps the local copy current on every replica. It returns when ctx
+// ends.
 func (s *Service) Run(ctx context.Context) {
-	if s.o.Publisher != nil {
-		go s.o.Publisher.Run(ctx, s.o.Leads)
-	}
 	for {
 		wait := s.refreshEvery(ctx)
 		select {

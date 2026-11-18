@@ -196,12 +196,16 @@ var specs = []*spec{
 	// branch or a tag; --app takes the console's saved values for it.
 	// Phase 12, wave 5 (HR-07): or a chart of a Helm repository the
 	// console knows (REPO/CHART) or of an OCI registry (oci://...), at
-	// --version (the newest when none is named).
-	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 2, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace] | helm install RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--create-namespace]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "create-namespace": {}, "set": {value: true},
+	// --version (the newest when none is named). 0.12.1 (CR-11): a git
+	// source is fetched with the credential --credential names, else the
+	// application's, else the one that covers the repository. 0.12.1
+	// (RP-04): --git NAME is a git repository of Administration › Settings › Repositories,
+	// fetched with its own credential.
+	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 2, usage: "helm install RELEASE --git URL|NAME [--path DIR] --ref BRANCH|TAG [--tag] [--credential NAME] -n NAMESPACE [--app] [--create-namespace] | helm install RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "credential": {value: true}, "version": {value: true}, "app": {}, "create-namespace": {}, "set": {value: true},
 			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
-	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 2, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace] | helm upgrade RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--install]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
+	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 2, usage: "helm upgrade RELEASE [--git URL|NAME] [--path DIR] [--ref BRANCH|TAG] [--tag] [--credential NAME] -n NAMESPACE [--app] [--install] [--create-namespace] | helm upgrade RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--install]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "credential": {value: true}, "version": {value: true}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
 			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
 	{tool: "helm", verb: []string{"uninstall"}, change: true, min: 1, max: 1, usage: "helm uninstall RELEASE -n NAMESPACE [--keep-history]",
 		flags: flags(map[string]flag{"keep-history": {}, "dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},

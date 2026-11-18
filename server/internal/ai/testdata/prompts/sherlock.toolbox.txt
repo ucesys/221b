@@ -159,3 +159,63 @@ Facts the console collected from paired nodes over SSH: operating system, family
 Automation's recent runs: script, version, fleet, who started them, when, state and each node's outcome (no output). Only for a SuperAdmin, as Automation is.
 
 {"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 20).","type":"integer"},"query":{"description":"Only runs whose text contains this (a script, a node).","type":"string"}},"required":[],"type":"object"}
+
+## get_automation_run
+
+One Automation run in full: script and version, fleet, who started it, state and why it stopped, and each node's state, exit code, error and the last lines of its output (credentials replaced by [REDACTED]; at most 20 nodes, those that failed first). Parameter values are not shown. Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"id":{"description":"The run's number, from automation_runs.","type":"integer"},"node":{"description":"Only this node.","type":"string"},"tail":{"description":"How many lines of each node's output (default 60, at most 200).","type":"integer"}},"required":["id"],"type":"object"}
+
+## list_scripts
+
+Automation's scripts: group, description, latest version and its state, the version approved and its approvals, privilege, target, parameters (secret ones marked), the checks' errors and warnings, and the last run. Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 40).","type":"integer"},"query":{"description":"Only scripts whose row contains this text.","type":"string"}},"required":[],"type":"object"}
+
+## get_script
+
+One version of an Automation script: its text (credentials replaced by [REDACTED]), header with parameters and privilege, the checks' findings, state, author, approvals or why it was rejected, and Sherlock's review; and the script's versions with their states. Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"name":{"description":"The script's name.","type":"string"},"version":{"description":"The version's number; the latest when not given.","type":"integer"}},"required":["name"],"type":"object"}
+
+## automation_variables
+
+Automation's variables on this cluster, as the Variables tab shows them: each fleet's nodes, values and values per node, ceiling, sensitive parameters and reboot times, and the parameters a node gets from more than one fleet. A secret parameter shows only that it is set, never its value. Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"fleet":{"description":"Only this fleet, by id or name.","type":"string"},"node":{"description":"Only the fleets this node is in, and its own values.","type":"string"}},"required":[],"type":"object"}
+
+## watson_history
+
+Watson's commands on this cluster that the person's Watson panel lists (those they asked for or approved), newest first: the command, read or change, where it came from and why, who asked and who approved, status, exit code, the reason it failed or was refused, when, and the last lines of its output (credentials replaced by [REDACTED]).
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 20).","type":"integer"},"lines":{"description":"How many of each command's last output lines (default 10, at most 50; 0 for none).","type":"integer"},"query":{"description":"Only commands whose text contains this (a command, a name).","type":"string"},"status":{"description":"Only this status: pending, queued, running, done, failed, stopped, lapsed, discarded or refused.","type":"string"}},"required":[],"type":"object"}
+
+## audit_log
+
+The console's audit log, newest first, as Administration › Audit log shows it: action, who, cluster, target, outcome, detail and from where; and every action among the events kept. Only for a SuperAdmin, as that page is.
+
+{"additionalProperties":false,"properties":{"action":{"description":"Only this action or the actions under it (watson, watson.command, automation, ai.agent, …).","type":"string"},"limit":{"description":"At most this many (default 50, at most 200).","type":"integer"},"outcome":{"description":"Only this outcome (ok, denied, failed, …).","type":"string"},"query":{"description":"Only events with every one of these words.","type":"string"}},"required":[],"type":"object"}
+
+## list_cases
+
+The cases of AIOps › Inbox, on every cluster: id, title, priority, status, outcome, cluster, the object it is about, source, assignee, its stage and analysis, when opened and changed. Only for those who may see the cases.
+
+{"additionalProperties":false,"properties":{"cluster":{"description":"Only cases on this cluster, by id.","type":"string"},"limit":{"description":"At most this many (default 30).","type":"integer"},"open":{"description":"Only cases not closed.","type":"boolean"},"priority":{"description":"Only this priority (P0 to P4).","type":"string"},"query":{"description":"Only cases with this text.","type":"string"},"status":{"description":"Only this status.","enum":["new","inProgress","closed"],"type":"string"}},"required":[],"type":"object"}
+
+## get_case
+
+One case in full: its detail, the object and cluster, who opened it, status and stage, its analysis, related cases, proposed changes and their state, the fix applied and its verification, and its last 20 messages. Only for those who may see the cases.
+
+{"additionalProperties":false,"properties":{"id":{"description":"The case's id, such as C-12.","type":"string"}},"required":["id"],"type":"object"}
+
+## list_job_runs
+
+The runs of AIOps › Jobs, newest first: job, kind, agent, trigger, clusters, status, started and ended, the counts of findings and what they did, and cost. Only for those who may see AIOps › Jobs.
+
+{"additionalProperties":false,"properties":{"job":{"description":"Only this job's runs, by id.","type":"string"},"limit":{"description":"At most this many (default 20).","type":"integer"},"ref":{"description":"Only runs about this, such as report:143.","type":"string"},"status":{"description":"Only this status (running, ok, failed, skipped, …).","type":"string"}},"required":[],"type":"object"}
+
+## get_job_run
+
+One run of a job in full: its report, health, findings (at most 50) with their evidence and the case, known issue or exception each went to, proposed changes, the fixes it verified, and what it could not do. Only for those who may see AIOps › Jobs.
+
+{"additionalProperties":false,"properties":{"id":{"description":"The run's id, such as run-12.","type":"string"}},"required":["id"],"type":"object"}

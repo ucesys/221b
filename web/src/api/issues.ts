@@ -1,5 +1,5 @@
-// The issue service's settings and API tokens, for Settings › Issues
-// (Phase 12, IS-24, IS-29). The report page has its own calls
+// The issue service's settings, for Administration › AI › Issues (Phase 12, IS-29).
+// The report page has its own calls
 // (report/api.ts).
 import { call, post } from './call'
 // The operators' types build on the reporter's (Cases, Phase 12).
@@ -12,8 +12,6 @@ export interface IssueTarget {
 
 export interface IssueSettings {
   company: string
-  statusPage: string
-  reportURL: string
   matchThreshold: number
   targets: Record<string, IssueTarget>
   retentionDays: number
@@ -27,33 +25,11 @@ export interface IssueSettings {
   webhook: { url: string; events?: string[] }
 }
 
-export interface IssueToken {
-  id: string
-  name: string
-  account: string
-  scopes: string[]
-  created: string
-  createdBy: { id: string; name?: string }
-  lastUsed?: string
-}
-
-export const TOKEN_SCOPES = [
-  { id: 'reports:create', label: 'File reports' },
-  { id: 'reports:read', label: 'Read the reports it filed' },
-  { id: 'reports:onBehalf', label: 'File for a person it names' },
-] as const
-
 const base = '/api/issues/v1/'
 
 export const fetchIssueSettings = () => call<IssueSettings>(base + 'settings')
 
 export const saveIssueSettings = (s: IssueSettings) => call<IssueSettings>(base + 'settings', { method: 'PUT', body: JSON.stringify(s) })
-
-export const fetchIssueTokens = () => call<{ tokens: IssueToken[] }>(base + 'tokens').then((r) => r.tokens)
-
-export const createIssueToken = (name: string, account: string, scopes: string[]) => call<{ token: IssueToken; secret: string }>(base + 'tokens', post({ name, account, scopes }))
-
-export const revokeIssueToken = (id: string) => call<{ revoked: boolean }>(`${base}tokens/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- Cases (Phase 12, CS-07 to CS-14) ---
 // The operators' calls, for AIOps › Inbox, Reports and Known issues: the
@@ -97,6 +73,8 @@ export interface OpKnown extends Known {
   inactive?: boolean
   /** With inactive: the known issue it duplicates, "KI-2". */
   duplicateOf?: string
+  /** Who wrote it, for the Inbox's From (FU-02): an operator, or the source's system account. */
+  createdBy?: Person
 }
 
 /** A report as an operator sees it (IS-22's fields included). */

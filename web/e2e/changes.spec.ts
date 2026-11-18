@@ -9,6 +9,7 @@
 // a chat from the case drawer, and unlinks it; an agent's own link stays.
 import type { Page } from '@playwright/test'
 import { inKind } from './cluster'
+import { askSherlockFor } from './sherlockAsk'
 import { expect, test } from './test'
 
 test.describe.configure({ mode: 'serial' })
@@ -241,8 +242,12 @@ test('a person links a change asked for in a chat from the case drawer, and unli
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   // A change Sherlock proposed in a chat, sent to Watson: kept as a card that names no case.
   const command = `kubectl label namespace default e2e-link=x${Date.now()} --overwrite`
+  expect((await api(page, 'PUT', '/api/v1/sherlock/key', { key: KEY })).status).toBe(200)
+  expect((await api(page, 'PUT', '/api/v1/sherlock/config', ON)).status).toBe(200)
+  await askSherlockFor(page, api, command)
   const sent = await api(page, 'POST', '/api/v1/watson/commands', { command, from: 'Sherlock', why: 'e2e: a change asked for in a chat' })
   expect(sent.status, JSON.stringify(sent.json)).toBe(202)
+  await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   let chat: Card | undefined
   await expect
     .poll(async () => {

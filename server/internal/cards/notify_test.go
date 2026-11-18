@@ -146,7 +146,7 @@ func TestANotificationCarriesASummaryAndALinkOnly(t *testing.T) {
 	fresh.st.opts.Secrets = &backup.MemorySecret{}
 	env := &backup.Env{}
 	n, notes, err := fresh.st.Import(ctx, b, env.Open)
-	if err != nil || n != 2 || len(notes) != 0 || len(env.ToSetAgain()) != 3 || !strings.HasPrefix(env.ToSetAgain()[0].Where, "Settings › Watson › Notifications › ") {
+	if err != nil || n != 2 || len(notes) != 0 || len(env.ToSetAgain()) != 3 || !strings.HasPrefix(env.ToSetAgain()[0].Where, "Administration › Settings › Watson › Notifications › ") {
 		t.Fatalf("restored %d, %v, %v, to set again %+v", n, notes, err, env.ToSetAgain())
 	}
 	if c, err := fresh.st.Get(ctx, id); err != nil || c.Title != "Restart shop/web" || c.History[0].What == "" {

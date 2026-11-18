@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -19,6 +20,9 @@ func (w *wiring) wireWatson(ctx context.Context) {
 		Logger: log.With("component", "watson"),
 		Apps:   w.appStore,
 		Repos:  w.helmRepos,
+		// Administration › Credentials (0.12.1, CR-11).
+		Credentials: w.creds,
+		Self:        apps.ParseSelfRelease(clusters.LocalID, w.cfg.SelfRelease),
 		TwoPerson: func(c watson.Cluster) bool {
 			return c.Env == clusters.EnvProduction && w.shared.Current().WatsonOrDefault().TwoPerson
 		},

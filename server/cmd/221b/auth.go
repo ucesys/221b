@@ -135,7 +135,10 @@ func (w *wiring) wireAuth() error {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		usersRef = ns + "/" + prefix + "-users"
 	}
-	if usersRef != "" && w.authCfg.Mode == auth.ModeLocal {
+	// With LDAP sign-in the local accounts stay: they still sign in when the
+	// directory cannot be reached (break glass).
+	localAccounts := w.authCfg.Mode == auth.ModeLocal || w.authCfg.Mode == auth.ModeLDAP
+	if usersRef != "" && localAccounts {
 		ns, name, ok := strings.Cut(usersRef, "/")
 		if !ok || ns == "" || name == "" {
 			return fmt.Errorf("-users-secret must be namespace/name, got %q", usersRef)
@@ -145,7 +148,7 @@ func (w *wiring) wireAuth() error {
 			return err
 		}
 		w.authCfg.Accounts = auth.SecretBackend(sk, usersKey)
-	} else if w.authCfg.Mode == auth.ModeLocal {
+	} else if localAccounts {
 		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
 	}
 	// Sign-ins are kept in Secrets of the console's namespace when running

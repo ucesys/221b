@@ -1,5 +1,5 @@
 // The AI agents (Phase 12): providers, agents, their instructions on the way
-// from a draft to live, test cases and pilots. Settings › AI, for SuperAdmins.
+// from a draft to live, test cases and pilots. Administration › AI, for SuperAdmins.
 
 import { SherlockError, type SherlockModel, type SherlockProvider } from './sherlock'
 import { unauthorized } from './auth'
@@ -46,6 +46,23 @@ export interface ProviderView extends AIProvider {
   tested?: ProviderTest
   /** It needs no key: its last test passed without one, with its settings as they are. */
   keylessOK?: boolean
+  /** Its daily and monthly limits, 0 none, and what every agent spent on it (Phase 12.1, AI-36). */
+  limit?: Caps
+  spend?: Spend
+}
+
+/** A daily and a monthly limit in US dollars; 0 is no limit. */
+export interface Caps {
+  dailyUSD: number
+  monthlyUSD: number
+}
+
+/** An agent's or a provider's share of the spend, today and this month (UTC). */
+export interface Spend {
+  dayUSD: number
+  monthUSD: number
+  dayAsked: number
+  monthAsked: number
 }
 
 export interface AgentSettings {
@@ -116,7 +133,7 @@ export interface AgentView {
   lastTest?: TestSummary
   baselineCheck?: TestSummary
   valuesKey: string
-  spend: { dayUSD: number; monthUSD: number; dayAsked: number; monthAsked: number }
+  spend: Spend
   unusable?: string
   testing?: boolean
   footprint?: AgentFootprint
@@ -147,6 +164,36 @@ export interface CaseResult {
   tools?: string[]
   handOvers?: string[]
   costUSD: number
+  /** The case as it ran (Phase 12.1): its question, clipped, and what it expected, the planted secrets only counted. */
+  question?: string
+  expect?: CaseExpect
+  /** Every line the case expects, met or not, in order. */
+  checks?: CaseCheck[]
+}
+
+export interface CaseExpect {
+  tools?: string[]
+  handOvers?: string[]
+  refuse?: boolean
+  points?: string[]
+  /** How many planted secrets the answer must not carry; never the values. */
+  secrets?: number
+}
+
+export interface CaseCheck {
+  what: string
+  ok: boolean
+}
+
+export type RunState = 'running' | 'done' | 'stopped' | 'failed'
+export type CaseState = 'waiting' | 'running' | 'passed' | 'failed'
+
+/** A case of a run and where it stands. */
+export interface PlannedCase {
+  id: string
+  name: string
+  base?: boolean
+  state: CaseState
 }
 
 export interface ReplayResult {
@@ -171,6 +218,13 @@ export interface TestRun {
   costUSD: number
   estimate: number
   error?: string
+  /** Where the run stands (Phase 12.1); a run kept before reads as done. */
+  state?: RunState
+  /** Every case the run runs, with its state. */
+  planned?: PlannedCase[]
+  replaysPlanned?: number
+  /** The number (from 1) of the case it stopped or failed at. */
+  stoppedAt?: number
 }
 
 export interface Pilot {
@@ -205,6 +259,37 @@ export interface Version {
   at: string
   why?: string
   parts?: Record<string, string>
+  /** The draft it was, and how that draft's test ended (AI-32). */
+  rev?: number
+  test?: TestBrief
+}
+
+/** How a draft's test ended, kept with its revision and its version (AI-32). */
+export interface TestBrief {
+  at: string
+  cases: number
+  passed: number
+  state?: string
+}
+
+/** One entry of an agent's history (AI-32): a version once live (n; 0 is the chart's baseline), or a draft by its revision. */
+export interface HistoryEntry {
+  kind: 'live' | 'draft' | 'discarded'
+  n?: number
+  rev?: number
+  by?: string
+  at?: string
+  note?: string
+  inForce?: boolean
+  current?: boolean
+  test?: TestBrief
+}
+
+/** An entry whole: its house instructions, its notes by cluster, and each part of the built-in text. */
+export interface HistoryText extends HistoryEntry {
+  house: string
+  notes?: Record<string, string>
+  parts: { name: string; label: string; text: string }[]
 }
 
 export interface Instructions {
@@ -221,11 +306,21 @@ export interface Instructions {
   versions: Version[]
   draft?: Draft
   warnings?: string[]
+  /** After a save: the earlier drafts it discarded, the pilot that ended, the requests withdrawn, and a notice saying so (AI-26). */
+  discarded?: DraftDiscarded
   maxWords: number
   baselineCheck?: TestRun
   /** The agent's built-in text by part, pre-filled and editable (Phase 12, wave 5). */
   parts: PromptPart[]
   maxPartWords: number
+}
+
+/** What saving a draft discarded (AI-26). */
+export interface DraftDiscarded {
+  drafts: number[]
+  pilotEnded?: boolean
+  requests?: number[]
+  notice: string
 }
 
 /** One editable part of an agent's built-in text. */
@@ -253,7 +348,6 @@ export interface PilotEntry {
   answer: string
   model: string
   costUSD: number
-  rating?: number
 }
 
 /** The notes' key for every cluster. */
@@ -284,7 +378,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const enc = encodeURIComponent
 
 export const fetchAI = () => call<AIOverview>('GET', '/api/v1/ai')
-export const saveLimits = (dailyUSD: number, monthlyUSD: number) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD })
+/** Saves the total limits and, when given, the providers' (by id; one left out keeps its own). */
+export const saveLimits = (dailyUSD: number, monthlyUSD: number, providers?: Record<string, Caps>) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD, providers })
 export const addProvider = (p: AIProvider) => call<AIOverview>('POST', '/api/v1/ai/providers', p)
 export const saveProvider = (p: AIProvider) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(p.id)}`, p)
 export const removeProvider = (id: string) => call<AIOverview>('DELETE', `/api/v1/ai/providers/${enc(id)}`)
@@ -341,12 +436,23 @@ export const discardDraft = (id: string) => call<Instructions>('DELETE', `/api/v
 export const resolveBaseline = (id: string, action: 'keep' | 'take') => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/baseline`, { action })
 export const estimateTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live })
 export const startTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live })
+/** The agent's test run: the one in flight, with each case's state, else the latest that ended (Phase 12.1). */
+export const fetchTestRun = (id: string) => call<TestRun>('GET', `/api/v1/ai/agents/${enc(id)}/tests/run`)
+/** Stops the agent's tests in flight; the run is kept as stopped. */
+export const stopTest = (id: string) => call<{ stopping: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/tests/stop`)
 export const startPilot = (id: string, people: string[], clusters: string[], hours: number) => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/pilot`, { people, clusters, hours })
 export const stopPilot = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/pilot`)
 export const fetchPilot = (id: string) => call<{ entries: PilotEntry[] }>('GET', `/api/v1/ai/agents/${enc(id)}/pilot`)
-export const ratePilot = (n: number, rating: number) => call<{ rated: boolean }>('POST', `/api/v1/ai/pilot/${n}/rate`, { rating })
-/** Live at once when no other SuperAdmin could approve; otherwise a request on Approvals. */
-export const makeLive = (id: string) => call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/live`)
+/** Live at once when no other SuperAdmin could approve; otherwise a request on Approvals. With a reason, an untested draft goes the same way (Phase 12.1). */
+export const makeLive = (id: string, untested?: { reason: string }) =>
+  call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/live`, untested ? { untested: true, reason: untested.reason } : undefined)
+
+/** The longest reason a draft goes live untested. */
+export const MAX_UNTESTED_REASON = 300
+/** The agent's versions once live and the drafts saved since, newest first (AI-32). */
+export const fetchHistory = (id: string) => call<{ entries: HistoryEntry[] }>('GET', `/api/v1/ai/agents/${enc(id)}/history`)
+/** One entry whole: a version by its number, or a draft by its revision (a draft that went live is found as its version). */
+export const fetchHistoryItem = (id: string, kind: 'live' | 'draft', n: number) => call<HistoryText>('GET', `/api/v1/ai/agents/${enc(id)}/history/${kind}/${n}`)
 export const restoreVersion = (id: string, n: number) => call<{ waiting?: boolean; request?: { id: number }; live?: Version }>('POST', `/api/v1/ai/agents/${enc(id)}/versions/${n}/restore`)
 /** Saves an answer of the person's own conversation as a test case. */
 export const saveTestCase = (cluster: string, message: number, name: string, points: string[], agent?: string) => call<{ id: string }>('POST', '/api/v1/ai/tests', { cluster, message, name, points, ...(agent ? { agent } : {}) })
@@ -366,6 +472,11 @@ export function stateTone(s: PromptState): string {
 }
 
 /** A test run in one line: "12 of 12 cases passed · 18 of 20 replays the same · $1.40"; no cost without `usd`. */
+/** Whether a run ran every case to the end: only such a run tests a draft (a run kept before Phase 12.1 does unless its error says otherwise). */
+export function testComplete(t: TestRun): boolean {
+  return t.state ? t.state === 'done' : !t.error
+}
+
 export function testLine(t: TestSummary | TestRun, usd?: (n: number) => string): string {
   const replays = 'replays' in t ? (Array.isArray(t.replays) ? t.replays.length : t.replays) : 0
   const parts = [`${t.passed} of ${t.cases} recorded case${t.cases === 1 ? '' : 's'} passed`]

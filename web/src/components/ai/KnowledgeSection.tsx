@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   addSource,
   fetchKnowledge,
-  fileBase64,
+  forgetSourceCert,
+  forgetStoreCert,
+  LIVE_ADDRESS_LABEL,
+  liveCheckText,
   moveStore,
-  removeDocument,
   removeSource,
   saveHookToken,
   saveSource,
@@ -12,25 +14,34 @@ import {
   saveStore,
   setSourceOn,
   SOURCE_KIND_LABEL,
+  sourceMode,
   sourceTestText,
   syncJobId,
   testStore,
   testTypedSource,
-  uploadDocument,
+  trustSourceCert,
+  trustStoreCert,
   type KeysChange,
   type KnowledgeSource,
+  type LiveAddress,
   type KnowledgeView,
   CONFIGMAP_STORE_LABEL,
+  SOURCES_HREF,
   type SourceTestResult,
   type StoreCheck,
   type StoreSettings,
 } from '../../api/knowledge'
+import type { PinnedWith, PresentedCert } from '../../api/certificates'
 import { fmtTs } from '../../lib/format'
-import { adminHref } from '../../lib/router'
+import { CertificateResult, PinnedCertNote } from '../CertificateTrust'
+import { aiHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
+import { CredentialPicker } from '../CredentialPicker'
+import { GitRepoPicker } from '../apps/GitRepoPicker'
+import { fetchCredentials, type CredentialUse } from '../../api/credentials'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
-import { AddedInMycroft } from './AddedInMycroft'
+import { UploadedDocuments } from './UploadedDocuments'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -61,10 +72,15 @@ function Text({ label, value, onChange, placeholder, testId, type, width }: { la
 /** Where a source was last read, and how; title says more when there is more. */
 function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone: string; title?: string } {
   if (s.off) return { text: 'Off', tone: 'muted' }
+  // A live source is never read into the wiki: looked up when asked (KN-39).
+  if (s.kind === 'live') return !s.credMigrated && s.auth && !v.creds[s.id]?.token ? { text: 'No token', tone: 'warn' } : { text: 'Looked up when asked', tone: 'ok' }
   const st = v.status.sources?.[s.id]
   if (st?.error) return { text: st.error, tone: 'err' }
-  if (s.kind === 'confluence' && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
-  if (s.kind === 's3' && s.credentials !== 'identity' && !v.creds[s.id]?.accessKey) return { text: 'No access key', tone: 'warn' }
+  // A source names its credential (0.12.1, CR-11); one of before keeps its own until the upgrade moves it.
+  const own = !s.credMigrated && !s.credential
+  if (s.kind === 'web' && own && s.auth && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
+  if (s.kind === 'confluence' && (own ? !v.creds[s.id]?.token : !s.credential)) return { text: 'No credential', tone: 'warn' }
+  if (s.kind === 's3' && s.credentials !== 'identity' && (own ? !v.creds[s.id]?.accessKey : !s.credential)) return { text: 'No access key', tone: 'warn' }
   if (st?.reported) return { text: `${st.reported} ${st.reported === 1 ? 'page' : 'pages'} not followed`, tone: 'warn' }
   if (!st?.lastRead) return { text: 'Not read yet', tone: 'muted' }
   // A bucket's objects of other kinds, or too large, are skipped (KN-25).
@@ -72,27 +88,47 @@ function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone
   return { text: `Read · ${st.items} ${st.items === 1 ? 'item' : 'items'}`, tone: 'ok' }
 }
 
-/** A bucket source's credentials, as its row says them (KN-25). */
-function bucketCreds(v: KnowledgeView, s: KnowledgeSource): string {
+/** A bucket source's credentials, as its row says them (KN-25, CR-11). */
+function bucketCreds(v: KnowledgeView, s: KnowledgeSource, names: Record<string, string>): string {
   if (s.credentials === 'identity') return 'the pod’s identity'
-  return v.creds[s.id]?.accessKey ? 'access key in a Secret' : 'no access key'
+  return credLine(v, s, names)
+}
+
+/** A source's credential, as its row says it: by name (CR-11), or the one kept before 0.12.1. */
+function credLine(v: KnowledgeView, s: KnowledgeSource, names: Record<string, string>): string {
+  if (s.credential) return `credential ${names[s.credential] ?? s.credential}`
+  if (!s.credMigrated && (v.creds[s.id]?.token || v.creds[s.id]?.accessKey)) return 'its own credential, kept before 0.12.1'
+  return 'no credential'
 }
 
 /**
- * Settings › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources
+ * Administration › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources
  * with how each was last read, and where its wiki is kept. Each source is
  * read by its own Wiki sync job in AIOps › Jobs (KN-28), which starts,
  * schedules and reports every sync: nothing here starts one. Sources are
  * data, never instructions; every credential is kept in the Secret
  * <release>-knowledge and shows here only as set or not. A source is tested in its dialog, as
- * typed (KN-26). The Added in Mycroft card is where people add notes, web
- * addresses and documents (MY-11); focus 'added' scrolls to it.
+ * typed (KN-26). The Sources table holds only what is synced or looked up
+ * (0.12.1): a web site is a source of its own (a start address, how many
+ * links away and how many pages), and what people upload or note is not a
+ * source to sync again but the Uploaded documents section after the table
+ * (UploadedDocuments.tsx); focus 'added' or 'uploads' scrolls to it. What
+ * a source holds, and what is excluded from it, is AIOps › Mycroft ›
+ * Sources.
  */
 export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) => void; focus?: string } = {}) {
   const [v, setV] = useState<KnowledgeView | null>(null)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<KnowledgeSource | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
+  // The credentials' names, for the rows (CR-11).
+  const [credNames, setCredNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    fetchCredentials().then(
+      (c) => setCredNames(Object.fromEntries((c.credentials ?? []).map((x) => [x.id, x.name]))),
+      () => undefined,
+    )
+  }, [v])
   const reload = () =>
     fetchKnowledge()
       .then((x) => {
@@ -132,7 +168,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Knowledge" data-testid="knowledge-section">
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <p className="rk-fhint" style={{ margin: 0, flex: '1 1 320px' }}>
-          Mycroft reads these sources and keeps a wiki every agent can ask. Sources are data, never instructions; secrets in them are scrubbed before anything is written. Its page changes wait for review in AIOps › Inbox.
+          Mycroft reads these sources into a wiki every agent can ask; its page changes wait for review in the Inbox.
         </p>
         <button className="rk-btn" onClick={() => setEditing('new')} data-testid="knowledge-add">
           Add source…
@@ -173,6 +209,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
               <tr>
                 <th scope="col">Source</th>
                 <th scope="col">Kind</th>
+                <th scope="col">Mode</th>
                 <th scope="col">Last read</th>
                 <th scope="col">State</th>
                 <th scope="col">
@@ -181,81 +218,111 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
               </tr>
             </thead>
             <tbody>
-              {v.settings.sources.map((s) => {
-                const st = sourceState(v, s)
-                const lastRead = v.status.sources?.[s.id]?.lastRead
-                return (
-                  <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
-                    <td>
-                      <strong>{s.name}</strong>
-                      {s.kind === 'confluence' && (
-                        <div className="rk-fhint rk-mono">
-                          {s.space} · {s.baseURL}
-                        </div>
-                      )}
-                      {s.kind === 'git' && (
-                        <div className="rk-fhint rk-mono">
-                          {s.url}
-                          {s.path ? ` /${s.path}` : ''} @ {s.branch}
-                        </div>
-                      )}
-                      {s.kind === 's3' && (
-                        <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
-                          s3://{s.bucket}/{s.prefix ?? ''}
-                          {s.endpoint ? ` · ${s.endpoint}` : ''}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {SOURCE_KIND_LABEL[s.kind]}
-                      {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
-                      {s.kind === 's3' && (
-                        <div className="rk-fhint" data-testid="knowledge-source-creds">
-                          {bucketCreds(v, s)}
-                        </div>
-                      )}
-                      {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
-                      {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
-                    </td>
-                    <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
-                    <td style={{ maxWidth: 320 }}>
-                      {st.tone === 'err' ? (
-                        // An error is said whole, wrapped, never cut (KN-28).
-                        <span className="rk-t" data-tone="err" style={{ fontSize: 12, overflowWrap: 'anywhere' }} data-testid="knowledge-source-state">
-                          {st.text}
-                        </span>
-                      ) : (
-                        <span className="rk-pill" data-tone={st.tone} title={st.title ?? st.text} data-testid="knowledge-source-state">
-                          {st.text}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {/* Test is in the source's dialog, with the values as typed (KN-26). */}
-                      <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
-                        Job
-                      </a>{' '}
-                      <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
-                        {s.off ? 'Turn on' : 'Turn off'}
-                      </button>{' '}
-                      <button className="rk-link" onClick={() => setEditing(s)} data-testid="knowledge-source-edit">
-                        Edit…
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
+              {v.settings.sources
+                .filter((s) => s.kind !== 'upload')
+                .map((s) => {
+                  const st = sourceState(v, s)
+                  const lastRead = v.status.sources?.[s.id]?.lastRead
+                  return (
+                    <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
+                      <td>
+                        <strong>{s.name}</strong>
+                        {s.kind === 'confluence' && (
+                          <div className="rk-fhint rk-mono">
+                            {s.space} · {s.baseURL}
+                          </div>
+                        )}
+                        {s.kind === 'git' && (
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-git-line">
+                            {s.repository ? `${s.repository} · ` : ''}
+                            {s.url}
+                            {s.path ? ` /${s.path}` : ''} @ {s.branch}
+                          </div>
+                        )}
+                        {s.kind === 'live' && (
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-live-line">
+                            {s.addresses?.[0]?.url}
+                            {(s.addresses?.length ?? 0) > 1 ? ` and ${(s.addresses?.length ?? 0) - 1} more` : ''}
+                          </div>
+                        )}
+                        {s.kind === 'web' && (
+                          <div className="rk-fhint" data-testid="knowledge-source-web-line">
+                            <span className="rk-mono">{s.url}</span> · {depthWords(s.depth ?? 1)} · at most {s.pages ?? 20} pages
+                            {(s.excluded?.length ?? 0) > 0 && ` · ${s.excluded!.length} excluded`}
+                          </div>
+                        )}
+                        {s.kind !== 'web' && (s.excluded?.length ?? 0) > 0 && (
+                          <div className="rk-fhint" data-testid="knowledge-source-excluded">
+                            {s.excluded!.length} excluded
+                          </div>
+                        )}
+                        {s.kind === 's3' && (
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
+                            s3://{s.bucket}/{s.prefix ?? ''}
+                            {s.endpoint ? ` · ${s.endpoint}` : ''}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {SOURCE_KIND_LABEL[s.kind]}
+                        {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{credLine(v, s, credNames)}</div>}
+                        {s.kind === 's3' && (
+                          <div className="rk-fhint" data-testid="knowledge-source-creds">
+                            {bucketCreds(v, s, credNames)}
+                          </div>
+                        )}
+                        {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
+                        {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
+                        {(s.kind === 'live' || s.kind === 'web') && <div className="rk-fhint">{!s.credential && (s.credMigrated || !s.auth) ? 'no sign-in' : credLine(v, s, credNames)}</div>}
+                      </td>
+                      <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
+                        {sourceMode(s)}
+                      </td>
+                      <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
+                      <td style={{ maxWidth: 320 }}>
+                        {st.tone === 'err' ? (
+                          // An error is said whole, wrapped, never cut (KN-28).
+                          <span className="rk-t" data-tone="err" style={{ fontSize: 12, overflowWrap: 'anywhere' }} data-testid="knowledge-source-state">
+                            {st.text}
+                          </span>
+                        ) : (
+                          <span className="rk-pill" data-tone={st.tone} title={st.title ?? st.text} data-testid="knowledge-source-state">
+                            {st.text}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {/* Test is in the source's dialog, with the values as typed (KN-26). */}
+                        {s.kind !== 'live' && (
+                          <>
+                            <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
+                              Job
+                            </a>{' '}
+                          </>
+                        )}
+                        <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
+                          {s.off ? 'Turn on' : 'Turn off'}
+                        </button>{' '}
+                        <button className="rk-link" onClick={() => setEditing(s)} data-testid="knowledge-source-edit">
+                          Edit…
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
             </tbody>
           </table>
         </div>
-        {v.settings.sources
-          .filter((s) => s.kind === 'upload' && s.id !== ADDED_SOURCE)
-          .map((s) => (
-            <Documents key={s.id} source={s} v={v} busy={busy} run={run} />
-          ))}
-        {/* What people add in Mycroft, and the form to add it (MY-11). */}
-        {v.settings.sources.some((s) => s.id === ADDED_SOURCE) && <AddedInMycroft onToast={onToast} focus={focus === 'added'} />}
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          What each source holds, and what is excluded from it, is in{' '}
+          <a className="rk-link" href={SOURCES_HREF} data-testid="knowledge-items-link">
+            AIOps › Mycroft › Sources
+          </a>
+          .
+        </p>
       </section>
+      {/* What people upload or note: not a source to sync again (0.12.1). */}
+      <UploadedDocuments onToast={onToast} focus={focus === 'added' || focus === 'uploads'} />
       <StoreCard v={v} onSaved={() => void reload()} onToast={onToast} />
       <section aria-label="More" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         <h3 className="rk-h" style={{ marginBottom: 4 }}>
@@ -264,7 +331,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
         <StaleDays v={v} run={run} busy={busy} />
         <HookToken set={v.hook} run={run} busy={busy} />
         <Row label="Mycroft’s model" hint="Its model, budget and instructions">
-          <a className="rk-link" href={adminHref('settings', ['agents'])} data-testid="knowledge-model-link">
+          <a className="rk-link" href={aiHref('agents')} data-testid="knowledge-model-link">
             Mycroft, under Agents
           </a>
         </Row>
@@ -272,9 +339,10 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
       {editing && (
         <SourceDrawer
           seed={editing === 'new' ? null : editing}
-          tokenSet={editing !== 'new' && !!v.creds[editing.id]?.token}
-          keySet={editing !== 'new' && !!v.creds[editing.id]?.accessKey}
+          ownCredential={editing !== 'new' && !editing.credMigrated && !editing.credential && !!(v.creds[editing.id]?.token || v.creds[editing.id]?.accessKey)}
           identity={v.identity}
+          pinned={editing === 'new' ? undefined : v.pins?.[editing.id]}
+          onPinChanged={() => void reload()}
           onClose={() => setEditing(null)}
           onRemove={editing === 'new' || editing.kind === 'upload' || editing.kind === 'console' || editing.kind === 'fixes' ? undefined : () => void run(() => removeSource(editing.id), 'Source removed.').then(() => setEditing(null))}
           onSaved={(msg) => {
@@ -288,52 +356,9 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
   )
 }
 
-/** The source of what people add in Mycroft (the server's AddedSourceID). */
-const ADDED_SOURCE = 'added'
-
-/** The uploaded documents of a source, and an upload. */
-function Documents({ source, v, busy, run }: { source: KnowledgeSource; v: KnowledgeView; busy: boolean; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void> }) {
-  const input = useRef<HTMLInputElement>(null)
-  const docs = v.documents?.[source.id] ?? []
-  return (
-    <div className="rk-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="knowledge-documents">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 12.5 }}>{source.name}</strong>
-        <span className="rk-fhint">Markdown, text, Word (.docx), PDF and HTML, up to 20 MiB. Read once when uploaded; only the excerpts and the pages Mycroft writes are kept.</span>
-        <span style={{ flex: '1 1 auto' }} />
-        <input
-          ref={input}
-          type="file"
-          accept=".md,.markdown,.txt,.rst,.adoc,.docx,.pdf,.html,.htm,.csv"
-          style={{ display: 'none' }}
-          data-testid="knowledge-upload-input"
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            e.target.value = ''
-            if (f) void run(async () => uploadDocument(source.id, f.name, await fileBase64(f)), `Mycroft is reading ${f.name}.`)
-          }}
-        />
-        <button className="rk-btn" disabled={busy || !v.settings.store.kind} onClick={() => input.current?.click()} data-testid="knowledge-upload">
-          Upload…
-        </button>
-      </div>
-      {docs.length === 0 ? (
-        <span className="rk-fhint">No documents yet.</span>
-      ) : (
-        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
-          {docs.map((d) => (
-            <li key={d.id}>
-              {d.title} <span className="rk-fhint">{d.lastRead ? `read ${fmtTs(d.lastRead)}` : 'waiting to be read'}</span>{' '}
-              <button className="rk-link" disabled={busy} onClick={() => void run(() => removeDocument(source.id, d.id), `${d.title} removed.`)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
+/** A web site's link depth, in words. */
+export const DEPTH_WORDS = ['only the start page', 'and the pages it links to', 'two links away', 'three links away']
+const depthWords = (d: number) => DEPTH_WORDS[d] ?? `${d} links away`
 
 function StaleDays({ v, run, busy }: { v: KnowledgeView; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void>; busy: boolean }) {
   const [days, setDays] = useState(String(v.settings.staleDays || 30))
@@ -413,11 +438,12 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
   const [st, setSt] = useState<StoreSettings>(saved.kind ? saved : blankStore('git'))
   const [keys, setKeys] = useState<KeysChange>({})
   const [replace, setReplace] = useState(false)
-  const [check, setCheck] = useState<{ ok: boolean; check?: StoreCheck; error?: string } | null>(null)
+  const [check, setCheck] = useState<{ ok: boolean; check?: StoreCheck; error?: string; certificate?: PresentedCert } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const put = (p: Partial<StoreSettings>) => setSt((s) => ({ ...s, ...p }))
-  const changed = JSON.stringify(st) !== JSON.stringify(saved) || Object.keys(keys).length > 0
+  // The pinned certificate is Trust's and Forget's, not the form's (CR-16).
+  const changed = JSON.stringify({ ...st, pinnedCert: undefined }) !== JSON.stringify({ ...saved, pinnedCert: undefined }) || Object.keys(keys).length > 0
   const moving = !!saved.kind && (st.kind !== saved.kind || st.url !== saved.url || st.bucket !== saved.bucket || st.prefix !== saved.prefix || st.endpoint !== saved.endpoint)
   const act = async (fn: () => Promise<unknown>, msg: string) => {
     setBusy(true)
@@ -572,10 +598,41 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           </Row>
         </>
       )}
+      {saved.pinnedCert && st.kind === saved.kind && (
+        <div style={{ marginTop: 8 }}>
+          <PinnedCertNote
+            pinned={{ pin: saved.pinnedCert, with: 'store' }}
+            mayForget
+            onForget={async () => {
+              await forgetStoreCert()
+              setCheck(null)
+              onToast?.('The pinned certificate is forgotten.')
+              onSaved()
+            }}
+          />
+        </div>
+      )}
       {check && !check.ok && (
         <p className="rk-callout" data-tone="warn" role="alert" style={{ margin: '8px 0 0', fontSize: 12.5 }} data-testid="knowledge-store-test">
           {check.error}
         </p>
+      )}
+      {check?.certificate && (
+        <div style={{ marginTop: 8 }}>
+          <CertificateResult
+            cert={check.certificate}
+            mayTrust
+            onTrust={
+              changed
+                ? undefined
+                : async (sha256) => {
+                    await trustStoreCert(sha256)
+                    onSaved()
+                  }
+            }
+            unavailable="Save the store first: its certificate is trusted with it."
+          />
+        </div>
       )}
       {check?.ok && (
         <p className="rk-callout" data-tone={check.check?.warnings?.length ? 'warn' : 'info'} role="status" style={{ margin: '8px 0 0', fontSize: 12.5 }} data-testid="knowledge-store-test">
@@ -637,27 +694,36 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
 /** A source being added or changed. */
 function SourceDrawer({
   seed,
-  tokenSet,
-  keySet = false,
+  ownCredential = false,
   identity = false,
+  pinned,
+  onPinChanged,
   onClose,
   onSaved,
   onRemove,
 }: {
   seed: KnowledgeSource | null
-  tokenSet: boolean
-  keySet?: boolean
+  /** The certificate pinned for it: its own, its credential's, its repository's (CR-19). */
+  pinned?: PinnedWith
+  onPinChanged?: () => void
+  /** It keeps its own credential of before 0.12.1, used until one is chosen. */
+  ownCredential?: boolean
   identity?: boolean
   onClose: () => void
   onSaved: (msg: string) => void
   onRemove?: () => void
 }) {
   const [s, setS] = useState<KnowledgeSource>(seed ?? { id: '', name: '', kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
-  const [token, setToken] = useState('')
-  // A bucket's access key (KN-25): typed here, sent once, never shown again.
-  const [keys, setKeys] = useState<KeysChange>({})
+  // The credential of Administration › Credentials, by id (CR-10, CR-11): the
+  // saved one, or none; null on a new source until chosen.
+  const [cred, setCred] = useState<string | null>(seed ? (seed.credential ?? (seed.kind === 's3' && seed.credentials === 'identity' ? IDENTITY : '')) : null)
+  // --- Administration › Settings › Repositories (0.12.1, RP-03): a git source picks a git
+  // repository of the list, whose address and credential it reads with;
+  // the branch and the directory stay its own.
+  const [gitRepo, setGitRepo] = useState(seed?.repository ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [pin, setPin] = useState<PinnedWith | undefined>(pinned)
   // Test's state (KN-26): running, or what it found; kept until a field
   // changes or Test runs again. gen counts the changes, so a test's answer
   // to values changed since is dropped.
@@ -676,20 +742,27 @@ function SourceDrawer({
   // people upload or add are there from the start: only their name
   // changes here.
   const builtIn = s.kind === 'upload' || s.kind === 'console' || s.kind === 'fixes'
-  // Only what was typed is sent: the saved credential stays otherwise.
-  const typedKeys = (): KeysChange => {
-    const typed: KeysChange = {}
-    if (s.credentials !== 'identity' && keys.accessKeyId) typed.accessKeyId = keys.accessKeyId
-    if (s.credentials !== 'identity' && keys.secretAccessKey) typed.secretAccessKey = keys.secretAccessKey
-    return typed
+  // The source as sent: it names its credential, or a bucket the pod's identity.
+  const withCred = (): KnowledgeSource => {
+    const src: KnowledgeSource = { ...s, id }
+    if (s.kind === 'live') src.addresses = liveAddresses(s)
+    if (s.kind === 's3') {
+      src.credentials = cred === IDENTITY ? 'identity' : 'keys'
+      src.credential = cred === IDENTITY ? '' : (cred ?? '')
+    } else if (s.kind === 'git') {
+      src.repository = gitRepo
+      src.credential = ''
+    } else if (signsIn(s.kind)) src.credential = cred ?? ''
+    // The sign-in of before 0.12.1 is the credential's now.
+    if (s.kind === 'live' || s.kind === 'web') src.auth = ''
+    return src
   }
   const runTest = async () => {
     const mine = ++gen.current
     setTest({ running: true })
     let r: SourceTestResult
     try {
-      const src = { ...s, id }
-      r = s.kind === 's3' ? await testTypedSource(src, undefined, typedKeys(), seed?.id) : await testTypedSource(src, token || undefined, undefined, seed?.id)
+      r = await testTypedSource(withCred(), seed?.id)
     } catch (e) {
       r = { ok: false, error: errorText(e) }
     }
@@ -699,12 +772,9 @@ function SourceDrawer({
     setBusy(true)
     setError('')
     try {
-      const src = { ...s, id }
-      if (s.kind === 's3') {
-        if (seed) await saveSource(src, undefined, typedKeys())
-        else await addSource(src, undefined, typedKeys())
-      } else if (seed) await saveSource(src, token || undefined)
-      else await addSource(src, token || undefined)
+      const src = withCred()
+      if (seed) await saveSource(src)
+      else await addSource(src)
       onSaved(seed ? `${s.name} saved.` : `${s.name} added.`)
     } catch (e) {
       setError(errorText(e))
@@ -722,7 +792,7 @@ function SourceDrawer({
       testId="knowledge-source-drawer"
       footer={
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim()} onClick={() => void save()} data-testid="knowledge-source-save">
+          <button className="rk-btn" data-primary="true" disabled={busy || !s.name.trim() || (s.kind === 'git' ? !gitRepo : signsIn(s.kind) && cred === null)} onClick={() => void save()} data-testid="knowledge-source-save">
             {seed ? 'Save' : 'Add source'}
           </button>
           <button className="rk-btn" onClick={onClose}>
@@ -745,23 +815,48 @@ function SourceDrawer({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 0' }}>
         {!seed && (
           <Select
+            label="Mode"
+            value={s.kind === 'live' ? 'live' : 'ingest'}
+            options={[
+              ['ingest', 'Ingest (read into the wiki)'],
+              ['live', 'Live (looked up when troubleshooting, not copied)'],
+            ]}
+            onChange={(m) => {
+              setS(m === 'live' ? { id: s.id, name: s.name, kind: 'live', addresses: [{ kind: 'page', url: '' }], auth: '' } : { id: s.id, name: s.name, kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
+              changed()
+            }}
+            testId="knowledge-source-mode-select"
+          />
+        )}
+        {!seed && s.kind !== 'live' && (
+          <Select
             label="Kind"
             value={s.kind}
             options={[
               ['confluence', 'Confluence space'],
               ['git', 'Git repository of runbooks'],
               ['s3', 'S3 bucket of documents'],
+              ['web', 'Web site'],
             ]}
             onChange={(k) => {
               if (k === 's3') {
                 setS({ id: s.id, name: s.name, kind: 's3', bucket: '', prefix: '', region: '', endpoint: '', pathStyle: false, credentials: 'keys' })
+                changed()
+              } else if (k === 'web') {
+                setS({ id: s.id, name: s.name, kind: 'web', url: '', depth: 1, pages: 20, auth: '' })
                 changed()
               } else put(k === 'git' ? { kind: 'git', branch: 'main' } : { kind: 'confluence', flavor: 'cloud' })
             }}
             testId="knowledge-source-kind"
           />
         )}
-        <Text label="Name" value={s.name} onChange={(x) => put({ name: x })} placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : 'Confluence space: Infrastructure'} testId="knowledge-source-name" />
+        <Text
+          label="Name"
+          value={s.name}
+          onChange={(x) => put({ name: x })}
+          placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : s.kind === 'live' ? 'Known problems' : s.kind === 'web' ? 'Vendor documentation' : 'Confluence space: Infrastructure'}
+          testId="knowledge-source-name"
+        />
         {s.kind === 'confluence' && (
           <>
             <Select
@@ -775,17 +870,24 @@ function SourceDrawer({
               testId="knowledge-source-flavor"
             />
             <Text label="Address" value={s.baseURL ?? ''} onChange={(x) => put({ baseURL: x })} placeholder="https://example.atlassian.net" testId="knowledge-source-url" />
-            {s.flavor !== 'datacenter' && <Text label="Account email" value={s.email ?? ''} onChange={(x) => put({ email: x })} testId="knowledge-source-email" />}
             <Text label="Space key" value={s.space ?? ''} onChange={(x) => put({ space: x })} placeholder="INFRA" testId="knowledge-source-space" />
           </>
         )}
         {s.kind === 'git' && (
           <>
-            <Text label="Repository address (HTTPS)" value={s.url ?? ''} onChange={(x) => put({ url: x })} placeholder="https://git.example.com/ops/runbooks.git" testId="knowledge-source-url" />
+            <GitRepoPicker
+              label="Repository"
+              value={gitRepo}
+              keptAddress={gitRepo ? undefined : s.url || undefined}
+              onChange={(r) => {
+                setGitRepo(r?.name ?? '')
+                put({ url: r?.url ?? '', repository: r?.name ?? '', ...(r?.defaultBranch && (!s.branch || s.branch === 'main') ? { branch: r.defaultBranch } : {}) })
+              }}
+              testId="knowledge-source-repository"
+            />
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Text label="Branch" value={s.branch ?? ''} onChange={(x) => put({ branch: x })} width={160} />
               <Text label="Directory (empty: all)" value={s.path ?? ''} onChange={(x) => put({ path: x })} width={200} />
-              <Text label="User" value={s.username ?? ''} onChange={(x) => put({ username: x })} placeholder="x-access-token" width={160} />
             </div>
           </>
         )}
@@ -802,43 +904,10 @@ function SourceDrawer({
               Path-style addresses (most S3-compatible stores)
             </label>
             <span className="rk-fhint">Mycroft reads Markdown, text, Word (.docx), PDF, HTML and CSV under the prefix, up to 20 MiB each and 1000 objects a read; anything else is skipped and counted.</span>
-            <Select
-              label="Credentials"
-              value={s.credentials ?? 'keys'}
-              options={[
-                ['keys', 'A read-only access key in a Secret'],
-                ['identity', identity ? 'The pod’s identity' : 'The pod’s identity (none found)'],
-              ]}
-              onChange={(x) => put({ credentials: x as 'keys' | 'identity' })}
-              testId="knowledge-source-credentials"
-            />
-            {s.credentials !== 'identity' && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Text
-                  label={keySet ? 'Access key ID (saved; type to replace)' : 'Access key ID'}
-                  value={keys.accessKeyId ?? ''}
-                  onChange={(x) => {
-                    setKeys({ ...keys, accessKeyId: x })
-                    changed()
-                  }}
-                  width={220}
-                  testId="knowledge-source-akid"
-                />
-                <Text
-                  label={keySet ? 'Secret access key (saved; type to replace)' : 'Secret access key'}
-                  type="password"
-                  value={keys.secretAccessKey ?? ''}
-                  onChange={(x) => {
-                    setKeys({ ...keys, secretAccessKey: x })
-                    changed()
-                  }}
-                  width={240}
-                  testId="knowledge-source-secret"
-                />
-              </div>
-            )}
           </>
         )}
+        {s.kind === 'live' && <LiveFields s={s} put={put} />}
+        {s.kind === 'web' && <WebFields s={s} put={put} />}
         {builtIn && (
           <span className="rk-fhint" data-testid="knowledge-source-builtin">
             There from the start: only its name changes here. Its Wiki sync job is renamed with it.
@@ -846,26 +915,48 @@ function SourceDrawer({
         )}
         {!builtIn && (
           <>
-            {s.kind !== 's3' && (
-              <Text
-                label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'}
-                type="password"
-                value={token}
-                onChange={(x) => {
-                  setToken(x)
+            {s.kind !== 'git' && (
+              <CredentialPicker
+                use={sourceUse(s)}
+                address={sourceAddress(s)}
+                value={cred}
+                onChange={(v) => {
+                  setCred(v)
                   changed()
                 }}
-                testId="knowledge-source-token"
+                label={
+                  s.kind === 's3'
+                    ? 'Credentials: a read-only access key, or the pod’s identity'
+                    : s.kind === 'confluence'
+                      ? s.flavor === 'datacenter'
+                        ? 'Credential: a personal access token sent as Bearer'
+                        : 'Credential: the account’s email and an API token, sent as Basic'
+                      : 'Credential (any way of sending)'
+                }
+                extra={s.kind === 's3' ? [{ value: IDENTITY, label: identity ? 'The pod’s identity' : 'The pod’s identity (none found)' }] : []}
+                testId="knowledge-source-credential"
               />
             )}
-            <span className="rk-fhint">Kept in the Secret &lt;release&gt;-knowledge and never shown again. Use a read-only credential: Mycroft never writes to its sources.</span>
+            {ownCredential && cred === '' && s.kind !== 'git' && (
+              <span className="rk-fhint" data-testid="knowledge-source-own-credential">
+                It reads with its own credential, kept before 0.12.1, until one is chosen here.
+              </span>
+            )}
+            <span className="rk-fhint">The credential is sent only to the addresses under its endpoint, never to a model{s.kind === 'live' ? ': each address is checked' : ''}. Use a read-only one: Mycroft never writes to its sources.</span>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
               Private CA (optional)
               <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
             </label>
             {/* Test's result, under the fields; its button is in the footer (KN-26). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
-              <span className="rk-fhint">Test lists what Mycroft would read with the values typed here, without saving them{seed ? '; a credential left blank is the saved one' : ''}.</span>
+              <span className="rk-fhint">
+                {s.kind === 'live'
+                  ? 'Test reads each address once with the values typed here, without saving them'
+                  : s.kind === 'web'
+                    ? 'Test reads the site as typed here and lists the pages Mycroft would read, without saving them'
+                    : 'Test lists what Mycroft would read with the values typed here, without saving them'}
+                .
+              </span>
               {test?.running && (
                 <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
                   Testing…
@@ -883,6 +974,49 @@ function SourceDrawer({
                   {sourceTestText(test.r)}
                 </p>
               )}
+              {test && !test.running && test.r.certificate && (
+                <CertificateResult
+                  cert={test.r.certificate}
+                  mayTrust
+                  onTrust={
+                    seed || (s.kind !== 'git' && cred && cred !== IDENTITY)
+                      ? async (sha256) => {
+                          setPin(await trustSourceCert(sha256, withCred(), seed?.id))
+                          onPinChanged?.()
+                        }
+                      : undefined
+                  }
+                  unavailable="Save the source first: without a credential, its certificate is trusted with the source."
+                />
+              )}
+              {pin && (
+                <PinnedCertNote
+                  pinned={pin}
+                  mayForget={!!seed && pin.with !== 'repository'}
+                  onForget={
+                    seed
+                      ? async () => {
+                          await forgetSourceCert(seed.id)
+                          setPin(undefined)
+                          setTest(null)
+                          onPinChanged?.()
+                        }
+                      : undefined
+                  }
+                />
+              )}
+              {test && !test.running && test.r.live && (
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="knowledge-source-live-results">
+                  {test.r.live.map((c, i) => (
+                    <li key={i} data-state={c.ok ? 'ok' : 'error'} style={{ overflowWrap: 'anywhere' }}>
+                      <span className="rk-mono">{c.url}</span>:{' '}
+                      <span className="rk-t" data-tone={c.ok ? 'ok' : 'err'}>
+                        {liveCheckText(c)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </>
         )}
@@ -893,6 +1027,97 @@ function SourceDrawer({
         )}
       </div>
     </Drawer>
+  )
+}
+
+/** A live source's addresses as saved: the empty rows left out. */
+function liveAddresses(s: KnowledgeSource): LiveAddress[] {
+  return (s.addresses ?? []).filter((a) => a.url.trim() !== '').map((a) => (a.kind === 'confluenceSearch' ? a : { kind: a.kind, url: a.url }))
+}
+
+/** A live source's addresses and sign-in (KN-39): never copied, read when the agents troubleshoot. */
+function LiveFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void }) {
+  const list = s.addresses ?? []
+  const set = (i: number, p: Partial<LiveAddress>) => put({ addresses: list.map((a, j) => (j === i ? { ...a, ...p } : a)) })
+  return (
+    <>
+      <span className="rk-fhint">
+        Never copied into the wiki: each address is read when an agent troubleshoots (up to 200 KiB a page, kept five minutes), and a report no known issue explains is checked against it. The console reads them from its pod: with the
+        network policy on, their hosts must be listed under the chart’s knowledge.egressCIDRs.
+      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="knowledge-live-addresses">
+        {list.map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }} data-testid="knowledge-live-address">
+            <Select label={`Address ${i + 1}`} value={a.kind} options={Object.entries(LIVE_ADDRESS_LABEL) as [LiveAddress['kind'], string][]} onChange={(k) => set(i, { kind: k as LiveAddress['kind'] })} testId="knowledge-live-kind" />
+            <Text
+              label={a.kind === 'confluenceSearch' ? 'Confluence site (with /wiki for Cloud)' : 'Address (https)'}
+              value={a.url}
+              onChange={(x) => set(i, { url: x })}
+              placeholder={a.kind === 'confluenceSearch' ? 'https://example.atlassian.net/wiki' : a.kind === 'confluencePage' ? 'https://example.atlassian.net/wiki/spaces/OPS/pages/123/Known+problems' : 'https://status.example.com/'}
+              width={320}
+              testId="knowledge-live-url"
+            />
+            {a.kind === 'confluenceSearch' && <Text label="Space key" value={a.space ?? ''} onChange={(x) => set(i, { space: x })} placeholder="OPS" width={110} testId="knowledge-live-space" />}
+            {list.length > 1 && (
+              <button className="rk-link" onClick={() => put({ addresses: list.filter((_, j) => j !== i) })} data-testid="knowledge-live-remove">
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+        {list.length < 20 && (
+          <button className="rk-btn" style={{ alignSelf: 'flex-start' }} onClick={() => put({ addresses: [...list, { kind: 'page', url: '' }] })} data-testid="knowledge-live-add">
+            Add an address
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+/** The select's value for a bucket read with the pod's identity. */
+const IDENTITY = '__identity'
+
+/** Whether a kind of source signs in with a credential (CR-11). */
+const signsIn = (k: KnowledgeSource['kind']) => k === 'confluence' || k === 'git' || k === 's3' || k === 'web' || k === 'live'
+
+/** What a source's credential is for: the picker offers only what serves it. */
+function sourceUse(s: KnowledgeSource): CredentialUse {
+  if (s.kind === 'git') return 'git'
+  if (s.kind === 's3') return 's3'
+  if (s.kind === 'confluence') return s.flavor === 'datacenter' ? 'confluence-dc' : 'confluence-cloud'
+  return 'http'
+}
+
+/** The address a source's credential must cover: its site, repository, bucket, start address, or first address. */
+export function sourceAddress(s: KnowledgeSource): string {
+  if (s.kind === 'confluence') return s.baseURL ?? ''
+  if (s.kind === 'git' || s.kind === 'web') return s.url ?? ''
+  if (s.kind === 's3') return s.bucket ? `${(s.endpoint ?? '').trim().replace(/\/+$/, '') || 'https://s3.amazonaws.com'}/${s.bucket}` : ''
+  if (s.kind === 'live') return s.addresses?.find((a) => a.url.trim())?.url ?? ''
+  return ''
+}
+
+/** The most pages a web site's read takes. */
+export const MAX_SITE_PAGES = 200
+
+/** A web site (0.12.1): its start address, how many links away and at most how many pages are read, and its sign-in. */
+function WebFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void }) {
+  return (
+    <>
+      <Text label="Start address" value={s.url ?? ''} onChange={(x) => put({ url: x })} placeholder="https://docs.example.com/runbooks/" testId="knowledge-web-url" />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
+          Link depth
+          <Select label="Link depth" value={String(s.depth ?? 1)} options={DEPTH_WORDS.map((w, i): [string, string] => [String(i), `${i}: ${w}`])} onChange={(x) => put({ depth: Number(x) })} testId="knowledge-web-depth" />
+        </label>
+        <Text label={`Page limit (1–${MAX_SITE_PAGES})`} type="number" value={String(s.pages ?? 20)} onChange={(x) => put({ pages: Number(x) })} width={150} testId="knowledge-web-pages" />
+      </div>
+      <span className="rk-fhint">
+        Only pages of the same site are read, one at a time; robots.txt and pages that ask not to be indexed are respected, and what is excluded in AIOps › Mycroft › Sources is neither read nor followed. The console reads the site from its
+        pod: with the network policy on, its host must be listed under the chart’s knowledge.egressCIDRs.
+      </span>
+    </>
   )
 }
 

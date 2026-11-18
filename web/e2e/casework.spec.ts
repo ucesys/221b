@@ -7,7 +7,7 @@
 // the same drawer with a reply and a note, and closed as a known issue
 // made from it; duplicates, whose original is checked, with what fits
 // instead when it is closed; New Case offering to add to a case like it;
-// the old addresses; Settings › SLA and Cases; and, with the case analysis
+// the old addresses; Administration › AI › SLA and Cases; and, with the case analysis
 // job on, the Troubleshooter's analysis with the fix it suggests, Open in
 // Watson, the change it proposes, and the RCA it drafts. Since wave 6e the
 // RCA is part of the case: its fix is what was done (no second field), and
@@ -376,12 +376,12 @@ test('with the case analysis job on, the Troubleshooter analyses a case, suggest
   await expect(drawer.getByTestId('case-open-watson')).toBeEnabled()
 })
 
-test('Settings › SLA has P0 to P4, and Settings › Cases keeps its values within their ranges', async ({ page }) => {
-  await page.goto('/#/admin/settings/sla')
+test('Administration › AI › SLA has P0 to P4, and Administration › AI › Cases keeps its values within their ranges', async ({ page }) => {
+  await page.goto('/#/admin/ai/sla')
   for (const p of [0, 1, 2, 3, 4]) await expect(page.getByTestId(`sla-P${p}`)).toBeVisible()
   await expect(page.getByTestId('sla-P0')).toContainText('P0: Outage')
   await page.locator('[data-testid="settings-section"][data-section="cases"]').click()
-  await expect(page).toHaveURL(/#\/admin\/settings\/cases$/)
+  await expect(page).toHaveURL(/#\/admin\/ai\/cases$/)
   const settings = page.getByTestId('cases-settings')
   await expect(settings.getByTestId('cases-newCasesPerRun')).toBeVisible()
   const was = await settings.getByTestId('cases-newCasesPerRun').inputValue()

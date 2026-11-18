@@ -774,11 +774,15 @@ func TestNodeShellAndNodeCommand(t *testing.T) {
 	}
 	m.End(s.ID, alice(), "")
 	waitState(t, m, s.ID, StateEnded)
-	if len(f.deleted) != 1 || !strings.HasPrefix(f.deleted[0], "pod/221b-privileged/") {
-		t.Fatalf("deleted %v", f.deleted)
+	f.mu.Lock()
+	deleted := append([]string(nil), f.deleted...)
+	// The ended shell's goroutine may still be in Exec, reading the output.
+	f.output = "Filesystem 84%\n"
+	f.mu.Unlock()
+	if len(deleted) != 1 || !strings.HasPrefix(deleted[0], "pod/221b-privileged/") {
+		t.Fatalf("deleted %v", deleted)
 	}
 
-	f.output = "Filesystem 84%\n"
 	c, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeCommand, Node: "worker-3", Command: "df -h"}, alice(), "Bob", "")
 	done := waitState(t, m, c.ID, StateEnded)
 	if done.EndedBy != EndFinished || string(m.Output(c.ID)) != "Filesystem 84%\n" {

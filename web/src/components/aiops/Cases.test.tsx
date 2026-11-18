@@ -40,7 +40,7 @@ vi.mock('../../api/casework', async (original) => ({ ...(await original<typeof i
 
 const admin: Me = { mode: 'oidc', user: { subject: 's', username: 'ann', name: 'Ann' }, admin: true, roles: ['superAdmin'], method: 'oidc', sessionIdleSeconds: 0 }
 const viewer: Me = { ...admin, admin: false, roles: ['viewer'] }
-const op = { person: { id: 'ann', name: 'Ann' }, report: true, operator: true, admin: true, company: '', statusPage: '', reportURL: '/report' }
+const op = { person: { id: 'ann', name: 'Ann' }, report: true, operator: true, admin: true, company: '', reportURL: '/report' }
 
 const report = (n: number, over: Partial<issues.OpReport> = {}): issues.OpReport => ({
   number: n,

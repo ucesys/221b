@@ -100,7 +100,7 @@ test('the Inbox is one table of every kind, pending first, with its filters in t
   await expect(page.getByRole('grid', { name: 'Inbox' })).toHaveCount(1)
   // No Kind filter or column since wave 6c (CF-38): a row's id and status say what it is.
   await expect(page.getByTestId('inbox-kinds')).toHaveCount(0)
-  await expect(page.getByRole('columnheader')).toHaveText([/^Priority/, /^Title/, /^Type/, /^Incident/, /^Cluster/, /^Object/, /^Status/, /^Waiting/, /^Assignee/, /^Last change/])
+  await expect(page.getByRole('columnheader')).toHaveText([/^Priority/, /^Title/, /^Type/, /^Incident/, /^Cluster/, /^Object/, /^Status/, /^Waiting/, /^From/, /^Assignee/, /^Last change/])
   await expect(page.getByTestId('inbox-show-pending')).toHaveAttribute('aria-pressed', 'true')
   const kase = page.locator(`[data-inbox-row="case:${c.number}"]`)
   await expect(kase).toHaveAttribute('aria-label', new RegExp(`^Case C-${c.number}: `))
@@ -231,7 +231,7 @@ test('the Inbox takes most of a wide screen, with Columns and Export just above 
 })
 
 test('the bell stands for what waits in the Inbox, in every area, and opens it; the Inbox links to the alerts (CF-80, CF-81)', async ({ page }) => {
-  for (const hash of ['#/nodes', '#/scripts', '#/aiops/inbox', '#/admin/users']) {
+  for (const hash of ['#/nodes', '#/scripts', '#/aiops/inbox', '#/admin/auth/users']) {
     await page.goto('/' + hash)
     const bell = page.getByTestId('inbox-bell')
     await expect(bell).toBeVisible()

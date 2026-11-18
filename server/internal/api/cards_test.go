@@ -291,14 +291,15 @@ func TestStandingApprovalsAndChannelsAreASuperAdmins(t *testing.T) {
 
 // A change Sherlock proposed in a chat and the person sent to Watson is
 // kept as a durable card too; approved there, its Watson card goes, and
-// Watson runs it once, as the approver.
+// Watson runs it once, as the approver. Only a command from one of
+// Sherlock's answers in the person's own conversation is.
 func TestAChatsChangeIsADurableCardToo(t *testing.T) {
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
 	var st *cards.Store
 	var wsvc *watson.Service
-	srv, ops, m, _, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+	srv, ops, _, _, local, sh, m, store := sherlockConsole(t, "ops@corp.example", nil, nil, func(o *Options) {
 		wsvc = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), CheckEvery: 50 * time.Millisecond})
 		o.Watson = wsvc
 		st = cards.New(cards.Options{Audit: o.Audit, Logger: quietLog(), Cluster: func(id string) (cards.ClusterInfo, bool) {
@@ -310,7 +311,22 @@ func TestAChatsChangeIsADurableCardToo(t *testing.T) {
 	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvDevelopment, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
 		t.Fatal(err)
 	}
-	r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"kubectl cordon worker-002","from":"Sherlock","why":"worker-002 reports disk pressure"}`)
+	enableSherlock(t, srv, ops, `{"clusters":{"local":true},"model":"claude-opus-5-5","dailyUSD":20,"monthlyUSD":200}`)
+	// Said to come from Sherlock, but in no answer of the person's: a
+	// Watson card only, as typed.
+	r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"kubectl cordon worker-002","from":"Sherlock"}`)
+	var typed []watsonItem
+	if _ = json.Unmarshal([]byte(b), &typed); r.StatusCode != http.StatusAccepted || len(typed) != 1 || typed[0].From != "Typed" {
+		t.Fatalf("a command in no answer: %d %s", r.StatusCode, b)
+	}
+	if none := listProposals(t, srv, ops, ""); len(none.Proposals) != 0 {
+		t.Fatalf("a command in no answer made a card: %+v", none.Proposals)
+	}
+	send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+typed[0].ID+"/discard", "")
+	if m := askAndRead(t, srv, ops, sh, "Suggest the command kubectl cordon worker-002"); !strings.Contains(m.Text, "kubectl cordon worker-002") {
+		t.Fatalf("answer: %+v", m)
+	}
+	r, b = send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"kubectl cordon worker-002","from":"Sherlock","why":"worker-002 reports disk pressure"}`)
 	if r.StatusCode != http.StatusAccepted {
 		t.Fatalf("submit: %d %s", r.StatusCode, b)
 	}
@@ -337,6 +353,7 @@ func TestAChatsChangeIsADurableCardToo(t *testing.T) {
 	}
 	// Sending the same again replaces nothing that is done, and a newer
 	// one replaces the older that waits.
+	askAndRead(t, srv, ops, sh, "Suggest the command kubectl uncordon worker-002")
 	send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"kubectl uncordon worker-002","from":"Sherlock"}`)
 	send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"kubectl uncordon worker-002","from":"Sherlock"}`)
 	if open := listProposals(t, srv, ops, "?state=queued"); len(open.Proposals) != 1 {
@@ -387,5 +404,54 @@ func TestACardsAlertConditionFollowsTheAlertsTab(t *testing.T) {
 	st.Sweep(ctx)
 	if c, _ := st.Get(ctx, id); c.State != cards.Expired || !strings.Contains(c.Reason, "its alert resolved") {
 		t.Fatalf("once it runs: %+v", c)
+	}
+}
+
+// A chat's durable card shows what the person who asked may see: an
+// Admin whose Kubernetes rights stop at web, asking to change a Secret's
+// annotation in default, gets a card without the annotation's value.
+func TestAChatsCardShowsWhatItsRequesterMaySee(t *testing.T) {
+	s := sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	var st *cards.Store
+	srv, ops, _, _, local, sh, m, store := sherlockConsole(t, "ops@corp.example", nil, nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), CheckEvery: 50 * time.Millisecond})
+		st = cards.New(cards.Options{Audit: o.Audit, Logger: quietLog(), Cluster: func(id string) (cards.ClusterInfo, bool) {
+			return cards.ClusterInfo{Name: "Here"}, id == clusters.LocalID
+		}})
+		o.Cards, o.CardRoles = st, []roles.ID{roles.SuperAdmin}
+	})
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvDevelopment, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range [][2]string{
+		{"/api/v1/namespaces/default/secrets", `{"metadata":{"name":"db-creds","annotations":{"note":"value-only-some-may-read"}},"data":{"k":"dg=="}}`},
+		{"/sim/deny", `{"only":{"221b-local:ops@corp.example":["web"]}}`},
+	} {
+		resp, err := http.Post(simSrv.URL+p[0], "application/json", strings.NewReader(p[1]))
+		if err != nil || resp.StatusCode/100 != 2 {
+			t.Fatalf("%s: %v %v", p[0], resp, err)
+		}
+		resp.Body.Close()
+	}
+	enableSherlock(t, srv, ops, `{"clusters":{"local":true},"model":"claude-opus-5-5","dailyUSD":20,"monthlyUSD":200}`)
+	line := "kubectl annotate secret db-creds -n default note-"
+	askAndRead(t, srv, ops, sh, "Suggest the command "+line)
+	if r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands", `{"command":"`+line+`","from":"Sherlock"}`); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit: %d %s", r.StatusCode, b)
+	}
+	list := listProposals(t, srv, ops, "")
+	if len(list.Proposals) != 1 || len(list.Proposals[0].Plans) != 1 {
+		t.Fatalf("proposals: %+v", list)
+	}
+	pl := list.Proposals[0].Plans[0]
+	if text := strings.Join(append(pl.Targets, pl.Impact...), "\n"); strings.Contains(text, "value-only-some-may-read") || pl.Fingerprint == "" {
+		t.Fatalf("the card: %+v", pl)
+	}
+	_, b := send(t, ops, http.MethodGet, srv.URL+"/api/v1/aiops/proposals/"+list.Proposals[0].ID, "")
+	if strings.Contains(b, "value-only-some-may-read") {
+		t.Fatalf("the card's view: %s", b)
 	}
 }

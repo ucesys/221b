@@ -15,7 +15,7 @@ import (
 
 // --- Mycroft tab (Phase 12, wave 5, MY-04 to MY-08, ADR-118) ---
 //
-// What people add in Mycroft's wiki (since MY-11 in Settings › Knowledge's
+// What people add in Mycroft's wiki (since MY-11 in Administration › AI › Knowledge's
 // Added in Mycroft card, once AIOps › Mycroft › Wiki › Add): a note of plain text,
 // a web address to read (the pages of that site it links to, as deep and
 // as many as asked, robots.txt respected), or documents. Each goes in as
@@ -82,6 +82,9 @@ type AddedItem struct {
 type Skipped struct {
 	URL string `json:"url"`
 	Why string `json:"why"`
+	// failed says it could not be fetched (not refused by the site's own
+	// rules): a web site's read that failed some is not every item.
+	failed bool
 }
 
 // AddResult is what an addition did.
@@ -136,7 +139,7 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 		return AddResult{}, err
 	}
 	if x, ok := set.source(AddedSourceID); !ok || x.Off {
-		return AddResult{}, invalid("the source %q is switched off in Settings › Knowledge: switch it on to add to the wiki", "Added in Mycroft")
+		return AddResult{}, invalid("the source %q is switched off in Administration › AI › Knowledge: switch it on to add to the wiki", "Added in Mycroft")
 	}
 	if _, _, err := s.currentStore(ctx); err != nil {
 		return AddResult{}, err
@@ -147,7 +150,7 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 	var docs []pendingDoc
 	keep := func(name, title, url, text string, raw []byte) {
 		text = scrub.Known(scrub.Text(text), secrets)
-		docs = append(docs, pendingDoc{source: AddedSourceID, name: name, title: title, url: url, text: text, hash: hashOf(append([]byte(url+"\x00"+title+"\x00"), raw...)), at: now, by: c.label()})
+		docs = append(docs, pendingDoc{source: AddedSourceID, name: name, title: title, url: url, text: text, hash: hashOf(append([]byte(url+"\x00"+title+"\x00"), raw...)), at: now, by: c.label(), kind: in.Kind})
 		res.Items = append(res.Items, AddedItem{ID: name, Title: title, URL: url, Bytes: len(text)})
 	}
 	var detail string
@@ -183,41 +186,22 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 		}
 		keep(name, name, "", text, in.Data)
 		detail = fmt.Sprintf("document %s added to the wiki's sources (%d bytes)", name, len(in.Data))
-	case AddURL:
-		depth := DefaultCrawlDepth
-		if in.Depth != nil {
-			depth = *in.Depth
-		}
-		pages := in.Pages
-		if pages == 0 {
-			pages = DefaultCrawlPages
-		}
-		if depth < 0 || depth > MaxCrawlDepth {
-			return AddResult{}, invalid("a crawl follows links 0 to %d deep", MaxCrawlDepth)
-		}
-		if pages < 1 || pages > MaxCrawlPages {
-			return AddResult{}, invalid("a crawl reads 1 to %d pages", MaxCrawlPages)
-		}
-		cctx, cancel := context.WithTimeout(ctx, CrawlTime)
-		defer cancel()
-		cr, err := s.crawl(cctx, strings.TrimSpace(in.URL), depth, pages)
-		if err != nil {
-			return AddResult{}, err
-		}
-		for _, p := range cr.pages {
-			keep(itemName("web ", p.host+p.path), p.title, p.url, p.text, []byte(p.text))
-		}
-		res.Skipped, res.More = cr.skipped, cr.more
-		if len(res.Items) == 0 {
-			why := "no page could be read"
-			if len(cr.skipped) > 0 {
-				why = cr.skipped[0].URL + ": " + cr.skipped[0].Why
+		// One document of a name (MY-12): one uploaded before to the
+		// other source of uploaded documents is replaced by this one.
+		for _, x := range set.Sources {
+			if x.Kind == SourceUpload && x.ID != AddedSourceID && s.holds(x.ID, name) {
+				if err := s.removeDocument(ctx, c, x.ID, name); err != nil {
+					s.o.Logger.Warn("a document replaced by one of the same name stays in its source", "source", x.ID, "err", err)
+				} else {
+					detail += fmt.Sprintf("; it replaces the one of %s", x.ID)
+				}
 			}
-			return AddResult{}, invalid("nothing was read from %s: %s", clip(in.URL, 200), why)
 		}
-		detail = fmt.Sprintf("%d web pages of %s added to the wiki's sources (depth %d, at most %d pages; %d skipped)", len(res.Items), cr.start, depth, pages, len(cr.skipped))
+	case AddURL:
+		// Since 0.12.1 a web address is a source of its own (KN-44).
+		return AddResult{}, invalid("a web address is read as a Web site source now: a SuperAdmin adds one in Administration › AI › Knowledge")
 	default:
-		return AddResult{}, invalid("an addition is text, url or document")
+		return AddResult{}, invalid("an addition is text or document")
 	}
 	s.audit(audit.Event{Action: ActionAdd, Who: c.who(), Target: AddedSourceID, Outcome: audit.OutcomeOK, Detail: detail, From: c.From})
 	s.readSoon(ctx, c, docs, "addition")
@@ -296,6 +280,16 @@ type WikiState struct {
 	Sources   []SourceBrief `json:"sources"`
 	Added     []ItemState   `json:"added"`
 	Limits    AddLimits     `json:"limits"`
+	// Usage is the ConfigMap store's room, when the wiki is kept there:
+	// a wiki of hundreds of pages fills it, and the Wiki says so before
+	// (KN-37).
+	Usage *StoreUsage `json:"usage,omitempty"`
+}
+
+// StoreUsage is how much of the ConfigMap wiki store is used, in bytes.
+type StoreUsage struct {
+	Used  int `json:"used"`
+	Limit int `json:"limit"`
 }
 
 // AddLimits are the additions' limits, for the form to say.
@@ -329,6 +323,12 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 	if s.o.Store != nil && w.Store == "" {
 		w.Store = s.o.Store.Kind()
 	}
+	if w.Store == StoreConfigMap && s.cmStore != nil {
+		// A failure to read it leaves the room unsaid, not the Wiki.
+		if used, err := s.cmStore.Used(ctx); err == nil {
+			w.Usage = &StoreUsage{Used: used, Limit: s.cmStore.limit}
+		}
+	}
 	s.mu.RLock()
 	for p := range s.files {
 		switch {
@@ -347,7 +347,7 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 			b.Skipped, b.SkippedWhy = ss.Skipped, ss.SkippedWhy
 		}
 		for _, it := range m.bySource(x.ID) {
-			if !it.Gone {
+			if !it.Gone && !it.record() {
 				b.Items++
 			}
 		}

@@ -3,7 +3,7 @@
 //
 // - This is outdated…: an Admin or a SuperAdmin (who may add to the wiki)
 //   writes what is outdated and what is true now. It becomes a note of
-//   "Added in Mycroft" tied to the page, and Mycroft redrafts the page
+//   Uploaded documents tied to the page, and Mycroft redrafts the page
 //   with it; the redraft waits for review as every change does. The page
 //   says a correction waits until the redraft is decided.
 // - Retire page… and Make active again…: a reviewer asks, with a reason;
@@ -127,7 +127,7 @@ export function PageActions({ page, mayAdd, mayReview, model, onChanged, onToast
           />
           <span className="rk-fhint" data-testid="wiki-outdated-hint">
             {model
-              ? 'It is added as a correction of this page under Sources. Mycroft redrafts the page with it, the correction winning over older sources, and the redraft waits for review under Drafts.'
+              ? 'It is added as a correction of this page, a note under Uploaded documents. Mycroft redrafts the page with it, the correction winning over older sources, and the redraft waits for review under Drafts.'
               : 'Mycroft has no model here: the correction is kept as a source the agents can quote, and no page is written from it.'}
           </span>
         </ConfirmDialog>

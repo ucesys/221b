@@ -133,6 +133,14 @@ func TestTroubleshootingAProposalCF61CF62(t *testing.T) {
 	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/PC-9/sherlock/ask", `{"question":"Why?"}`); r.StatusCode != http.StatusNotFound {
 		t.Fatalf("no such proposal: %d", r.StatusCode)
 	}
+	// A view action's result comes back on the proposal's own route
+	// (SR-19): one nobody waits for is refused, and a Viewer cannot post.
+	if r, b := send(t, ops, http.MethodPost, chat+"/ui/nosuchaction", `{"applied":true}`); r.StatusCode != http.StatusNotFound || !strings.Contains(b, "no view action") {
+		t.Fatalf("an unknown action's result: %d %s", r.StatusCode, b)
+	}
+	if r, _ := send(t, viewer, http.MethodPost, chat+"/ui/nosuchaction", `{"applied":true}`); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("a Viewer's result: %d", r.StatusCode)
+	}
 
 	// Watson from the proposal: a read, checked and logged.
 	cmd := func(c *http.Client, body string) (int, []watsonItem) {

@@ -1,5 +1,5 @@
 // AIOps › Mycroft's sub-tabs share one column and one page layout
-// (CF-55): at 1440px the Known issues, Exceptions and Fixes tables are as
+// (CF-55): at 1440px the Sources (0.12.1), Known issues, Exceptions and Fixes tables are as
 // wide as each other and start at the same left edge, whatever they hold
 // (an empty one keeps its header), and the Wiki sits in the same column.
 // Each page's intro line spans the column, as on Jobs. Validation rules,
@@ -9,6 +9,7 @@
 import { expect, test } from './test'
 
 const TABLES = [
+  ['sources', 'sources-table'],
   ['known', 'known-table'],
   ['exceptions', 'exceptions-table'],
   ['fixes', 'fixes-table'],

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/kube"
 )
 
 // What Watson does for the durable cards of agents' proposals (Phase 12,
@@ -20,8 +21,11 @@ import (
 // change as the last of them, in their Watson panel, without a card of
 // its own: the durable card was that card.
 
-// Inspection is what a change would act on now, read with the console's
-// own account: an agent that proposes it has no person to read as.
+// Inspection is what a change would act on now. Its targets and impact
+// are read as the person a card was asked for, as an approval card's are
+// (ADR-51); only an agent's own card, with no person to read as, reads
+// them with the console's account. Its fingerprint is read with the
+// console's account: it says only whether the objects changed since.
 type Inspection struct {
 	// Line is the command as Watson reads it.
 	Line string `json:"line"`
@@ -31,16 +35,33 @@ type Inspection struct {
 	// Fingerprint is a digest of every part of those objects the command
 	// depends on: the same guards that lapse a Watson card (ADR-51).
 	Fingerprint string `json:"fingerprint"`
+	// Refusal says why the change may not run, or "": it removes values
+	// from the console's own release.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 // ErrNotChange is a line a durable card cannot carry: a read runs at
 // once, without anyone's approval.
 var ErrNotChange = errors.New("not a change")
 
-// Inspect parses a change and reads what it would act on now. An object
-// that cannot be read is an error: a fingerprint without it would prove
-// nothing.
-func (s *Service) Inspect(ctx context.Context, cl Cluster, line string) (Inspection, error) {
+// Inspect parses a change and reads what it would act on now. as is the
+// person the card was asked for: its targets and impact are read as them,
+// so it shows nothing their own access does not; nil reads them with the
+// console's account, for an agent's own card. The fingerprint is read with
+// the console's account whoever asked, so the same objects give the same
+// fingerprint. An object that cannot be read for it is an error: a
+// fingerprint without it would prove nothing.
+func (s *Service) Inspect(ctx context.Context, cl Cluster, line string, as *kube.Person) (Inspection, error) {
+	return s.inspect(ctx, cl, line, as, true)
+}
+
+// Fingerprint is Inspect without the targets and impact: what a card's
+// recheck compares, read with the console's account.
+func (s *Service) Fingerprint(ctx context.Context, cl Cluster, line string) (Inspection, error) {
+	return s.inspect(ctx, cl, line, nil, false)
+}
+
+func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube.Person, describe bool) (Inspection, error) {
 	c, err := Parse(line)
 	if err != nil {
 		return Inspection{}, err
@@ -52,7 +73,7 @@ func (s *Service) Inspect(ctx context.Context, cl Cluster, line string) (Inspect
 	if cl.Config == nil {
 		return out, errors.New("the cluster cannot be reached")
 	}
-	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, pin: &appPin{}}
+	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: &appPin{}}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	if err != nil {
 		return out, fmt.Errorf("cannot reach the cluster: %w", err)
@@ -63,7 +84,25 @@ func (s *Service) Inspect(ctx context.Context, cl Cluster, line string) (Inspect
 		return out, fmt.Errorf("cannot reach the cluster: %w", err)
 	}
 	targets, guards, impact := cardFor(ctx, cs, c, t)
-	out.Targets, out.Impact = targets, impact
+	_, alert, refusal := s.cardAlert(cl.ID, c, t.pin)
+	out.Refusal = refusal
+	switch {
+	case !describe:
+	case as == nil || as.Nobody():
+		out.Targets, out.Impact = targets, withAlert(alert, impact)
+	default:
+		// What the card shows is read again as the person: what they may
+		// not see is left out, and the card says so.
+		asker := Target{Config: cl.Config, Person: *as, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, Discovery: d, pin: &appPin{}}
+		acs, err := clientsFor(ctx, asker)
+		if err != nil {
+			out.Impact = withAlert(alert, []string{"Watson could not read the cluster to work out the impact: " + err.Error()})
+			break
+		}
+		var asImpact []string
+		out.Targets, _, asImpact = cardFor(ctx, acs, c, asker)
+		out.Impact = withAlert(alert, asImpact)
+	}
 	parts := make([]string, 0, len(guards))
 	for _, g := range guards {
 		got, err := g.read(ctx, cs)
@@ -95,6 +134,13 @@ func (s *Service) RunApproved(cl Cluster, approver Who, line, from, why string, 
 	it := &Item{ID: newID(), Cluster: cl.ID, cmd: c, Line: c.Line, Change: true, From: from, Why: why, Requester: approver, Created: now, Exit: -1}
 	s.record(ActionCommand, it, approver, audit.OutcomeOK, "kind=change from="+quote(from))
 	if r := s.refusalFor(cl, Who{}, nil, false, false); r != nil && r.Rule != "two people" {
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it, r
+	}
+	if inspected != nil && inspected.Refusal != "" {
+		r := refuse("own release", "%s", inspected.Refusal)
 		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 		s.add(it)
 		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))

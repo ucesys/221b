@@ -12,6 +12,7 @@ import {
   updateApp,
   type AppDrift,
   type AppImage,
+  type ImageCheck,
   type AppInput,
   type AppRefs,
   type AppSource,
@@ -36,7 +37,11 @@ import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
 import { DiffDialog } from './DiffDialog'
 import { DriftDialog } from './DriftDialog'
+import { ImageCheckNote, NewerImageNotice } from './NewerImages'
 import { RevisionActions } from './revisionActions'
+import { SelfReleaseCallout, ValuesOriginNote } from './SelfRelease'
+import { useUnsaved } from '../../lib/unsaved'
+import { GitRepoPicker } from './GitRepoPicker'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
 export type AppTab = (typeof APP_TABS)[number]
@@ -72,7 +77,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const [checking, setChecking] = useState(false)
   const [refs, setRefs] = useState<AppRefs | null>(null)
   const [revisions, setRevisions] = useState<RevisionView[] | null>(null)
-  const [images, setImages] = useState<{ revision: number; images: AppImage[] } | null>(null)
+  const [images, setImages] = useState<{ revision: number; images: AppImage[]; checks?: Record<string, ImageCheck> } | null>(null)
   const [imageRev, setImageRev] = useState<number | undefined>(undefined)
   const [diffFor, setDiffFor] = useState<number | null>(null)
   const [driftOpen, setDriftOpen] = useState(false)
@@ -179,6 +184,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               </span>
               <span role="cell" className="rk-mono" style={{ padding: '7px 12px', borderBottom: '1px solid var(--line)' }}>
                 {im.tag || (im.digest ? '(digest)' : 'latest')}
+                <ImageCheckNote check={images.checks?.[im.image]} />
               </span>
               <span role="cell" className="rk-mono" style={{ padding: '7px 12px', borderBottom: '1px solid var(--line)', color: 'var(--fg3)' }}>
                 {im.registry || 'docker.io'}
@@ -341,6 +347,8 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             )}
           </span>
         </div>
+        {(app?.self || d?.self) && <SelfReleaseCallout />}
+        {!row.orphan && <NewerImageNotice images={row.newerImages} onImages={tab === 'images' ? undefined : () => onTab('images')} />}
         {row.orphan ? (
           <>
             <div className="rk-callout" data-tone="warn" data-testid="app-orphan">
@@ -416,6 +424,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   const [values, setValues] = useState(app.values ?? '')
   const [params, setParams] = useState((app.params ?? []).join('\n'))
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
+  useUnsaved(state === 'dirty', 'the values editor')
   const [error, setError] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -489,6 +498,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         </span>
       }
     >
+      <ValuesOriginNote app={app} />
       <YamlEditor
         value={values}
         onChange={({ text, errors }) => {
@@ -540,7 +550,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
 /**
  * The application's source, edited in place and saved when a field is
  * left (HA-05, HA-11): the repository, the chart's path, the branch or
- * tag, a token for a private repository, and whether to make the
+ * tag, the credential for a private repository (0.12.1, CR-10), and whether to make the
  * namespace at install. A release the console did not install gets its
  * record here.
  */
@@ -628,6 +638,8 @@ function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clu
 /** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
 interface SourceDraft {
   repo: string
+  /** The git repository of Administration › Settings › Repositories picked, by name (RP-03). */
+  repository?: string
   path: string
   ref: string
   refKind: RefKind
@@ -641,25 +653,61 @@ function readDraft(key: string): SourceDraft | null {
     return null
   }
 }
+/**
+ * A repository address as a draft keeps it in the browser: without a user
+ * name, password or token, query or fragment, any of which may carry a
+ * secret. An address that is not a URL (git@host:path) is kept as it is.
+ */
+function draftAddress(repo: string): string {
+  try {
+    const u = new URL(repo.trim())
+    if (!u.username && !u.password && !u.search && !u.hash) return repo
+    u.username = ''
+    u.password = ''
+    u.search = ''
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return repo
+  }
+}
+/** Whether an address carries a user name or password (or token). */
+function hasUserinfo(repo: string): boolean {
+  try {
+    const u = new URL(repo.trim())
+    return !!(u.username || u.password)
+  } catch {
+    return false
+  }
+}
 function writeDraft(key: string, d: SourceDraft | null) {
   try {
-    if (d) sessionStorage.setItem(key, JSON.stringify(d))
+    if (d) sessionStorage.setItem(key, JSON.stringify({ ...d, repo: draftAddress(d.repo) }))
     else sessionStorage.removeItem(key)
   } catch {
     // Storage off: the draft lives only in the card.
   }
 }
 
-function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
+/** The Setup card of a release from git (exported for its test). */
+export function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
   const key = draftKey(clusterId, row)
   const [draft] = useState(() => readDraft(key))
-  const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
+  // A draft keeps the address without its user name or token: the saved
+  // address is used again where the draft names it.
+  const [repo, setRepo] = useState(draft && app && draft.repo === draftAddress(app.source.repo) ? app.source.repo : (draft?.repo ?? app?.source.repo ?? ''))
+  // --- Administration › Settings › Repositories (0.12.1, RP-03): the git repository of
+  // the list, by name; its address and credential are its own, and the
+  // release keeps its path and branch or tag.
+  const [gitRepo, setGitRepo] = useState(draft?.repository ?? app?.source.repository ?? '')
   const [path, setPath] = useState(draft?.path ?? app?.source.path ?? '')
   const [ref, setRef] = useState(draft?.ref ?? app?.source.ref ?? '')
   const [refKind, setRefKind] = useState<RefKind>(draft?.refKind ?? app?.source.refKind ?? 'branch')
-  const [token, setToken] = useState('')
+  // The credential is the repository's: used to look the repository over.
+  const [cred, setCred] = useState(app?.credential ?? '')
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
+  useUnsaved(state === 'dirty', 'the release’s source')
   const [error, setError] = useState(() => (draft ? (draft.repo.trim() && draft.ref.trim() ? 'Not saved yet: press Save.' : 'Not saved: needs a repository and a branch or tag.') : ''))
   // The repository is looked over when its URL is typed (M-07): the chart's path and the default branch fill what is empty.
   const [look, setLook] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; text: string } | null>(null)
@@ -675,25 +723,29 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   useEffect(() => {
     if (stateRef.current !== 'saved' || !app) return
     setRepo(app.source.repo)
+    setGitRepo(app.source.repository ?? '')
     setPath(app.source.path ?? '')
     setRef(app.source.ref)
     setRefKind(app.source.refKind)
     setCreateNs(app.createNamespace ?? false)
+    setCred(app.credential ?? '')
   }, [app])
   // What is typed now, for a save that starts after a repository look-over
   // finished (the blur's closure would be stale).
-  const latest = useRef({ repo, path, ref, refKind, token, createNs })
+  const latest = useRef({ repo, gitRepo, path, ref, refKind, cred, createNs })
   useEffect(() => {
-    latest.current = { repo, path, ref, refKind, token, createNs }
-  }, [repo, path, ref, refKind, token, createNs])
-  const dirty = (createNsNow: boolean, tok: string) => {
+    latest.current = { repo, gitRepo, path, ref, refKind, cred, createNs }
+  }, [repo, gitRepo, path, ref, refKind, cred, createNs])
+  const dirty = (createNsNow: boolean) => {
     const l = latest.current
-    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
+    return (
+      !saved || l.repo.trim() !== saved.repo || l.gitRepo !== (saved.repository ?? '') || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false)
+    )
   }
   // pressed: Save or Enter, which reports a missing field; quiet: after a
   // look-over, which saves only what is complete.
-  const save = (createNsNow = latest.current.createNs, tok = latest.current.token, pressed = false, quiet = false) => {
-    if (!canChange || !dirty(createNsNow, tok)) return
+  const save = (createNsNow = latest.current.createNs, pressed = false, quiet = false) => {
+    if (!canChange || !dirty(createNsNow)) return
     const l = latest.current
     if (!l.repo.trim() || !l.ref.trim()) {
       if (quiet) return
@@ -704,7 +756,10 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     }
     setState('saving')
     setError('')
-    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, token: tok || undefined, createNamespace: createNsNow }
+    // The credential is the repository's (RP-03); an address kept before
+    // 0.12.1 that names no repository is sent as it is, and the server
+    // records the listed repository at it.
+    const input = { source: { repo: l.repo.trim(), ...(l.gitRepo ? { repository: l.gitRepo } : {}), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, createNamespace: createNsNow }
     // One save after another: two fields left in quick succession must not
     // race; and an answer marks the card clean only when nothing was typed
     // since it went out.
@@ -714,10 +769,9 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       .then((r) => {
         if (seq.current === mine) {
           setState('saved')
-          setToken('')
           writeDraft(key, null)
         }
-        onResult(r, !isCard(r) && r.tokenRemoved ? 'Source saved; the token saved for the old repository was removed' : saved ? 'Source saved' : 'Source set')
+        onResult(r, !isCard(r) && r.credentialRemoved ? 'Source saved; its credential does not cover the new repository and was let go' : saved ? 'Source saved' : 'Source set')
       })
       .catch((e: unknown) => {
         if (seq.current === mine) {
@@ -733,13 +787,13 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   // Every keystroke goes to the draft, so leaving the page loses nothing.
   useEffect(() => {
     if (state === 'saved' || state === 'saving') return
-    writeDraft(key, { repo, path, ref, refKind })
-  }, [key, state, repo, path, ref, refKind])
+    writeDraft(key, { repo, repository: gitRepo, path, ref, refKind })
+  }, [key, state, repo, gitRepo, path, ref, refKind])
   const lookOver = (): Promise<void> => {
     const url = latest.current.repo.trim()
     if (!canChange || !url || (look?.repo === url && look.state !== 'error') || (saved && url === saved.repo && latest.current.path.trim())) return Promise.resolve()
     setLook({ repo: url, state: 'busy', text: 'Looking over the repository…' })
-    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.token || undefined)
+    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.cred || undefined)
       .then((d) => {
         const chart = d.charts[0]
         const filled: string[] = []
@@ -782,8 +836,8 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           value={value}
           readOnly={!canChange}
           onChange={(e) => (set(e.target.value), edited())}
-          onBlur={() => (testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, false, true)) : save())}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, true)) : save(undefined, undefined, true))}
+          onBlur={() => save()}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), save(undefined, true))}
           placeholder={placeholder}
           data-testid={testId}
         />
@@ -858,7 +912,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             <button
               className="rk-btn"
               data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined}
-              onClick={() => save(undefined, undefined, true)}
+              onClick={() => save(undefined, true)}
               disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')}
               style={{ height: 26 }}
               data-testid="app-src-save"
@@ -870,7 +924,29 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       }
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
-        {field('Repository (https:// git URL)', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 4)}
+        <div style={{ gridColumn: 'span 4', minWidth: 0 }}>
+          <GitRepoPicker
+            label="Repository (Administration › Settings › Repositories)"
+            value={gitRepo}
+            keptAddress={gitRepo ? undefined : repo || undefined}
+            disabled={!canChange}
+            onChange={(r) => {
+              setGitRepo(r?.name ?? '')
+              setRepo(r?.url ?? '')
+              setCred(r?.credential ?? '')
+              latest.current = { ...latest.current, gitRepo: r?.name ?? '', repo: r?.url ?? '', cred: r?.credential ?? '' }
+              if (r && !latest.current.ref.trim() && r.defaultBranch) {
+                setRef(r.defaultBranch)
+                setRefKind('branch')
+                latest.current = { ...latest.current, ref: r.defaultBranch, refKind: 'branch' }
+              }
+              edited()
+              // Picking it looks it over: the chart's path and the branch fill what is empty (M-07); then it saves what is complete.
+              if (r) void lookOver().then(() => save(undefined, false, true))
+            }}
+            testId="app-src-repository"
+          />
+        </div>
         {field('Chart path (empty for the root)', path, setPath, 'charts/app', 'app-src-path', 'text', 2)}
         <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: 'span 3' }}>
           {refKind === 'tag' ? 'Tag' : 'Branch'}
@@ -888,20 +964,12 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(
-          app?.hasToken && repo.trim() !== app.source.repo
-            ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)'
-            : app?.hasToken
-              ? 'GitHub token (one is saved; paste a new one to replace it)'
-              : 'GitHub token (for a private repository; kept in the console, never shown again)',
-          token,
-          setToken,
-          app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional',
-          'app-src-token',
-          'password',
-          3,
-        )}
       </div>
+      {!gitRepo && hasUserinfo(repo) && (
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--err)' }} role="alert" data-testid="app-src-userinfo">
+          This address carries a user name or token, which is not kept in this browser: pick its repository above, whose credential holds the token.
+        </p>
+      )}
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
           {look.text}
@@ -948,7 +1016,12 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </>
         )}
-        {!saved && <span>Once set, the release can be upgraded from here and checked for drift.</span>}
+        {!saved && (
+          <span data-testid="app-src-adopt-note">
+            Once set, the release can be upgraded from here and checked for drift.
+            {!row.orphan && ' Its values start from what the release runs now (helm get values), so a Redeploy keeps them.'}
+          </span>
+        )}
       </div>
       {app && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px dashed var(--line)' }} data-testid="app-deploy-options">

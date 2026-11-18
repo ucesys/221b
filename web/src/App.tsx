@@ -28,7 +28,7 @@ import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
-import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams } from './lib/router'
+import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams, aiHref } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
 import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, opensHere, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
@@ -52,6 +52,7 @@ import { AIOpsPage } from './components/aiops/AIOpsPage'
 import { useOpenAIOpsItem } from './lib/aiopsItem'
 import { onWatsonFill, type WatsonFill } from './lib/watsonFill'
 import { ErrorBoundary } from './components/ErrorScreen'
+import { setUIMe } from './lib/uiControl'
 // --- end Cases ---
 
 const THEME_KEY = '221b.theme'
@@ -158,6 +159,8 @@ function Shell() {
   const route = useRoute()
   const now = useNow()
   const me = useMe()
+  // Sherlock's view_admin opens only the pages this person's role opens (SR-13).
+  useEffect(() => setUIMe(me), [me])
   const { clusters, loaded: clustersLoaded } = useClusters()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [editing, setEditing] = useState<Editing>(undefined)
@@ -332,7 +335,7 @@ function Shell() {
       installed: !!watson.status?.available,
       sherlockOn,
       admin: !!sherlock.status?.admin,
-      settingsHref: adminHref('settings', ['sherlock']),
+      settingsHref: aiHref('agents', ['sherlock']),
     }),
     send: (command: string, o: Send = {}) => {
       const away = popped
@@ -616,6 +619,7 @@ function Shell() {
                 onPopOut={canPopOut() ? popOutNow : undefined}
                 waiting={waiting}
                 busy={busy}
+                sherlockBusy={!!sherlock.conv?.busy}
                 sessions={
                   watsonOn
                     ? {

@@ -1,10 +1,11 @@
-import type { AppView } from '../api/apps'
+import type { AppView, NewerImage } from '../api/apps'
 import { sourceText } from '../api/apps'
 import type { ReleaseRow } from '../api/types'
 import { fmtAge, fmtTs, minutesSince } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import type { ColumnDef, Term } from '../lib/table'
 import { NameWithAppTools } from '../components/apps/AppMenu'
+import { NewerImageMark, newerImageText } from '../components/apps/NewerImages'
 import { Mono, NameCell, Tone } from './cells'
 
 /** A release on the Helm tab: the release, and what the console keeps about it (HA-01). */
@@ -12,6 +13,8 @@ export interface AppRow extends ReleaseRow {
   app?: AppView
   /** A record without a release: its install failed (HA-08). */
   orphan?: boolean
+  /** The images it runs with a newer one published (HA-22). */
+  newerImages?: NewerImage[]
 }
 
 /**
@@ -95,8 +98,17 @@ export const APP_COLUMNS: ColumnDef<AppRow>[] = [
     width: '100px',
     min: 100,
     sortValue: (r) => r.appVersion,
-    cell: (r) => <Mono text={r.appVersion || '—'} size={12} />,
-    export: (r) => [{ head: 'App version', cell: r.appVersion }],
+    // A newer image published (HA-22) is marked beside the version.
+    cell: (r) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0 }}>
+        <Mono text={r.appVersion || '—'} size={12} />
+        <NewerImageMark images={r.newerImages} />
+      </span>
+    ),
+    export: (r) => [
+      { head: 'App version', cell: r.appVersion },
+      { head: 'Newer images', cell: (r.newerImages ?? []).map(newerImageText).join('; ') },
+    ],
   },
   {
     id: 'revision',

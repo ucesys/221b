@@ -18,6 +18,8 @@ const (
 	ChangeWaiting  = "waiting"
 	ChangeApproved = "approved"
 	ChangeRejected = "rejected"
+	// ChangeExpired is a run request nobody decided in time (FU-05a).
+	ChangeExpired  = "expired"
 	ChangeApplied  = "applied"
 	ImpactSafe     = "safe"
 	ImpactApproval = "approval"
@@ -169,6 +171,10 @@ func RaiseImpact(items []ImpactItem, raised map[string]string) []ImpactItem {
 type changesRecord struct {
 	Next    int              `json:"next"`
 	Changes []VariableChange `json:"changes"`
+	// NextRun and Runs are the runs that wait for their values' approval
+	// (FU-05).
+	NextRun int          `json:"nextRun,omitempty"`
+	Runs    []WaitingRun `json:"runs,omitempty"`
 }
 
 // Changes lists a cluster's parameter changes, newest first.

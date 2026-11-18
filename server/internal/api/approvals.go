@@ -15,7 +15,8 @@ import (
 )
 
 // approvalRow is one thing that waits, or waited, for an approval: a
-// script version, a variable change or a Watson card. Approved by and on
+// script version, a variable change, a run with its own values or a
+// Watson card. Approved by and on
 // name whoever decided it, as State says how.
 type approvalRow struct {
 	Kind        string     `json:"kind"`
@@ -41,17 +42,44 @@ type approvalRow struct {
 	Own bool `json:"own,omitempty"`
 	// Overtaken says why a waiting change can only be rejected now.
 	Overtaken string `json:"overtaken,omitempty"`
+	// Run is the run an approved run request started.
+	Run int `json:"run,omitempty"`
+	// Request is what a console change asks for, for its drawer to show
+	// (AI-35).
+	Request *adminRequest `json:"request,omitempty"`
+}
+
+// adminRequest is what a console change that waits for a second
+// SuperAdmin asks for (AI-35): an environment's from and to, the user made
+// a SuperAdmin and how, or the agent and the draft that goes live, tested
+// or not.
+type adminRequest struct {
+	Kind      string   `json:"kind"`
+	From      string   `json:"from,omitempty"`
+	To        string   `json:"to,omitempty"`
+	User      string   `json:"user,omitempty"`
+	Super     bool     `json:"super,omitempty"`
+	Groups    []string `json:"groups,omitempty"`
+	Agent     string   `json:"agent,omitempty"`
+	AgentName string   `json:"agentName,omitempty"`
+	Rev       int      `json:"rev,omitempty"`
+	Untested  string   `json:"untested,omitempty"`
+	Withdrawn bool     `json:"withdrawn,omitempty"`
 }
 
 // The kinds and states of an approval row.
 const (
-	approvalScript   = "script"
-	approvalChange   = "change"
-	approvalCommand  = "command"
+	approvalScript  = "script"
+	approvalChange  = "change"
+	approvalCommand = "command"
+	// approvalRun is a run whose own values wait on production (FU-05).
+	approvalRun      = "run"
 	approvalPending  = "pending"
 	approvalApproved = "approved"
 	approvalRejected = "rejected"
 	approvalRevoked  = "revoked"
+	// approvalExpired is a run request nobody decided in time (FU-05a).
+	approvalExpired = "expired"
 	// approvalsKept is how many decided rows the page lists.
 	approvalsKept = 200
 )
@@ -180,6 +208,39 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 					row.Mine = me.Same(c.By) && !me.Same(*c.DecidedBy)
 				}
 				row.ApprovedAt, row.Comment = c.DecidedAt, c.Comment
+				decided = append(decided, row)
+			}
+		}
+		// Runs whose own values wait (FU-05): whoever asked sees theirs, to
+		// withdraw it; another admin approves it.
+		s.expireWaitingRuns(r)
+		runs, err := st.WaitingRuns(r.Context(), "")
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, q := range runs {
+			row := approvalRow{Kind: approvalRun, What: q.What(), Cluster: q.Cluster, ClusterName: names[q.Cluster], RequestedBy: q.By.Name, RequestedAt: timeRef(q.At), Script: q.Script, Version: q.Version, Fleet: q.Fleet, ID: strconv.Itoa(q.ID), Run: q.Run}
+			if row.ClusterName == "" {
+				row.ClusterName = q.Cluster
+			}
+			switch q.State {
+			case automation.ChangeWaiting:
+				row.State, row.Own = approvalPending, me.Same(q.By)
+				pending = append(pending, row)
+			default:
+				row.State = approvalApproved
+				switch q.State {
+				case automation.ChangeRejected:
+					row.State = approvalRejected
+				case automation.ChangeExpired:
+					row.State = approvalExpired
+				}
+				if q.DecidedBy != nil {
+					row.ApprovedBy = q.DecidedBy.Name
+					row.Mine = me.Same(q.By) && !me.Same(*q.DecidedBy)
+				}
+				row.ApprovedAt, row.Comment = q.DecidedAt, q.Comment
 				decided = append(decided, row)
 			}
 		}

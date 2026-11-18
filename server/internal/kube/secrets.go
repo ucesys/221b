@@ -92,6 +92,7 @@ func (s *SecretSummary) DeepCopyObject() runtime.Object {
 	if s.Release != nil {
 		r := *s.Release
 		r.Resources = append([]ReleaseResource(nil), s.Release.Resources...)
+		r.Images = append([]string(nil), s.Release.Images...)
 		out.Release = &r
 	}
 	return &out
@@ -140,6 +141,9 @@ type HelmRelease struct {
 	Values    json.RawMessage   `json:"values,omitempty"`
 	Masked    []string          `json:"maskedValues,omitempty"`
 	Resources []ReleaseResource `json:"resources,omitempty"`
+	// Images are the container images the manifest names, each once, as
+	// written (HA-21): what the check for newer images looks up.
+	Images []string `json:"images,omitempty"`
 }
 
 // ReleaseResource is one object a release's manifest creates.
@@ -373,7 +377,7 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 		sort.Strings(masked)
 		r.Masked = masked
 	}
-	r.Resources = manifestResources(rec.Manifest)
+	r.Resources, r.Images = manifestResources(rec.Manifest)
 	return r, nil
 }
 
@@ -420,6 +424,8 @@ func MaskValues(v any, path string, masked *[]string) any {
 type masker struct {
 	paths  []string
 	values []string
+	// refs are names that look like credentials but only name one, kept.
+	refs map[string]bool
 }
 
 func (m *masker) hide(path string, value any) string {
@@ -443,7 +449,7 @@ func (m *masker) mask(v any, path string) any {
 				p = path + "." + k
 			}
 			switch {
-			case credentialKey(k):
+			case credentialKey(k) && !m.refs[k]:
 				out[k] = m.maskAll(val, p)
 			case k == "value" && credentialKey(name):
 				out[k] = m.maskAll(val, strings.TrimPrefix(path+"."+name, "."))
@@ -535,6 +541,55 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 	return out
 }
 
+// objectRefs are the fields of Kubernetes objects whose names look like
+// credentials but which only refer to a Secret or a token by name.
+var objectRefs = map[string]bool{"secretName": true, "secretKeyRef": true, "secretRef": true, "imagePullSecrets": true,
+	"secrets": true, "serviceAccountToken": true, "automountServiceAccountToken": true}
+
+// MaskObjects masks the objects of a rendered manifest, Secrets left out
+// (they are hidden whole elsewhere), as a release's values and notes are
+// masked: every value under a credential-looking name, the value of a
+// {name, value} pair named like one, a string that looks like a credential
+// by itself, and wherever it occurs, also in base64, any value masked so
+// or held by one of the manifest's Secrets (X-01). The objects are
+// returned as copies.
+func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
+	m := &masker{refs: objectRefs}
+	out := make([]map[string]any, len(objs))
+	for i, o := range objs {
+		out[i], _ = m.mask(o, "").(map[string]any)
+	}
+	known := append(m.values, manifestSecrets(manifest)...)
+	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	var hide func(v any) any
+	hide = func(v any) any {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, val := range x {
+				x[k] = hide(val)
+			}
+		case []any:
+			for i, val := range x {
+				x[i] = hide(val)
+			}
+		case string:
+			for _, k := range known {
+				if len(k) < shortCredential {
+					continue
+				}
+				x = strings.ReplaceAll(x, k, MaskedValue)
+				x = strings.ReplaceAll(x, base64.StdEncoding.EncodeToString([]byte(k)), MaskedValue)
+			}
+			return x
+		}
+		return v
+	}
+	for _, o := range out {
+		hide(o)
+	}
+	return out
+}
+
 // wholeWord says whether s holds word with no letter or digit against it.
 func wholeWord(s, word string) bool {
 	return regexp.MustCompile(`(?:^|[^\pL\pN])` + regexp.QuoteMeta(word) + `(?:$|[^\pL\pN])`).MatchString(s)
@@ -568,12 +623,15 @@ func manifestSecrets(manifest string) []string {
 	return out
 }
 
-// manifestResources lists the objects a release's manifest creates.
-func manifestResources(manifest string) []ReleaseResource {
+// manifestResources lists the objects a release's manifest creates, and
+// the images its containers run, each once, sorted.
+func manifestResources(manifest string) ([]ReleaseResource, []string) {
 	if manifest == "" {
-		return nil
+		return nil, nil
 	}
 	var out []ReleaseResource
+	seen := map[string]bool{}
+	var images []string
 	for _, doc := range strings.Split(manifest, "\n---") {
 		doc = strings.TrimSpace(doc)
 		if doc == "" || strings.HasPrefix(doc, "#") && !strings.Contains(doc, "\nkind:") {
@@ -590,8 +648,49 @@ func manifestResources(manifest string) []ReleaseResource {
 			continue
 		}
 		out = append(out, ReleaseResource{Kind: head.Kind, Name: head.Metadata.Name, Namespace: head.Metadata.Namespace})
+		// Only the kinds that hold containers are read whole.
+		if !strings.Contains(doc, "image:") {
+			continue
+		}
+		var body map[string]any
+		if yaml.Unmarshal([]byte(doc), &body) != nil {
+			continue
+		}
+		containerImages(body, func(img string) {
+			if !seen[img] {
+				seen[img] = true
+				images = append(images, img)
+			}
+		})
 	}
-	return out
+	sort.Strings(images)
+	return out, images
+}
+
+// containerImages calls f with the image of every container,
+// initContainer and ephemeralContainer wherever it is in an object: a
+// Pod's spec, a workload's template, a CronJob's job template.
+func containerImages(v any, f func(image string)) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if list, ok := child.([]any); ok && (k == "containers" || k == "initContainers" || k == "ephemeralContainers") {
+				for _, c := range list {
+					if cm, ok := c.(map[string]any); ok {
+						if img, _ := cm["image"].(string); img != "" {
+							f(img)
+						}
+					}
+				}
+				continue
+			}
+			containerImages(child, f)
+		}
+	case []any:
+		for _, child := range x {
+			containerImages(child, f)
+		}
+	}
 }
 
 // Secret-type labels the Namespaces tab shows.

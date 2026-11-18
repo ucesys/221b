@@ -2,11 +2,14 @@
 // Mycroft's wiki. Pages: browse the approved pages, each with its sources
 // and their dates and whether it is stale, and search them and the
 // sources' excerpts. Drafts: the runs of changes waiting for review, with
-// every page's diff. Sources: what Mycroft reads, and what people added.
-// Each view has its address: #/aiops/mycroft/wiki[/drafts|/sources], a
-// page #/aiops/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 a note, a
-// web address or documents are added in Settings › Knowledge's Added in
-// Mycroft card only: the Add view's old address opens it there.
+// every page's diff. Each view has its address: #/aiops/mycroft/wiki[/drafts],
+// a page #/aiops/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 notes and
+// documents are added in Administration › AI › Knowledge only (its Uploaded documents
+// section since 0.12.1): the Add view's old address opens it there. Since
+// 0.12.1 what Mycroft reads is AIOps › Mycroft › Sources, a sub-tab of its
+// own (MycroftSources.tsx); the Sources view's old address leads there.
+// ?pages=<path>,<path> shows only those pages (Review those pages, after a
+// source item was removed or excluded).
 //
 // A page's view has its own actions (KN-23, KN-24, WikiPageActions.tsx):
 // This is outdated…, Retire page… and Make active again…; retired pages
@@ -18,17 +21,28 @@
 //
 // Its views switch in the toolbar row every Mycroft sub-tab has (CF-55),
 // below the intro, and its sections stay in the Mycroft column.
+//
+// A wiki of hundreds of pages (Phase 12.1, KN-36): the page list filters
+// as it is typed, by title or path, sorts by title or by last update,
+// shows the stale pages alone, and groups the pages by kind in groups
+// that fold, each showing its first PAGE_ROWS pages until asked for all.
+// The full-text search of the pages, the sources and the records is the
+// one at the top of Mycroft (MycroftSearch.tsx, KN-35). A wiki kept in
+// the ConfigMap store says when that store is nearly full (KN-37).
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
-import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, searchKnowledge, wikiHref, type DraftRun, type PageView as PageData, type SearchHit, type WikiPage, type WikiState } from '../../api/knowledge'
+import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, wikiHref, type DraftRun, type PageView as PageData, type WikiPage, type WikiState } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Markdown } from '../../lib/markdown'
-import { adminHref, navigate, type Route } from '../../lib/router'
+import { navigate, type Route, aiHref } from '../../lib/router'
 import { DraftRunCard } from './KnowledgeDraft'
 import { MycroftPage } from './MycroftPage'
 import { SourceLink } from './SourceLink'
+import { STORE_NEAR, StoreRoom } from './WikiStoreRoom'
 import { PageActions, PageNotices } from './WikiPageActions'
-import { ADD_HREF, WikiSources } from './WikiSources'
+
+/** Where notes and documents are added: Administration › AI › Knowledge's Uploaded documents section (MY-11, 0.12.1). */
+export const ADD_HREF = aiHref('knowledge', ['added'])
 
 export { pageHref } from '../../api/knowledge'
 
@@ -46,9 +60,24 @@ const KIND_LABEL: Record<string, string> = {
   exception: 'Exceptions (old pages)',
 }
 
+/** How many pages a kind's group shows until asked for all of them. */
+export const PAGE_ROWS = 50
+
+/** Up to this many pages, every group starts unfolded. */
+export const UNFOLDED_PAGES = 60
+
+export type PageSort = 'title' | 'updated'
+
+/** The pages a filter keeps (every word in the title or the path), stale ones alone if asked, sorted. */
+export function pagesShown(pages: WikiPage[], filter: string, staleOnly: boolean, sort: PageSort): WikiPage[] {
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
+  const kept = pages.filter((p) => (!staleOnly || p.stale) && words.every((w) => p.title.toLowerCase().includes(w) || p.path.toLowerCase().includes(w)))
+  return kept.sort((a, b) => (sort === 'updated' ? (b.updated ?? '').localeCompare(a.updated ?? '') : 0) || a.title.localeCompare(b.title))
+}
+
 /** The Wiki's views. */
-export type WikiView = 'pages' | 'drafts' | 'sources'
-const VIEWS: WikiView[] = ['pages', 'drafts', 'sources']
+export type WikiView = 'pages' | 'drafts'
+const VIEWS: WikiView[] = ['pages', 'drafts']
 
 /** What a route opens: a view, or a page (#/aiops/mycroft/wiki/pages/<kind>/<name>.md). */
 export function wikiRoute(route: Route): { view: WikiView; page: string } {
@@ -61,6 +90,8 @@ export function wikiRoute(route: Route): { view: WikiView; page: string } {
 /** The Wiki of AIOps › Mycroft. onPages hears how many approved pages there are. */
 export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToast?: (msg: string) => void; onPages?: (n: number) => void }): JSX.Element {
   const { view, page: open } = wikiRoute(route)
+  // Review those pages (0.12.1): only the pages named, until Show all.
+  const only = useMemo(() => (route.params.get('pages') ?? '').split(',').filter(Boolean), [route.params])
   const [wiki, setWiki] = useState<WikiState | null>(null)
   const [wikiError, setWikiError] = useState('')
   const [pages, setPages] = useState<WikiPage[] | null>(null)
@@ -68,9 +99,12 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
   // The page list shows the active pages, or the retired ones (KN-24).
   const [showRetired, setShowRetired] = useState(false)
   const [pagesError, setPagesError] = useState('')
-  const [q, setQ] = useState('')
-  const [hits, setHits] = useState<SearchHit[] | null>(null)
-  const [searchError, setSearchError] = useState('')
+  // The page list's filter, sort and folds (KN-36).
+  const [filter, setFilter] = useState('')
+  const [sort, setSort] = useState<PageSort>('title')
+  const [staleOnly, setStaleOnly] = useState(false)
+  const [folded, setFolded] = useState<Record<string, boolean>>({})
+  const [whole, setWhole] = useState<Record<string, boolean>>({})
   const [runs, setRuns] = useState<DraftRun[] | null>(null)
   const [runsError, setRunsError] = useState('')
   const [tick, setTick] = useState(0)
@@ -112,28 +146,29 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
       },
     )
   }, [tick])
-  useEffect(() => {
-    const term = q.trim()
-    if (term.length < 2) return
-    const t = setTimeout(() => {
-      searchKnowledge(term).then(
-        (r) => {
-          setHits(r.hits ?? [])
-          setSearchError('')
-        },
-        (e: unknown) => setSearchError(errorText(e)),
-      )
-    }, 250)
-    return () => clearTimeout(t)
-  }, [q])
+  const kept = useMemo(
+    () =>
+      pagesShown(
+        (pages ?? []).filter((p) => only.length === 0 || only.includes(p.path)),
+        filter,
+        staleOnly,
+        sort,
+      ),
+    [pages, filter, staleOnly, sort, only],
+  )
   const groups = useMemo(() => {
     const m = new Map<string, WikiPage[]>()
-    for (const p of pages ?? []) m.set(p.kind, [...(m.get(p.kind) ?? []), p])
-    return [...m.entries()].sort(([a], [b]) => Object.keys(KIND_LABEL).indexOf(a) - Object.keys(KIND_LABEL).indexOf(b))
-  }, [pages])
+    for (const p of kept) m.set(p.kind, [...(m.get(p.kind) ?? []), p])
+    const order = (k: string) => (k in KIND_LABEL ? Object.keys(KIND_LABEL).indexOf(k) : Object.keys(KIND_LABEL).length)
+    return [...m.entries()].sort(([a], [b]) => order(a) - order(b) || a.localeCompare(b))
+  }, [kept])
+  const stale = useMemo(() => (pages ?? []).filter((p) => p.stale).length, [pages])
   const waiting = (runs ?? []).filter((r) => r.state === 'waiting' || r.state === 'partial')
-  const shown = q.trim().length >= 2 ? hits : null
   const listRetired = showRetired && retired.length > 0
+  const filtering = filter.trim() !== '' || staleOnly || only.length > 0
+  // A group is unfolded while filtering, when it holds the page open, or
+  // when the wiki is small; folding it by hand wins.
+  const isFolded = (kind: string, list: WikiPage[]) => folded[kind] ?? !(filtering || (pages?.length ?? 0) <= UNFOLDED_PAGES || list.some((p) => p.path === open))
   const noStore = wiki !== null && !wiki.store
   const show = (v: WikiView) => {
     if (v !== view || open) navigate(wikiHref(v))
@@ -150,9 +185,6 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
           <button aria-pressed={view === 'drafts'} onClick={() => show('drafts')} title="Mycroft’s changes waiting for review" data-testid="knowledge-view-drafts">
             Drafts <span className="rk-cnt">{waiting.length}</span>
           </button>
-          <button aria-pressed={view === 'sources'} onClick={() => show('sources')} title="What Mycroft reads, and what people added" data-testid="knowledge-view-sources">
-            Sources
-          </button>
         </div>
       }
     >
@@ -162,9 +194,8 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
         </p>
       )}
       {noStore && <NoStore maySetup={wiki.maySetup} />}
-      {view === 'sources' ? (
-        <WikiSources wiki={wiki} onChanged={refresh} onToast={onToast} />
-      ) : view === 'drafts' ? (
+      {wiki?.usage && wiki.usage.used >= wiki.usage.limit * STORE_NEAR && <StoreRoom usage={wiki.usage} maySetup={wiki.maySetup} />}
+      {view === 'drafts' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }} data-testid="knowledge-drafts">
           {runs === null && <p className="rk-fhint">Loading…</p>}
           {runsError && (
@@ -183,13 +214,44 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
         </div>
       ) : (
         <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <nav className="rk-card" style={{ flex: '0 1 280px', minWidth: 220, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Pages" data-testid="knowledge-pages">
+          <nav className="rk-card" style={{ flex: '0 1 280px', minWidth: 220, maxHeight: '75vh', overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Pages" data-testid="knowledge-pages">
             <label className="rk-field">
-              <span className="rk-sr">Search the knowledge</span>
-              <input type="search" placeholder="Search pages and sources" value={q} onChange={(e) => setQ(e.target.value)} data-testid="knowledge-search" />
+              <span className="rk-sr">Filter the pages</span>
+              <input type="search" placeholder="Filter pages by title or path" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} data-testid="knowledge-filter" />
             </label>
-            {searchError && shown && <span className="tb-err">{searchError}</span>}
-            {!shown && retired.length > 0 && (
+            {!listRetired && (pages?.length ?? 0) > 1 && (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <label className="rk-fhint" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  Sort
+                  <select value={sort} onChange={(e) => setSort(e.target.value as PageSort)} data-testid="knowledge-sort">
+                    <option value="title">by title</option>
+                    <option value="updated">last updated first</option>
+                  </select>
+                </label>
+                {stale > 0 && (
+                  <button
+                    className="rk-btn"
+                    aria-pressed={staleOnly}
+                    data-on={staleOnly || undefined}
+                    onClick={() => setStaleOnly(!staleOnly)}
+                    title="Only the pages none of whose sources was seen in a while"
+                    data-testid="knowledge-stale-only"
+                  >
+                    Stale <span className="rk-cnt">{stale}</span>
+                  </button>
+                )}
+              </div>
+            )}
+            {only.length > 0 && !listRetired && (
+              <span className="rk-callout" data-tone="info" style={{ fontSize: 12, flexDirection: 'column', gap: 4 }} data-testid="knowledge-only">
+                Showing {kept.length} {kept.length === 1 ? 'page' : 'pages'} that drew on what was removed or excluded
+                {kept.length < only.length ? ` (${only.length - kept.length} not approved or gone)` : ''}.
+                <a className="rk-link" href={wikiHref('pages')} data-testid="knowledge-only-all">
+                  Show all
+                </a>
+              </span>
+            )}
+            {retired.length > 0 && (
               <div className="rk-seg" role="group" aria-label="Which pages" data-testid="knowledge-pages-filter">
                 <button aria-pressed={!listRetired} onClick={() => setShowRetired(false)} data-testid="knowledge-pages-active">
                   Active <span className="rk-cnt">{pages?.length ?? 0}</span>
@@ -199,35 +261,9 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                 </button>
               </div>
             )}
-            {shown ? (
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="knowledge-hits">
-                {shown.length === 0 && <li className="rk-fhint">Nothing matches.</li>}
-                {shown.map((h, i) => (
-                  <li key={i} style={{ fontSize: 12.5 }}>
-                    {h.kind === 'page' && h.path ? (
-                      <a className="rk-link" href={pageHref(h.path)}>
-                        {h.title}
-                      </a>
-                    ) : (
-                      <span>
-                        <span className="rk-pill" data-tone="muted">
-                          Source
-                        </span>{' '}
-                        <SourceLink title={h.title} url={h.url} />
-                      </span>
-                    )}
-                    {h.stale && (
-                      <span className="rk-pill" data-tone="warn" style={{ marginLeft: 4 }}>
-                        Stale
-                      </span>
-                    )}
-                    <div className="rk-fhint">{h.text.slice(0, 160)}</div>
-                  </li>
-                ))}
-              </ul>
-            ) : listRetired ? (
+            {listRetired ? (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }} data-testid="knowledge-retired">
-                {retired.map((p) => (
+                {pagesShown(retired, filter, false, sort).map((p) => (
                   <li key={p.path} style={{ fontSize: 12.5, padding: '2px 0' }}>
                     <a className="rk-link" href={pageHref(p.path)} aria-current={p.path === open ? 'page' : undefined} style={{ fontWeight: p.path === open ? 600 : undefined }} data-testid="knowledge-retired-link">
                       {p.title}
@@ -254,41 +290,75 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                   <>
                     No approved pages yet: add knowledge or connect sources in{' '}
                     <a className="rk-link" href={ADD_HREF} data-testid="knowledge-empty-add">
-                      Settings › Knowledge
+                      Administration › AI › Knowledge
                     </a>
                     , and approve Mycroft’s first changes under Drafts.
                   </>
                 ) : (
-                  'No approved pages yet: an Admin adds knowledge, or a SuperAdmin connects sources, in Settings › Knowledge.'
+                  'No approved pages yet: an Admin adds knowledge, or a SuperAdmin connects sources, in Administration › AI › Knowledge.'
                 )}
               </span>
+            ) : kept.length === 0 ? (
+              <span className="rk-fhint" data-testid="knowledge-filter-none">
+                No page’s title or path has that. The search at the top of Mycroft searches the pages’ text and the sources too.
+              </span>
             ) : (
-              groups.map(([kind, list]) => (
-                <div key={kind}>
-                  <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', textTransform: 'uppercase', margin: '6px 0 2px' }}>{KIND_LABEL[kind] ?? kind}</div>
-                  <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                    {list.map((p) => (
-                      <li key={p.path} style={{ fontSize: 12.5, padding: '2px 0' }}>
-                        <a className="rk-link" href={pageHref(p.path)} aria-current={p.path === open ? 'page' : undefined} style={{ fontWeight: p.path === open ? 600 : undefined }} data-testid="knowledge-page-link">
-                          {p.title}
-                        </a>
-                        {p.stale && (
-                          <span className="rk-pill" data-tone="warn" style={{ marginLeft: 4 }}>
-                            Stale
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-testid="knowledge-groups">
+                {filtering && (
+                  <span className="rk-fhint" data-testid="knowledge-filter-count">
+                    {kept.length} of {pages.length} pages
+                  </span>
+                )}
+                {groups.map(([kind, list]) => {
+                  const shut = isFolded(kind, list)
+                  const rows = whole[kind] ? list : list.slice(0, PAGE_ROWS)
+                  return (
+                    <div key={kind} data-testid="knowledge-group">
+                      <button
+                        className="rk-link"
+                        aria-expanded={!shut}
+                        onClick={() => setFolded((f) => ({ ...f, [kind]: !shut }))}
+                        style={{ all: 'unset', cursor: 'pointer', display: 'flex', gap: 4, alignItems: 'center', fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', textTransform: 'uppercase', margin: '6px 0 2px' }}
+                        data-testid="knowledge-group-toggle"
+                      >
+                        <span aria-hidden="true">{shut ? '▸' : '▾'}</span>
+                        {KIND_LABEL[kind] ?? kind} <span className="rk-cnt">{list.length}</span>
+                      </button>
+                      {!shut && (
+                        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                          {rows.map((p) => (
+                            <li key={p.path} style={{ fontSize: 12.5, padding: '2px 0' }}>
+                              <a className="rk-link" href={pageHref(p.path)} aria-current={p.path === open ? 'page' : undefined} style={{ fontWeight: p.path === open ? 600 : undefined }} data-testid="knowledge-page-link">
+                                {p.title}
+                              </a>
+                              {p.stale && (
+                                <span className="rk-pill" data-tone="warn" style={{ marginLeft: 4 }}>
+                                  Stale
+                                </span>
+                              )}
+                              {sort === 'updated' && p.updated && <span className="rk-fhint"> · {p.updated.slice(0, 10)}</span>}
+                            </li>
+                          ))}
+                          {rows.length < list.length && (
+                            <li>
+                              <button className="rk-btn" onClick={() => setWhole((w) => ({ ...w, [kind]: true }))} data-testid="knowledge-group-more">
+                                Show all {list.length}
+                              </button>
+                            </li>
+                          )}
+                        </ul>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             )}
           </nav>
           {open ? (
             <PageView key={open} path={open} wiki={wiki} onChanged={refresh} onToast={onToast} />
           ) : (
             <p className="rk-fhint" style={{ flex: '1 1 400px', margin: 0 }}>
-              Pick a page, or search the pages and the sources.
+              Pick a page, or filter the list. The search at the top of Mycroft searches the pages’ text, the sources, the known issues, the fixes and the exceptions.
             </p>
           )}
         </div>
@@ -303,12 +373,12 @@ function NoStore({ maySetup }: { maySetup: boolean }) {
     <div className="rk-callout" data-tone="warn" style={{ fontSize: 12.5, flexDirection: 'column', gap: 6 }} data-testid="wiki-no-store">
       <strong>No wiki is kept yet.</strong>
       <span>
-        Mycroft keeps the wiki’s pages, the excerpts of its sources and its drafts in a git repository or an S3 bucket, chosen in Administration › Settings › Knowledge. Until one is chosen there is nothing to browse or add, and the agents
-        answer without the wiki.
+        Mycroft keeps the wiki’s pages, the excerpts of its sources and its drafts in a git repository or an S3 bucket, chosen in Administration › AI › Knowledge. Until one is chosen there is nothing to browse or add, and the agents answer
+        without the wiki.
       </span>
       {maySetup ? (
         <span>
-          <a className="rk-btn" data-on href={adminHref('settings', ['knowledge'])} data-testid="wiki-setup">
+          <a className="rk-btn" data-on href={aiHref('knowledge')} data-testid="wiki-setup">
             Set up the wiki
           </a>
         </span>

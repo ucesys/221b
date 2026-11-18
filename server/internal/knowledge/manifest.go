@@ -63,6 +63,27 @@ type ItemState struct {
 	// in Mycroft.
 	Corrects string `json:"corrects,omitempty"`
 	By       string `json:"by,omitempty"`
+	// --- AIOps › Mycroft › Sources (0.12.1, KN-45, KN-47, MY-12) ---
+	// Type is what people added: AddText (a note) or AddDocument; "" for
+	// what was added before it was kept, told by its name.
+	Type string `json:"type,omitempty"`
+	// Parent is a Confluence page's parent, for an exclusion of a page
+	// and its children.
+	Parent string `json:"parent,omitempty"`
+	// Error is why the item's last read failed; it is read again at the
+	// next read.
+	Error string `json:"error,omitempty"`
+	// Skipped is why the source's last read left the item out (a kind
+	// Mycroft does not read, too large, robots.txt): a record only, with
+	// no excerpt.
+	Skipped string `json:"skipped,omitempty"`
+}
+
+// record says the entry is a record of an item never read (KN-47): one a
+// read left out, or whose first read failed. It holds no excerpt and
+// counts as none of the source's items.
+func (st *ItemState) record() bool {
+	return st.Skipped != "" || (st.Error != "" && st.Hash == "" && st.LastRead.IsZero())
 }
 
 // HostFact is a host a document lists, with the labels it gives it.

@@ -16,8 +16,9 @@ import (
 )
 
 // While a draft is piloted, every answer of that agent is logged, the
-// draft's and the live version's alike, so the two can be compared and
-// rated before the draft goes live.
+// draft's and the live version's alike, so the two can be compared before
+// the draft goes live. Ratings an older console kept in the log are
+// ignored when it is read and dropped when it is next written (AI-29).
 
 // PilotEntry is one answer logged during a pilot.
 type PilotEntry struct {
@@ -31,9 +32,6 @@ type PilotEntry struct {
 	Answer   string    `json:"answer"`
 	Model    string    `json:"model"`
 	CostUSD  float64   `json:"costUSD"`
-	// Rating is 1 (better), -1 (worse) or 0 (not rated).
-	Rating  int    `json:"rating,omitempty"`
-	RatedBy string `json:"ratedBy,omitempty"`
 }
 
 // PilotLog is the pilots' answers, under PilotKey.
@@ -85,25 +83,6 @@ func (s *Service) Pilot(ctx context.Context, id string) ([]PilotEntry, error) {
 		}
 	}
 	return out, nil
-}
-
-// Rate rates a logged answer: 1, -1, or 0 to take a rating back.
-func (s *Service) Rate(ctx context.Context, n, rating int, by string) error {
-	if rating < -1 || rating > 1 {
-		return fmt.Errorf("%w: a rating is 1, -1 or 0", ErrInvalid)
-	}
-	_, err := change(ctx, s.opts.Backend, PilotKey, func(l *PilotLog) error {
-		i := slices.IndexFunc(l.Entries, func(e PilotEntry) bool { return e.N == n })
-		if i < 0 {
-			return ErrNotFound
-		}
-		l.Entries[i].Rating, l.Entries[i].RatedBy = rating, by
-		if rating == 0 {
-			l.Entries[i].RatedBy = ""
-		}
-		return nil
-	})
-	return err
 }
 
 // Export is the AI ConfigMap's keys for a backup, as kept, with each

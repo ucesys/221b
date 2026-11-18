@@ -1,4 +1,4 @@
-// Settings › Cases (Phase 12, wave 6): how long closed agent-found cases
+// Administration › AI › Cases (Phase 12, wave 6): how long closed agent-found cases
 // are kept, how far back New Case looks for cases closed lately, when an
 // exception is stale, how many exceptions an agent is told about, and how
 // many new cases one run may open; after how many minutes a critical alert
@@ -71,10 +71,10 @@ export function CasesSettings() {
   const maySet = saved.maySet !== false
   const bad = FIELDS.some((f) => rangeError(draft[f.id] ?? NaN, f.max, f.min))
   const changed = FIELDS.some((f) => draft[f.id] !== saved[f.id])
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     if (bad) {
       setError('Fix the values marked above, then save.')
-      return
+      return false
     }
     setBusy(true)
     setError('')
@@ -92,8 +92,10 @@ export function CasesSettings() {
       setSaved(s)
       setDraft(s)
       setNote('Saved.')
+      return true
     } catch (e) {
       setError(errorText(e))
+      return false
     } finally {
       setBusy(false)
     }
@@ -101,7 +103,7 @@ export function CasesSettings() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="cases-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        How the console keeps the cases the agents find, how much one run may do, and when a critical alert opens a case by itself. Every problem is a case, whether an agent found it or a person reported it.
+        How long agent-found cases are kept, how much one run may do, and when a critical alert opens a case.
       </p>
       {FIELDS.map((f) => {
         const v = draft[f.id] ?? NaN
@@ -142,6 +144,7 @@ export function CasesSettings() {
           changed={changed}
           busy={busy}
           onSave={() => void save()}
+          save={save}
           onUndo={() => {
             setDraft(saved)
             setError('')

@@ -100,10 +100,24 @@ const sameKey = (a?: Key, b?: Key) => !!a && !!b && a.cluster === b.cluster && a
 
 const getCase = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/aiops/cases/${id}`)).json as Case
 
+/** The title of the known issue a case of this spec is closed as. */
+const KNOWN_TITLE = 'No network policy (e2e '
+
+/**
+ * Deletes the known issues this spec made: one left by an earlier try of
+ * the file (a retry runs all of it again) takes the audit's finding as
+ * known, and the run opens no case.
+ */
+async function forgetKnown(page: Page) {
+  const all = ((await api(page, 'GET', '/api/issues/v1/known?all=true')).json as { known?: { id: string; title: string }[] } | null)?.known ?? []
+  for (const k of all.filter((x) => x.title.startsWith(KNOWN_TITLE))) expect((await api(page, 'DELETE', `/api/issues/v1/known/${k.id}`)).status).toBe(200)
+}
+
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await forgetKnown(page)
   expect((await api(page, 'PUT', '/api/v1/sherlock/key', { key: KEY })).status).toBe(200)
   expect((await api(page, 'PUT', '/api/v1/sherlock/config', ON)).status).toBe(200)
   // The audit covers the simulated cluster alone, whatever others a spec connected.
@@ -119,6 +133,7 @@ test.afterAll(async ({ browser }) => {
   // would raise the gear's flag for the specs after.
   const queued = ((await api(page, 'GET', '/api/v1/aiops/proposals?state=queued')).json as { proposals?: { id: string; source: { kind: string; id?: string } }[] } | null)?.proposals ?? []
   for (const c of queued.filter((p) => p.source.kind === 'job')) await api(page, 'POST', `/api/v1/aiops/proposals/${c.id}/reject`, { reason: 'e2e: done' })
+  await forgetKnown(page)
   await api(page, 'PUT', '/api/v1/jobs/nightly-audit', { clusters: [] })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   await page.close()
@@ -227,7 +242,7 @@ test('closed as a known issue made from it: the next run records the problem on 
   const drawer = page.getByTestId('case-drawer')
   await drawer.getByTestId('case-close-open').click()
   await drawer.getByTestId('case-outcome-knownIssue').check()
-  const title = `No network policy (e2e ${Date.now()})`
+  const title = `${KNOWN_TITLE}${Date.now()})`
   await drawer.getByTestId('case-known-title').fill(title)
   await drawer.getByTestId('case-known-workaround').fill('The namespace is behind its own firewall.')
   await drawer.getByTestId('case-known-create').click()

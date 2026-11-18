@@ -164,7 +164,8 @@ func (s *Server) twoPersonRows(ctx context.Context, sess auth.Session) (pending,
 	}
 	me := auth.PersonKey(sess.User)
 	for _, req := range list {
-		row := approvalRow{Kind: approvalAdmin, What: req.What(), Cluster: req.Cluster, ClusterName: req.ClusterName, RequestedBy: req.By.Name, RequestedAt: timeRef(req.At), ID: strconv.Itoa(req.ID)}
+		row := approvalRow{Kind: approvalAdmin, What: req.What(), Cluster: req.Cluster, ClusterName: req.ClusterName, RequestedBy: req.By.Name, RequestedAt: timeRef(req.At), ID: strconv.Itoa(req.ID),
+			Request: &adminRequest{Kind: req.Kind, From: req.From, To: req.To, User: req.User, Super: req.Super, Groups: req.Groups, Agent: req.Agent, AgentName: req.AgentName, Rev: req.Rev, Untested: req.Untested, Withdrawn: req.Withdrawn}}
 		mine := req.By.Key == me
 		switch req.State {
 		case twoperson.Waiting:

@@ -17,8 +17,7 @@
 //
 // Every replica keeps its own copy of the approved pages on its disk and
 // its own index, and answers ask_knowledge from them, never the network.
-// Only the leader (ADR-70) reads sources, writes to the wiki and publishes
-// to Confluence.
+// Only the leader (ADR-70) reads sources and writes to the wiki.
 package knowledge
 
 import (
@@ -37,7 +36,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
-	"github.com/ucesys/221b/server/internal/confluence"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -51,18 +50,14 @@ const (
 	DraftsKey = "knowledge-drafts.json"
 	// StatusKey holds the last sync's outcome, per source.
 	StatusKey = "knowledge-status.json"
-	// PublisherKey is the Confluence publisher's settings, outbox and
-	// pages.
-	PublisherKey = confluence.StateKey
 )
 
 // The most each key holds, by default; together under the ConfigMap's
 // budget.
 const (
-	DefaultSettingsBytes  = 64 << 10
-	DefaultDraftsBytes    = 512 << 10
-	DefaultStatusBytes    = 96 << 10
-	DefaultPublisherBytes = 256 << 10
+	DefaultSettingsBytes = 64 << 10
+	DefaultDraftsBytes   = 512 << 10
+	DefaultStatusBytes   = 96 << 10
 )
 
 // Limits are the keys' limits, as the ConfigMap's layout sets them.
@@ -103,6 +98,10 @@ const (
 	ActionRetire        = "knowledge.retire"
 	ActionActivate      = "knowledge.activate"
 	ActionRetireReject  = "knowledge.retire.reject"
+	// ActionExclude and ActionInclude are an item of a source excluded,
+	// and included again (0.12.1, KN-45).
+	ActionExclude = "knowledge.exclude"
+	ActionInclude = "knowledge.include"
 )
 
 // Errors the API turns into answers.
@@ -113,7 +112,7 @@ var (
 	// ErrNotLeader is work only the leader does, asked of another replica.
 	ErrNotLeader = errors.New("only the console that leads does this")
 	// ErrNoStore is work that needs the wiki's store before one is set.
-	ErrNoStore = errors.New("choose where the wiki is kept first, in Settings › Knowledge")
+	ErrNoStore = errors.New("choose where the wiki is kept first, in Administration › AI › Knowledge")
 	// ErrBusy is a sync asked for while one runs.
 	ErrBusy = errors.New("a sync is running")
 	// ErrConflict is a request another came before (KN-24): one waits
@@ -178,6 +177,9 @@ type Options struct {
 	// Secrets keeps the credentials, one key each, in the Secret
 	// <release>-knowledge; nil keeps them in memory.
 	Secrets SecretStore
+	// Credentials are Administration › Credentials, which the sources name
+	// (0.12.1, CR-11); nil is none.
+	Credentials *credentials.Service
 	// Dir is where the local copy of the wiki, and the source
 	// repositories, are kept on the pod's disk; empty is a temporary
 	// directory.
@@ -209,8 +211,6 @@ type Options struct {
 	// (Mycroft's first import, GS-11), so the inventory it describes waits
 	// in AIOps › Inbox without waiting for the nightly sync.
 	ReadNew bool
-	// Publisher puts approved pages into Confluence; nil leaves them out.
-	Publisher *confluence.Publisher
 	// Leads says whether this replica leads (ADR-70); nil is always.
 	Leads func() bool
 	// Audit receives a record per change; nil records nothing.
@@ -227,10 +227,8 @@ type Options struct {
 	CrawlHTTP *http.Client
 	// Identity is the pod's AWS identity, for a bucket without keys.
 	Identity *awsv4.Identity
-	// ConsoleURL is the console's address, for links back from pages.
-	ConsoleURL string
-	Now        func() time.Time
-	Logger     *slog.Logger
+	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 // Service is Mycroft's knowledge.
@@ -263,6 +261,9 @@ type Service struct {
 	// cmStore is the ConfigMap store, when the chart made its ConfigMap.
 	cmStore *ConfigMapStore
 
+	// gitRepos are Administration › Settings › Repositories' git repositories (RP-03).
+	gitRepos gitRepos
+
 	// open makes a store from typed settings (tests).
 	open func(StoreSettings, Creds) (Store, error)
 	// dial connects a source's test to its address (tests; nil is a
@@ -271,6 +272,9 @@ type Service struct {
 	// proxy is the proxy a source's test would go through (tests; nil is
 	// http.ProxyFromEnvironment, which reads the environment once).
 	proxy func(*http.Request) (*url.URL, error)
+
+	// live keeps what the live sources' addresses gave (KN-41).
+	live liveCache
 
 	// covers are the known issues and the exceptions that keep a
 	// difference from being proposed, once SetCovers gives them (KN-31).
@@ -286,6 +290,9 @@ type Service struct {
 	jobs     atomic.Pointer[jobs.Service]
 	migrated atomic.Bool
 	kindsMu  sync.Mutex
+	// webMigrated says the web pages added in Mycroft were made web
+	// sites (KN-46).
+	webMigrated atomic.Bool
 
 	// fixes are the console's fixes, from Options or SetFixes (KN-33).
 	fixes atomic.Pointer[Fixes]
@@ -335,9 +342,6 @@ func New(o Options) *Service {
 	s.runSeq.Store(o.Now().Unix() % 100000)
 	return s
 }
-
-// Publisher is the Confluence publisher the service was given, or nil.
-func (s *Service) Publisher() *confluence.Publisher { return s.o.Publisher }
 
 func (s *Service) audit(e audit.Event) {
 	if s.o.Audit != nil {

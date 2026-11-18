@@ -127,6 +127,56 @@ func (s *SecretKey) LoadKey(ctx context.Context, key string) (b []byte, version 
 	return b, "rv:" + sec.ResourceVersion, found, nil
 }
 
+// DeleteKeyIf removes one key of the Secret, keeping its other keys, only
+// if the Secret is still at version (from LoadKey). No Secret, or no such
+// key, is nothing to remove. It returns ErrConflict as SaveKeyIf does.
+func (s *SecretKey) DeleteKeyIf(ctx context.Context, key, version string) error {
+	if version == NoSecret {
+		return nil
+	}
+	sec, err := s.secrets.Get(ctx, s.name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return fmt.Errorf("reading the Secret %s: %w", s.ref, err)
+	}
+	if "rv:"+sec.ResourceVersion != version {
+		return ErrConflict
+	}
+	if _, ok := sec.Data[key]; !ok {
+		return nil
+	}
+	delete(sec.Data, key)
+	if _, err := s.secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return ErrConflict
+		}
+		return fmt.Errorf("saving the Secret %s: %w", s.ref, err)
+	}
+	return nil
+}
+
+// Sizes are how many bytes the Secret's data holds, its keys' names
+// counted, and how many of them are one key's (0 when it has none), for a
+// writer that keeps it under the 1 MiB a Secret holds.
+func (s *SecretKey) Sizes(ctx context.Context, key string) (total, ofKey int, err error) {
+	sec, err := s.secrets.Get(ctx, s.name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("reading the Secret %s: %w", s.ref, err)
+	}
+	for k, v := range sec.Data {
+		total += len(k) + len(v)
+		if k == key {
+			ofKey = len(k) + len(v)
+		}
+	}
+	return total, ofKey, nil
+}
+
 // SaveKeyIf writes one key of the Secret, keeping its other keys, only if
 // the Secret is still at version (from LoadKey; NoSecret creates it). It
 // returns ErrConflict when another writer got there first.

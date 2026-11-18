@@ -22,7 +22,7 @@ import (
 // pauses the job. A source added or changed is read once at once, as a
 // run of its job; what people add or upload starts a run of theirs; a
 // push to a repository of runbooks starts a run of its. Every sync is a
-// run with its report, and Settings › Knowledge starts none.
+// run with its report, and Administration › AI › Knowledge starts none.
 
 // SyncJobPrefix starts the id of a source's Wiki sync job: the job, and
 // its kind, are "wiki-sync-<source id>".
@@ -58,6 +58,7 @@ func (s *Service) SetJobs(ctx context.Context, js *jobs.Service) {
 	s.jobs.Store(js)
 	s.syncKinds(ctx)
 	s.migrateJobs(ctx)
+	s.migrateWebSites(ctx)
 	go func() {
 		t := time.NewTicker(syncKindsEvery)
 		defer t.Stop()
@@ -69,6 +70,7 @@ func (s *Service) SetJobs(ctx context.Context, js *jobs.Service) {
 			}
 			s.syncKinds(ctx)
 			s.migrateJobs(ctx)
+			s.migrateWebSites(ctx)
 		}
 	}()
 }
@@ -91,6 +93,9 @@ func (s *Service) syncKinds(ctx context.Context) {
 	reg := js.Kinds()
 	want := map[string]bool{}
 	for _, x := range set.Sources {
+		if x.Kind == SourceLive {
+			continue
+		}
 		k := s.syncKind(x)
 		want[k.ID] = true
 		reg.Register(k)
@@ -154,9 +159,13 @@ func (s *Service) syncKind(x Source) jobs.Kind {
 			dir = ", directory " + x.Path
 		}
 		k.Does = "Reads the repository's documents every hour and on each push, and drafts the wiki's pages from what changed"
-		k.Reads = fmt.Sprintf("The repository %s, branch %s%s: its documents at the branch's head. A push, through the webhook of Settings › Knowledge, starts a run.%s", x.URL, x.Branch, dir, changed)
+		k.Reads = fmt.Sprintf("The repository %s, branch %s%s: its documents at the branch's head. A push, through the webhook of Administration › AI › Knowledge, starts a run.%s", x.URL, x.Branch, dir, changed)
 		k.Default = jobs.When{Schedule: &schedule.Spec{Kind: schedule.Hours, Every: 1, At: "00:00"}, Event: jobs.EventSource}
 		k.Events = []string{jobs.EventSource}
+	case SourceWeb:
+		k.Does = "Reads the web site's pages every night, and drafts the wiki's pages from what changed"
+		k.Reads = fmt.Sprintf("The web site from %s, %d links deep and at most %d pages, robots.txt respected; its excluded pages never.%s", x.URL, x.Depth, x.Pages, changed)
+		k.Default = jobs.When{Schedule: nightly}
 	case SourceS3:
 		k.Does = "Reads the bucket's documents every night, and drafts the wiki's pages from what changed"
 		k.Reads = fmt.Sprintf("The bucket s3://%s/%s: its documents of the kinds Mycroft reads, at most 1000 a read.%s", x.Bucket, x.Prefix, changed)
@@ -188,10 +197,10 @@ func (s *Service) runSync(ctx context.Context, env *jobs.RunEnv, id string) (job
 	}
 	x, ok := set.source(id)
 	if !ok {
-		return jobs.Outcome{}, fmt.Errorf("the source %q is gone from Settings › Knowledge", id)
+		return jobs.Outcome{}, fmt.Errorf("the source %q is gone from Administration › AI › Knowledge", id)
 	}
 	if x.Off {
-		return jobs.Outcome{Report: x.Name + " is switched off in Settings › Knowledge: nothing was read."}, nil
+		return jobs.Outcome{Report: x.Name + " is switched off in Administration › AI › Knowledge: nothing was read."}, nil
 	}
 	// A Confluence space's scheduled runs read the pages edited since the
 	// last read, and every page on the first run of the night; every other
@@ -286,7 +295,7 @@ func syncFacts(r SyncResult, x Source) []jobs.Fact {
 		read = "The pages edited since the last read"
 	}
 	out := []jobs.Fact{
-		{Label: "Source", Text: fmt.Sprintf("%s (%s)", x.Name, sourceKindWords[x.Kind]), Href: "#/admin/settings/knowledge"},
+		{Label: "Source", Text: fmt.Sprintf("%s (%s)", x.Name, sourceKindWords[x.Kind]), Href: "#/admin/ai/knowledge"},
 		{Label: "Read", Text: read},
 		{Label: "Items read", Text: n(r.Read, "changed item", "changed items")},
 		{Label: "Unchanged", Text: n(r.Unchanged, "item", "items")},
@@ -356,6 +365,10 @@ func (c Caller) person() jobs.Person {
 // source once at once, as a run of its job (KN-28). Without the jobs, a
 // source added is read in the background (GS-11).
 func (s *Service) sourceSaved(ctx context.Context, c Caller, x Source, create, read bool) {
+	if x.Kind == SourceLive {
+		// Never read into the wiki: it has no job and no first read.
+		return
+	}
 	js := s.jobs.Load()
 	if js == nil {
 		if create && s.o.ReadNew && !x.Off {

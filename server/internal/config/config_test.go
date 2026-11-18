@@ -50,6 +50,35 @@ func TestAllowedHosts(t *testing.T) {
 	}
 }
 
+func TestAppsAllowedHosts(t *testing.T) {
+	t.Setenv("APPS_ALLOWED_HOSTS", " git.example.com, *.corp.example:8443 ,,")
+	c, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AppsAllowedHosts) != 2 || c.AppsAllowedHosts[0] != "git.example.com" || c.AppsAllowedHosts[1] != "*.corp.example:8443" {
+		t.Fatalf("hosts %q", c.AppsAllowedHosts)
+	}
+}
+
+// The report page's address comes from the chart (issues.reportURL): a
+// path or a web address; anything else stops the console.
+func TestIssuesReportURL(t *testing.T) {
+	for _, ok := range []string{"", "/report", "https://help.example.com/report"} {
+		t.Setenv("ISSUES_REPORT_URL", ok)
+		c, err := Parse(nil)
+		if err != nil || c.IssuesReportURL != ok {
+			t.Fatalf("%q: %q %v", ok, c.IssuesReportURL, err)
+		}
+	}
+	for _, bad := range []string{"//evil.example.com", "javascript:alert(1)", "help.example.com"} {
+		t.Setenv("ISSUES_REPORT_URL", bad)
+		if _, err := Parse(nil); err == nil {
+			t.Fatalf("%q was taken", bad)
+		}
+	}
+}
+
 func TestValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"-cluster-name", ""},

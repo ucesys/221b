@@ -1,6 +1,6 @@
 // Run History and a run's drawer: its nodes, their output and what is left to do.
 import { useEffect, useRef, useState } from 'react'
-import { cancelRun, countsText, fetchRun, profileName, NODE_LABEL, nodeTone, runTone, retryRun, type NodeState, type Run, type RunDetail } from '../../api/automation'
+import { boundTo, cancelRun, countsText, fetchRun, isWaiting, profileName, NODE_LABEL, nodeTone, runTone, retryRun, type NodeState, type Run, type RunDetail } from '../../api/automation'
 import { fmtTs } from '../../lib/format'
 import { useSorted, type SortCol } from '../../lib/useSorted'
 import { SortTh } from './SortTh'
@@ -9,6 +9,7 @@ import { Drawer } from '../Drawer'
 import { SearchIcon } from '../Icons'
 import { runToolAction } from '../../api/toolbox'
 import { errText, Pill } from './parts'
+import { ConstantBadge, EmptyChip, VariableChip } from './ValueTag'
 
 /** A run's nodes counted by state. */
 export function tally(r: Run): Partial<Record<NodeState, number>> {
@@ -76,7 +77,16 @@ export function RunDrawer({ id, now, onRetried, onClose, onToast, onEnded }: { i
               Cancel run
             </button>
           ) : run && failedNodes > 0 ? (
-            <button className="rk-btn" onClick={() => void retryRun(run.cluster, run.id).then(onRetried, (e: unknown) => setErr(errText(e)))} data-testid="run-retry">
+            <button
+              className="rk-btn"
+              onClick={() =>
+                void retryRun(run.cluster, run.id).then(
+                  (r) => (isWaiting(r) ? onToast(`Run request ${r.waiting.id} waits for another admin’s approval of ${r.waiting.changed.join(', ')}: it is in AIOps › Inbox.`) : onRetried(r)),
+                  (e: unknown) => setErr(errText(e)),
+                )
+              }
+              data-testid="run-retry"
+            >
               Retry {failedNodes} failed
             </button>
           ) : undefined
@@ -130,13 +140,30 @@ export function RunDrawer({ id, now, onRetried, onClose, onToast, onEnded }: { i
               What this run gave the script{sel ? ` on ${sel}` : ''}.
             </p>
             <dl className="rk-kv">
-              {params.map(([k, v]) => (
-                <div key={k} style={{ display: 'contents' }}>
-                  <dt className="rk-mono">{k}</dt>
-                  <dd className="rk-mono">{v}</dd>
-                </div>
-              ))}
+              {params.map(([k, v]) => {
+                // FU-04, FU-06: a value bound to a variable shows its chip; one given for the run its badge.
+                const own = run.overrides?.[k]
+                const bound = boundTo(own)
+                return (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <dt className="rk-mono">{k}</dt>
+                    <dd className="rk-mono">
+                      {v}
+                      {own !== undefined && (
+                        <span style={{ marginLeft: 8, display: 'inline-flex', verticalAlign: 'middle' }} data-testid="run-param-origin" data-bound={bound}>
+                          {bound ? <VariableChip variable={bound} title={`The run gave each node its own value of ${bound}.`} /> : own === '' ? <EmptyChip kind="empty" name={k} /> : <ConstantBadge />}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                )
+              })}
             </dl>
+            {run.valuesApproved && (
+              <p className="tb-hint" style={{ margin: '8px 0 0' }} data-testid="run-values-approved">
+                The run’s own values were approved by {run.valuesApproved.by.name}, {fmtTs(run.valuesApproved.at)} (run request {run.valuesApproved.request}).
+              </p>
+            )}
           </section>
         )}
         {run && (

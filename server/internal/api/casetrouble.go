@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -33,6 +34,7 @@ func (s *Server) caseTroubleRoutes() {
 	s.handle("GET "+base+"/conversation", "case-sherlock-conversation", s.getCaseSherlock)
 	s.handle("POST "+base+"/ask", "case-sherlock-ask", s.postCaseSherlockAsk)
 	s.handle("POST "+base+"/stop", "case-sherlock-stop", s.postCaseSherlockStop)
+	s.handle("POST "+base+"/ui/{uid}", "case-sherlock-ui", s.postCaseSherlockUI)
 }
 
 // caseworkFail answers an error of the cases.
@@ -146,6 +148,11 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 	}
 	var in struct {
 		Question string `json:"question"`
+		// Window and View are the asker's console window and its view, as
+		// in their own conversation: Sherlock's view actions change only
+		// that window (SR-19).
+		Window string `json:"window"`
+		View   string `json:"view"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxQuestionBody))
 	dec.DisallowUnknownFields()
@@ -163,6 +170,7 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 	if s.opts.AI != nil {
 		notes, instructions = "", ""
 	}
+	sess, _ := auth.SessionFrom(r.Context())
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
 		Key:          key,
 		Text:         in.Question,
@@ -174,6 +182,11 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 		Tools:        s.toolboxFor(r, key.Cluster, cl),
 		Who:          who,
 		From:         fromAddr(r),
+		// The view actions go to the asker's window only (SR-19).
+		Window:        windowID(in.Window),
+		WindowSession: sess.ID,
+		View:          in.View,
+		ViewChanges:   s.sherlockSettings().ChangesView(),
 		// Asked from a case or a proposed change, Sherlock knows the Cases
 		// pages (IB-10).
 		Cases:   true,
@@ -195,6 +208,18 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 		return nil, false
 	}
 	return conv, true
+}
+
+// postCaseSherlockUI takes the asker's window's result of a view action
+// on a case's conversation (SR-19): only the session that asked may post
+// it, as in a person's own conversation (P6U-17).
+func (s *Server) postCaseSherlockUI(w http.ResponseWriter, r *http.Request) {
+	_, _, key, _, ok := s.caseChat(w, r, true, false)
+	if !ok {
+		return
+	}
+	sess, _ := auth.SessionFrom(r.Context())
+	s.deliverUI(w, r, key, r.PathValue("uid"), sess.ID)
 }
 
 // postCaseSherlockStop stops the answer coming on a case's conversation:

@@ -15,6 +15,7 @@ import (
 	chart "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	kubefake "helm.sh/helm/v4/pkg/kube/fake"
+	rcommon "helm.sh/helm/v4/pkg/release/common"
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage"
 	"helm.sh/helm/v4/pkg/storage/driver"
@@ -146,43 +147,79 @@ type Rendered struct {
 
 // Render renders the chart for the release on the console alone, as helm
 // template does (HA-17): no cluster is asked, so it is what the source
-// says, for comparing with what is deployed.
+// says, for comparing with what is deployed. It renders in a process of
+// its own, within the limits of limits.go.
 func Render(ctx context.Context, ch *chart.Chart, vals map[string]any, name, namespace, kubeVersion string) (Rendered, error) {
+	return RenderRelease(ctx, ch, vals, ReleaseOptions{Name: name, Namespace: namespace, KubeVersion: kubeVersion})
+}
+
+// RenderRelease is Render for a release described in full: an upgrade, the
+// cluster's API versions, Secrets left out. Lookups find nothing.
+func RenderRelease(ctx context.Context, ch *chart.Chart, vals map[string]any, o ReleaseOptions) (Rendered, error) {
+	return renderOutside(ctx, ch, vals, o)
+}
+
+// renderHere renders in this process: the child's side of RenderRelease.
+func renderHere(ctx context.Context, ch *chart.Chart, vals map[string]any, o ReleaseOptions) (out Rendered, err error) {
 	funcs, tripped := RenderFuncs(ch)
-	out, err := Bounded(ctx, func(ctx context.Context) (Rendered, error) {
-		cfg := action.NewConfiguration()
-		cfg.Releases = storage.Init(driver.NewMemory())
-		cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
-		cfg.SetLogger(slog.NewTextHandler(io.Discard, nil))
-		cfg.CustomTemplateFuncs = funcs
-		caps := *common.DefaultCapabilities
-		if kubeVersion != "" {
-			if v, err := common.ParseKubeVersion(kubeVersion); err == nil {
-				caps.KubeVersion = *v
-			}
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = Rendered{}, fmt.Errorf("rendering the chart: %v", r)
 		}
-		cfg.Capabilities = &caps
-		i := action.NewInstall(cfg)
-		i.DryRunStrategy = action.DryRunClient
-		i.ReleaseName, i.Namespace = name, namespace
-		i.Replace, i.IncludeCRDs = true, true
-		rel, err := i.RunWithContext(ctx, ch, vals)
-		if err != nil {
+		if tripped() {
+			out, err = Rendered{}, fmt.Errorf("%w: it loops or repeats too much", ErrRenderLimit)
+		}
+	}()
+	cfg := action.NewConfiguration()
+	cfg.Releases = storage.Init(driver.NewMemory())
+	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
+	cfg.SetLogger(slog.NewTextHandler(io.Discard, nil))
+	cfg.CustomTemplateFuncs = funcs
+	caps := *common.DefaultCapabilities
+	if o.KubeVersion != "" {
+		if v, err := common.ParseKubeVersion(o.KubeVersion); err == nil {
+			caps.KubeVersion = *v
+		}
+	}
+	if len(o.APIVersions) > 0 {
+		caps.APIVersions = common.VersionSet(o.APIVersions)
+	}
+	cfg.Capabilities = &caps
+	var rel any
+	if o.Upgrade {
+		// The release deployed now, as far as a render needs it: its
+		// revision and the values it was deployed with.
+		prev := &release.Release{Name: o.Name, Namespace: o.Namespace, Version: max(o.Revision-1, 1), Config: o.Previous,
+			Chart: &chart.Chart{Metadata: ch.Metadata}, Info: &release.Info{Status: rcommon.StatusDeployed}}
+		if err := cfg.Releases.Create(prev); err != nil {
 			return Rendered{}, fmt.Errorf("rendering the chart: %w", err)
 		}
-		r, err := V1(rel)
-		if err != nil {
-			return Rendered{}, err
-		}
-		if err := CheckOutput(r.Manifest + r.Info.Notes); err != nil {
-			return Rendered{}, err
-		}
-		return Rendered{Manifest: r.Manifest, Notes: r.Info.Notes}, nil
-	})
-	if tripped() {
-		return Rendered{}, fmt.Errorf("%w: it loops or repeats too much", ErrRenderLimit)
+		u := action.NewUpgrade(cfg)
+		u.Namespace = o.Namespace
+		u.DryRunStrategy, u.HideSecret = action.DryRunClient, o.HideSecret
+		u.DisableOpenAPIValidation = true
+		rel, err = u.RunWithContext(ctx, o.Name, ch, vals)
+	} else {
+		i := action.NewInstall(cfg)
+		i.DryRunStrategy, i.HideSecret = action.DryRunClient, o.HideSecret
+		i.ReleaseName, i.Namespace = o.Name, o.Namespace
+		i.Replace, i.IncludeCRDs = true, true
+		// An install on the console starts from Helm's capabilities and
+		// takes the cluster's from these.
+		i.KubeVersion, i.APIVersions = &caps.KubeVersion, caps.APIVersions
+		rel, err = i.RunWithContext(ctx, ch, vals)
 	}
-	return out, err
+	if err != nil {
+		return Rendered{}, fmt.Errorf("rendering the chart: %w", err)
+	}
+	r, err := V1(rel)
+	if err != nil {
+		return Rendered{}, err
+	}
+	if err := CheckOutput(r.Manifest + r.Info.Notes); err != nil {
+		return Rendered{}, err
+	}
+	return Rendered{Manifest: r.Manifest, Notes: r.Info.Notes}, nil
 }
 
 // V1 is a release in the format the SDK's v1 types use.

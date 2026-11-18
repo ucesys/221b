@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"sort"
@@ -51,8 +52,11 @@ type Options struct {
 	// ToolDefs are the toolbox's tool definitions, for a test's recorded
 	// tools.
 	ToolDefs func() []sherlock.ToolDef
-	Now      func() time.Time
-	Logger   *slog.Logger
+	// Context is the process's: every test run ends with it, whatever
+	// started the run.
+	Context context.Context
+	Now     func() time.Time
+	Logger  *slog.Logger
 }
 
 // Service is the console's agents.
@@ -65,8 +69,10 @@ type Service struct {
 	readAt  time.Time
 	keys    map[string]*sherlock.Keys
 	clients map[string]*sherlock.Client
-	// running names the agents whose tests run now.
-	running map[string]bool
+	// runs are the test runs in flight on this replica (the leader's), by
+	// agent, and lastRuns the last that ended (Phase 12.1).
+	runs     map[string]*liveRun
+	lastRuns map[string]TestRun
 	// setup is Getting started, for Sherlock's setup skill (Phase 12).
 	setup SetupGuide
 }
@@ -97,7 +103,7 @@ func New(o Options) *Service {
 	if o.HTTP == nil {
 		o.HTTP = &http.Client{Timeout: 5 * time.Minute}
 	}
-	return &Service{opts: o, keys: map[string]*sherlock.Keys{}, clients: map[string]*sherlock.Client{}, running: map[string]bool{}}
+	return &Service{opts: o, keys: map[string]*sherlock.Keys{}, clients: map[string]*sherlock.Client{}, runs: map[string]*liveRun{}, lastRuns: map[string]TestRun{}}
 }
 
 // SetEngine gives the service the conversation engine, which runs tests;
@@ -340,7 +346,7 @@ func (s *Service) usable(p Provider) string {
 		if p.ID == DefaultProvider {
 			return "Sherlock has no API key. An administrator adds one in Settings."
 		}
-		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Settings › Providers.", p.Name)
+		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Administration › AI › Providers.", p.Name)
 	}
 	return ""
 }
@@ -554,7 +560,7 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	set := s.settingsOf(snap, id)
 	p, ok := s.provider(snap, set.Provider)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Settings › Agents", info.Name, set.Provider)
+		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider)
 	}
 	if why := s.usable(p); why != "" {
 		return sherlock.Agent{}, errors.New(why)
@@ -591,6 +597,14 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	if id != Sherlock {
 		setup = nil
 	}
+	// The work whose owner Sherlock cannot ask is its own (PM-D1): added
+	// after its core, an edited one too, so that turning an agent off
+	// never leaves that work with nobody.
+	if id == Sherlock {
+		if own := OwnWork(roster); own != "" {
+			core += "\n\n" + own
+		}
+	}
 	if setup != nil {
 		core += "\n\n" + SetupSkill()
 		tools = append(tools, sherlock.ToolSetupStatus)
@@ -602,6 +616,9 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	a := sherlock.Agent{
 		ID: id, Name: info.Name, Client: s.Client(p.ID), Model: model, Price: priceOf(model, p),
 		Caps:         sherlock.Caps{DailyUSD: set.DailyUSD, MonthlyUSD: set.MonthlyUSD},
+		Provider:     p.ID,
+		ProviderName: p.Name,
+		ProviderCaps: snap.providers.Limits[p.ID],
 		Instructions: Assemble(core, roster, text),
 		Notes:        notesFor(notes, cluster),
 		Tools:        tools,
@@ -668,7 +685,7 @@ func (s *Service) Usable(id, cluster string) string {
 
 // ---------- the administrators' view ----------
 
-// ProviderView is a provider as Settings › Providers shows it.
+// ProviderView is a provider as Administration › AI › Providers shows it.
 type ProviderView struct {
 	Provider
 	// Resolved is the provider with its kind's defaults filled in.
@@ -683,9 +700,13 @@ type ProviderView struct {
 	// KeylessOK says it needs no key: its last test passed without one,
 	// with its settings as they are (Phase 12, wave 5).
 	KeylessOK bool `json:"keylessOK"`
+	// Limit is its daily and monthly limits, Spend what every agent spent
+	// on it (Phase 12.1, AI-36).
+	Limit sherlock.Caps       `json:"limit"`
+	Spend sherlock.AgentSpend `json:"spend"`
 }
 
-// AgentView is an agent as Settings › Agents shows it.
+// AgentView is an agent as Administration › AI › Agents shows it.
 type AgentView struct {
 	Info
 	Settings AgentSettings `json:"settings"`
@@ -764,15 +785,15 @@ func (s *Service) footprint(snap snapshot, info Info) *AgentFootprint {
 	return f
 }
 
-// Overview is Settings › Agents and Providers.
+// Overview is Administration › AI › Agents and Providers.
 type Overview struct {
 	Providers []ProviderView   `json:"providers"`
 	Agents    []AgentView      `json:"agents"`
 	Models    []sherlock.Model `json:"models"`
 	// DefaultModel is the default provider's model.
 	DefaultModel string `json:"defaultModel"`
-	// DailyUSD and MonthlyUSD are the overall limits, every agent's spend
-	// together.
+	// DailyUSD and MonthlyUSD are the total limits, every agent's spend
+	// on every provider together.
 	DailyUSD       float64        `json:"dailyUSD"`
 	MonthlyUSD     float64        `json:"monthlyUSD"`
 	Spend          sherlock.Spend `json:"spend"`
@@ -842,7 +863,7 @@ func (s *Service) View(ctx context.Context) Overview {
 	for _, p := range list {
 		k := s.KeysFor(p.ID)
 		r := p.Provider.Normalized(s.opts.DefaultURL)
-		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p)})
+		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)})
 	}
 	return o
 }
@@ -991,6 +1012,7 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 		return refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
 	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+		delete(ps.Limits, id)
 		if id == DefaultProvider {
 			ps.DefaultRemoved, ps.DefaultTested = true, nil
 			return nil
@@ -1139,12 +1161,68 @@ func mustInfo(id string) Info {
 	return info
 }
 
-// SetLimits changes the overall limits: what every agent spends together.
-func (s *Service) SetLimits(ctx context.Context, daily, monthly float64) error {
+// Limits are the spending limits Administration › AI › Limits changes (AI-36): the
+// total, every agent's spend on every provider together, and each
+// provider's. 0 is no limit.
+type Limits struct {
+	DailyUSD   float64 `json:"dailyUSD"`
+	MonthlyUSD float64 `json:"monthlyUSD"`
+	// Providers are the providers' limits by id; nil keeps them, and a
+	// provider left out keeps its own.
+	Providers map[string]sherlock.Caps `json:"providers,omitempty"`
+}
+
+// checkCaps reports what is wrong with a pair of limits; what names them.
+func checkCaps(c sherlock.Caps, what string) error {
+	for _, v := range []float64{c.DailyUSD, c.MonthlyUSD} {
+		if v < 0 || v > MaxCapUSD || math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("%s must be between $0 (no limit) and $%d", what, MaxCapUSD)
+		}
+	}
+	if c.DailyUSD > 0 && c.MonthlyUSD > 0 && c.DailyUSD > c.MonthlyUSD {
+		return fmt.Errorf("%s: the daily limit is above the monthly limit", what)
+	}
+	return nil
+}
+
+// SetLimits changes the total limits and the providers' given. Each is
+// checked before any is saved; a provider's must be one there is.
+func (s *Service) SetLimits(ctx context.Context, in Limits) error {
+	defer s.forget()
 	sh := s.sherlockSettings()
-	sh.DailyUSD, sh.MonthlyUSD = daily, monthly
+	sh.DailyUSD, sh.MonthlyUSD = in.DailyUSD, in.MonthlyUSD
 	if err := sh.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	snap := s.read(ctx)
+	for id, c := range in.Providers {
+		p, ok := s.provider(snap, id)
+		if id == "" || !ok {
+			return fmt.Errorf("%w: there is no provider %q", ErrInvalid, id)
+		}
+		if err := checkCaps(c, "the limits of "+p.Name); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+	if len(in.Providers) > 0 {
+		if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+			if ps.Limits == nil {
+				ps.Limits = map[string]sherlock.Caps{}
+			}
+			for id, c := range in.Providers {
+				if c == (sherlock.Caps{}) {
+					delete(ps.Limits, id)
+				} else {
+					ps.Limits[id] = c
+				}
+			}
+			if len(ps.Limits) == 0 {
+				ps.Limits = nil
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	_, err := s.opts.Settings.UpdateSherlock(ctx, sh)
 	return err
@@ -1153,5 +1231,5 @@ func (s *Service) SetLimits(ctx context.Context, daily, monthly float64) error {
 func (s *Service) testing(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.running[id]
+	return s.runs[id] != nil
 }

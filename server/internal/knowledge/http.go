@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,11 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)
 	route("POST store/move", h.postStoreMove)
+	// Trust this certificate, and Forget (0.12.1, CR-16, CR-19).
+	route("POST sources/trust", h.postSourceTrust)
+	route("DELETE sources/{id}/trust", h.deleteSourceTrust)
+	route("POST store/trust", h.postStoreTrust)
+	route("DELETE store/trust", h.deleteStoreTrust)
 	route("PUT hook", h.putHook)
 	route("GET status", h.getStatus)
 	route("GET pages", h.getPages)
@@ -72,6 +78,14 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET wiki", h.getWiki)
 	route("POST add", h.postAdd)
 	route("DELETE added/{name}", h.deleteAdded)
+	// What Mycroft draws on (0.12.1, KN-45, KN-47, MY-12 to MY-14).
+	route("GET uploads", h.getUploads)
+	route("DELETE uploads/{source}/{name}", h.deleteUpload)
+	route("GET items", h.getItems)
+	route("GET items/detail", h.getItem)
+	route("POST sources/{id}/exclusions", h.postExclusion)
+	route("DELETE sources/{id}/exclusions", h.deleteExclusion)
+	route("POST rewrite", h.postRewrite)
 	// A page's own actions (KN-23, KN-24).
 	route("POST outdated", h.postOutdated)
 	route("GET requests", h.getRequests)
@@ -83,12 +97,6 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET drafts/{id}", h.getDraft)
 	route("POST drafts/{id}/approve", h.postApprove)
 	route("POST drafts/{id}/reject", h.postReject)
-	route("GET confluence", h.getConfluence)
-	route("PUT confluence", h.putConfluence)
-	route("POST confluence/test", h.postConfluenceTest)
-	route("POST confluence/check", h.postConfluenceCheck)
-	route("GET confluence/conflicts", h.getConflicts)
-	route("POST confluence/conflicts/{id}", h.postConflict)
 	// The webhook: a token, not a session.
 	h.mux.HandleFunc("POST "+Prefix+"hook/{target}", h.postHook)
 	return h
@@ -115,7 +123,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrDenied):
 		writeError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, ErrInvalid), errors.Is(err, confluence.ErrInvalid):
+	case errors.Is(err, ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotLeader):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -159,22 +167,15 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 	h.getSettings(w, r, c)
 }
 
+// sourceInput is a source as its dialog sends it: it names its
+// credential of Administration › Credentials (0.12.1, CR-11), and sends none.
 type sourceInput struct {
-	Source Source  `json:"source"`
-	Token  *string `json:"token,omitempty"`
-	// Keys are a bucket's access key (KN-25): a value replaces, ""
-	// removes, absent keeps.
-	Keys CredsChange `json:"keys"`
+	Source Source `json:"source"`
 }
 
-// creds is the input's credential change.
-func (in sourceInput) creds() CredsChange {
-	ch := in.Keys
-	if in.Token != nil {
-		ch.Token = in.Token
-	}
-	return ch
-}
+// creds is the input's change to the credential kept in the knowledge
+// Secret: none since 0.12.1.
+func (in sourceInput) creds() CredsChange { return CredsChange{} }
 
 func (h *handler) postSource(w http.ResponseWriter, r *http.Request, c Caller) {
 	var in sourceInput
@@ -228,10 +229,40 @@ func (h *handler) postSourceOn(w http.ResponseWriter, r *http.Request, c Caller)
 func (h *handler) postSourceTest(w http.ResponseWriter, r *http.Request, c Caller) {
 	t, err := h.s.TestSource(r.Context(), c, r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusOK, failedTest(t, err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
+	writeJSON(w, http.StatusOK, testAnswer(t))
+}
+
+// failedTest is a Test's answer when it failed: the error, and the
+// certificate the address presented when it is not trusted (CR-15).
+func failedTest(t SourceTest, err error) map[string]any {
+	out := map[string]any{"ok": false, "error": err.Error()}
+	if t.Certificate != nil {
+		out["certificate"] = t.Certificate
+	}
+	return out
+}
+
+// testAnswer is a Test's answer: a live source is OK when every address
+// was read.
+func testAnswer(t SourceTest) map[string]any {
+	ok := true
+	for _, c := range t.Live {
+		ok = ok && c.OK
+	}
+	out := map[string]any{"ok": ok, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy}
+	if t.Live != nil {
+		out["live"] = t.Live
+	}
+	if t.Certificate != nil {
+		out["certificate"] = t.Certificate
+	}
+	if !ok {
+		out["error"] = "not every address could be read"
+	}
+	return out
 }
 
 // sourceTestInput is a source's dialog as typed (KN-26): saved is the id
@@ -252,10 +283,10 @@ func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c 
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusOK, failedTest(t, err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
+	writeJSON(w, http.StatusOK, testAnswer(t))
 }
 
 func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller) {
@@ -309,11 +340,58 @@ func (h *handler) postStoreTest(w http.ResponseWriter, r *http.Request, c Caller
 		fail(w, err)
 		return
 	}
+	out := map[string]any{"ok": true, "check": check}
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		out = map[string]any{"ok": false, "error": err.Error()}
+	}
+	if cert := h.s.StoreCertificate(r.Context(), c, in, err == nil); cert != nil {
+		out["certificate"] = cert
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) postSourceTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in TrustInput
+	if !decode(w, r, maxBody, &in) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "check": check})
+	p, err := h.s.TrustSource(r.Context(), c, in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *handler) deleteSourceTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	if err := h.s.ForgetSource(r.Context(), c, r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"forgotten": true})
+}
+
+func (h *handler) postStoreTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		SHA256 string `json:"sha256"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	p, err := h.s.TrustStore(r.Context(), c, in.SHA256)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *handler) deleteStoreTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	if err := h.s.ForgetStore(r.Context(), c); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"forgotten": true})
 }
 
 func (h *handler) postStoreMove(w http.ResponseWriter, r *http.Request, c Caller) {
@@ -421,6 +499,87 @@ func (h *handler) deleteAdded(w http.ResponseWriter, r *http.Request, c Caller) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})
+}
+
+// --- What Mycroft draws on (0.12.1) ---
+
+func (h *handler) getUploads(w http.ResponseWriter, r *http.Request, c Caller) {
+	v, err := h.s.Uploads(r.Context(), c)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (h *handler) deleteUpload(w http.ResponseWriter, r *http.Request, c Caller) {
+	res, err := h.s.RemoveUpload(r.Context(), c, r.PathValue("source"), r.PathValue("name"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *handler) getItems(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	page, err := h.s.Items(r.Context(), c, ItemsQuery{Source: q.Get("source"), Type: q.Get("type"), State: q.Get("state"), Q: q.Get("q"), Offset: offset, Limit: limit})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) getItem(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	d, err := h.s.Item(r.Context(), c, q.Get("source"), q.Get("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (h *handler) postExclusion(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in ExcludeInput
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.Exclude(r.Context(), c, r.PathValue("id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *handler) deleteExclusion(w http.ResponseWriter, r *http.Request, c Caller) {
+	q := r.URL.Query()
+	if err := h.s.Include(r.Context(), c, r.PathValue("id"), q.Get("pattern"), q.Get("under") == "1"); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"included": true, "text": "Included again: it is read at the next sync, its Wiki sync job's next run or Run now."})
+}
+
+func (h *handler) postRewrite(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Pages []string `json:"pages"`
+		Title string   `json:"title"`
+		Why   string   `json:"why"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.Rewrite(r.Context(), c, in.Pages, in.Title, in.Why)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, res)
 }
 
 // --- A page's own actions (KN-23, KN-24) ---
@@ -570,11 +729,6 @@ func (h *handler) getDraftsCount(w http.ResponseWriter, r *http.Request, c Calle
 		fail(w, err)
 		return
 	}
-	if p := h.s.o.Publisher; p != nil && c.Reviewer {
-		if list, err := p.Conflicts(r.Context()); err == nil {
-			n += len(list)
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": n})
 }
 
@@ -613,152 +767,4 @@ func (h *handler) postReject(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
-}
-
-// The Confluence publisher (Settings › Issues › Confluence).
-
-func (h *handler) publisher(w http.ResponseWriter) *confluence.Publisher {
-	p := h.s.o.Publisher
-	if p == nil {
-		writeError(w, http.StatusNotFound, "the Confluence publisher is not offered here")
-	}
-	return p
-}
-
-func (h *handler) superAdmin(w http.ResponseWriter, c Caller) bool {
-	if !c.SuperAdmin {
-		fail(w, wrapf(ErrDenied, "only a SuperAdmin sets up publishing to Confluence"))
-		return false
-	}
-	return true
-}
-
-func (h *handler) getConfluence(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	v, err := p.View(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
-}
-
-type confluenceInput struct {
-	Settings confluence.Settings `json:"settings"`
-	Token    *string             `json:"token,omitempty"`
-}
-
-func (h *handler) putConfluence(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	var in confluenceInput
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	detail, err := p.Save(r.Context(), in.Settings, in.Token, c.label())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Outcome: audit.OutcomeOK, From: c.From, Detail: detail})
-	h.getConfluence(w, r, c)
-}
-
-func (h *handler) postConfluenceTest(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	var in confluenceInput
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	res, err := p.Test(r.Context(), in.Settings, in.Token)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "spaces": res})
-}
-
-func (h *handler) postConfluenceCheck(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Outcome: audit.OutcomeOK, From: c.From, Detail: "the Confluence pages' check started by hand"})
-	go func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Minute)
-		defer cancel()
-		if _, err := p.Check(ctx); err != nil {
-			h.s.o.Logger.Warn("the Confluence pages' check failed", "err", err)
-		}
-	}()
-	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
-}
-
-func (h *handler) getConflicts(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil {
-		return
-	}
-	if !c.Reviewer {
-		fail(w, wrapf(ErrDenied, "only an Admin or a SuperAdmin decides the Confluence pages' edits"))
-		return
-	}
-	list, err := p.Conflicts(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	type row struct {
-		confluence.Conflict
-		Mine bool `json:"mine"`
-	}
-	out := make([]row, 0, len(list))
-	for _, x := range list {
-		out = append(out, row{Conflict: x, Mine: x.Owner != "" && x.Owner == c.ID})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"conflicts": out})
-}
-
-func (h *handler) postConflict(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil {
-		return
-	}
-	if !c.Reviewer {
-		fail(w, wrapf(ErrDenied, "only an Admin or a SuperAdmin decides the Confluence pages' edits"))
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	var in struct {
-		Action string `json:"action"`
-	}
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	detail, err := p.Resolve(r.Context(), r.PathValue("id"), in.Action, confluence.Person{ID: c.ID, Name: c.label(), Email: c.Email})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Target: r.PathValue("id"), Outcome: audit.OutcomeOK, From: c.From, Detail: detail})
-	writeJSON(w, http.StatusOK, map[string]bool{"resolved": true})
 }

@@ -122,10 +122,17 @@ auth:
     ldap: "221b-ldap:"
   # CIDRs of the proxies in front of the console, such as your Ingress
   # controller's pods: their X-Forwarded-For says who a request is from, for
-  # the audit log's From and the limits on sign-in attempts. Empty believes
-  # no one's header: From is the socket's peer, and every address meets the
-  # same limit, as well as the limit per account. List every proxy on the
-  # way, not the clients.
+  # the audit log's From and the limits on sign-in attempts. Needed whenever
+  # people reach the console through a proxy (ingress.enabled, or a load
+  # balancer that proxies HTTP). Empty believes no one's header: From is the
+  # socket's peer, so behind a proxy it is the proxy's address for everyone,
+  # and everyone behind it shares that address's limit of 30 sign-in
+  # attempts a minute, as well as each account's own. List every proxy on
+  # the way, not the clients: usually the ingress controller's pod CIDR, or
+  # the nodes' addresses when it runs on the host network, for example
+  #   trustedProxies: ["10.42.0.0/16"]
+  # The log and Administration say when a proxy that is not listed sends
+  # X-Forwarded-For, Forwarded or X-Real-IP.
   trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.
@@ -319,7 +326,7 @@ sherlock:
 
 agents:
   # The AI agents (Phase 12): Sherlock at the front desk, and an agent for
-  # each other purpose, configured in Administration › Settings › AI. Each
+  # each other purpose, configured in Administration › AI. Each
   # agent's instructions are its fixed core (in the console, changed only
   # by releases), then house instructions, then notes per cluster. What is
   # set here is the baseline of the house instructions: an edit made in
@@ -416,6 +423,13 @@ issues:
   # local group named here). Members of these groups may sign in with LDAP
   # even when they are in no group under auth.ldap.roles.
   reporterGroups: []
+  # The report page's address that other pages link to (the AIOps pages'
+  # "Report page" links, the console's emails): a path on this console
+  # or an http or https address, such as https://help.example.com/report
+  # when a proxy serves it elsewhere. Empty is /report on this console.
+  # Set in Administration › AI › Issues before 0.12.1; a value saved there is no
+  # longer read.
+  reportURL: ""
   # The issue service's webhook is set in its settings at run time; with
   # networkPolicy.enabled, let the console reach it: list its address
   # under networkPolicy.outboundCIDRs and its port under outboundPorts.
@@ -468,6 +482,11 @@ cases:
   # networkPolicy.enabled, sherlock.egress opens HTTPS to any address,
   # which covers Slack and Teams; otherwise list the webhooks' addresses
   # under networkPolicy.outboundCIDRs and their ports under outboundPorts.
+  # Email about cases (EM-01) is set at run time in Administration ›
+  # Settings › Email; its password is kept in the same Secret. With
+  # networkPolicy.enabled, list the SMTP server's address under
+  # networkPolicy.outboundCIDRs and its port (587, 465 or 25) under
+  # outboundPorts: nothing else opens it.
   # --- Case work (Phase 12, ADR-105 to ADR-107) ---
   # The same roles work the cases of Cases › Cases (numbered C-1, C-2…):
   # they open a case by hand or from a finding, change its priority,
@@ -486,7 +505,7 @@ jobs:
   # budget. Their output is read-only: runs with a report and findings,
   # kept in the ConfigMap <release>-runs, and proposals that wait for a
   # person in Cases › Inbox. They read the clusters as the user
-  # 221b:agents with the role Settings › Jobs chooses (Viewer by default;
+  # 221b:agents with the role Administration › AI › Jobs chooses (Viewer by default;
   # bind a role to that user to let them read a namespace, or pick a group
   # of the role Viewer there).
   # The time zone a new schedule starts in, an IANA name such as
@@ -526,17 +545,18 @@ backup:
 
 # --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
 knowledge:
-  # Mycroft's knowledge: the sources a SuperAdmin connects in Settings ›
+  # Mycroft's knowledge: the sources a SuperAdmin connects in Administration › AI ›
   # Knowledge (Confluence spaces, git repositories of runbooks, uploaded
   # documents, and what the console knows), and the wiki it keeps in a git
   # repository or an S3 bucket. Its records are in the ConfigMap
   # <release>-knowledge, every credential in the Secret <release>-knowledge
-  # (with connections.store secrets). The Confluence publisher of known
-  # issues (Settings › Issues) keeps its state there too.
+  # (with connections.store secrets). A live source (Administration › AI › Knowledge,
+  # mode Live) is never copied: its pages are fetched when an agent
+  # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
   #
   # The addresses the console reaches for knowledge, as CIDRs: Confluence,
   # the git hosts and the buckets (the wiki's, and any bucket of documents
-  # Mycroft reads, KN-25). Listed, the network policy lets the
+  # Mycroft reads, KN-25), and the hosts of live sources' pages. Listed, the network policy lets the
   # console reach them on egressPorts. Empty adds no rule: with
   # sherlock.egress on (the default) the console reaches any address on 443
   # already; list them when it is off, or for a store on another port.
@@ -552,17 +572,13 @@ knowledge:
     sizeLimit: 512Mi
   # How often the local copy is read again from a git repository (besides
   # each push to the webhook) or an S3 bucket (besides each bucket
-  # notification); Settings › Knowledge may set its own.
+  # notification); Administration › AI › Knowledge may set its own.
   refresh:
     git: 15m
     s3: 5m
-  # The console's address as people reach it, for the links back from
-  # Confluence pages to the known issues; empty is the ingress's host when
-  # ingress.enabled, and no links otherwise.
-  consoleURL: ""
   # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
-  # the wiki while Settings › Knowledge names no store, so Mycroft's wiki
-  # can be tried without a repository or a bucket. Settings › Knowledge
+  # the wiki while Administration › AI › Knowledge names no store, so Mycroft's wiki
+  # can be tried without a repository or a bucket. Administration › AI › Knowledge
   # shows it as "ConfigMap (temporary, for testing — will be removed; move
   # to Git or S3 before relying on it)". It holds at most 900 KiB, and a
   # write past that is refused; it will be removed, so move the wiki to
@@ -587,6 +603,18 @@ helmRepositories:
   # a repository on another port.
   egressCIDRs: []
   egressPorts: [443]
+
+# --- Where applications' charts are fetched from ---
+apps:
+  # The hosts the console fetches git repositories, Helm repositories and
+  # OCI registries from, for applications and Watson's helm install and
+  # upgrade. Empty (the default) allows any host but the console's own pod
+  # and node and the clouds' metadata services. Listed, a source or
+  # repository on any other host is refused when it is saved and when the
+  # console connects, redirects included. An entry is a host name
+  # (git.example.com), or *.example.com for any name under example.com;
+  # either may end in :port to allow that port only (without one, any).
+  allowedHosts: []
 
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod

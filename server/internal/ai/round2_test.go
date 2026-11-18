@@ -296,7 +296,7 @@ func testDefs(t *testing.T) []sherlock.ToolDef {
 func TestBackToDraft(t *testing.T) {
 	w := setup(t, nil)
 	ctx := context.Background()
-	if err := w.ai.BackToDraft(ctx, Auditor); !errors.Is(err, ErrNotFound) {
+	if err := w.ai.BackToDraft(ctx, Auditor, "ann"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("without a draft: %v", err)
 	}
 	if _, err := w.ai.SaveDraft(ctx, Auditor, "Weigh PCI findings first.", nil, "ann"); err != nil {
@@ -312,7 +312,7 @@ func TestBackToDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.ai.BackToDraft(ctx, Auditor); err != nil {
+	if err := w.ai.BackToDraft(ctx, Auditor, "ann"); err != nil {
 		t.Fatal(err)
 	}
 	v, _ := w.ai.Instructions(ctx, Auditor)

@@ -2,21 +2,31 @@ import { useEffect, useRef, useState } from 'react'
 import { DEFAULT_GRACE, GRACE_CHOICES, REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
 import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
-import { adminHref, navigate, type Route } from '../lib/router'
+import { adminHref, aiHref, navigate, settingsHref, type AIPage, type Route, type SettingsPage } from '../lib/router'
+import { fetchIssueSettings, saveIssueSettings } from '../api/issues'
 import { IssueSettings } from './IssueSettings'
 import { SLASettings } from './SLASettings'
 import { CasesSettings } from './CasesSettings' // One flow for findings and cases (Phase 12, wave 6)
+import { EmailSettings, useMailForm } from './EmailSettings' // Email about cases (EM-01)
 import { SaveBar } from './SaveBar'
 import { WatsonSettings } from './WatsonSettings'
 import { AgentsSection } from './ai/AgentsSection'
 import { KnowledgeSection } from './ai/KnowledgeSection'
+import { LimitsSection } from './ai/LimitsSection' // Limits (Phase 12.1, AI-37)
 import { ProvidersSection } from './ai/ProvidersSection'
 import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
-import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
+import { HelmReposSettings } from './apps/HelmReposSettings' // Administration › Settings › Repositories (0.12.1; Helm repositories, Phase 12, wave 5)
+import { CredentialsSettings } from './CredentialsSettings' // Administration › Credentials (0.12.1)
 import { leftText, useSetup } from '../api/setup'
+import { LeaveSaveContext } from '../lib/leaveSave'
+import { hasUnsaved, unsavedWhat } from '../lib/unsaved'
+import { ConfirmDialog } from './ConfirmDialog'
 
-type Section = 'start' | 'general' | 'providers' | 'agents' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
+/** The panel's tab of Administration: AI, Credentials or Settings (CU-18). */
+export type Area = 'ai' | 'credentials' | 'settings'
+
+type Section = AIPage | SettingsPage | 'credentials'
 
 interface SectionInfo {
   id: Section
@@ -24,54 +34,83 @@ interface SectionInfo {
   hint: string
 }
 
-// The sections, in groups under a heading (Phase 12): the AI agents'
-// replace Sherlock's of before, whose address leads to Agents.
-const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
-  {
-    sections: [
-      // --- Getting started (Phase 12, GS-05): first, with what is left.
-      { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
-      { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts' },
+// Each tab's pages, in groups under a heading (Phase 12; CU-18, 0.12.1):
+// AI has the agents' pages, then AIOps' (a group, not a tab: the main
+// app has an AIOps area); Settings the console's own; Credentials is one
+// page, with no list.
+const AREAS: Record<Area, { nav: string; groups: { label?: string; sections: SectionInfo[] }[] }> = {
+  ai: {
+    nav: 'AI pages',
+    groups: [
+      {
+        label: 'Agents',
+        sections: [
+          { id: 'providers', label: 'Providers', hint: 'Where models come from' },
+          { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
+          // --- Limits (Phase 12.1, AI-37): the total, each provider's, each agent's.
+          { id: 'limits', label: 'Limits', hint: 'What the agents may spend: total, providers, agents' },
+          { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
+        ],
+      },
+      {
+        label: 'AIOps',
+        sections: [
+          // --- Cases replace reports (Phase 12, wave 5): the SLA, for every
+          // case; first, since every case has one.
+          { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
+          { id: 'issues', label: 'Issues', hint: 'Matching, timers, webhook' },
+          // --- One flow for findings and cases (Phase 12, wave 6) ---
+          { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
+          // --- Jobs (Phase 12) ---
+          { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
+        ],
+      },
     ],
   },
-  {
-    label: 'AI',
-    sections: [
-      { id: 'providers', label: 'Providers', hint: 'Where models come from' },
-      { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
-      { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
+  // --- Administration › Credentials (0.12.1, CR-01; a tab since CU-18):
+  // applications, repositories and Mycroft's sources all use them.
+  credentials: {
+    nav: 'Credentials',
+    groups: [{ sections: [{ id: 'credentials', label: 'Credentials', hint: 'Tokens and keys the console signs in with' }] }],
+  },
+  settings: {
+    nav: 'Settings pages',
+    groups: [
+      {
+        sections: [
+          // --- Getting started (Phase 12, GS-05): first, with what is left.
+          { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
+          // Email is a section of General since 0.12.1 (its old address leads there).
+          { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts, email' },
+          { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
+          // --- Repositories (0.12.1, RP-01): Settings › Applications before;
+          // its old address leads here.
+          { id: 'repositories', label: 'Repositories', hint: 'Git, Helm and OCI repositories applications and sources come from' },
+        ],
+      },
     ],
   },
-  {
-    label: 'Changes',
-    sections: [
-      { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
-      // --- Helm repositories (Phase 12, wave 5) ---
-      { id: 'apps', label: 'Applications', hint: 'Helm repositories and OCI registries' },
-    ],
-  },
-  {
-    label: 'AIOps',
-    sections: [
-      { id: 'issues', label: 'Issues', hint: 'Report page, timers, API tokens' },
-      // --- Cases replace reports (Phase 12, wave 5): the SLA, for every case.
-      { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
-      // --- One flow for findings and cases (Phase 12, wave 6) ---
-      { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
-      // --- Jobs (Phase 12) ---
-      { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
-    ],
-  },
-]
+}
 
-const SECTIONS: SectionInfo[] = GROUPS.flatMap((g) => g.sections)
+const sectionsOf = (area: Area): SectionInfo[] => AREAS[area].groups.flatMap((g) => g.sections)
 
-const settingsHref = (section: Section) => adminHref('settings', section === 'general' ? [] : [section])
+/** A page's address in its tab. */
+export function sectionHref(area: Area, section: Section): string {
+  if (area === 'ai') return aiHref(section as AIPage)
+  if (area === 'settings') return settingsHref(section as SettingsPage)
+  return adminHref('credentials')
+}
 
-/** The section an address asks for: Sherlock's of before is Agents now. */
-export function sectionOf(asked: string | undefined): Section {
-  if (asked === 'sherlock') return 'agents'
-  return SECTIONS.find((s) => s.id === asked)?.id ?? 'general'
+/** The tab an Administration address is on: AI, Credentials, or Settings otherwise. */
+export function areaOf(route: Route): Area {
+  const tab = route.path[0]
+  return tab === 'ai' || tab === 'credentials' ? tab : 'settings'
+}
+
+/** The page of a tab an address asks for, or the tab's first (Settings': General). */
+export function sectionOf(area: Area, asked: string | undefined): Section {
+  const all = sectionsOf(area)
+  return all.find((s) => s.id === asked)?.id ?? (area === 'settings' ? 'general' : all[0]!.id)
 }
 
 interface Props {
@@ -82,78 +121,155 @@ interface Props {
 }
 
 /**
- * Settings, the last page of the Administration area (RB-47), for
- * SuperAdmins: General (the refresh rate, kept on the server), the AI
- * agents' Providers, Agents and Knowledge (Phase 12), Watson, and the issue
- * service's (Phase 12). The theme is personal and lives in the account
- * menu. The page and its frame, with Back and Escape, are the
- * Administration area's.
+ * Administration's AI, Credentials and Settings tabs (RB-47; CU-18), for
+ * SuperAdmins: AI has the agents' Providers, Agents, Limits and Knowledge
+ * and AIOps' SLA, Issues, Cases and Jobs; Credentials is one page;
+ * Settings has Getting started, General (the refresh rate, kept on the
+ * server, times, alerts, email), Watson and Repositories. Each page has
+ * one Save, and leaving one with changes asks first. The theme is
+ * personal and lives in the account menu. The frame, with Back and
+ * Escape, is the Administration area's.
  */
 export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) {
-  const section = sectionOf(route.path[1])
+  const area = areaOf(route)
+  const section = sectionOf(area, route.path[1])
   const heading = useRef<HTMLHeadingElement>(null)
+  const href = (s: Section) => sectionHref(area, s)
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
   }, [section])
+  // Settings › Email of before (EM-01): General's Email section, at its
+  // own address no more (#/admin/settings/general/email, which its old
+  // address leads to, scrolls to it).
+  const askedEmail = section === 'general' && route.path[2] === 'email'
+  useEffect(() => {
+    if (!askedEmail) return
+    document.getElementById('settings-email')?.scrollIntoView?.({ block: 'start' })
+    navigate(settingsHref('general'), true)
+  }, [askedEmail])
 
-  const label = SECTIONS.find((s) => s.id === section)!.label
+  // Leaving a page with changes not saved asks first (CU-16): Save (where
+  // the page's Save can say it all went), Discard, or stay. Closing or
+  // reloading the browser's tab asks the browser's own way.
+  const leaveSave = useRef<(() => Promise<boolean>) | null>(null)
+  const [leaving, setLeaving] = useState<{ to: string; canSave: boolean } | null>(null)
+  const [leaveBusy, setLeaveBusy] = useState(false)
+  useEffect(() => {
+    const ask = (e: BeforeUnloadEvent) => {
+      if (!hasUnsaved()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', ask)
+    return () => window.removeEventListener('beforeunload', ask)
+  }, [])
+  const go = (to: string) => {
+    if (to !== href(section) && hasUnsaved()) setLeaving({ to, canSave: !!leaveSave.current })
+    else navigate(to, true)
+  }
+
+  const label = sectionsOf(area).find((s) => s.id === section)!.label
+  const groups = AREAS[area].groups
+  const nav = sectionsOf(area).length > 1
   // Getting started's hint says how many steps are left (Phase 12).
-  const { view: setup } = useSetup(true)
+  const { view: setup } = useSetup(area === 'settings')
   return (
-    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
-      <nav aria-label="Settings sections" style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
-        {GROUPS.map((g) => [
-          g.label && (
-            <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
-              {g.label}
-            </span>
-          ),
-          ...g.sections.map((s) => (
-            <a
-              key={s.id}
-              href={settingsHref(s.id)}
-              aria-current={s.id === section ? 'page' : undefined}
-              onClick={(e) => {
-                e.preventDefault()
-                navigate(settingsHref(s.id), true)
-              }}
-              data-testid="settings-section"
-              data-section={s.id}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                padding: '8px 12px',
-                borderRadius: 8,
-                textDecoration: 'none',
-                color: 'var(--fg)',
-                background: s.id === section ? 'var(--surface)' : 'transparent',
-                boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-              <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
-            </a>
-          )),
-        ])}
-      </nav>
-      <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
-        <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
-          {label}
-        </h2>
-        {section === 'start' && <GettingStartedSection onToast={onToast} />}
-        {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
-        {section === 'providers' && <ProvidersSection onToast={onToast} />}
-        {section === 'agents' && <AgentsSection onToast={onToast} />}
-        {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
-        {section === 'watson' && <WatsonSettings open />}
-        {section === 'apps' && <HelmReposSettings onToast={onToast} />}
-        {section === 'issues' && <IssueSettings open />}
-        {section === 'jobs' && <JobsSettings />}
-        {section === 'sla' && <SLASettings />}
-        {section === 'cases' && <CasesSettings />}
-      </section>
-    </div>
+    <LeaveSaveContext.Provider value={leaveSave}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page" data-area={area}>
+        {nav && (
+          <nav aria-label={AREAS[area].nav} style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
+            {groups.map((g) => [
+              g.label && (
+                <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
+                  {g.label}
+                </span>
+              ),
+              ...g.sections.map((s) => (
+                <a
+                  key={s.id}
+                  href={href(s.id)}
+                  aria-current={s.id === section ? 'page' : undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    go(href(s.id))
+                  }}
+                  data-testid="settings-section"
+                  data-section={s.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                    color: 'var(--fg)',
+                    background: s.id === section ? 'var(--surface)' : 'transparent',
+                    boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
+                  <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
+                </a>
+              )),
+            ])}
+          </nav>
+        )}
+        <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
+          <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
+            {label}
+          </h2>
+          {section === 'start' && <GettingStartedSection onToast={onToast} />}
+          {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
+          {section === 'credentials' && <CredentialsSettings onToast={onToast} />}
+          {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
+          {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
+          {section === 'limits' && <LimitsSection onToast={onToast} />}
+          {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
+          {section === 'watson' && <WatsonSettings open />}
+          {section === 'repositories' && <HelmReposSettings onToast={onToast} />}
+          {section === 'issues' && <IssueSettings open />}
+          {section === 'jobs' && <JobsSettings />}
+          {section === 'sla' && <SLASettings />}
+          {section === 'cases' && <CasesSettings />}
+        </section>
+        {leaving && (
+          <ConfirmDialog
+            title={leaving.canSave ? 'Save or discard?' : 'Discard the changes?'}
+            confirm="Discard"
+            danger
+            busy={leaveBusy}
+            also={
+              leaving.canSave
+                ? {
+                    label: 'Save',
+                    testId: 'leave-save',
+                    onClick: () => {
+                      const save = leaveSave.current
+                      if (!save) return
+                      setLeaveBusy(true)
+                      void save().then((ok) => {
+                        setLeaveBusy(false)
+                        setLeaving(null)
+                        // What failed is said on the page's Save bar, where it stays.
+                        if (ok) navigate(leaving.to, true)
+                      })
+                    },
+                  }
+                : undefined
+            }
+            onCancel={() => setLeaving(null)}
+            onConfirm={() => {
+              setLeaving(null)
+              navigate(leaving.to, true)
+            }}
+          >
+            <p style={{ margin: 0 }} data-testid="leave-unsaved">
+              {unsavedWhat().join(', ') || 'This page'} has changes not saved. {leaving.canSave ? 'Save them, or discard them and leave.' : 'Discard them and leave, or cancel to stay.'}
+            </p>
+          </ConfirmDialog>
+        )}
+      </div>
+    </LeaveSaveContext.Provider>
   )
 }
 
@@ -182,26 +298,75 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [fleetsDraft, setFleetsDraft] = useState<boolean | undefined>(undefined)
   const currentFleets = settings?.fleetsPage ?? true
   const pickedFleets = fleetsDraft ?? currentFleets
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined
+  const [imagesDraft, setImagesDraft] = useState<boolean | undefined>(undefined)
+  const currentImages = settings?.imageChecks ?? true
+  const pickedImages = imagesDraft ?? currentImages
+  // The company or IT name on the report page (IS-29): the issue service's
+  // setting, kept where it was, set here since 0.12.1. Without the issue
+  // service the field is not shown.
+  const [company, setCompany] = useState<string | null>(null)
+  const [companyDraft, setCompanyDraft] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    let gone = false
+    fetchIssueSettings().then(
+      (s) => !gone && setCompany(s.company),
+      () => !gone && setCompany(null),
+    )
+    return () => {
+      gone = true
+    }
+  }, [])
+  const companyChanged = company !== null && companyDraft !== undefined && companyDraft.trim() !== company
+  const settingsChanged = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined
+  // Email (EM-11) is saved by the same bar (CU-16).
+  const mail = useMailForm()
+  const changed = settingsChanged || companyChanged || mail.changed
 
-  const save = async () => {
-    if (picked === undefined) return
+  // One Save for the page (CU-16): only the parts changed, in turn; a part
+  // that fails keeps what was typed and is named, the others stay saved,
+  // and Save again tries only what is left.
+  const save = async (): Promise<boolean> => {
     setBusy(true)
     setError('')
     setSaved('')
-    try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets })
-      setDraft(undefined)
-      setBannersDraft(undefined)
-      setFleetsDraft(undefined)
-      setFormatDraft(undefined)
-      setGraceDraft(undefined)
-      setSaved('Saved.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
+    const failed: string[] = []
+    const notes: string[] = []
+    const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
+    if (settingsChanged && picked !== undefined) {
+      try {
+        await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
+        setDraft(undefined)
+        setBannersDraft(undefined)
+        setFleetsDraft(undefined)
+        setImagesDraft(undefined)
+        setFormatDraft(undefined)
+        setGraceDraft(undefined)
+      } catch (err) {
+        failed.push(`Console settings not saved: ${why(err)}`)
+      }
     }
+    if (companyChanged) {
+      try {
+        // Read again just before, so Administration › AI › Issues' other values stay as they are now.
+        const current = await fetchIssueSettings()
+        const s = await saveIssueSettings({ ...current, company: companyDraft.trim() })
+        setCompany(s.company)
+        setCompanyDraft(undefined)
+      } catch (err) {
+        failed.push(`Company or IT name not saved: ${why(err)}`)
+      }
+    }
+    if (mail.changed) {
+      try {
+        notes.push(await mail.save())
+      } catch (err) {
+        failed.push(`Email not saved: ${why(err)}`)
+      }
+    }
+    setError(failed.join(' '))
+    if (!failed.length) setSaved(['Saved.', ...notes].join(' '))
+    setBusy(false)
+    return !failed.length
   }
 
   const current = settings?.refreshSeconds
@@ -238,16 +403,39 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
       <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
+      <ImageChecksSection picked={pickedImages} disabled={!settings || busy} onPick={(b) => setImagesDraft(b === currentImages ? undefined : b)} />
+      {company !== null && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Company or IT name">
+          <h3 className="rk-h">Company or IT name</h3>
+          <span className="rk-field" style={{ maxWidth: 360 }}>
+            <input value={companyDraft ?? company} maxLength={120} disabled={busy} onChange={(e) => setCompanyDraft(e.target.value)} aria-label="Company or IT name" data-testid="settings-company" />
+          </span>
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            In the report page’s header, such as “Example Corp IT”.
+          </p>
+        </section>
+      )}
+      {/* --- Email about cases (EM-01), in General since 0.12.1, saved by its bar (CU-16) --- */}
+      <section id="settings-email" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 16 }} aria-label="Email" data-testid="settings-email-section">
+        <h3 className="rk-h">Email</h3>
+        <EmailSettings mail={mail} busy={busy} />
+      </section>
       <SaveBar
+        what="Administration › Settings › General"
         changed={changed}
         busy={busy}
         onSave={() => void save()}
+        save={save}
         onUndo={() => {
           setDraft(undefined)
           setFormatDraft(undefined)
           setGraceDraft(undefined)
           setBannersDraft(undefined)
           setFleetsDraft(undefined)
+          setImagesDraft(undefined)
+          setCompanyDraft(undefined)
+          mail.undo()
+          setError('')
         }}
         error={error}
         saved={saved}
@@ -292,6 +480,27 @@ function FleetsPageSection({ picked, disabled, onPick }: { picked: boolean; disa
       </div>
       <p className="rk-fhint" style={{ margin: 0 }}>
         For everyone: the Fleets tab, with every node against every label and taint. Fleets are made, changed and deleted from the Nodes tab’s fleet list either way, and filter the nodes there.
+      </p>
+    </section>
+  )
+}
+
+/** Whether the leader looks for newer images than the Helm releases run (HA-23). */
+function ImageChecksSection({ picked, disabled, onPick }: { picked: boolean; disabled: boolean; onPick: (b: boolean) => void }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Newer images">
+      <h3 className="rk-h">Newer images</h3>
+      <div className="rk-seg" role="group" aria-label="Look for newer images" style={{ alignSelf: 'flex-start' }} data-testid="settings-image-checks">
+        <button aria-pressed={picked} disabled={disabled} onClick={() => onPick(true)}>
+          Check
+        </button>
+        <button aria-pressed={!picked} disabled={disabled} onClick={() => onPick(false)}>
+          Off
+        </button>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: the console asks the registries of the images the Helm releases run, anonymously and at most every six hours each, for a newer tag of the same form, and the Helm tab says when there is one. Private repositories and
+        registries it cannot reach are not checked. Off, no registry is asked.
       </p>
     </section>
   )

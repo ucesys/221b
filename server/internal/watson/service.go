@@ -19,6 +19,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/kube"
 )
 
@@ -116,7 +117,14 @@ type Plan struct {
 	DryRunning bool `json:"dryRunning,omitempty"`
 	// Object is the YAML of what a session creates or patches (TB-36).
 	Object string `json:"object,omitempty"`
-	guards []guard
+	// Tone is "warn" for a deploy that removes values the release has,
+	// "danger" for a change to the console's own release; Alert says the
+	// latter before anything else (asked November 17, 2026).
+	Tone  string `json:"tone,omitempty"`
+	Alert string `json:"alert,omitempty"`
+	// refusal says why the card may not be approved, or "".
+	refusal string
+	guards  []guard
 	// pin is what an install or upgrade card showed, which its run holds to.
 	pin *appPin
 }
@@ -210,6 +218,9 @@ type Options struct {
 	// Repos are the chart repositories and OCI registries charts come
 	// from besides git (Phase 12, wave 5, HR-07); nil is git alone.
 	Repos *apps.Repos
+	// Credentials are Administration › Credentials (0.12.1, CR-11): a git
+	// source's credential; nil fetches without one.
+	Credentials *credentials.Service
 	// Reread reads a standing approval's holder again as the sign-in sees
 	// them now; false means their session has ended or they may no longer
 	// use the console. Nil keeps the holder as they were.
@@ -217,6 +228,9 @@ type Options struct {
 	// AppAccess asks Kubernetes whether a person may manage applications
 	// in a namespace, as them. Nil leaves --app to the role alone.
 	AppAccess func(ctx context.Context, cl Cluster, who Who, ns string) (bool, error)
+	// Self is the Helm release that runs this console; its cards say so,
+	// and one that removes values from it is refused.
+	Self apps.SelfRelease
 	// ApproveAllMax is the longest standing approval a person may give on
 	// a cluster (R2-04); nil or 0 offers none.
 	ApproveAllMax func(c Cluster) time.Duration
@@ -839,7 +853,7 @@ func (s *Service) plan(cl Cluster, id string) {
 	p := &Plan{pin: &appPin{}}
 	// The card reads as the person who asked (ADR-51): it shows them
 	// nothing their own access does not.
-	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, pin: p.pin}
+	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: p.pin}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	var cs *clients
 	if err == nil {
@@ -848,6 +862,7 @@ func (s *Service) plan(cl Cluster, id string) {
 	}
 	if err == nil {
 		p.Targets, p.guards, p.Impact = cardFor(ctx, cs, it.cmd, asker)
+		p.Tone, p.Alert, p.refusal = s.cardAlert(cl.ID, it.cmd, p.pin)
 	} else {
 		p.Impact = []string{"Watson could not read the cluster to work out the impact: " + err.Error()}
 		p.guards = []guard{unreadable("the objects this command acts on", err)}
@@ -948,6 +963,12 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		return it, fmt.Errorf("%w: Watson is still working out what it changes", ErrState)
 	}
 	if r := s.refusalFor(cl, it.Requester, &who, it.Session != nil, it.Session != nil && it.Session.NeedsTwo); r != nil {
+		s.mu.Unlock()
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it, r
+	}
+	if it.Plan.refusal != "" {
+		r := refuse("own release", "%s", it.Plan.refusal)
 		s.mu.Unlock()
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 		return it, r
@@ -1331,7 +1352,7 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 
 // execute runs one command as the person who approved it.
 func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who) {
-	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
+	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials}
 	if it.Plan != nil {
 		t.pin = it.Plan.pin
 	}

@@ -57,14 +57,17 @@ func TestEveryRouteIsForwardedUnlessLocal(t *testing.T) {
 		"/api/v1/admin/roles/manifest":     true,
 		"/api/v1/meta":                     true,
 		"/api/issues/v1/reports":           true,
-		"/api/issues/v1/intake/reports":    true,
-		"/signin":                          false,
-		"/signin/callback":                 false,
-		"/setup":                           false,
-		"/healthz":                         false,
-		"/readyz":                          false,
-		"/metrics":                         false,
-		"/":                                false,
+		// A test run is the leader's: its progress and its stop are read
+		// and sent there from any replica (Phase 12.1).
+		"/api/v1/ai/agents/sherlock/tests/run":  true,
+		"/api/v1/ai/agents/sherlock/tests/stop": true,
+		"/signin":                               false,
+		"/signin/callback":                      false,
+		"/setup":                                false,
+		"/healthz":                              false,
+		"/readyz":                               false,
+		"/metrics":                              false,
+		"/":                                     false,
 	} {
 		if got := leaderOnly(path); got != want {
 			t.Errorf("%s: forwarded %v, want %v", path, got, want)

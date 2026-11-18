@@ -137,3 +137,41 @@ func TestTwoApprovalsAtOnceApplyOnce(t *testing.T) {
 		t.Fatalf("approving a withdrawn one: %v", err)
 	}
 }
+
+// A request for what no longer stands is withdrawn (AI-26): kept, rejected
+// and marked so, with who caused it and why; a new request for the same
+// thing is then taken, and one that does not match stays waiting.
+func TestAStaleRequestIsWithdrawn(t *testing.T) {
+	ctx := context.Background()
+	s := New(&kv.Memory{}, nil)
+	old, err := s.Add(ctx, Request{Kind: KindPrompt, Agent: "sherlock", AgentName: "Sherlock", Rev: 3, By: ann})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := s.Add(ctx, Request{Kind: KindPrompt, Agent: "auditor", AgentName: "Auditor", Rev: 1, By: ann})
+	if _, err := s.Add(ctx, Request{Kind: KindPrompt, Agent: "sherlock", AgentName: "Sherlock", Rev: 4, By: ann}); !errors.Is(err, ErrWaits) || !strings.Contains(err.Error(), "request 1, Sherlock: instructions, draft 3, go live") {
+		t.Fatalf("a second request: %v", err)
+	}
+	if _, err := s.Withdraw(ctx, func(Request) bool { return true }, Who{}, "x"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("withdrawn by nobody: %v", err)
+	}
+	got, err := s.Withdraw(ctx, func(r Request) bool { return r.Kind == KindPrompt && r.Agent == "sherlock" && r.Rev != 4 }, sam, "draft 3 was discarded for draft 4")
+	if err != nil || len(got) != 1 || got[0].ID != old.ID || got[0].State != Rejected || !got[0].Withdrawn || got[0].DecidedBy.Key != "sam" || got[0].Comment != "draft 3 was discarded for draft 4" {
+		t.Fatalf("withdrawn: %+v %v", got, err)
+	}
+	if !strings.HasPrefix(DecidedText(got[0]), "already withdrawn by Sam at ") {
+		t.Fatalf("decided text: %s", DecidedText(got[0]))
+	}
+	if r, err := s.Add(ctx, Request{Kind: KindPrompt, Agent: "sherlock", AgentName: "Sherlock", Rev: 4, By: ann}); err != nil || r.State != Waiting {
+		t.Fatalf("a request for the new draft: %+v %v", r, err)
+	}
+	if _, err := s.Decide(ctx, old.ID, true, "", sam, nil); !errors.Is(err, ErrDecided) {
+		t.Fatalf("a withdrawn request approved: %v", err)
+	}
+	list, _ := s.List(ctx)
+	for _, r := range list {
+		if r.ID == other.ID && r.State != Waiting {
+			t.Fatalf("another agent's request: %+v", r)
+		}
+	}
+}

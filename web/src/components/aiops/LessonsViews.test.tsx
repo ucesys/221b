@@ -316,7 +316,7 @@ describe('AIOps › Mycroft: exceptions (FX-06, MY-01); no RCAs since wave 6e', 
         .getAllByRole('button')
         .map((b) => b.getAttribute('data-testid'))
         .filter((t) => t?.startsWith('mycroft-sub-')),
-    ).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
+    ).toEqual(['mycroft-sub-wiki', 'mycroft-sub-sources', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
   })
 
   it('tells a role without the records so', async () => {

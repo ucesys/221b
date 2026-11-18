@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { dismissSteps, leftText, nextStep, progressText, shortWhere, useSetup, type SetupStep, type SetupView } from '../api/setup'
-import { adminHref } from '../lib/router'
+import { settingsHref } from '../lib/router'
 
 // Getting started (Phase 12, GS-01 to GS-06): the checklist of setting the
 // console up, as the mockup Start.dc.html draws it. The server checks each
@@ -64,7 +64,7 @@ function Step({ st, next, last, busy, onDismiss }: { st: SetupStep; next: boolea
   )
 }
 
-/** Settings › Getting started. */
+/** Administration › Settings › Getting started. */
 export function GettingStartedSection({ onToast }: { onToast?: (msg: string) => void }) {
   const { view, error, set } = useSetup(true)
   const [busy, setBusy] = useState(false)
@@ -100,9 +100,9 @@ export function GettingStartedSection({ onToast }: { onToast?: (msg: string) => 
           </button>
         )}
       </div>
-      <p style={{ margin: 0, color: 'var(--fg2)' }}>
-        Each step is checked against the console as it is, and ticks itself when done. Passwords, keys and tokens are typed on each step’s own screen, never here or in a chat.
-        {view.complete ? ' Every step is done or dismissed, so the list has left the home page and Sherlock’s setup skill has ended.' : ' Sherlock helps with the rest: ask it “What’s next?”.'}
+      <p style={{ margin: 0, color: 'var(--fg2)' }} data-testid="setup-lead">
+        Each step ticks itself when done; secrets go on its own screen, never in a chat.
+        {view.complete ? '' : ' Ask Sherlock “What’s next?”.'}
       </p>
       <ol aria-label="Steps" style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden' }}>
         {view.steps.map((st, i) => (
@@ -145,7 +145,7 @@ function SetupCard({ view }: { view: SetupView }) {
           Open {shortWhere(next.where)}
         </a>
       )}
-      <a className="rk-btn" href={adminHref('settings', ['start'])} data-testid="home-setup-all">
+      <a className="rk-btn" href={settingsHref('start')} data-testid="home-setup-all">
         {leftText(view)}
       </a>
     </section>

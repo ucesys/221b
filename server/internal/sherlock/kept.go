@@ -160,7 +160,7 @@ func keptMsgs(in []*Msg) []Msg {
 		cp := *m
 		cp.Text = clipText(scrub.Text(cp.Text), KeptText)
 		cp.Error = clipText(scrub.Text(cp.Error), 500)
-		cp.Note, cp.View, cp.Hands = "", nil, nil
+		cp.Note, cp.View, cp.Show, cp.Hands = "", nil, nil, nil
 		cp.Steps = append([]Step(nil), m.Steps...)
 		if len(cp.Steps) > keptSteps {
 			cp.Steps = cp.Steps[:keptSteps]

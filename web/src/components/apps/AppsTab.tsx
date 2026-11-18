@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { forgetApp, isCard, uninstallApp, useApps, type AppDrift, type AppView } from '../../api/apps'
+import { forgetApp, isCard, uninstallApp, useApps, useNewerImages, type AppDrift, type AppView } from '../../api/apps'
 import { useMe } from '../../api/auth'
 import { useRefreshTick, useView } from '../../api/live'
 import type { ReleaseRow } from '../../api/types'
@@ -60,6 +60,8 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   const tick = useRefreshTick()
   const [version, setVersion] = useState(0)
   const { apps, error: appsErr, setApps } = useApps(route.cluster, tick, version)
+  // Newer images published for what the releases run (HA-22).
+  const newer = useNewerImages(route.cluster)
   const [dialog, setDialog] = useState<{ mode: DialogMode; row?: AppRow } | null>(null)
   const [commandDialog, setCommandDialog] = useState<{ row: AppRow; command?: string } | null>(null)
   const [confirm, setConfirm] = useState<{ action: 'uninstall' | 'forget'; row: AppRow } | null>(null)
@@ -69,11 +71,11 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
 
   const rows = useMemo<AppRow[]>(() => {
     const byKey = new Map(apps.map((a) => [`${a.namespace}/${a.name}`, a]))
-    const out: AppRow[] = releases.map((r) => ({ ...r, app: byKey.get(`${r.namespace}/${r.name}`) }))
+    const out: AppRow[] = releases.map((r) => ({ ...r, app: byKey.get(`${r.namespace}/${r.name}`), newerImages: newer[`${r.namespace}/${r.name}`] }))
     const have = new Set(out.map((r) => r.key))
     for (const a of apps) if (!have.has(`${a.namespace}/${a.name}`)) out.push(orphanRow(a))
     return out
-  }, [releases, apps])
+  }, [releases, apps, newer])
   const shown = useMemo(() => rows.filter((r) => (addons || r.group !== 'addons') && (filter === 'all' || (filter === 'deployed' ? r.status === 'deployed' : r.status === 'failed' || r.orphan))), [rows, addons, filter])
   const [wantNs, wantName] = route.path
   const current = rows.find((r) => r.namespace === wantNs && r.name === wantName) ?? null

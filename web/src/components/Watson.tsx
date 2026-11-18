@@ -20,6 +20,7 @@ import {
 import { fmtClock } from '../lib/format'
 import { readJSON, writeJSON } from '../lib/storage'
 import { CopyIcon, WatsonIcon } from './Icons'
+import { CardAlert } from './WatsonAlert'
 
 // ---------- sending from anywhere ----------
 
@@ -307,7 +308,7 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
       setEditing(false)
     })
   return (
-    <div className="rk-appr" data-kind={change ? 'change' : 'read'} data-testid="watson-card" data-id={it.id} data-command={it.command}>
+    <div className="rk-appr" data-kind={change ? 'change' : 'read'} data-tone={change ? plan?.tone : undefined} data-testid="watson-card" data-id={it.id} data-command={it.command}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px' }}>
         <strong style={{ fontSize: 12, fontWeight: 600, color: change ? 'var(--term-warn)' : 'var(--term-fg)' }}>{change ? (it.mine ? 'Waiting for your approval' : `${it.by} asks for approval`) : 'Ready to run'}</strong>
         <span className="rk-ttag" data-k={session ? 'session' : change ? 'change' : 'read'}>
@@ -324,6 +325,7 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
           </span>
         )}
       </div>
+      {change && <CardAlert plan={plan} />}
       {editing ? (
         <textarea
           className="rk-tedit"

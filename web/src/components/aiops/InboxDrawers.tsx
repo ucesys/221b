@@ -4,12 +4,13 @@
 // in ProposalDrawer and a known-issue draft in KnownDrawer, their owners'.
 import { useEffect, useState } from 'react'
 import type { ApprovalRow } from '../../api/automation'
-import { fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
+import { fetchPageRequests, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
-import { DecidedVersion, linkOf, RequestActions } from './InboxApprovals'
+import { AdminRequestDetail } from './AdminRequest'
+import { DecidedVersion, linkOf, RequestActions, WaitingRunFacts } from './InboxApprovals'
 import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
-import { ConflictCard, DraftRunCard } from './KnowledgeDraft'
+import { DraftRunCard } from './KnowledgeDraft'
 import { Tag } from './parts'
 import { PageRequestCard } from './WikiPageActions'
 
@@ -26,10 +27,11 @@ function Missing({ label, what, loaded, onClose, testId }: { label: string; what
 
 /**
  * An approval (CS-06): what waits, who asked and when, and who decided.
- * A console change is decided here, as it has no page of its own; every
- * other kind is reviewed where it lives (Review); a decided script version
- * is read here. A decision someone else made first says who and when
- * (IB-09).
+ * A console change is decided here, with what it asks for in full (AI-35):
+ * for an agent's instructions, the agent, the draft, tested or not, its
+ * test and its diff against the version in force. Every other kind is
+ * reviewed where it lives (Review); a decided script version is read here.
+ * A decision someone else made first says who and when (IB-09).
  */
 export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: string; row: ApprovalRow | undefined; loaded: boolean; onClose: () => void; onDecided: () => void }) {
   const [conflict, setConflict] = useState('')
@@ -52,7 +54,7 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       }
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          {row.kind === 'admin' ? (
+          {row.kind === 'admin' || (row.kind === 'run' && row.state === 'pending') ? (
             <RequestActions row={row} onConflict={setConflict} onDecided={onDecided} />
           ) : (
             link && (
@@ -97,6 +99,8 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
           {row.overtaken}
         </p>
       )}
+      {row.kind === 'run' && <WaitingRunFacts row={row} />}
+      {row.kind === 'admin' && <AdminRequestDetail row={row} />}
       {conflict && (
         <p className="tb-err" role="alert" data-testid="approval-conflict">
           {conflict}
@@ -104,20 +108,25 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       )}
       <p className="tb-hint" style={{ margin: 0 }}>
         {row.kind === 'admin'
-          ? 'A console change has no page of its own: it is decided here. Whoever asked may only withdraw it.'
-          : row.state === 'pending'
-            ? 'Review opens it where it is read and approved. What you wrote or asked for yourself is left out where it takes a second person.'
-            : 'Decided; Open shows it where it lives.'}
+          ? row.state === 'pending'
+            ? row.own
+              ? 'You asked for this: another SuperAdmin approves or rejects it. You can only withdraw it.'
+              : 'You can approve or reject it here. The person who asked can only withdraw it.'
+            : 'Decided.'
+          : row.kind === 'run'
+            ? 'A run’s own values on production are weighed as a change of the fleet’s values; these need a second admin. It is decided here: approving starts the run as whoever asked; whoever asked may only withdraw it.'
+            : row.state === 'pending'
+              ? 'Review opens it where it is read and approved. What you wrote or asked for yourself is left out where it takes a second person.'
+              : 'Decided; Open shows it where it lives.'}
       </p>
     </Drawer>
   )
 }
 
-/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, a Confluence page someone edited, or a request to retire a page or make it active again (KN-24). */
+/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, or a request to retire a page or make it active again (KN-24). */
 export function KnowledgeDrawer({
   id,
   run,
-  conflict,
   request: waiting,
   loaded,
   onClose,
@@ -126,7 +135,6 @@ export function KnowledgeDrawer({
 }: {
   id: string
   run?: DraftRun
-  conflict?: ConfluenceConflict
   request?: PageRequest
   loaded: boolean
   onClose: () => void
@@ -138,7 +146,7 @@ export function KnowledgeDrawer({
   // with who decided it.
   const [decided, setDecided] = useState<PageRequest>()
   useEffect(() => {
-    if (waiting || run || conflict || !loaded) return
+    if (waiting || run || !loaded) return
     let live = true
     fetchPageRequests(true).then(
       (r) => live && setDecided((r.requests ?? []).find((x) => x.id === id)),
@@ -147,9 +155,9 @@ export function KnowledgeDrawer({
     return () => {
       live = false
     }
-  }, [id, waiting, run, conflict, loaded])
+  }, [id, waiting, run, loaded])
   const request = waiting ?? (decided?.id === id ? decided : undefined)
-  if (request && !run && !conflict) {
+  if (request && !run) {
     return (
       <Drawer
         label="Wiki page request"
@@ -164,19 +172,18 @@ export function KnowledgeDrawer({
       </Drawer>
     )
   }
-  if (!run && !conflict) return <Missing label="Knowledge draft" what={id} loaded={loaded} onClose={onClose} testId="knowledge-drawer" />
+  if (!run) return <Missing label="Knowledge draft" what={id} loaded={loaded} onClose={onClose} testId="knowledge-drawer" />
   return (
     <Drawer
       label="Knowledge draft"
-      kicker={run ? `Knowledge draft · ${run.store} · started by ${run.startedBy ?? run.by}, ${fmtTs(run.started)}` : 'Knowledge draft · Confluence'}
-      title={run ? `Wiki changes ${run.id}` : conflict!.title}
+      kicker={`Knowledge draft · ${run.store} · started by ${run.startedBy ?? run.by}, ${fmtTs(run.started)}`}
+      title={`Wiki changes ${run.id}`}
       onClose={onClose}
       width={960}
       copy={false}
       testId="knowledge-drawer"
     >
-      {run && <DraftRunCard run={run} onChanged={onChanged} onToast={onToast} open />}
-      {conflict && <ConflictCard c={conflict} onChanged={onChanged} onToast={onToast} />}
+      <DraftRunCard run={run} onChanged={onChanged} onToast={onToast} open />
     </Drawer>
   )
 }

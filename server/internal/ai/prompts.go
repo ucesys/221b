@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -27,29 +30,74 @@ func promptFile(name string) string {
 		return ""
 	}
 	text := strings.TrimSpace(htmlComment.ReplaceAllString(string(b), ""))
-	return strings.ReplaceAll(text, commandsMark, watson.Commands())
+	return marks.Replace(text)
 }
 
 // commandsMark in a prompt file stands for the sentence that says what
 // Watson runs, built from Watson's own list (S-1).
 const commandsMark = "{{watson.Commands}}"
 
+// The other marks of a prompt file: {{rounds}} is how many rounds of
+// reads the engine gives one answer (PM-C2), and the two automation marks
+// are the rules every Automation script keeps and what a review of one
+// checks, which the Automation screen's tasks say too (PM-J9), so the
+// agents' cores and those tasks cannot part.
+const (
+	roundsMark      = "{{rounds}}"
+	scriptRulesMark = "{{automation.ScriptRules}}"
+	reviewRulesMark = "{{automation.ReviewRules}}"
+	// How a cause is found and the two reports (PM-D1, PM-D3): each is
+	// said once, in package sherlock, and held by the agent whose work
+	// it is and by Sherlock's own work where that agent cannot be asked.
+	manualMark  = "{{sherlock.TroubleshootingManual}}"
+	troubleMark = "{{sherlock.TroubleshootingReport}}"
+	reviewMark  = "{{sherlock.DeficiencyReview}}"
+)
+
+// marks fills a prompt file's marks.
+var marks = strings.NewReplacer(
+	commandsMark, watson.Commands(),
+	roundsMark, strconv.Itoa(sherlock.DefaultMaxRounds),
+	scriptRulesMark, automation.ScriptRules,
+	reviewRulesMark, automation.ReviewRules,
+	manualMark, sherlock.TroubleshootingManual,
+	troubleMark, sherlock.TroubleshootingReport,
+	reviewMark, sherlock.DeficiencyReview,
+)
+
 // htmlComment is a comment in a prompt file, such as the source: comment
 // that names where a part came from (docs/prompt-sources.md); it is for
 // people reading the file and never reaches a model.
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->\n?`)
 
-// Core is an agent's fixed instructions. Sherlock's are its built-in
-// instructions (which say how it may change the view when viewChanges,
-// and what Watson runs), then the rules every agent keeps and its front
-// desk's part. Every other agent's are its own, then the rules every
-// agent keeps with what Watson runs (S-1, P-1).
+// Core is an agent's fixed instructions. Sherlock's are the front desk's
+// built-in part (which says how it may change the view when
+// viewChanges), then the rules every agent keeps and the front desk's
+// routing; the work whose owner it cannot ask is added when its
+// instructions are assembled (OwnWork, PM-D1). Every other agent's are
+// its own, then the rules every agent keeps with what Watson runs (S-1,
+// P-1).
 func Core(id string, viewChanges bool) string {
-	common := promptFile("common")
 	if id == Sherlock {
-		return sherlock.BuiltIn(viewChanges, watson.Commands()) + "\n\n" + common + "\n\n" + promptFile("sherlock")
+		return sherlock.FrontDesk(viewChanges) + "\n\n" + promptFile("sherlock") + "\n\n" + sherlock.ClusterTextRule
 	}
-	return promptFile(id) + "\n\n" + common + "\n\n" + watson.Commands() + "\n\n" + sherlock.ClusterTextRule
+	return promptFile(id) + "\n\n" + promptFile("common") + "\n\n" + sherlock.ClusterTextRule
+}
+
+// OwnLanes are the kinds of work Sherlock does itself with a roster: each
+// lane whose owner is not among the agents it can hand work to (PM-D1).
+// With every owner there it does none of them; with no agents, all.
+func OwnLanes(roster []sherlock.RosterEntry) sherlock.Lanes {
+	has := func(id string) bool {
+		return slices.ContainsFunc(roster, func(e sherlock.RosterEntry) bool { return e.ID == id })
+	}
+	return sherlock.Lanes{Causes: !has(Troubleshooter), Reviews: !has(Auditor), Hosts: !has(HostDoctor), Changes: !has(ChangePlanner)}
+}
+
+// OwnWork is the part of Sherlock's instructions for the work it does
+// itself with a roster, "" when every owner can be asked.
+func OwnWork(roster []sherlock.RosterEntry) string {
+	return sherlock.OwnWork(OwnLanes(roster), len(roster) > 0, watson.Commands())
 }
 
 // --- AI settings, round 2 (Phase 12, wave 5) ---

@@ -1,4 +1,4 @@
-// Settings › SLA (Phase 12, wave 5, CU-06; wave 6): the response and
+// Administration › AI › SLA (Phase 12, wave 5, CU-06; wave 6): the response and
 // resolution targets per priority, P0 to P4 (kept under "0" to "4"). They
 // apply to every case a person made (reported, by hand, from an alert) at
 // every priority, and to an agent-found case only at P0 and P1. A case
@@ -41,8 +41,8 @@ export function SLASettings() {
       stop = true
     }
   }, [])
-  const save = async () => {
-    if (!draft) return
+  const save = async (): Promise<boolean> => {
+    if (!draft) return false
     setBusy(true)
     setError('')
     setNote('')
@@ -51,8 +51,10 @@ export function SLASettings() {
       setSaved(s.targets)
       setDraft(s.targets)
       setNote('Saved.')
+      return true
     } catch (e) {
       setError(errorText(e))
+      return false
     } finally {
       setBusy(false)
     }
@@ -68,8 +70,7 @@ export function SLASettings() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="sla-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        How soon each priority asks for a first response from a person and for a resolution. They apply to every case a person made (reported, opened by hand, from an alert) and to an agent-found case only at P0 and P1; the others show “no
-        SLA”. A case opened in the console counts as responded to when it is opened. 0 sets no target. A case past a target shows it as late.
+        How soon each priority asks for a person’s first response and for a resolution; 0 sets no target.
       </p>
       <table className="rp-settable">
         <thead>
@@ -101,8 +102,12 @@ export function SLASettings() {
           })}
         </tbody>
       </table>
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="sla-scope">
+        For every case a person made (reported, opened by hand, from an alert), and for an agent-found case only at P0 and P1; the others show “no SLA”. A case opened in the console counts as responded to when it is opened; a case past a
+        target shows it as late.
+      </p>
       {maySet ? (
-        <SaveBar changed={JSON.stringify(draft) !== JSON.stringify(saved)} busy={busy} onSave={() => void save()} onUndo={() => setDraft(saved)} error={error} saved={note} testId="sla-save" />
+        <SaveBar changed={JSON.stringify(draft) !== JSON.stringify(saved)} busy={busy} onSave={() => void save()} save={save} onUndo={() => setDraft(saved)} error={error} saved={note} testId="sla-save" />
       ) : (
         <p className="rk-fhint">Only a SuperAdmin sets the SLA.</p>
       )}

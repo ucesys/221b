@@ -31,7 +31,7 @@ const sync: api.Run = {
   costUSD: 0.12,
   noFindings: true,
   facts: [
-    { label: 'Source', text: 'E2E docs bucket (S3 bucket)', href: '#/admin/settings/knowledge' },
+    { label: 'Source', text: 'E2E docs bucket (S3 bucket)', href: '#/admin/ai/knowledge' },
     { label: 'Read', text: 'Every item' },
     { label: 'Items read', text: '2 changed items' },
     { label: 'Unchanged', text: '0 items' },

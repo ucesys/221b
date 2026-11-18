@@ -90,6 +90,8 @@ test('a case is troubleshot in its drawer: Sherlock on the case, Watson from it,
 
   // Run in Watson hands it to the case's Watson, as the dock's Send to
   // Watson does: a read runs (Auto-run reads is on), a change asks (CF-48).
+  // It says so: a change waits for an approval, a read runs at once (never "nothing runs until you approve").
+  await expect(answer.getByTestId('sherlock-run-watson')).toHaveAttribute('title', /A change waits there on its card until you approve it.*a read runs at once/)
   await answer.getByTestId('sherlock-run-watson').click()
   await expect(trouble).toHaveAttribute('data-pane', 'watson')
   const watson = trouble.getByTestId('watson')

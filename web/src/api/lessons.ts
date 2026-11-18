@@ -37,7 +37,7 @@ export interface AcceptedException {
   lastMatched?: string
   /** The case closed as this exception: "C-12". */
   case?: string
-  /** Never matched, or not for Settings › Cases' exceptionStaleDays. */
+  /** Never matched, or not for Administration › AI › Cases' exceptionStaleDays. */
   stale: boolean
   /** When it last changed (wave 6g); older records: removedAt or at. */
   updated?: string

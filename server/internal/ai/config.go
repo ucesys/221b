@@ -103,11 +103,15 @@ type Providers struct {
 	DefaultWindow int           `json:"defaultWindow,omitempty"`
 	DefaultTested *ProviderTest `json:"defaultTested,omitempty"`
 	// DefaultID is the provider agents that name none use, made the
-	// default in Settings › Providers; "" is the default provider.
+	// default in Administration › AI › Providers; "" is the default provider.
 	DefaultID string `json:"defaultId,omitempty"`
 	// DefaultRemoved says the default provider (Sherlock's of before
 	// Phase 12) was removed, once another was made the default.
 	DefaultRemoved bool `json:"defaultRemoved,omitempty"`
+	// Limits are each provider's daily and monthly limits, by its id, the
+	// default provider's too (Phase 12.1, AI-36): what every agent spends
+	// on it together. None, or 0, is no limit.
+	Limits map[string]sherlock.Caps `json:"limits,omitempty"`
 }
 
 // MaxProviders bounds the providers.
@@ -362,6 +366,55 @@ type AgentPrompt struct {
 	// PartBase is the hash of the built-in text each edit was made over,
 	// to show that a release changed it under the edit.
 	PartBase map[string]string `json:"partBase,omitempty"`
+	// Revisions are the drafts saved since the last went live, each whole,
+	// to compare in the drawer's History (AI-32). A draft that goes live
+	// drops them: its own text is kept as the version.
+	Revisions []Revision `json:"revisions,omitempty"`
+}
+
+// Revision is a draft as one save left it (AI-32).
+type Revision struct {
+	Rev   int               `json:"rev"`
+	House string            `json:"house"`
+	Notes map[string]string `json:"notes,omitempty"`
+	Parts map[string]string `json:"parts,omitempty"`
+	By    string            `json:"by"`
+	At    time.Time         `json:"at"`
+	// Note says how it came to be when not by a save: a version restored,
+	// a draft sent back to its first stage.
+	Note string `json:"note,omitempty"`
+	// Discarded says the draft was discarded; it stays to compare until a
+	// draft goes live.
+	Discarded bool       `json:"discarded,omitempty"`
+	Test      *TestBrief `json:"test,omitempty"`
+}
+
+// TestBrief is how a draft's test ended, kept with its revision and with
+// the version it became.
+type TestBrief struct {
+	At     time.Time `json:"at"`
+	Cases  int       `json:"cases"`
+	Passed int       `json:"passed"`
+	State  string    `json:"state,omitempty"`
+}
+
+// briefOf is a test's brief; nil for none.
+func briefOf(t *TestRun) *TestBrief {
+	if t == nil {
+		return nil
+	}
+	return &TestBrief{At: t.At, Cases: t.Cases, Passed: t.Passed, State: t.State}
+}
+
+// MaxRevisions bounds the drafts kept between two go-lives.
+const MaxRevisions = 50
+
+// addRevision keeps a draft as it is now.
+func (p *AgentPrompt) addRevision(d *Draft, note string) {
+	p.Revisions = append(p.Revisions, Revision{Rev: d.Rev, House: d.House, Notes: cleanNotes(d.Notes), Parts: cloneParts(d.Parts), By: d.By, At: d.At, Note: note})
+	if len(p.Revisions) > MaxRevisions {
+		p.Revisions = append([]Revision(nil), p.Revisions[len(p.Revisions)-MaxRevisions:]...)
+	}
 }
 
 // Version is the instructions as they were once live.
@@ -375,10 +428,15 @@ type Version struct {
 	Why string `json:"why,omitempty"`
 	// Parts are the edits of the built-in text it had (Phase 12, wave 5).
 	Parts map[string]string `json:"parts,omitempty"`
+	// Rev is the draft it was, and Test how that draft's test ended, if it
+	// was tested (AI-32).
+	Rev  int        `json:"rev,omitempty"`
+	Test *TestBrief `json:"test,omitempty"`
 }
 
-// MaxVersions bounds the history each agent keeps.
-const MaxVersions = 10
+// MaxVersions bounds the versions once live each agent keeps (AI-32);
+// prune drops the oldest first when the key runs short.
+const MaxVersions = 50
 
 // Draft is instructions on their way to live: saved, tested, piloted.
 type Draft struct {
