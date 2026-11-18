@@ -12,6 +12,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 
 	"github.com/ucesys/221b/server/internal/awsv4"
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/s3"
 	"github.com/ucesys/221b/server/internal/s3/s3test"
 )
@@ -40,8 +41,8 @@ func files(t *testing.T, st Store) map[string]File {
 // one to the same page waits for a person.
 func TestTheWikiInGit(t *testing.T) {
 	url := remote(t)
-	mycroft := NewGitStore(t.TempDir(), url, "main", "", "", "")
-	person := NewGitStore(t.TempDir(), url, "main", "", "", "")
+	mycroft := NewGitStore(t.TempDir(), url, "main", "", "", certpin.Trust{})
+	person := NewGitStore(t.TempDir(), url, "main", "", "", certpin.Trust{})
 	if got := files(t, mycroft); len(got) != 0 {
 		t.Fatalf("an empty repository: %v", got)
 	}
@@ -102,11 +103,11 @@ func TestTheWikiInGit(t *testing.T) {
 // them as text.
 func TestAGitSourceReadsItsDocuments(t *testing.T) {
 	url := remote(t)
-	w := NewGitStore(t.TempDir(), url, "main", "", "", "")
+	w := NewGitStore(t.TempDir(), url, "main", "", "", certpin.Trust{})
 	if err := w.Write(ctx, []Change{{Path: "runbooks/restart.md", Body: []byte("# Restart\n\nDrain first.")}, {Path: "runbooks/policy.docx", Body: docx(t, "Keep 30 days.")}, {Path: "src/main.go", Body: []byte("package main")}}, "runbooks"); err != nil {
 		t.Fatal(err)
 	}
-	rd := &gitReader{g: newRepo(t.TempDir(), url, "main", "", "", ""), dir: "runbooks", web: "https://git.example.com/ops/runbooks.git"}
+	rd := &gitReader{g: newRepo(t.TempDir(), url, "main", "", "", certpin.Trust{}), dir: "runbooks", web: "https://git.example.com/ops/runbooks.git"}
 	items, complete, err := rd.List(ctx, time.Time{})
 	if err != nil || !complete || len(items) != 2 {
 		t.Fatalf("items: %+v, %v", items, err)

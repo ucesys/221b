@@ -116,6 +116,7 @@ func (s *Service) sourceAuth(ctx context.Context, x Source) (Source, Creds, erro
 	if strings.TrimSpace(x.CAPEM) == "" {
 		x.CAPEM = use.CAPEM
 	}
+	x.credPin = use.Pin
 	switch x.Kind {
 	case SourceGit:
 		if user, pass, ok := use.Basic(); ok {

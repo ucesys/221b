@@ -3,12 +3,13 @@ package credentials
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // Use is a credential resolved for one use at one address (CR-04): what
@@ -31,8 +32,10 @@ type Use struct {
 	// An SSH key, its passphrase and the host key it trusts.
 	PrivateKey, Passphrase, HostKey string
 	CAPEM                           string
-	cert                            *tls.Certificate
-	ep                              Endpoint
+	// Pin is the pinned certificate's fingerprint (CR-16), "" for none.
+	Pin  string
+	cert *tls.Certificate
+	ep   Endpoint
 }
 
 // Methods other than the HTTP ones.
@@ -70,7 +73,7 @@ func (s *Service) resolve(ctx context.Context, c Credential, sec Secret) (*Use, 
 	if err != nil {
 		return nil, err
 	}
-	u := &Use{ID: c.ID, Name: c.Name, Kind: c.Kind, SendAs: c.SendAs, Method: c.SendAs.Method, CAPEM: c.CAPEM, ep: ep}
+	u := &Use{ID: c.ID, Name: c.Name, Kind: c.Kind, SendAs: c.SendAs, Method: c.SendAs.Method, CAPEM: c.CAPEM, Pin: c.PinnedCert.Fingerprint(), ep: ep}
 	if u.Method == "" {
 		u.Method = SendBearer
 	}
@@ -167,24 +170,25 @@ func (u *Use) Bearer() (string, bool) {
 }
 
 // TLS is the TLS a request to the endpoint needs: the private CA, the
-// client certificate; nil when neither.
+// pinned certificate, the client certificate; nil when none.
 func (u *Use) TLS() *tls.Config {
-	if u == nil || u.cert == nil && strings.TrimSpace(u.CAPEM) == "" {
+	if u == nil || u.cert == nil && u.Trust().Empty() {
 		return nil
 	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if strings.TrimSpace(u.CAPEM) != "" {
-		pool, err := x509.SystemCertPool()
-		if err != nil || pool == nil {
-			pool = x509.NewCertPool()
-		}
-		pool.AppendCertsFromPEM([]byte(u.CAPEM))
-		cfg.RootCAs = pool
-	}
+	cfg := certpin.Config(nil, u.Trust())
 	if u.cert != nil {
 		cfg.Certificates = []tls.Certificate{*u.cert}
 	}
 	return cfg
+}
+
+// Trust is what the endpoint's TLS trusts besides the system's CAs: the
+// private CA and the pinned certificate (CR-16).
+func (u *Use) Trust() certpin.Trust {
+	if u == nil {
+		return certpin.Trust{}
+	}
+	return certpin.Trust{CAPEM: u.CAPEM, Pin: u.Pin}
 }
 
 // Certificate is the client certificate, nil for none.

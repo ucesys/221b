@@ -70,10 +70,10 @@ func (s *Service) bucketReader(x Source, c Creds) (*s3Reader, error) {
 		return awsv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.sessionToken}, nil
 	}
 	hc := s.o.HTTP
-	if x.CAPEM != "" {
+	if !x.trust().Empty() {
 		hc = nil
 	}
-	client, err := s3.New(s3.Config{Endpoint: x.Endpoint, Region: x.Region, Bucket: x.Bucket, PathStyle: x.PathStyle, CAPEM: x.CAPEM, Credentials: creds, HTTP: hc, Now: s.o.Now})
+	client, err := s3.New(s3.Config{Endpoint: x.Endpoint, Region: x.Region, Bucket: x.Bucket, PathStyle: x.PathStyle, CAPEM: x.CAPEM, Pin: x.pin(), Credentials: creds, HTTP: hc, Now: s.o.Now})
 	if err != nil {
 		return nil, invalid("%v", err)
 	}

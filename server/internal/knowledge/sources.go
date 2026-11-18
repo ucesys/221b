@@ -110,16 +110,16 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 			return nil, invalid("%s names no credential: choose one in Administration › AI › Knowledge", x.Name)
 		}
 		hc := s.o.HTTP
-		if x.CAPEM != "" {
+		if !x.trust().Empty() {
 			hc = nil
 		}
-		client, err := confluence.New(confluence.Config{BaseURL: x.BaseURL, Flavor: x.Flavor, Email: x.Email, Token: c.Token, CAPEM: x.CAPEM, HTTP: hc})
+		client, err := confluence.New(confluence.Config{BaseURL: x.BaseURL, Flavor: x.Flavor, Email: x.Email, Token: c.Token, CAPEM: x.CAPEM, Pin: x.pin(), HTTP: hc})
 		if err != nil {
 			return nil, invalid("%v", err)
 		}
 		return &confluenceReader{c: client, key: x.Space}, nil
 	case SourceGit:
-		g := newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.CAPEM)
+		g := newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.trust())
 		g.bearer = c.bearer
 		return &gitReader{g: g, dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
 	case SourceS3:

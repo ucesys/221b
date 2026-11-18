@@ -37,6 +37,9 @@ type View struct {
 	// (CF-57). While the settings name no store and it can, the view's
 	// store is it.
 	ConfigMapStore bool `json:"configMapStore"`
+	// Pins are the certificates pinned for the sources, by id: their own,
+	// their credential's or their repository's (CR-19).
+	Pins map[string]Pinned `json:"pins,omitempty"`
 }
 
 // GetView builds Administration › AI › Knowledge's view.
@@ -50,6 +53,7 @@ func (s *Service) GetView(ctx context.Context, c Caller) (View, error) {
 	}
 	v := View{Settings: set, Creds: map[string]CredState{}, Documents: map[string][]ItemState{}, Identity: s.o.Identity.Available(), Model: s.o.Model != nil, Console: s.o.Console != nil, ConfigMapStore: s.cmStore != nil}
 	v.Settings.Store.Kind = s.storeKind(set.Store)
+	v.Pins = s.SourcePins(ctx, set)
 	for _, x := range set.Sources {
 		// A source that names its credential (CR-11) keeps none here.
 		if !x.CredMigrated {
@@ -101,7 +105,7 @@ type StoreInput struct {
 }
 
 func (s *Service) storeWith(ctx context.Context, in StoreInput) (Store, StoreSettings, error) {
-	st := in.Store.normalized()
+	st := s.withSavedPin(ctx, in.Store.normalized())
 	if err := st.Validate(); err != nil {
 		return nil, st, err
 	}
@@ -177,6 +181,12 @@ func (s *Service) SaveStore(ctx context.Context, c Caller, in StoreInput) (Store
 		}
 	}
 	st.SavedBy, st.SavedAt = c.label(), s.o.Now().UTC()
+	// A pinned certificate is set by Trust alone, and kept while the
+	// store is reached at the same address (CR-16).
+	st.PinnedCert = nil
+	if sameAddr(set.Store.addr(), st.addr()) {
+		st.PinnedCert = set.Store.PinnedCert
+	}
 	if _, err := s.editSettings(ctx, func(v *Settings) error { v.Store = st; return nil }); err != nil {
 		return StoreSettings{}, err
 	}

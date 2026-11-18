@@ -2,7 +2,6 @@ package knowledge
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/confluence"
 	"github.com/ucesys/221b/server/internal/scrub"
 )
@@ -416,14 +416,11 @@ func (s *Service) liveClient(x Source, site *url.URL) *http.Client {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		tr.DialContext = (&net.Dialer{Timeout: liveTimeout, Control: guardedDial}).DialContext
-		if strings.TrimSpace(x.CAPEM) != "" || x.cert != nil {
-			tr.TLSClientConfig = &tls.Config{RootCAs: s.rootsFor(x), MinVersion: tls.VersionTLS12}
-			if x.cert != nil {
-				tr.TLSClientConfig.Certificates = []tls.Certificate{*x.cert}
-			}
-		}
 		base = tr
 	}
+	// The private CA, the pinned certificate (CR-17), the client
+	// certificate.
+	base = certpin.Transport(base, x.trust(), x.cert)
 	return &http.Client{
 		Transport: base,
 		Timeout:   liveTimeout,

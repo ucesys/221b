@@ -280,10 +280,14 @@ func (a *appChart) gitAuth(ctx context.Context, c *Command, t Target, ns, name, 
 				}
 			}
 			a.cred, a.credSet = listed.Credential, true
+			// The repository's pinned certificate when its credential has
+			// none (CR-16).
 			if listed.Credential == "" {
-				return apps.GitAuth{}, nil
+				return apps.GitAuth{Trust: listed.OwnTrust()}, nil
 			}
-			return apps.CredentialAuth(ctx, t.Credentials, listed.Credential, listed.URL)
+			auth, err := apps.CredentialAuth(ctx, t.Credentials, listed.Credential, listed.URL)
+			auth.Trust = auth.Trust.Or(listed.OwnTrust())
+			return auth, err
 		}
 	}
 	if c.Has("credential") {

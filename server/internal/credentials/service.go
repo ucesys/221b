@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // SecretStore keeps the credentials: one key each of the Secret
@@ -104,7 +107,10 @@ type Options struct {
 	// HTTP fetches OAuth2 and GitHub App tokens and runs the tests; nil is
 	// one that refuses the console's own pod and node and the clouds'
 	// metadata services. Tests give their own.
-	HTTP   *http.Client
+	HTTP *http.Client
+	// Dial connects a Test's and a Trust's look at a certificate (CR-15);
+	// nil refuses what HTTP's default refuses. Tests give their own.
+	Dial   certpin.DialFunc
 	Now    func() time.Time
 	Logger *slog.Logger
 }
@@ -140,6 +146,9 @@ func New(o Options) *Service {
 	}
 	if o.HTTP == nil {
 		o.HTTP = guardedClient(nil)
+	}
+	if o.Dial == nil {
+		o.Dial = (&net.Dialer{Timeout: 15 * time.Second, Control: guardedControl}).DialContext
 	}
 	return &Service{o: o, minted: map[string]minted{}}
 }
@@ -291,7 +300,7 @@ func (s *Service) Create(ctx context.Context, c Credential, sec Secret, by strin
 		return Credential{}, err
 	}
 	now := s.o.Now().UTC()
-	c.ID, c.Set, c.LastTest, c.From = newID(), sec.parts(), nil, nil
+	c.ID, c.Set, c.LastTest, c.From, c.PinnedCert = newID(), sec.parts(), nil, nil, nil
 	c.Created, c.CreatedBy, c.Changed, c.ChangedBy = now, by, now, by
 	return c, s.add(ctx, c, sec)
 }
@@ -345,6 +354,12 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
 	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
 	c.LastTest = old.LastTest
+	// A pinned certificate is set by Trust alone, and kept while the
+	// endpoint's host is the same (CR-16).
+	c.PinnedCert = nil
+	if hostOf(c.Endpoint) == hostOf(old.Endpoint) {
+		c.PinnedCert = old.PinnedCert
+	}
 	if sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM {
 		c.LastTest = nil
 	}

@@ -30,6 +30,7 @@ import (
 	chartutil "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/ignore"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
@@ -89,10 +90,14 @@ func fetchSlot(ctx context.Context) (release func(), err error) {
 type GitAuth struct {
 	Username, Password string
 	Bearer             string
+	// Trust is the credential's private CA and pinned certificate, or the
+	// repository's pinned certificate (CR-17): a fetch's context carries
+	// it to the console's git client (repohost.go).
+	Trust certpin.Trust
 }
 
 // None says it signs in with nothing.
-func (a GitAuth) None() bool { return a == GitAuth{} }
+func (a GitAuth) None() bool { return a.Username == "" && a.Password == "" && a.Bearer == "" }
 
 func auth(a GitAuth) transport.AuthMethod {
 	switch {
@@ -114,18 +119,18 @@ func auth(a GitAuth) transport.AuthMethod {
 // it: Basic or Bearer (Credential.Supports refuses the others for git).
 func GitAuthOf(u *credentials.Use) GitAuth {
 	if user, pass, ok := u.Basic(); ok {
-		return GitAuth{Username: user, Password: pass}
+		return GitAuth{Username: user, Password: pass, Trust: u.Trust()}
 	}
 	if tok, ok := u.Bearer(); ok {
-		return GitAuth{Bearer: tok}
+		return GitAuth{Bearer: tok, Trust: u.Trust()}
 	}
-	return GitAuth{}
+	return GitAuth{Trust: u.Trust()}
 }
 
 // ListRefs asks the repository for its branches and tags, as git
 // ls-remote does, without fetching anything else.
 func ListRefs(ctx context.Context, repo string, token GitAuth) (Refs, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{repo}})
 	list, err := rem.ListContext(ctx, &git.ListOptions{Auth: auth(token), PeelingOption: git.IgnorePeeled})
@@ -387,7 +392,7 @@ func checkOut(r *git.Repository, st boundedStorage, fsys billy.Filesystem, hash 
 // Fetch clones the repository at the ref, shallow and in memory (HA-04),
 // within FetchLimits.
 func Fetch(ctx context.Context, s Source, token GitAuth) (*Checkout, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
 	if err != nil {
@@ -434,7 +439,7 @@ func FetchCommit(ctx context.Context, s Source, token GitAuth, commit string) (*
 }
 
 func fetchExact(ctx context.Context, s Source, token GitAuth, commit string) (*Checkout, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	ctx, cancel := context.WithTimeout(certpin.With(ctx, token.Trust), fetchTimeout)
 	defer cancel()
 	release, err := fetchSlot(ctx)
 	if err != nil {

@@ -3,6 +3,7 @@
 // any release. Changes come back as the Watson card that runs them.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { PinnedWith, PresentedCert } from './certificates'
 import { apiPath } from '../lib/router'
 import { BACKGROUND, unauthorized } from './auth'
 import type { WatsonItem } from './watson'
@@ -324,6 +325,8 @@ export interface HelmRepository {
   tested?: string
   setBy?: string
   setAt?: string
+  /** The certificate pinned for it, its own or its credential's (CR-19), for a SuperAdmin. */
+  pinned?: PinnedWith
 }
 
 export interface HelmRepositoryInput {
@@ -345,6 +348,8 @@ export interface RepoTest {
   ok: boolean
   text: string
   charts?: number
+  /** The certificate the repository presented, when it is not trusted or is the pinned one (CR-15). */
+  certificate?: PresentedCert
 }
 
 export interface ChartInfo {
@@ -368,6 +373,10 @@ export const deleteHelmRepo = (name: string) => call<void>('DELETE', `${repos}/$
 export const testHelmRepo = (input: HelmRepositoryInput & { name?: string }) => call<RepoTest>('POST', `${repos}/test`, input)
 /** Tests a saved repository and keeps what it found. */
 export const retestHelmRepo = (name: string) => call<RepoTest>('POST', `${repos}/${encodeURIComponent(name)}/test`)
+/** Trusts the certificate a saved repository presents, when it is the one its Test showed (CR-16): with its credential when it names one. */
+export const trustRepoCert = (name: string, sha256: string) => call<PinnedWith>('POST', `${repos}/${encodeURIComponent(name)}/trust`, { sha256 })
+/** Lets a repository's pinned certificate go: its own, or its credential's (CR-19). */
+export const forgetRepoCert = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}/trust`)
 export const fetchRepoCharts = (name: string) => call<{ charts: ChartInfo[] }>('GET', `${repos}/${encodeURIComponent(name)}/charts`)
 /** A repository chart's versions, newest first, and the newest stable one. */
 export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart'>) =>

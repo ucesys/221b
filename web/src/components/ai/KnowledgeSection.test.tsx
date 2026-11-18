@@ -411,6 +411,45 @@ describe('Administration › AI › Knowledge', () => {
     expect(body).toEqual({ source: { ...view().settings.sources[1], credential: '' }, saved: 'infra' })
   })
 
+  // CR-15, CR-16, CR-19: a saved source's Test shows a certificate of no
+  // known CA; Trust sends the fingerprint with the source; the pinned note
+  // forgets it. The store's card does the same for the saved store.
+  it('trusts the certificate a saved source presents, and forgets it; the store too', async () => {
+    const FP = Array(32).fill('AB').join(':')
+    const certificate = { subject: 'CN=wiki.corp', issuer: 'CN=wiki.corp', notBefore: '2026-01-01T00:00:00Z', notAfter: '2027-01-01T00:00:00Z', sha256: FP, selfSigned: true, trusted: false, trustable: true }
+    current = view({ settings: { ...view().settings, store: { ...view().settings.store, pinnedCert: { sha256: FP, by: 'Ann' } } } })
+    render(<KnowledgeSection />)
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      const c = credentialsAnswer(String(url))
+      if (c) return c
+      if (String(url).endsWith('/sources/test') || String(url).endsWith('/store/test')) return new Response(JSON.stringify({ ok: false, error: 'wiki.corp:443 has a TLS certificate the console does not trust', certificate }))
+      if (String(url).endsWith('/sources/trust')) return new Response(JSON.stringify({ pin: { sha256: FP, by: 'Ann' }, with: 'source' }))
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ forgotten: true }))
+      return new Response(JSON.stringify(current))
+    })
+    const row = (await screen.findAllByTestId('knowledge-source')).find((r) => r.dataset.source === 'infra')!
+    fireEvent.click(within(row).getByText('Edit…'))
+    const drawer = screen.getByTestId('knowledge-source-drawer')
+    fireEvent.click(within(drawer).getByTestId('knowledge-source-test'))
+    const cert = await within(drawer).findByTestId('cert-result')
+    fireEvent.click(within(cert).getByTestId('cert-trust'))
+    fireEvent.click(within(await screen.findByTestId('confirm')).getByTestId('confirm-ok'))
+    await waitFor(() => expect(calls.find((c) => c.url === '/api/v1/knowledge/sources/trust')?.body).toMatchObject({ sha256: FP, saved: 'infra', source: { id: 'infra' } }))
+    const note = await within(drawer).findByTestId('cert-pinned-note')
+    fireEvent.click(within(note).getByTestId('cert-forget'))
+    fireEvent.click(within(await screen.findByTestId('confirm')).getByTestId('confirm-ok'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url === '/api/v1/knowledge/sources/infra/trust')).toBe(true))
+
+    const store = screen.getByTestId('knowledge-store')
+    expect(within(store).getByTestId('cert-pinned-sha256').textContent).toContain(FP)
+    fireEvent.click(within(store).getByTestId('knowledge-store-test-btn'))
+    expect(await within(store).findByTestId('cert-result')).toBeTruthy()
+    fireEvent.click(within(store).getByTestId('cert-forget'))
+    fireEvent.click(within(await screen.findByTestId('confirm')).getByTestId('confirm-ok'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url === '/api/v1/knowledge/store/trust')).toBe(true))
+  })
+
   it('lists only what is synced or looked up: the uploads are the Uploaded documents section after the table, which focus scrolls to', async () => {
     const base = view()
     current = view({ settings: { ...base.settings, sources: [...base.settings.sources, { id: 'added', name: 'Added in Mycroft', kind: 'upload' }] } })

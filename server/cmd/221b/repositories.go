@@ -36,7 +36,7 @@ func (w *wiring) wireKnowledgeRepositories(svc *knowledge.Service) {
 		}
 		m := make(map[string]knowledge.GitRepo, len(list))
 		for name, x := range list {
-			m[name] = knowledge.GitRepo{URL: x.URL, Credential: x.Credential}
+			m[name] = knowledge.GitRepo{URL: x.URL, Credential: x.Credential, PinnedCert: x.PinnedCert}
 		}
 		return m, nil
 	})

@@ -176,12 +176,13 @@ func (s *Service) oauth2Token(ctx context.Context, c Credential, sec Secret) (st
 	return tok.AccessToken, exp, nil
 }
 
-// clientFor is the service's client with the credential's private CA.
+// clientFor is the service's client with the credential's private CA and
+// pinned certificate.
 func (s *Service) clientFor(c Credential) *http.Client {
-	if strings.TrimSpace(c.CAPEM) == "" {
+	u := &Use{CAPEM: c.CAPEM, Pin: c.PinnedCert.Fingerprint()}
+	if u.Trust().Empty() {
 		return s.o.HTTP
 	}
-	u := &Use{CAPEM: c.CAPEM}
 	return withTLS(s.o.HTTP, u.TLS())
 }
 

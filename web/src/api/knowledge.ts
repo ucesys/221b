@@ -2,6 +2,7 @@
 // the wiki's pages and the drafts in Cases. Credentials go in and never
 // come back: the server says only whether each is set.
 import { call, post } from './call'
+import type { CertPin, PinnedWith, PresentedCert } from './certificates'
 
 /** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. live: never copied, looked up when the agents troubleshoot (KN-39). web: a web site crawled from a start address (0.12.1). */
 export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes' | 'live' | 'web'
@@ -44,6 +45,8 @@ export interface KnowledgeSource {
   pathStyle?: boolean
   credentials?: 'keys' | 'identity'
   caPEM?: string
+  /** The source's certificate a SuperAdmin trusted, for one without a credential (CR-16); set by Trust only. */
+  pinnedCert?: CertPin
   /** A live source's addresses and how it signs in (KN-39): none, a bearer token, or the user (username) with a password or API token. A web site signs in the same way. */
   addresses?: LiveAddress[]
   auth?: '' | 'bearer' | 'basic'
@@ -108,6 +111,8 @@ export interface StoreSettings {
   sse?: '' | 'AES256' | 'aws:kms'
   kmsKeyId?: string
   caPEM?: string
+  /** The store's certificate a SuperAdmin trusted (CR-16); set by Trust only. */
+  pinnedCert?: CertPin
   refreshMinutes?: number
   savedBy?: string
   savedAt?: string
@@ -143,6 +148,8 @@ export interface SourceTestResult {
   error?: string
   /** A live source's addresses, each read once (KN-42). */
   live?: LiveCheck[]
+  /** The certificate the source's address presented, when it is not trusted or is the pinned one (CR-15). */
+  certificate?: PresentedCert
 }
 
 export interface SyncResult {
@@ -193,6 +200,8 @@ export interface KnowledgeView {
   console: boolean
   /** Whether the temporary ConfigMap store can be chosen (CF-57). */
   configMapStore?: boolean
+  /** The certificates pinned for the sources, by id: their own, their credential's or their repository's (CR-19). */
+  pins?: Record<string, PinnedWith>
 }
 
 export interface StoreCheck {
@@ -377,7 +386,19 @@ export const isWebUrl = (url?: string) => !!url && /^https?:\/\//i.test(url)
 export const uploadDocument = (source: string, name: string, data: string) => call<{ version: string }>(base + 'sources/' + enc(source) + '/documents', post({ name, data }))
 export const removeDocument = (source: string, name: string) => call<{ removed: boolean }>(base + 'sources/' + enc(source) + '/documents/' + enc(name), { method: 'DELETE' })
 export const saveStore = (store: StoreSettings, keys: KeysChange) => call<KnowledgeView>(base + 'store', { method: 'PUT', body: JSON.stringify({ store, keys }) })
-export const testStore = (store: StoreSettings, keys: KeysChange) => call<{ ok: boolean; check?: StoreCheck; error?: string }>(base + 'store/test', post({ store, keys }))
+export const testStore = (store: StoreSettings, keys: KeysChange) => call<{ ok: boolean; check?: StoreCheck; error?: string; certificate?: PresentedCert }>(base + 'store/test', post({ store, keys }))
+/**
+ * Trusts the certificate a source's address presents, when it is the one
+ * its Test showed (CR-16): with its credential when it names one,
+ * otherwise with the saved source.
+ */
+export const trustSourceCert = (sha256: string, source: KnowledgeSource, saved?: string) => call<PinnedWith>(base + 'sources/trust', post({ sha256, source, saved }))
+/** Lets a source's pinned certificate go: its own, or its credential's (CR-19). */
+export const forgetSourceCert = (id: string) => call<{ forgotten: boolean }>(base + 'sources/' + enc(id) + '/trust', { method: 'DELETE' })
+/** Trusts the certificate the saved store presents (CR-16). */
+export const trustStoreCert = (sha256: string) => call<PinnedWith>(base + 'store/trust', post({ sha256 }))
+/** Lets the store's pinned certificate go (CR-19). */
+export const forgetStoreCert = () => call<{ forgotten: boolean }>(base + 'store/trust', { method: 'DELETE' })
 export const moveStore = (store: StoreSettings, keys: KeysChange) => call<{ files: number }>(base + 'store/move', post({ store, keys }))
 export const saveHookToken = (token: string) => call<{ hook: boolean }>(base + 'hook', { method: 'PUT', body: JSON.stringify({ token }) })
 export const fetchPages = () => call<{ pages: WikiPage[]; retired?: WikiPage[]; connected: boolean }>(base + 'pages')

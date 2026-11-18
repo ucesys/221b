@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/ucesys/221b/server/internal/certpin"
 )
 
 // Which hosts the console fetches repositories from. Git servers on
@@ -279,7 +281,9 @@ func (t cappedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func init() {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkConnect}).DialContext
-	c := githttp.NewClient(&http.Client{Transport: cappedTransport{allowedTransport{base}}})
+	// Each fetch's context carries the trust of its repository's
+	// credential or its own: a private CA, a pinned certificate (CR-17).
+	c := githttp.NewClient(&http.Client{Transport: cappedTransport{allowedTransport{&certpin.ContextTransport{Base: base}}}})
 	client.InstallProtocol("https", c)
 	client.InstallProtocol("http", c)
 }
