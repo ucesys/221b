@@ -59,6 +59,71 @@ func (m *MemorySecret) SaveKeyIf(_ context.Context, key string, b []byte, versio
 	return nil
 }
 
+// DeleteKeyIf removes a key, as the Secret's own store does.
+func (m *MemorySecret) DeleteKeyIf(_ context.Context, key, version string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		return nil
+	}
+	if version != fmt.Sprint(m.version) {
+		return errors.New("the Secret changed since it was read")
+	}
+	if _, ok := m.data[key]; ok {
+		delete(m.data, key)
+		m.version++
+	}
+	return nil
+}
+
+// Sizes are the bytes kept, keys counted, and those of one key.
+func (m *MemorySecret) Sizes(_ context.Context, key string) (total, ofKey int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, v := range m.data {
+		total += len(k) + len(v)
+		if k == key {
+			ofKey = len(k) + len(v)
+		}
+	}
+	return total, ofKey, nil
+}
+
+// keyDeleter is a store that removes a key, so a removed credential's
+// secret leaves the Secret instead of staying as an empty key.
+type keyDeleter interface {
+	DeleteKeyIf(ctx context.Context, key, version string) error
+}
+
+// sizer is a store that says how big its Secret is: in all, and one key
+// (its name and value).
+type sizer interface {
+	Sizes(ctx context.Context, key string) (total, ofKey int, err error)
+}
+
+// SecretBudget is the most the credentials' Secret is let hold: under the
+// 1 MiB Kubernetes keeps in one Secret, with room for its metadata.
+const SecretBudget = 900 << 10
+
+// fits says whether a key may be written with n bytes (its name and
+// value): a write that grows the Secret past SecretBudget is refused with
+// why; one that does not grow the key always goes.
+func (s *Service) fits(ctx context.Context, key string, n int) error {
+	sz, ok := s.o.Secrets.(sizer)
+	if !ok {
+		return nil
+	}
+	total, cur, err := sz.Sizes(ctx, key)
+	if err != nil || n <= cur {
+		// The write itself says what is wrong with the store.
+		return nil
+	}
+	if total-cur+n > SecretBudget {
+		return invalid("the credentials would take over %d KiB, more than their Secret can hold: remove the credentials no longer used, or shorten long private CAs and descriptions", SecretBudget>>10)
+	}
+	return nil
+}
+
 const indexKey = "index"
 
 func secretKey(id string) string { return "secret-" + id }
@@ -187,6 +252,9 @@ func (s *Service) update(ctx context.Context, f func(*index) error) error {
 			return err
 		}
 		b, _ := json.Marshal(ix)
+		if err := s.fits(ctx, indexKey, len(indexKey)+len(b)); err != nil {
+			return err
+		}
 		if err := s.o.Secrets.SaveKeyIf(ctx, indexKey, b, version); err != nil {
 			if conflict(err) {
 				continue
@@ -205,12 +273,24 @@ func (s *Service) saveSecret(ctx context.Context, id string, sec Secret) error {
 	if !sec.empty() {
 		raw, _ = json.Marshal(sec)
 	}
+	del, canDelete := s.o.Secrets.(keyDeleter)
+	if !canDelete || len(raw) > 0 {
+		if err := s.fits(ctx, secretKey(id), len(secretKey(id))+len(raw)); err != nil {
+			return err
+		}
+	}
 	for range 10 {
 		_, version, _, err := s.o.Secrets.LoadKey(ctx, secretKey(id))
 		if err != nil {
 			return err
 		}
-		if err = s.o.Secrets.SaveKeyIf(ctx, secretKey(id), raw, version); err == nil {
+		if len(raw) == 0 && canDelete {
+			// None: the key goes.
+			err = del.DeleteKeyIf(ctx, secretKey(id), version)
+		} else {
+			err = s.o.Secrets.SaveKeyIf(ctx, secretKey(id), raw, version)
+		}
+		if err == nil {
 			return nil
 		} else if !conflict(err) {
 			return fmt.Errorf("saving the credential's secret: %w", err)
@@ -354,12 +434,6 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
 	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
 	c.LastTest = old.LastTest
-	// A pinned certificate is set by Trust alone, and kept while the
-	// endpoint's host is the same (CR-16).
-	c.PinnedCert = nil
-	if hostOf(c.Endpoint) == hostOf(old.Endpoint) {
-		c.PinnedCert = old.PinnedCert
-	}
 	if sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM {
 		c.LastTest = nil
 	}
@@ -375,6 +449,13 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 		}
 		if slices.ContainsFunc(ix.Credentials, func(o Credential) bool { return o.ID != id && strings.EqualFold(o.Name, c.Name) }) {
 			return invalid("there is a credential named %s already", c.Name)
+		}
+		// A pinned certificate is set by Trust alone, and kept while the
+		// endpoint's host is the same (CR-16): the one kept now, not the
+		// one read before, which a Trust or a Forget may have changed.
+		c.PinnedCert = nil
+		if hostOf(c.Endpoint) == hostOf(ix.Credentials[i].Endpoint) {
+			c.PinnedCert = ix.Credentials[i].PinnedCert
 		}
 		ix.Credentials[i] = c
 		return nil

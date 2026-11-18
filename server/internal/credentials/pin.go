@@ -109,6 +109,11 @@ func (s *Service) Trust(ctx context.Context, id, typed, sha256, by string) (Cred
 		if i < 0 {
 			return fmt.Errorf("%w %q", ErrNotFound, id)
 		}
+		// Changed while its certificate was looked at: the pin is for the
+		// address as it was, not one of the endpoint now.
+		if !ix.Credentials[i].Covers(target) {
+			return invalid("%s changed meanwhile, and %s is not under its endpoint now: test it again", ix.Credentials[i].Name, target)
+		}
 		ix.Credentials[i].PinnedCert, ix.Credentials[i].LastTest = pin, nil
 		c = ix.Credentials[i]
 		return nil

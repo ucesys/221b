@@ -11,7 +11,8 @@ import (
 // A backup holds the credentials (CR-13) as the consoles' other secrets
 // are held (ADR-137): each one's secret sealed with the install's backup
 // key, or a placeholder, never in clear. A restore adds the credentials
-// missing, by id, and keeps the ones the console has; one whose secret
+// missing, by id, and keeps the ones the console has (one missing whose
+// name another has comes back under its id, renamed); one whose secret
 // the backup's key does not open comes back without it, listed to be
 // given again in Administration › Credentials.
 
@@ -62,13 +63,16 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 		if slices.ContainsFunc(have, func(c Credential) bool { return c.ID == e.ID }) {
 			continue
 		}
-		if slices.ContainsFunc(have, func(c Credential) bool { return strings.EqualFold(c.Name, e.Name) }) {
-			note("credential %s: one of that name is here already; the backup's is not restored", e.Name)
-			continue
+		c := e.Credential
+		if taken(have, c.Name) {
+			// Restored under its own id, which what the backup restores
+			// with it names, and a name of its own.
+			c.Name = restoredName(have, c.Name)
+			note("credential %s: one of that name is here already; the backup's is restored as %s", e.Name, c.Name)
 		}
 		var sec Secret
 		if len(e.Set) > 0 || e.Secret != "" {
-			v, err := open(e.Secret, "the secret of the credential "+e.Name, "Administration › Credentials › "+e.Name)
+			v, err := open(e.Secret, "the secret of the credential "+e.Name, "Administration › Credentials › "+c.Name)
 			if err == nil && v != "" {
 				if json.Unmarshal([]byte(v), &sec) != nil {
 					note("credential %s: its secret in the backup cannot be read; give it again in Administration › Credentials", e.Name)
@@ -76,7 +80,6 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 				}
 			}
 		}
-		c := e.Credential
 		sec = keep(c.Kind, sec)
 		c.Set, c.LastTest = sec.parts(), nil
 		if err := s.add(ctx, c, sec); err != nil {
@@ -87,4 +90,27 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 		n++
 	}
 	return n, nil
+}
+
+func taken(have []Credential, name string) bool {
+	return slices.ContainsFunc(have, func(c Credential) bool { return strings.EqualFold(c.Name, name) })
+}
+
+// restoredName is a name no credential has: "GitHub (restored)",
+// "GitHub (restored 2)", within the 100 characters a name may have.
+func restoredName(have []Credential, name string) string {
+	for n := 1; ; n++ {
+		suffix := " (restored)"
+		if n > 1 {
+			suffix = fmt.Sprintf(" (restored %d)", n)
+		}
+		base := name
+		for len(base)+len(suffix) > 100 {
+			r := []rune(base)
+			base = string(r[:len(r)-1])
+		}
+		if !taken(have, base+suffix) {
+			return base + suffix
+		}
+	}
 }

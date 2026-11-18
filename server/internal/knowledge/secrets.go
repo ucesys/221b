@@ -94,6 +94,9 @@ type Creds struct {
 	sessionToken string
 	apply        func(*http.Request)
 	values       []string
+	// covers says whether the credential may go to an address: a live
+	// source's client certificate goes only to those (CR-04).
+	covers func(string) bool
 }
 
 func (c Creds) empty() bool { return c.Token == "" && c.AccessKeyID == "" && c.SecretAccessKey == "" }

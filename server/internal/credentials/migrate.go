@@ -119,7 +119,7 @@ func (s *Service) Migrate(ctx context.Context, consumers []Consumer, by string) 
 			names[strings.ToLower(name)] = true
 			now := s.o.Now().UTC()
 			c := Credential{ID: newID(), Name: name, Kind: g.f.Kind, Endpoint: g.f.Endpoint, Username: g.f.Username, SendAs: g.f.SendAs, Region: g.f.Region, CAPEM: g.f.CAPEM,
-				Description: "Made at the upgrade to 0.12.1 from " + strings.Join(g.labels, ", ") + ".",
+				Description: migratedDescription(g.labels),
 				Set:         g.f.Secret.parts(), Created: now, CreatedBy: by, Changed: now, ChangedBy: by, From: g.labels}
 			if err := s.add(ctx, c, g.f.Secret); err != nil {
 				return created, err
@@ -189,13 +189,36 @@ func migratedName(endpoint string, labels []string, taken map[string]bool) strin
 	if len(sorted) > 2 {
 		from = sorted[0] + " and " + fmt.Sprint(len(sorted)-1) + " more"
 	}
-	base := ep + " (from " + from + ")"
-	if len(base) > 90 {
-		base = base[:89] + "…"
-	}
+	base := clipRunes(ep+" (from "+from+")", 90)
 	name := base
 	for n := 2; taken[strings.ToLower(name)]; n++ {
 		name = fmt.Sprintf("%s %d", base, n)
 	}
 	return name
+}
+
+// migratedDescription says what a credential the upgrade made was made
+// from, within the 500 characters a description may have: every label,
+// or the first and how many more.
+func migratedDescription(labels []string) string {
+	const head, most = "Made at the upgrade to 0.12.1 from ", 500
+	d := head + strings.Join(labels, ", ") + "."
+	if len(d) <= most || len(labels) == 0 {
+		return d
+	}
+	more := fmt.Sprintf(" and %d more.", len(labels)-1)
+	return clipRunes(head+labels[0], most-len(more)) + more
+}
+
+// clipRunes cuts s to at most n bytes on a character's boundary, ending
+// it with … when cut.
+func clipRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	for len(string(r))+len("…") > n {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
 }

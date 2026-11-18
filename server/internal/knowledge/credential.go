@@ -112,7 +112,7 @@ func (s *Service) sourceAuth(ctx context.Context, x Source) (Source, Creds, erro
 	if err != nil {
 		return x, Creds{}, fmt.Errorf("%s's credential: %w", x.Name, err)
 	}
-	c := Creds{values: use.Values()}
+	c := Creds{values: use.Values(), covers: use.Covers}
 	if strings.TrimSpace(x.CAPEM) == "" {
 		x.CAPEM = use.CAPEM
 	}
