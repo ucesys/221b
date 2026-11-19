@@ -145,11 +145,16 @@ type Spec struct {
 	Fleet       string
 	FleetName   string
 	// Nodes are the targets in order; Values each one's parameters.
-	Nodes     []string
-	Values    map[string]map[string]string
-	Overrides map[string]string
-	Rollout   Rollout
-	Who       Who
+	Nodes  []string
+	Values map[string]map[string]string
+	// Fleets are the fleets the nodes are in, with their values for the
+	// script's parameters, and NodeFleets each node's fleets by id: kept
+	// with the run, so it says where its values came from.
+	Fleets     []RunFleet
+	NodeFleets map[string][]string
+	Overrides  map[string]string
+	Rollout    Rollout
+	Who        Who
 	// Secrets are each node's secret values, never recorded: Values holds
 	// their references.
 	Secrets map[string]map[string]string
@@ -191,7 +196,7 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	r := Run{Script: sp.Script, Version: sp.Version.N, Hash: sp.Version.Hash, DryRun: sp.DryRun, Privilege: sp.Version.Header.Privilege,
 		Cluster: sp.Cluster, ClusterName: sp.ClusterName, Fleet: sp.Fleet, FleetName: sp.FleetName, Overrides: sp.Overrides, Rollout: sp.Rollout,
 		By: sp.Who, State: RunRunning, Started: now, Beat: now, Target: sp.Version.Header.Target, Config: sp.Config, Identity: sp.Identity, Basis: sp.Basis, HookRefs: sp.HookRefs, RetryOf: sp.RetryOf,
-		Request: sp.Request, ValuesApproved: sp.ValuesApproved}
+		Request: sp.Request, ValuesApproved: sp.ValuesApproved, Fleets: sp.Fleets}
 	for _, ap := range sp.Version.Approvals {
 		r.Approvers = append(r.Approvers, ap.By)
 	}
@@ -203,7 +208,7 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	}
 	for bi, batch := range Batches(sp.Nodes, sp.Rollout) {
 		for _, n := range batch {
-			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n], RebootMinutes: sp.RebootMinutes[n]})
+			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n], RebootMinutes: sp.RebootMinutes[n], Fleets: sp.NodeFleets[n]})
 		}
 	}
 	r, err := e.opts.Store.NewRun(ctx, r)

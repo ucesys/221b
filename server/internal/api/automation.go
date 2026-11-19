@@ -931,6 +931,7 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	values := map[string]map[string]string{}
 	resolved := map[string]automation.Resolved{}
 	reboot := map[string]int{}
+	layersOf := map[string][]automation.Layer{}
 	kube8s := v.Header.Target == automation.TargetKubernetes
 	// Each node answers to all its fleets, not only the one picked: the
 	// strictest ceiling holds, and a change waiting on any of them holds
@@ -976,6 +977,7 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		}
 		values[n.Name] = res.Values
 		resolved[n.Name] = res
+		layersOf[n.Name] = layers
 		targets = append(targets, n.Name)
 	}
 	// A binding to a variable no node of the run has stops it, required or
@@ -1054,8 +1056,11 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	} else if weighed != "" {
 		basis += "; " + weighed
 	}
+	// The fleets the nodes are in now, and what each has for the script's
+	// parameters: kept with the run (DB-38).
+	runFleets, nodeFleets := automation.FleetsOf(v.Header, layersOf, targets)
 	run, err := s.opts.Automation.Start(ctx, automation.Spec{Script: l.sc.Name, Version: v, DryRun: in.DryRun, Cluster: list.Cluster, ClusterName: clusterName,
-		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: automation.Who{Name: l.who.Name, User: l.who.User}, ValuesApproved: valuesApproved,
+		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Fleets: runFleets, NodeFleets: nodeFleets, Overrides: in.Params, Rollout: in.Rollout, Who: automation.Who{Name: l.who.Name, User: l.who.User}, ValuesApproved: valuesApproved,
 		Secrets: secrets, Config: l.config.ID, Identity: l.identity, Person: automation.Person{User: l.who.Person.User, Groups: l.who.Person.Groups}, Basis: basis,
 		Before: l.before, After: l.after, HookRefs: in.Hooks, RetryOf: l.retryOf, RebootMinutes: reboot, Request: in.Request,
 		Recheck: !in.DryRun && list.Production})

@@ -37,8 +37,9 @@ func TestRunsInTheDatabase(t *testing.T) {
 			Fleet: "gpu", FleetName: "GPU", Overrides: map[string]string{"MODE": "fast", "EMPTY": ""}, Rollout: Rollout{Mode: RolloutCanary, Size: 2, StopAfter: 1, TimeoutMinutes: 10},
 			By: ada, State: RunRunning, Config: "elevated", Basis: "approved code", Hooks: []string{"drain", "uncordon"}, HookRefs: HookRefs{Before: []string{"pre"}, After: []string{"post", "report"}},
 			Request: "req-1", Approvers: []Who{bob, {Name: "Cy"}}, ValuesApproved: &ValuesApproval{Request: 7, By: bob, At: at}, Started: at, Beat: at,
-			Nodes: []NodeResult{{Node: "n1", Batch: 1, State: NodeWaiting, Values: map[string]string{"MODE": "fast", "DISK": "sda"}, RebootMinutes: 30},
-				{Node: "n2", Batch: 2, State: NodeWaiting, Values: map[string]string{"MODE": "fast"}}}})
+			Fleets: []RunFleet{{ID: "gpu", Name: "GPU", Values: map[string]string{"DISK": "sda", "ZONE": "a"}}, {ID: "db", Name: "DB"}, {ID: AllNodes, Name: "All nodes", Values: map[string]string{"ZONE": "z"}}},
+			Nodes: []NodeResult{{Node: "n1", Batch: 1, State: NodeWaiting, Values: map[string]string{"MODE": "fast", "DISK": "sda"}, RebootMinutes: 30, Fleets: []string{"gpu", AllNodes}},
+				{Node: "n2", Batch: 2, State: NodeWaiting, Values: map[string]string{"MODE": "fast"}, Fleets: []string{"db", "gpu", AllNodes}}}})
 		if err != nil || first.ID != 1 {
 			t.Fatalf("the first run: %+v: %v", first, err)
 		}
@@ -97,7 +98,7 @@ func TestRunsInTheDatabase(t *testing.T) {
 	if got := read(open()); got != want {
 		t.Fatalf("the database's runs differ from the ConfigMap's.\nthe database:\n%s\nthe ConfigMap:\n%s", got, want)
 	}
-	for _, part := range []string{`"overrides"`, `"hookRefs"`, `"approvers"`, `"valuesApproved"`, `"cancelAsked"`, `"retryOf"`, `"identity"`, `"tail"`, `"cordoned"`, `"rebootMinutes"`, `"exit": 0`, `"exit": 3`, `"EMPTY": ""`} {
+	for _, part := range []string{`"overrides"`, `"hookRefs"`, `"approvers"`, `"valuesApproved"`, `"cancelAsked"`, `"retryOf"`, `"identity"`, `"tail"`, `"cordoned"`, `"rebootMinutes"`, `"exit": 0`, `"exit": 3`, `"EMPTY": ""`, `"fleets"`, `"All nodes"`} {
 		if !contains(want, part) {
 			t.Errorf("the scenario has no %s", part)
 		}
@@ -124,6 +125,15 @@ func TestRunsInTheDatabase(t *testing.T) {
 	// What each host got: the view gives its values.
 	if n := count("SELECT count(*) FROM script_run_host_values v JOIN script_run_hosts h USING (script_run_host_id) WHERE h.host_name = 'n1' AND ((v.name = 'DISK' AND v.value = 'sda') OR (v.name = 'MODE' AND v.value = 'fast'))"); n != 2 {
 		t.Errorf("n1's values through the view: %d", n)
+	}
+	// The fleets the nodes were in, each with what it had then, and each
+	// node's fleets (DB-38).
+	if fleets, values, of := count("SELECT count(*) FROM script_run_fleets"), count("SELECT count(*) FROM script_run_values WHERE scope = 'fleet'"), count("SELECT count(*) FROM script_run_host_fleets"); fleets != 3 || values != 3 || of != 5 {
+		t.Errorf("%d fleets, %d fleet values and %d fleets of nodes in the tables, want 3, 3 and 5", fleets, values, of)
+	}
+	// ZONE is neither the run's nor the node's own: the view gives n1 its fleets' value.
+	if n := count("SELECT count(*) FROM script_run_host_values v JOIN script_run_hosts h USING (script_run_host_id) WHERE h.host_name = 'n1' AND v.name = 'ZONE' AND v.scope = 'fleet'"); n != 1 {
+		t.Errorf("n1's ZONE through the view: %d", n)
 	}
 	// A node's row stays when another node of its run is saved.
 	var before, after string

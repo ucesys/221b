@@ -118,9 +118,10 @@ func TestMigrate(t *testing.T) {
 	}
 	// The model's 73, 3 that hold what a script version's document kept in
 	// lists (step 0016), and the script versions a variable change touches
-	// (step 0018), and who had approved a run's version (step 0019).
-	if tables != 78 {
-		t.Errorf("the schema has %d tables; the data model has 78", tables)
+	// (step 0018), who had approved a run's version (step 0019), and what
+	// a run request's values mean for its script (step 0020).
+	if tables != 79 {
+		t.Errorf("the schema has %d tables; the data model has 79", tables)
 	}
 	// No bare "id" column anywhere, and every uuid or text key column that
 	// is a table's whole key ends in _id, scope or path.

@@ -19,17 +19,22 @@ import (
 // items, so that is all it needs.
 //
 // The same document holds the runs that wait for their values' approval.
-// They belong with the runs, which have not moved: until they do, they are
-// kept as they are, with the two counters, in the settings scope below.
+// Those are rows of script_runs, the runs' own table (DB-37): one list has
+// every run, the ones that wait, were rejected or expired among them, and
+// a request that was approved and the run it started are one row. This
+// document writes a request's own columns, and the columns a request
+// shares with its run only until the run has started. The two counters
+// are in the settings scope below.
 
 const changesScope = "automation-changes"
 
-// changesRest is what the scope holds: the counters, and for now the runs
-// that wait.
+// changesRest is what the scope holds: the counters.
 type changesRest struct {
-	Next    int          `json:"next"`
-	NextRun int          `json:"nextRun,omitempty"`
-	Runs    []WaitingRun `json:"runs,omitempty"`
+	Next    int `json:"next"`
+	NextRun int `json:"nextRun,omitempty"`
+	// Runs is where a build of November 19, 2026 kept the requests, whole:
+	// read once more, and written as rows by the next save.
+	Runs []WaitingRun `json:"runs,omitempty"`
 }
 
 // NewChangesPG keeps the variable changes in d.
@@ -50,6 +55,13 @@ func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error)
 			return rec, false, err
 		}
 		rec.Next, rec.NextRun, rec.Runs = rest.Next, rest.NextRun, rest.Runs
+	}
+	requests, err := readRequests(ctx, q)
+	if err != nil {
+		return rec, false, err
+	}
+	if len(requests) > 0 {
+		rec.Runs = requests
 	}
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT variable_change_id::text, change_number, cluster_id, fleet_key, fleet_name, requested_by, requested_by_user,
@@ -115,19 +127,233 @@ func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error)
 	}); err != nil {
 		return rec, false, err
 	}
-	return rec, found || len(rec.Changes) > 0, nil
+	return rec, found || len(rec.Changes) > 0 || len(rec.Runs) > 0, nil
+}
+
+// readRequests reads the runs that wait for approval, or did: the rows of
+// script_runs that have a request's number, oldest first.
+func readRequests(ctx context.Context, q db.Querier) ([]WaitingRun, error) {
+	var out []WaitingRun
+	at := map[string]int{}
+	rows, err := q.Query(ctx, `SELECT script_run_id::text, request_number, cluster_id, cluster_name, script_name, version_number, fleet_key, fleet_name,
+			request_nodes, request_targets, rollout_mode, rollout_size, rollout_stop_after, rollout_timeout_minutes, coalesce(run_profile_id, ''),
+			hooks_before, hooks_after, coalesce(retry_of_number, 0), request_client_key, requested_by, requested_by_user, person_user, person_groups,
+			requested_at, request_method, request_changed, request_note, coalesce(request_state, ''), decided_by, decided_by_user, decided_at,
+			decision_comment, coalesce(started_run_number, 0)
+		FROM script_runs WHERE request_number IS NOT NULL ORDER BY request_number`)
+	if err != nil {
+		return nil, err
+	}
+	var id string
+	var w WaitingRun
+	var nodes, targets, before, after, groups, changed []string
+	var asked, decided *time.Time
+	var by, byUser *string
+	list := func(s []string) []string {
+		if len(s) == 0 {
+			return nil
+		}
+		return append([]string(nil), s...)
+	}
+	if _, err := pgx.ForEachRow(rows, []any{&id, &w.ID, &w.Cluster, &w.ClusterName, &w.Script, &w.Version, &w.Fleet, &w.FleetName, &nodes, &targets,
+		&w.Rollout.Mode, &w.Rollout.Size, &w.Rollout.StopAfter, &w.Rollout.TimeoutMinutes, &w.Config, &before, &after, &w.RetryOf, &w.Request,
+		&w.By.Name, &w.By.User, &w.Person.User, &groups, &asked, &w.Method, &changed, &w.Note, &w.State, &by, &byUser, &decided, &w.Comment, &w.Run}, func() error {
+		x := w
+		// The row's own slices: the next row is read into the same variables.
+		x.Nodes, x.Targets, x.Hooks, x.Person.Groups = list(nodes), append([]string{}, targets...), HookRefs{Before: list(before), After: list(after)}, list(groups)
+		x.Changed, x.Impact, x.Params, x.At = append([]string{}, changed...), []ImpactItem{}, map[string]string{}, timeOf(asked)
+		x.DecidedBy, x.DecidedAt = nil, nil
+		if by != nil {
+			who := Who{Name: *by}
+			if byUser != nil {
+				who.User = *byUser
+			}
+			x.DecidedBy = &who
+		}
+		if decided != nil {
+			t := decided.UTC()
+			x.DecidedAt = &t
+		}
+		at[id] = len(out)
+		out = append(out, x)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, value FROM script_run_values WHERE scope = 'request'")
+	if err != nil {
+		return nil, err
+	}
+	var name, value string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &name, &value}, func() error {
+		if i, ok := at[id]; ok {
+			out[i].Params[name] = value
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, script, version_number, decision, why, decided_by FROM script_run_impacts ORDER BY script_run_id, position")
+	if err != nil {
+		return nil, err
+	}
+	var im ImpactItem
+	if _, err := pgx.ForEachRow(rows, []any{&id, &im.Script, &im.Version, &im.Decision, &im.Why, &im.By}, func() error {
+		if i, ok := at[id]; ok {
+			out[i].Impact = append(out[i].Impact, im)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// writeRequests writes the requests that changed. A request whose run has
+// started shares its row: only the request's own columns are written then.
+func writeRequests(ctx context.Context, tx pgx.Tx, old, next []WaitingRun) error {
+	before := map[int]WaitingRun{}
+	for _, w := range old {
+		before[w.ID] = w
+	}
+	numbers := make([]int, 0, len(next))
+	for _, w := range next {
+		numbers = append(numbers, w.ID)
+	}
+	// A request that is no longer kept: its row goes when it never started
+	// a run, and otherwise only what was the request's.
+	gone := `request_number IS NOT NULL AND NOT (request_number = ANY($1))`
+	for _, q := range []string{
+		"DELETE FROM script_run_values WHERE scope = 'request' AND script_run_id IN (SELECT script_run_id FROM script_runs WHERE " + gone + ")",
+		"DELETE FROM script_run_impacts WHERE script_run_id IN (SELECT script_run_id FROM script_runs WHERE " + gone + ")",
+		"DELETE FROM script_runs WHERE run_number IS NULL AND " + gone,
+		`UPDATE script_runs SET request_number = NULL, request_state = NULL, request_client_key = '', requested_by = '', requested_by_user = '',
+			requested_at = NULL, request_method = '', request_nodes = '{}', request_targets = '{}', person_user = '', person_groups = '{}',
+			request_changed = '{}', request_note = '', decided_by = NULL, decided_by_user = NULL, decided_at = NULL, decision_comment = '',
+			started_run_number = NULL WHERE ` + gone,
+	} {
+		if _, err := tx.Exec(ctx, q, numbers); err != nil {
+			return err
+		}
+	}
+	list := func(s []string) []string {
+		if s == nil {
+			return []string{}
+		}
+		return s
+	}
+	for _, w := range next {
+		if b, had := before[w.ID]; had && sameJSON(b, w) {
+			continue
+		}
+		var id string
+		err := tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE request_number = $1", w.ID).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The run it started may be there already, without its request:
+			// copied from a ConfigMap before the requests were.
+			err = nil
+			if w.Run != 0 {
+				err = tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE run_number = $1 AND request_number IS NULL AND cluster_id = $2", w.Run, w.Cluster).Scan(&id)
+				if errors.Is(err, pgx.ErrNoRows) {
+					err = nil
+				}
+			}
+			if err == nil && id == "" {
+				id = db.NewID()
+				_, err = tx.Exec(ctx, "INSERT INTO script_runs (script_run_id, request_number) VALUES ($1, $2)", id, w.ID)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		var by, byUser *string
+		if w.DecidedBy != nil {
+			by, byUser = &w.DecidedBy.Name, &w.DecidedBy.User
+		}
+		var decided *time.Time
+		if w.DecidedAt != nil {
+			decided = timeOrNil(*w.DecidedAt)
+		}
+		var started *int
+		if w.Run != 0 {
+			started = &w.Run
+		}
+		if _, err := tx.Exec(ctx, `UPDATE script_runs SET request_number = $2, request_state = $3, request_client_key = $4, requested_by = $5,
+				requested_by_user = $6, requested_at = $7, request_method = $8, request_nodes = $9, request_targets = $10, person_user = $11,
+				person_groups = $12, request_changed = $13, request_note = $14, decided_by = $15, decided_by_user = $16, decided_at = $17,
+				decision_comment = $18, started_run_number = $19 WHERE script_run_id = $1`,
+			id, w.ID, w.State, w.Request, w.By.Name, w.By.User, timeOrNil(w.At), w.Method, list(w.Nodes), list(w.Targets), w.Person.User,
+			list(w.Person.Groups), list(w.Changed), w.Note, by, byUser, decided, w.Comment, started); err != nil {
+			return err
+		}
+		// What a request shares with its run is the run's once it has started.
+		var config *string
+		if w.Config != "" {
+			config = &w.Config
+		}
+		var retry *int
+		if w.RetryOf != 0 {
+			retry = &w.RetryOf
+		}
+		if _, err := tx.Exec(ctx, `UPDATE script_runs SET state = $2, cluster_id = $3, cluster_name = $4, script_name = $5, version_number = $6,
+				fleet_key = $7, fleet_name = $8, rollout_mode = $9, rollout_size = $10, rollout_stop_after = $11, rollout_timeout_minutes = $12,
+				run_profile_id = $13, hooks_before = $14, hooks_after = $15, retry_of_number = $16,
+				script_version_id = (SELECT v.script_version_id FROM script_versions v JOIN scripts s USING (script_id) WHERE s.name = $5 AND v.version_number = $6),
+				fleet_id = (SELECT f.fleet_id FROM fleets f WHERE coalesce(f.cluster_id, '') = $3 AND f.fleet_key = $7)
+			WHERE script_run_id = $1 AND run_number IS NULL`,
+			id, w.State, w.Cluster, w.ClusterName, w.Script, w.Version, w.Fleet, w.FleetName, w.Rollout.Mode, w.Rollout.Size, w.Rollout.StopAfter,
+			w.Rollout.TimeoutMinutes, config, list(w.Hooks.Before), list(w.Hooks.After), retry); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM script_run_values WHERE script_run_id = $1 AND scope = 'request'", id); err != nil {
+			return err
+		}
+		for name, v := range w.Params {
+			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, name, value) VALUES ($1, $2, 'request', $3, $4)", db.NewID(), id, name, v); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM script_run_impacts WHERE script_run_id = $1", id); err != nil {
+			return err
+		}
+		for i, im := range w.Impact {
+			if _, err := tx.Exec(ctx, `INSERT INTO script_run_impacts (script_run_id, position, script, version_number, decision, why, decided_by)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, i, im.Script, im.Version, im.Decision, im.Why, im.By); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func writeChanges(ctx context.Context, tx pgx.Tx, old, next changesRecord) error {
-	rest := func(r changesRecord) changesRest { return changesRest{Next: r.Next, NextRun: r.NextRun, Runs: r.Runs} }
-	if !sameJSON(rest(old), rest(next)) {
-		b, err := json.Marshal(rest(next))
+	// The counters. The scope is written again, without the requests, when
+	// it still has them from a build that kept them there.
+	var inScope changesRest
+	if b, _, err := db.LoadScope(ctx, tx, changesScope); err == nil {
+		_ = json.Unmarshal(b, &inScope)
+	} else if !errors.Is(err, db.ErrNotFound) {
+		return err
+	}
+	if next.Next != old.Next || next.NextRun != old.NextRun || len(inScope.Runs) > 0 {
+		b, err := json.Marshal(changesRest{Next: next.Next, NextRun: next.NextRun})
 		if err != nil {
 			return err
 		}
 		if _, err := db.SaveScope(ctx, tx, changesScope, b, db.AnyVersion, ""); err != nil {
 			return err
 		}
+	}
+	asRows := old.Runs
+	if len(inScope.Runs) > 0 {
+		// Not rows yet: all of them are written.
+		asRows = nil
+	}
+	if err := writeRequests(ctx, tx, asRows, next.Runs); err != nil {
+		return err
 	}
 	// What is kept of a change in the database: what it alters, not the
 	// fleet's variables whole, which a change copied from a ConfigMap has.

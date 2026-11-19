@@ -18,11 +18,17 @@ import (
 // names its script's version, its profile, its fleet and the run it
 // retries as its document did, and keys to their rows while they exist.
 //
+// The runs that wait for approval are rows of the same table, written
+// from the changes' document (pg_changes.go): a row with no run number is
+// a request that has not started a run, and this document leaves it alone.
+//
 // The store is unchanged and reaches the rows through db.Doc, which reads
 // every kept run for each save, as the ConfigMap's document was read: a
 // repository that writes one node's row at a time is the rework due.
-// script_run_fleets and script_run_host_fleets stay empty until the engine
-// records a run's fleets (the code to-do list, item 11).
+// The fleets a run's nodes were in when it started are rows of
+// script_run_fleets, each fleet's values then rows of script_run_values,
+// and each node's fleets rows of script_run_host_fleets (DB-38): a run's
+// rows are written in one transaction, so they never mix two runs.
 
 const runsScope = "automation-runs"
 
@@ -53,7 +59,7 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 			state, target, coalesce(run_profile_id, ''), identity, basis, hook_names, hooks_before, hooks_after, coalesce(retry_of_number, 0), note,
 			request_key, is_cancel_asked, values_request_number, values_approved_by, values_approved_by_user, values_approved_at,
 			started_at, ended_at, heartbeat_at
-		FROM script_runs ORDER BY run_number`)
+		FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number`)
 	if err != nil {
 		return rec, false, err
 	}
@@ -134,12 +140,56 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 		return rec, false, err
 	}
 
-	rows, err = q.Query(ctx, "SELECT script_run_id::text, coalesce(script_run_host_id::text, ''), scope, name, value FROM script_run_values WHERE scope IN ('run', 'host')")
+	type spot struct{ run, fleet int }
+	fleets := map[string]spot{}
+	keys := map[string]string{}
+	rows, err = q.Query(ctx, "SELECT script_run_fleet_id::text, script_run_id::text, fleet_key, fleet_name FROM script_run_fleets ORDER BY script_run_id, position, fleet_key")
+	if err != nil {
+		return rec, false, err
+	}
+	var fid string
+	var f RunFleet
+	if _, err := pgx.ForEachRow(rows, []any{&fid, &id, &f.ID, &f.Name}, func() error {
+		if i, ok := at[id]; ok {
+			fleets[fid], keys[fid] = spot{i, len(rec.Runs[i].Fleets)}, f.ID
+			rec.Runs[i].Fleets = append(rec.Runs[i].Fleets, RunFleet{ID: f.ID, Name: f.Name})
+		}
+		return nil
+	}); err != nil {
+		return rec, false, err
+	}
+	rows, err = q.Query(ctx, `SELECT m.script_run_host_id::text, m.script_run_fleet_id::text FROM script_run_host_fleets m
+		ORDER BY m.script_run_host_id, m.position`)
+	if err != nil {
+		return rec, false, err
+	}
+	if _, err := pgx.ForEachRow(rows, []any{&hid, &fid}, func() error {
+		if p, ok := nodes[hid]; ok {
+			node := &rec.Runs[p.run].Nodes[p.node]
+			node.Fleets = append(node.Fleets, keys[fid])
+		}
+		return nil
+	}); err != nil {
+		return rec, false, err
+	}
+
+	rows, err = q.Query(ctx, `SELECT script_run_id::text, coalesce(script_run_host_id::text, ''), coalesce(script_run_fleet_id::text, ''), scope, name, value
+		FROM script_run_values WHERE scope IN ('run', 'host', 'fleet')`)
 	if err != nil {
 		return rec, false, err
 	}
 	var scope, name, value string
-	if _, err := pgx.ForEachRow(rows, []any{&id, &hid, &scope, &name, &value}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&id, &hid, &fid, &scope, &name, &value}, func() error {
+		if scope == "fleet" {
+			if p, ok := fleets[fid]; ok {
+				fl := &rec.Runs[p.run].Fleets[p.fleet]
+				if fl.Values == nil {
+					fl.Values = map[string]string{}
+				}
+				fl.Values[name] = value
+			}
+			return nil
+		}
 		if scope == "run" {
 			if i, ok := at[id]; ok {
 				if rec.Runs[i].Overrides == nil {
@@ -192,8 +242,9 @@ func writeRuns(ctx context.Context, tx pgx.Tx, old, next runsRecord) error {
 	for _, r := range next.Runs {
 		numbers = append(numbers, r.ID)
 	}
-	// First, so that a run that goes frees its nodes' names and its number.
-	if _, err := tx.Exec(ctx, "DELETE FROM script_runs WHERE NOT (run_number = ANY($1))", numbers); err != nil {
+	// First, so that a run that goes frees its number. A row that is only
+	// a request, with no run yet, is the changes' document's to remove.
+	if _, err := tx.Exec(ctx, "DELETE FROM script_runs WHERE run_number IS NOT NULL AND NOT (run_number = ANY($1))", numbers); err != nil {
 		return err
 	}
 	for _, r := range next.Runs {
@@ -231,6 +282,17 @@ func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
 	}
 	if r.Ended != nil {
 		ended = timeOrNil(*r.Ended)
+	}
+	// A run that an approval started is the row of the request that waited
+	// for it (DB-37): the request's row gets the run's number, and the run
+	// is written into it.
+	if !had {
+		if _, err := tx.Exec(ctx, `UPDATE script_runs SET run_number = $1 WHERE run_number IS NULL AND script_run_id = (
+				SELECT q.script_run_id FROM script_runs q WHERE q.run_number IS NULL AND q.cluster_id = $2
+					AND (q.started_run_number = $1 OR q.request_number = $3) ORDER BY q.started_run_number NULLS LAST LIMIT 1)
+				AND NOT EXISTS (SELECT 1 FROM script_runs o WHERE o.run_number = $1)`, r.ID, r.Cluster, request); err != nil {
+			return err
+		}
 	}
 	var id string
 	if err := tx.QueryRow(ctx, `INSERT INTO script_runs (script_run_id, run_number, script_name, version_number, version_hash, script_version_id,
@@ -294,6 +356,40 @@ func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
 		}
 	}
 
+	// The run's fleets, which do not change once it has started.
+	fleetRow := map[string]string{}
+	if !had || !sameJSON(was.Fleets, r.Fleets) {
+		if _, err := tx.Exec(ctx, "DELETE FROM script_run_fleets WHERE script_run_id = $1", id); err != nil {
+			return err
+		}
+		for i, f := range r.Fleets {
+			fid := db.NewID()
+			if _, err := tx.Exec(ctx, `INSERT INTO script_run_fleets (script_run_fleet_id, script_run_id, fleet_id, fleet_key, fleet_name, position)
+				VALUES ($1, $2, (SELECT x.fleet_id FROM fleets x WHERE coalesce(x.cluster_id, '') = $3 AND x.fleet_key = $4), $4, $5, $6)`,
+				fid, id, r.Cluster, f.ID, f.Name, i); err != nil {
+				return err
+			}
+			fleetRow[f.ID] = fid
+			for name, v := range f.Values {
+				if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, script_run_fleet_id, name, value) VALUES ($1, $2, 'fleet', $3, $4, $5)",
+					db.NewID(), id, fid, name, v); err != nil {
+					return err
+				}
+			}
+		}
+		// Every node's fleets point at the new rows.
+		had = false
+	} else if len(r.Fleets) > 0 {
+		rows, err := tx.Query(ctx, "SELECT fleet_key, script_run_fleet_id::text FROM script_run_fleets WHERE script_run_id = $1", id)
+		if err != nil {
+			return err
+		}
+		var key, fid string
+		if _, err := pgx.ForEachRow(rows, []any{&key, &fid}, func() error { fleetRow[key] = fid; return nil }); err != nil {
+			return err
+		}
+	}
+
 	type seen struct {
 		node  NodeResult
 		place int
@@ -336,6 +432,20 @@ func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
 			RETURNING script_run_host_id::text`,
 			db.NewID(), id, r.Cluster, n.Node, i, n.Batch, n.State, n.Exit, n.Msg, n.Error, started, ended, n.Tail, minutes, n.Cordoned).Scan(&host); err != nil {
 			return err
+		}
+		if !had || !known || !sameJSON(o.node.Fleets, n.Fleets) {
+			if _, err := tx.Exec(ctx, "DELETE FROM script_run_host_fleets WHERE script_run_host_id = $1", host); err != nil {
+				return err
+			}
+			for at, key := range n.Fleets {
+				fid, ok := fleetRow[key]
+				if !ok {
+					continue
+				}
+				if _, err := tx.Exec(ctx, "INSERT INTO script_run_host_fleets (script_run_host_id, script_run_fleet_id, position) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", host, fid, at); err != nil {
+					return err
+				}
+			}
 		}
 		if had && known && sameJSON(o.node.Values, n.Values) {
 			continue

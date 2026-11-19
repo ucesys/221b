@@ -177,3 +177,20 @@ func TestAnApprovedChangeSetsTheNodesItNames(t *testing.T) {
 		t.Fatalf("approving over a node changed meanwhile: %v", err)
 	}
 }
+
+// A run keeps the fleets its nodes are in, each once, with what each has
+// for the parameters the script declares, and each node's fleets.
+func TestFleetsOfARun(t *testing.T) {
+	h := Header{Params: []Param{{Name: "MODE"}, {Name: "ZONE"}}}
+	gpu := Layer{ID: "gpu", Name: "GPU", Params: FleetVariables{Values: map[string]string{"MODE": "fast", "OTHER": "x"}}}
+	all := Layer{ID: AllNodes, Name: "All nodes", Params: FleetVariables{Values: map[string]string{"ZONE": "a"}}, Default: true}
+	db := Layer{ID: "db", Name: "DB"}
+	fleets, of := FleetsOf(h, map[string][]Layer{"n1": {gpu, all}, "n2": {gpu, db, all}, "n3": {all}}, []string{"n1", "n2"})
+	want := []RunFleet{{ID: "gpu", Name: "GPU", Values: map[string]string{"MODE": "fast"}}, {ID: AllNodes, Name: "All nodes", Values: map[string]string{"ZONE": "a"}}, {ID: "db", Name: "DB"}}
+	if !reflect.DeepEqual(fleets, want) {
+		t.Fatalf("the run's fleets\n%+v\nwant\n%+v", fleets, want)
+	}
+	if !reflect.DeepEqual(of, map[string][]string{"n1": {"gpu", AllNodes}, "n2": {"gpu", "db", AllNodes}}) {
+		t.Fatalf("the nodes' fleets: %+v", of)
+	}
+}

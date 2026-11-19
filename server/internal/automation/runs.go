@@ -155,6 +155,19 @@ type NodeResult struct {
 	// Cordoned says the run drained the node and nothing has uncordoned
 	// it since.
 	Cordoned bool `json:"cordoned,omitempty"`
+	// Fleets are the ids of the fleets the node was in when the run
+	// started, All nodes last: where its values came from.
+	Fleets []string `json:"fleets,omitempty"`
+}
+
+// RunFleet is a fleet some node of a run was in when it started, with the
+// values the fleet had then for the parameters the script declares. With
+// each node's fleets and its own values, a run says where every value it
+// used came from, whatever the fleets say since.
+type RunFleet struct {
+	ID     string            `json:"id"`
+	Name   string            `json:"name,omitempty"`
+	Values map[string]string `json:"values,omitempty"`
 }
 
 // Done says whether the node's part is over.
@@ -212,6 +225,8 @@ type Run struct {
 	Ended          *time.Time      `json:"ended,omitempty"`
 	Beat           time.Time       `json:"beat"`
 	Nodes          []NodeResult    `json:"nodes"`
+	// Fleets are the fleets the run's nodes were in when it started.
+	Fleets []RunFleet `json:"fleets,omitempty"`
 }
 
 // ValuesApproval is who approved a run's own values, and the request

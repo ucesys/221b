@@ -550,6 +550,35 @@ func Inherited(layers []Layer, node, name string) (value, source string, conflic
 	return inherited(layers, node, name)
 }
 
+// FleetsOf are the fleets of a run's nodes, each once, in the order they
+// are met, with their values for the parameters h declares; and each
+// node's fleets by id. A run keeps both (RunFleet).
+func FleetsOf(h Header, nodes map[string][]Layer, order []string) ([]RunFleet, map[string][]string) {
+	var fleets []RunFleet
+	seen := map[string]bool{}
+	of := map[string][]string{}
+	for _, node := range order {
+		for _, l := range nodes[node] {
+			of[node] = append(of[node], l.ID)
+			if seen[l.ID] {
+				continue
+			}
+			seen[l.ID] = true
+			f := RunFleet{ID: l.ID, Name: l.Name}
+			for _, p := range h.Params {
+				if v, ok := l.Params.Values[p.Name]; ok {
+					if f.Values == nil {
+						f.Values = map[string]string{}
+					}
+					f.Values[p.Name] = v
+				}
+			}
+			fleets = append(fleets, f)
+		}
+	}
+	return fleets, of
+}
+
 // VariableConflicts lists every conflict among nodes' fleets, by node then
 // parameter, whether or not a script reads the parameter yet.
 func VariableConflicts(nodes map[string][]Layer) []Conflict {
