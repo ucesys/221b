@@ -4,7 +4,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 
 ## Start here
 
-- **The branch is `phase-13-store`**, 24 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
+- **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation the scripts, groups, profiles and variables. Without a database (`database.mode=none`, the default) nothing changes for an installation.
 - **One member of the bundled database has run in a cluster**, twice. The first test found ten things; the second found all ten fixed and four more (B11 to B14), fixed since and not yet seen in a cluster. Three members, a failover and a restore have never run.
