@@ -14,6 +14,11 @@ Everything is on `phase-13-store`, pushed. Nothing is merged, there is no pull r
 | `Activity log: the audit log is kept in the database when there is one` | `audit.PGStore`, `db.ImportOnce`, the `imports` table. |
 | `Backups: the settings and the runs behind a repository…` | `backup.Repo` with `KVRepo` and `PGRepo`, `db.LoadScope`/`SaveScope`. The pattern for every other domain. |
 | `Activity log: the Toolbox's session records…` | `sessions.PGHistory` and `sessions.Archive`; the backup reads and merges through it. Activity log is the first domain wholly moved. |
+| `Platform: getting started, email and case settings…` | `db.ScopeKV`, `kv.Keyed`: a service's singleton documents as scopes of `settings`. |
+| `Approvals: requests, decisions, standing approvals and channels…` | `db.Doc` and `db.Diff`, the interim step; `twoperson/pg.go`, `cards/pg_approvals.go`. |
+| `Platform: the shared settings and the acknowledged alerts…`, `…the repositories…` | `settings/pg.go`, `apps/pg.go`. |
+| `Hosts carry no labels (to-do 1, server side)` | The first of the code to-do items. |
+| `Inventory: hosts, pairings, fleets and facts…` | Package `inventory`; `nodessh/pg.go`, `automation/pg_facts.go`, fleets in `settings/pg.go`. |
 | `Docs: Phase 13…` | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first commit on the branch, `CI: cache Playwright browsers…` (pushed by the owner's other session), was reviewed and left as it is: no problems found.
@@ -23,7 +28,8 @@ The first commit on the branch, `CI: cache Playwright browsers…` (pushed by th
 **Tested here** (Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1):
 
 - `go build ./...`, `gofmt`, `go vet` on the changed packages: clean.
-- `go test -race` with `TEST_DATABASE` set, on `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions`, `cmd/221b`: pass. The whole suite without `-race` passed before the changes (54 packages); see *Test results* at the end for the last full run.
+- `go test -race` with `TEST_DATABASE` set, on `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions`, `internal/twoperson`, `internal/cards`, `internal/settings`, `internal/apps`, `internal/nodessh`, `internal/automation`, `cmd/221b`: pass.
+- The real server was started against the simulator with its ConfigMaps and a database: it migrated, copied each of the 13 moved record sets once, served `GET /api/v1/database`, logged no error, and at a second start copied nothing. Sign-in was off there, so no change was made through the API; the services' own tests cover that. The whole suite without `-race` passed before the changes (54 packages); see *Test results* at the end for the last full run.
 - `hack/check-chart.sh`: all 107 checks pass, the database's included, and every render is valid against the Kubernetes 1.35 and 1.37 schemas.
 - The Patroni file the entrypoint writes parses as YAML in its three shapes (plain, with backups, restoring), and `post-bootstrap.sh` was run twice against a real PostgreSQL (it makes the role and the database once, then only resets the password).
 
@@ -41,7 +47,7 @@ These differ from the design document *221B storage deployment design*, or were 
 
 | Decision | Why | To undo |
 | --- | --- | --- |
-| `database.mode` defaults to **`none`**, not `bundled`. | Only three record sets have moved; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
+| `database.mode` defaults to **`none`**, not `bundled`. | Six domains are still in ConfigMaps, and the image has not run; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
 | The base backup runs at a **time of day** (`backup.dailyAt: "02:00"`), not a cron expression. | A shell loop in the pod cannot parse cron. | Replace `backup.sh` with a small program. |
 | The member that takes the backup is **picked from Patroni's `/cluster`** (first standby by name, else the primary), not by an advisory lock. | Simpler, and nothing is run in another pod either way. | — |
 | **`iamAuth`** (RDS, Cloud SQL tokens) is not implemented. | Time. | Add a token source in `db.open`'s `BeforeConnect`. |
@@ -50,6 +56,9 @@ These differ from the design document *221B storage deployment design*, or were 
 | The import is written down in a table, **`imports`**; the ConfigMap is not annotated. | One transaction with the copy. | — |
 | Columns **`check` and `window` are `check_name` and `time_window`**: both are reserved words in SQL. `audit_events.detail` is text. | — | — |
 | **The Lease stays.** Claims, sweeps and notices are there and tested, but Sherlock's conversations and Watson's cards still live in the leader's memory. | ADR-163. | Remove it when cards, conversations and runs are rows. |
+| Tables that point at a **cluster or a credential** get that row made with only its id. | The clusters' and credentials' own records are in Secrets and have not moved. | Fill the rows when those move (order 9). |
+| Ids the console already gives are kept as **text keys**: Toolbox sessions, standing approvals, channels, credentials; a fleet keeps `fleet_key` beside its UUID. | The audit log, the Secrets and other records carry those ids. | — |
+| The **Secret-kept record sets** (applications, credentials, connections, sessions) are left for last. | See order 9. | — |
 | PostgreSQL **18** in the bundled image; **16** the minimum for an external one. | Open question 1 of the design document. | `PG_MAJOR` in the Dockerfile; `db.MinServerVersion`. |
 
 The design document and *221B storage engine options* (Claude docs, not in the repository) have not been updated with these.
@@ -65,31 +74,39 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 
 ### 2. Move the domains
 
-One repository at a time, as [database.md](database.md) describes, in this order: what is simple and foundation first. The table is a starting point made from `cmd/221b/storage.go`; check each line against the code before starting it.
+**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap.
+
+**How each moved, and what that leaves to do.**
+
+| Record set | How | Rework still due |
+| --- | --- | --- |
+| The audit log; the Toolbox's session records; the backups' settings and runs | A repository (`audit.PGStore`, `sessions.PGHistory`, `backup.PGRepo`). | None. |
+| Getting started, Settings › Email, the case work's settings | Scopes of `settings` (`db.ScopeKV`). | None: they are singletons. |
+| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
+
+**Still to move**, in this order. The owner's rule: **every field a column** (no record kept as JSON beside its keys), `db.Doc` allowed as the first step where a service edits its whole document in many places.
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| done | `audit.StoreKey`, `audit`; `sessions.HistoryKey`, `sessions`; `backup.SettingsKey` and `StatusKey`, `backup` | `audit_events`; `toolbox_sessions`; `settings` scope `backup`, `backup_runs` | Moved in this session. |
-| 2 | `api.SetupKey`; `mail.ConfigKey`; `casework.SettingsKey` | `settings` scopes `setup`, `email`, `cases` | Singletons: `db.LoadScope`/`SaveScope`, as `backup.PGRepo.Settings`. |
-| 3 | `kube.SettingsKey`, `settings.Service` | `settings` scopes `general`, `sherlock`, `watson`; `alert_acks`; selector `fleets` | The hardest of Platform: one document today, three tables. Give `settings.Service` a repository with `SaveGeneral`, `SaveSherlock`, `SaveWatson`, `Ack`, `Unack`, `SaveFleets`; it keeps its in-memory `State` and reloads on a notice (`db.Subscribe("settings", …)`) instead of every 3 seconds. Fleets need Inventory's decisions (to-do 1 to 3 below). |
-| 4 | `apps.RepositoriesKey`, `apps.Repos`; the applications' records; the credentials' index; the cluster connections' metadata | `repositories`, `applications`, `credentials`, `clusters` | Secrets stay in Secrets; the tables hold the metadata and `secret_ref`. `clusters` must exist before Inventory's and Platform's keys into it mean anything. |
-| 5 | `twoperson.Key`; `cards.StandingKey`; `cards.NotifyKey` | `approval_requests`, `approval_decisions`, `approval_policies`, `notification_channels` | Approvals is what the other domains' `approval_request_id` points to. |
-| 6 | The sign-in sessions (`kube.SessionStore`) | `auth_sessions` | With to-do 13: a signed session when the database is away. |
-| 7 | `nodessh.HostsKey`, `nodessh.PairingsKey`, `automation.GroupsKey`, `automation.FactsKey` | `hosts`, `host_pairings`, `host_logins`, `fleets`, `fleet_hosts`, `host_facts`, `data_centers` | After to-do 1 to 3: `nodessh.Host` carries labels, the login user and the pinned key in one struct, and the model splits them and has no labels. |
-| 8 | `automation.ScriptsKey`, `ChangesKey`, `VariablesKey`, `ProfilesKey`, `RunsKey` | the 14 Automation tables | With to-do 11. Runs are the largest record set. |
-| 9 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | `agents` rows are seeded from the catalog; `ai_spend` is a ledger (insert a row a call, sum on read). |
-| 10 | `jobs.JobsKey`, `RunsKey`; `casework.ChecksKey`, `RulesKey`, `FoundKey` | the 6 Jobs tables | `schedule_claims` replaces "on the leader" for schedules (`db.Claim`). |
-| 11 | `issues.IndexKey` and the case ConfigMaps (`kv.Objects`); `issues.ConfigKey`; the casework's work; the RCAs | the 8 Cases tables | The case ConfigMaps go; `casework/clean.go` has the old shapes. |
-| 12 | `cards.CardsKey`, `ChatsKey` | the 5 Changes tables | The console calls a change a card. |
-| 13 | `knowledge.SettingsKey`, `DraftsKey`, `StatusKey`; `fixes.Key`; `lessons.ExceptionsKey`; `issues.KnownKey` | the 10 Knowledge tables | Wiki bodies stay in git or S3. |
+| 1 | `automation.GroupsKey`, `ProfilesKey` | `script_groups`, `run_profiles`, `run_profile_fleets` | Small. `run_profile_fleets.fleet_id` points at `fleets`: look a fleet up by cluster and `fleet_key`. |
+| 2 | `automation.ScriptsKey`, `VariablesKey`, `ChangesKey` | `scripts`, `script_versions`, `script_version_parameters`, `variables`, `variable_changes`, `variable_change_items` | Variables point at `fleets` and `hosts` (`inventory.EnsureHost`). |
+| 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. |
+| 4 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | Seed `agents` from the catalog first; `ai_spend` is a ledger (a row a call, summed on read): a repository. |
+| 5 | `jobs.JobsKey`, `RunsKey`; `casework.ChecksKey`, `RulesKey`, `FoundKey` | the 6 Jobs tables | `db.Claim` on `schedule_claims` replaces "on the leader" for schedules. |
+| 6 | `issues.IndexKey` and the case ConfigMaps (`kv.Objects`); `issues.ConfigKey`; the case work; the RCAs | the 8 Cases tables | `kv.Objects` needs its own adapter or, better, a repository. `casework/clean.go` has the old shapes. |
+| 7 | `cards.CardsKey`, `ChatsKey` | the 5 Changes tables | `cards.StandingKey` and `NotifyKey` are done; extend `cmd/221b/cards.go`'s `wrap`. |
+| 8 | `knowledge.SettingsKey`, `DraftsKey`, `StatusKey`; `fixes.Key`; `lessons.ExceptionsKey`; `issues.KnownKey` | the 10 Knowledge tables | Wiki bodies stay in git or S3. |
+| 9 | What is kept in **Secrets**: the applications (`apps.Store`), the credentials' list (`credentials`), the cluster connections (`clusters.Manager`), the sign-in sessions (`kube.SessionStore`) | `applications`, `credentials`, `clusters`, `auth_sessions` | Skipped on purpose, with the owner told: they have no 1 MiB problem, each needs a store that keeps the metadata in the table and the secret part in the Secret, and sessions touch sign-in (to-do 12, 13). `wireDatabase` must then run before `wireClusters`. Fill the rows of `clusters` and `credentials` that today hold only an id, and remove a cluster's row when its connection goes (to-do 3). |
 
-For each: the backup's export and restore (`cmd/221b/backupparts.go`, `internal/api/backup.go`) read through the service, so they follow the repository; check them. Remove a domain's ConfigMap from the chart one release after its move.
+How to add one (each of the moved ones is a model): write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in its migration file, test the service over it with `dbtest.Open`, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). A time read back from PostgreSQL has microseconds, not nanoseconds: tests use whole seconds.
 
-When the last domain has moved: default `database.mode` to `bundled`; remove the Lease and the forwarding to the leader (ADR-163); remove `kv.Limited` and the size metrics.
+For each: the backup's export and restore read through the service or through `w.spendBackend`, which is wrapped once so they find the moved keys; check them. Remove a domain's ConfigMap from the chart one release after its move.
+
+When the last domain has moved: default `database.mode` to `bundled`; remove the Lease and the forwarding to the leader (ADR-163); remove `kv.Limited` and the size metrics; let the app say `database` where Settings says where the settings are kept (`storage` is still `configmap`).
 
 ### 3. The code to-do list agreed with the owner
 
-Agreed during the data model's review on November 18, 2026; none of it is done. Items 1 to 3 come before Inventory moves, 11 with Automation, 12 and 13 with Identity.
+Agreed during the data model's review on November 18, 2026. **Done: item 1, the server's side** (DB-29); its browser side is open: `HostDialog.tsx` and `HostPanel.tsx` still show label fields, which now do nothing. **Items 2 and 3 are not done**: Inventory's tables allow them (`hosts.cluster_id` and `fleets.cluster_id` may be empty), but the services still file every host and fleet under one cluster, and removing a cluster's connection does not yet touch Inventory's rows. Item 11 goes with Automation's runs, 12 and 13 with the sign-in sessions.
 
 1. **Drop host labels**: the field on `nodessh.Host`, the `host.label` card action, and hosts matching selector fleets. A host is in a fleet by being listed.
 2. **Runs and fleets with no cluster**: a list fleet or a host whose cluster is gone shows under every cluster, and a run may target it.

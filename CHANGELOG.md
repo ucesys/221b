@@ -6,11 +6,17 @@ What changed in each release of 221B, for people who use it and people who insta
 
 Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-22). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
+### Changed
+
+- **Hosts outside Kubernetes carry no labels.** A host is in a fleet by being listed. The hosts API no longer takes or returns `labels`, an agent can no longer propose `host.label`, and labels kept from before are ignored. The app's label fields for a host have no effect and go in a later change.
+
 ### Added
 
 - **`database.mode`** in the chart: `none` (the default until the move is complete), `bundled` or `external`. `bundled` runs PostgreSQL beside the console from a second image of the release, `221b-postgres` (PostgreSQL 18, Patroni, WAL-G): one member, or three with `database.bundled.ha`, a commit waiting for one of the two standbys; passwords and a certificate made once; the write-ahead log archived and a base backup a day, to S3 or a second volume. `external` connects to a PostgreSQL 16 or later that you run (`database.external.host`, `port`, `database`, `user`, `passwordSecret`, `sslMode`, `caSecret`, `clientCertSecret`, `maxConnections`, `listenerHost` for a pooler in transaction mode). **The bundled database has not been run in a cluster yet.**
 - **The audit log in the database**: with a database, Administration › Audit log reads `audit_events`, where each event is a row added and never changed; it is no longer bounded by a ConfigMap, and is kept a year. What the ConfigMap held is copied once.
 - **The Toolbox's session records in the database**: with a database, each ended session is a row of `toolbox_sessions`, no longer bounded by a ConfigMap's size; the newest `toolbox.history.keep` are kept, and the ConfigMap's are copied once.
+- **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
+- **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.
 - **Getting started, Settings › Email and the case work's settings in the database**, as rows of `settings`.
 - **The backups' settings and runs in the database**: the settings as a row of `settings`, each run a row of `backup_runs`; copied once from the ConfigMap, the newest scheduled time handled included.

@@ -7,9 +7,11 @@
 | Domain | In the database | Still in ConfigMaps |
 | --- | --- | --- |
 | Activity log | the audit log (`audit_events`) and the Toolbox's session records (`toolbox_sessions`): the whole domain | |
-| Platform | the backups' settings (`settings`, scope `backup`) and runs (`backup_runs`); getting started's dismissed steps, Settings › Email and the case work's settings (`settings`, scopes `setup`, `email`, `cases`) | the shared settings, acknowledged alerts, applications, repositories, credentials' list, cluster connections |
+| Platform | the shared settings (`settings`, scopes `general`, `sherlock`, `watson`) and the acknowledged alerts (`alert_acks`); the repositories (`repositories`); the backups' settings (scope `backup`) and runs (`backup_runs`); getting started's dismissed steps, Settings › Email and the case work's settings (scopes `setup`, `email`, `cases`) | what is kept in Secrets, not ConfigMaps: the applications, the credentials' list, the cluster connections. `clusters` and `credentials` hold a row by id for each one another table points at |
 | Approvals | the requests that wait for a second person and their decisions (`approval_requests`, `approval_decisions`), the standing approvals (`approval_policies`), the notification channels (`notification_channels`): the whole domain | |
-| Identity, Inventory, Automation, AI configuration, Jobs, Cases, Changes, Knowledge | | everything |
+| Inventory | the hosts outside Kubernetes and the paired nodes (`hosts`, `host_logins`, `host_pairings`), the fleets and the members of listed fleets (`fleets`, `fleet_hosts`), what was last read from each node (`host_facts`) | `data_centers`, a host's rack and data center: nothing sets them yet |
+| Identity | | the sign-in sessions (in a Secret); local accounts stay in their Secret for good |
+| Automation, AI configuration, Jobs, Cases, Changes, Knowledge | | everything (Automation's node facts are Inventory's and have moved) |
 
 `GET /api/v1/database` and Administration's metrics say the same of a running console.
 
