@@ -165,7 +165,7 @@ database_modes() {
     sed -n '/^kind: Deployment$/,/^---/p' "$d" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
     sed -n '/^kind: Deployment$/,/^---/p' "$ext" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
     dbrole "$d" | has 'configmaps' &&
-    dbrole "$d" | has 'k8s-console-221b-db-leader$' && dbrole "$d" | has 'k8s-console-221b-db-2$' &&
+    dbrole "$d" | has 'k8s-console-221b-db-leader$' && dbrole "$d" | has 'k8s-console-221b-db-failover$' && dbrole "$d" | has 'k8s-console-221b-db-2$' &&
     [ "$(dbrole "$d" | grep -c 'verbs:')" = 4 ] && [ "$(dbrole "$d" | grep -c 'resourceNames:')" = 2 ] &&
     [ "$(dbrole "$d" | grep -c '"patch"')" = 2 ] && ! dbrole "$d" | grep -A1 'resources: \["configmaps"\]' | has '"patch"' &&
     netpol "$d" | has 'app.kubernetes.io/name: "221b-db"' &&

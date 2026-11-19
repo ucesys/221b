@@ -89,6 +89,8 @@ rules:
     resourceNames:
       - {{ $name }}-config
       - {{ $name }}-leader
+      # Where a switchover or a failover is asked for (patronictl).
+      - {{ $name }}-failover
       - {{ $name }}-sync
       - {{ $name }}-failsafe
     verbs: ["get", "patch", "update", "delete"]

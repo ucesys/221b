@@ -39,6 +39,8 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- Run History showed each node's batch one too high: a run's first batch read as 2.
+- The bundled database's pods may write the ConfigMap Patroni uses for a switchover or a failover (`<release>-db-failover`), which the narrowed permissions had left out.
 - When the default provider has no key, the agents' pages said an administrator adds one "in Settings"; the key is added in Administration › AI › Providers, and the message says so.
 
 ## 0.12.1 (2026-11-18)

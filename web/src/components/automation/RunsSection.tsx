@@ -221,7 +221,7 @@ export function RunDrawer({ id, now, onRetried, onClose, onToast, onEnded }: { i
                     data-testid="run-node"
                   >
                     <td className="rk-mono">{n.node}</td>
-                    <td>{n.batch + 1}</td>
+                    <td>{n.batch}</td>
                     <td>
                       <Pill tone={nodeTone(n.state)}>{NODE_LABEL[n.state]}</Pill>
                       {(n.msg || n.error) && (

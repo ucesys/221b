@@ -127,7 +127,7 @@ const run: Run = {
   nodes: [
     {
       node: 'w1',
-      batch: 0,
+      batch: 1,
       state: 'changed',
       exit: 0,
       msg: 'installed',

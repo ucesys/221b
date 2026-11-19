@@ -263,7 +263,7 @@ is asked too. */ -}}
 {{- end -}}
 {{- if and (or (not $was) (eq $was "none")) (ne $mode "bundled") (not .Values.database.allowModeChange) -}}
 {{- if lookup "v1" "Secret" .Release.Namespace (include "b221.dbSecret" .) -}}
-{{- fail (printf "this release has a bundled database from an earlier revision (its Secret %s and its volumes are kept), and database.mode is now %s, which leaves the records in it behind. Set database.mode=bundled to go on with it. If it is no longer wanted, delete that Secret, the Secret %s, the volume claims of %s-db and the ConfigMaps %s-db-config, -db-leader, -db-sync and -db-failsafe that Patroni made, or set database.allowModeChange=true (docs/database.md)" (include "b221.dbSecret" .) $mode (include "b221.dbTLSSecret" .) (include "b221.fullname" .) (include "b221.fullname" .)) -}}
+{{- fail (printf "this release has a bundled database from an earlier revision (its Secret %s and its volumes are kept), and database.mode is now %s, which leaves the records in it behind. Set database.mode=bundled to go on with it. If it is no longer wanted, delete that Secret, the Secret %s, the volume claims of %s-db and the ConfigMaps %s-db-config, -db-leader, -db-failover, -db-sync and -db-failsafe that Patroni made, or set database.allowModeChange=true (docs/database.md)" (include "b221.dbSecret" .) $mode (include "b221.dbTLSSecret" .) (include "b221.fullname" .) (include "b221.fullname" .)) -}}
 {{- end -}}
 {{- end -}}
 {{- if and $was (ne $was "none") (ne $was $mode) (not .Values.database.allowModeChange) -}}
