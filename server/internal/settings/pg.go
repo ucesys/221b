@@ -12,6 +12,7 @@ import (
 	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/inventory"
 )
 
 // The shared settings in the database (Phase 13, DB-26). What was one
@@ -22,13 +23,13 @@ import (
 // interim step until it has a repository whose operations are its own
 // (Ack, Unack, SaveSherlock…).
 //
-// The fleets stay one more document, the scope "fleets", until Inventory
-// moves: a fleet's members are hosts, and hosts are Inventory's.
+// The fleets are Inventory's: each a row of fleets, and each member of a
+// listed fleet a row of fleet_hosts that points at the member's row of
+// hosts (package inventory).
 const (
 	scopeGeneral  = "general"
 	scopeSherlock = "sherlock"
 	scopeWatson   = "watson"
-	scopeFleets   = "fleets"
 )
 
 // SettingsKey is the key the settings were kept under in the ConfigMap;
@@ -72,10 +73,11 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	} else if ok {
 		s.Watson, found = &wa, true
 	}
-	var fl map[string][]fleets.Fleet
-	if ok, err := loadPart(ctx, q, scopeFleets, &fl); err != nil {
+	fl, err := readFleets(ctx, q)
+	if err != nil {
 		return s, false, err
-	} else if ok && len(fl) > 0 {
+	}
+	if len(fl) > 0 {
 		s.Fleets, found = fl, true
 	}
 	rows, err := q.Query(ctx, `SELECT cluster_id, alert_key, fingerprint, acked_by, acked_at, job_run_id, case_id, exception_id, is_expected, reason
@@ -134,7 +136,7 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 		}
 	}
 	if !reflect.DeepEqual(old.Fleets, next.Fleets) {
-		if err := savePart(ctx, tx, scopeFleets, next.Fleets, len(next.Fleets) > 0); err != nil {
+		if err := writeFleets(ctx, tx, old.Fleets, next.Fleets); err != nil {
 			return err
 		}
 	}
@@ -178,4 +180,121 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 		}
 	}
 	return nil
+}
+
+// kindOf is a fleet's kind as its column has it.
+func kindOf(f fleets.Fleet) string {
+	if f.Kind == fleets.KindNodes {
+		return "list"
+	}
+	return "selector"
+}
+
+func readFleets(ctx context.Context, q db.Querier) (map[string][]fleets.Fleet, error) {
+	rows, err := q.Query(ctx, `SELECT coalesce(f.cluster_id, ''), f.fleet_key, f.name, f.color, f.description, f.labels, f.taints, f.kind, f.deploy_label,
+			coalesce((SELECT array_agg(h.name ORDER BY m.position, h.name) FROM fleet_hosts m JOIN hosts h ON h.host_id = m.host_id WHERE m.fleet_id = f.fleet_id), '{}')
+		FROM fleets f ORDER BY f.cluster_id, f.position, f.fleet_key`)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]fleets.Fleet{}
+	var cluster, kind string
+	var f fleets.Fleet
+	var labels, taints, members []string
+	_, err = pgx.ForEachRow(rows, []any{&cluster, &f.ID, &f.Name, &f.Color, &f.Desc, &labels, &taints, &kind, &f.Deploy, &members}, func() error {
+		x := f
+		x.Labels, x.Taints = append([]string{}, labels...), append([]string{}, taints...)
+		x.Kind, x.Nodes = "", nil
+		if kind == "list" {
+			x.Kind = fleets.KindNodes
+		}
+		if len(members) > 0 {
+			x.Nodes = append([]string(nil), members...)
+		}
+		out[cluster] = append(out[cluster], x)
+		return nil
+	})
+	return out, err
+}
+
+func writeFleets(ctx context.Context, tx pgx.Tx, old, next map[string][]fleets.Fleet) error {
+	if err := inventory.Lock(ctx, tx); err != nil {
+		return err
+	}
+	clusters := map[string]bool{}
+	for c := range old {
+		clusters[c] = true
+	}
+	for c := range next {
+		clusters[c] = true
+	}
+	ids := make([]string, 0, len(clusters))
+	for c := range clusters {
+		ids = append(ids, c)
+	}
+	sort.Strings(ids)
+	for _, cluster := range ids {
+		place := map[string]int{}
+		for i, f := range next[cluster] {
+			place[f.ID] = i
+		}
+		put := func(f fleets.Fleet) error {
+			if err := inventory.EnsureCluster(ctx, tx, cluster); err != nil {
+				return err
+			}
+			var id string
+			err := tx.QueryRow(ctx, "SELECT fleet_id::text FROM fleets WHERE coalesce(cluster_id, '') = $1 AND fleet_key = $2", cluster, f.ID).Scan(&id)
+			if errors.Is(err, pgx.ErrNoRows) {
+				id, err = db.NewID(), nil
+			}
+			if err != nil {
+				return err
+			}
+			var c *string
+			if cluster != "" {
+				c = &cluster
+			}
+			labels, taints := f.Labels, f.Taints
+			if labels == nil {
+				labels = []string{}
+			}
+			if taints == nil {
+				taints = []string{}
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO fleets (fleet_id, cluster_id, fleet_key, position, name, kind, labels, taints, deploy_label, color, description)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				ON CONFLICT (fleet_id) DO UPDATE SET position = excluded.position, name = excluded.name, kind = excluded.kind, labels = excluded.labels,
+					taints = excluded.taints, deploy_label = excluded.deploy_label, color = excluded.color, description = excluded.description`,
+				id, c, f.ID, place[f.ID], f.Name, kindOf(f), labels, taints, f.Deploy, f.Color, f.Desc); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, "DELETE FROM fleet_hosts WHERE fleet_id = $1", id); err != nil {
+				return err
+			}
+			for i, name := range f.Nodes {
+				host, err := inventory.EnsureHost(ctx, tx, cluster, name)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, "INSERT INTO fleet_hosts (fleet_id, host_id, position) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", id, host, i); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		remove := func(f fleets.Fleet) error {
+			_, err := tx.Exec(ctx, "DELETE FROM fleets WHERE coalesce(cluster_id, '') = $1 AND fleet_key = $2", cluster, f.ID)
+			return err
+		}
+		if err := db.Diff(old[cluster], next[cluster], func(f fleets.Fleet) string { return f.ID }, put, func(_, f fleets.Fleet) error { return put(f) }, remove); err != nil {
+			return err
+		}
+		// A fleet that only moved in the list.
+		for i, f := range next[cluster] {
+			if _, err := tx.Exec(ctx, "UPDATE fleets SET position = $3 WHERE coalesce(cluster_id, '') = $1 AND fleet_key = $2 AND position <> $3", cluster, f.ID, i); err != nil {
+				return err
+			}
+		}
+	}
+	return inventory.Collect(ctx, tx)
 }

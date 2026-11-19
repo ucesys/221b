@@ -9,6 +9,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
@@ -54,9 +55,27 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
 			outDir = w.toolboxCfg.TranscriptDir
 		}
-		autoStore = automation.NewStore(autoBackend, nil)
-		if runsBackend != nil {
-			autoStore.SetRunsBackend(runsBackend)
+		if w.database == nil {
+			autoStore = automation.NewStore(autoBackend, nil)
+			if runsBackend != nil {
+				autoStore.SetRunsBackend(runsBackend)
+			}
+		} else {
+			// With a database (Phase 13) what is known of each node is
+			// rows of host_facts; the rest is where it was, the runs in
+			// their own ConfigMap when there is one. The facts are copied
+			// from wherever they were kept.
+			kept := autoBackend
+			if runsBackend != nil {
+				routes := map[string]kv.Backend{}
+				for _, k := range automation.RunsKeys {
+					routes[k] = runsBackend
+				}
+				kept = &kv.Routed{Default: autoBackend, Routes: routes}
+			}
+			autoStore = automation.NewStore(w.inTables(ctx, kept, func(d *db.DB) map[string]movedDoc {
+				return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d)}
+			}), nil)
 		}
 		autoEngine = automation.NewEngine(automation.Options{
 			Node: func(cluster, node string) (automation.NodeState, bool) {

@@ -4,23 +4,32 @@
 CREATE TABLE fleets (
     fleet_id uuid PRIMARY KEY,
     cluster_id text,
+    -- The id the fleet has within its cluster, which fleets, runs and variables name it by.
+    fleet_key text NOT NULL DEFAULT '',
+    -- Its place in the cluster's list.
+    position integer NOT NULL DEFAULT 0,
     name text NOT NULL DEFAULT '',
-    kind text NOT NULL DEFAULT '',
-    labels jsonb,
-    taints jsonb,
+    -- selector: the nodes that have its labels and taints. list: the hosts listed.
+    kind text NOT NULL DEFAULT 'selector',
+    labels text[] NOT NULL DEFAULT '{}',
+    taints text[] NOT NULL DEFAULT '{}',
     deploy_label text NOT NULL DEFAULT '',
-    color text NOT NULL DEFAULT '',
+    color integer NOT NULL DEFAULT 0,
     description text NOT NULL DEFAULT '',
     privilege_ceiling text NOT NULL DEFAULT '',
     reboot_minutes integer
 );
+
 COMMENT ON TABLE fleets IS 'Fleets per cluster: name, kind (list or selector), the selector''s labels and taints, the privilege ceiling and reboot timeout';
 
 CREATE TABLE fleet_hosts (
     fleet_id uuid NOT NULL,
     host_id uuid NOT NULL,
+    -- The member's place in the fleet's list.
+    position integer NOT NULL DEFAULT 0,
     PRIMARY KEY (fleet_id, host_id)
 );
+
 COMMENT ON TABLE fleet_hosts IS 'Members of list fleets';
 
 CREATE TABLE hosts (
@@ -29,16 +38,21 @@ CREATE TABLE hosts (
     data_center_id uuid,
     name text NOT NULL DEFAULT '',
     node_uid text NOT NULL DEFAULT '',
-    is_kubernetes_node boolean GENERATED ALWAYS AS (node_uid <> '') STORED,
+    -- A Kubernetes node's row holds its identity only; a host outside Kubernetes has the
+    -- columns below.
+    is_kubernetes_node boolean NOT NULL DEFAULT false,
     address text NOT NULL DEFAULT '',
     port integer,
     state text NOT NULL DEFAULT '',
+    -- Named after its address when added, until someone names it.
+    is_auto_named boolean NOT NULL DEFAULT false,
     rack_name text NOT NULL DEFAULT '',
     privilege_ceiling text NOT NULL DEFAULT '',
     reboot_minutes integer,
     added_by text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
 COMMENT ON TABLE hosts IS 'Kubernetes nodes and external SSH hosts. Nodes keep identity only (cluster, name, uid); external hosts add address, port, state, data center and rack';
 
 CREATE TABLE data_centers (
@@ -56,16 +70,26 @@ CREATE TABLE host_facts (
     read_at timestamptz,
     error text NOT NULL DEFAULT ''
 );
+
 COMMENT ON TABLE host_facts IS 'Latest facts gathered from each host, network ones included: interfaces, bonds, subnets, routes, DNS, time sync, LLDP switch';
 
 CREATE TABLE host_pairings (
     host_id uuid PRIMARY KEY,
+    -- The host keys pinned: a node's, as its kubelet gave them; a host's, the one a person
+    -- trusted.
     host_keys text[] NOT NULL DEFAULT '{}',
+    fingerprint text NOT NULL DEFAULT '',
+    -- The SSH authority the host trusts, by its fingerprint.
     ca_fingerprint text NOT NULL DEFAULT '',
     trusted_by text NOT NULL DEFAULT '',
+    trusted_at timestamptz,
+    -- The key the host offered last, and the one that did not match the pinned one.
+    offered_key text NOT NULL DEFAULT '',
+    mismatch_key text NOT NULL DEFAULT '',
     paired_by text NOT NULL DEFAULT '',
     paired_at timestamptz
 );
+
 COMMENT ON TABLE host_pairings IS 'SSH trust per host: pinned host keys, authority fingerprint, who trusted and paired it';
 
 CREATE TABLE host_logins (
