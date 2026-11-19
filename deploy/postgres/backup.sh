@@ -49,8 +49,9 @@ run() {
 }
 
 # Prints "<the member that takes the backup> <the primary> <its timeline>".
+# Quiet when Patroni does not answer: the loop says so once.
 cluster() {
-  curl -fsS --max-time 5 http://127.0.0.1:8008/cluster | python3 -c '
+  curl -fs --max-time 5 http://127.0.0.1:8008/cluster | python3 -c '
 import json, sys
 try:
     members = json.load(sys.stdin).get("members", [])

@@ -7,7 +7,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 - **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation everything but the runs. Without a database (`database.mode=none`, the default) nothing changes for an installation.
-- **One member of the bundled database has run in a cluster**, twice. The first test found ten things; the second found all ten fixed and four more (B11 to B14), fixed since and not yet seen in a cluster. Three members, a failover and a restore have never run.
+- **One member of the bundled database has run in a cluster**, three times. The first test found ten things, the second four more, and the third found all fourteen fixed and nothing new but a line of noise in a log. Three members, a failover and a restore have never run. The variables' changes (step `0018`) have not been in a cluster.
 - **Do next, in this order:** in a cluster, what was never run and the short list after the second test (below); then the domains in the order of the table under *Move the domains*, starting with Automation's runs.
 
 ## Where the branch stands
@@ -69,12 +69,22 @@ It found four more things, fixed in `Storage: what the second cluster test found
 
 Also seen, and left: the image's version comes from `git describe` and says `v0.12.1-NN` until a `v0.13.0` tag exists, while the chart says 0.13.0.
 
+**The third test, the same day**, on commit `1077a44` (report: `~/phase-13-findings-3.md` on `rke2cp1`, logs in `~/p13-3`): everything held and no new bug was found.
+
+- The second test's database (schema 16) took only step `0017`, with no crash loop: no step had been edited (B11).
+- The variables (AU-23, DB-33): a value of All nodes and a node's own value and reboot time, set through the API, were a row of `fleets` of kind `all`, a `variables` row on the fleet, one on the host, and `hosts.reboot_minutes`; no row was on both. Taken back, the rows went, the node's row with them.
+- B12: a database pod deleted four seconds after it was running left its timeline written down, and the next start took no base backup. B13 and B14: both messages as worded. B10 again: exactly the four events written while rolled back were copied.
+- Not run there: a fleet of its own setting a member's value, and refusing one that is not a member (the release has only All nodes); the Variables page in a browser.
+- One nit, fixed since: `curl` wrote its own error to the backup container's log before the script's line when Patroni did not answer.
+- The release was left at revision 29: `bundled`, the images of `1077a44`, schema 17, and `localCluster.mode=write`, set at the owner's word for the test.
+- For the next test: Helm keeps ten revisions, so `helm rollback 221b-github 13` no longer works; revisions 22 and 28 are copies of 13 (0.12.0, no database).
+
 **To see in a cluster next:**
 
-1. The cluster's database gets the steps after the ones it has at start (`0017`, the variables, and `0018`, their changes; the third test's build had `0017`). With variables in the release's `params.json`, they are rows of `variables`, All nodes is a row of `fleets` of kind `all`, and Automation › Variables shows them as before. Set a node's own value there and remove it again. On a production connection, ask for a change that needs approval, set another value of the same fleet meanwhile, and approve the change as a second person: both values are in afterwards, and Automation › Variables lists the change with what it altered.
-2. B12: delete the database pod twice within 30 seconds. Expected: no base backup at the next start, and `/backup/.primary-timeline` holds the timeline.
-3. B13 and B14: the two messages, as worded above.
-4. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record (the test release's cluster was read-only).
+1. The cluster's database (schema 17) gets step `0018` at start; `changes.json` of the automation ConfigMap (the third test left two changes there) is copied once into `variable_changes`, each change with what it altered in `variable_change_items`, and Automation › Variables lists them as before.
+2. With a fleet made first: a request for that fleet sets a member's own value (200, and All nodes shows it), and is refused for a node that is not a member (400).
+3. On a production connection: ask for a variable change that needs approval, set another value of the same fleet meanwhile, approve the change as a second person. Both values are in afterwards.
+4. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record.
 
 ## What was tested without a cluster
 
