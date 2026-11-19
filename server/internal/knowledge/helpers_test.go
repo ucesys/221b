@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/confluence/confluencetest"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 var ctx = context.Background()
@@ -145,6 +148,18 @@ type fixture struct {
 	creds *credentials.Service
 }
 
+// testStore is where a test's records are kept: memory, or the database's
+// tables over memory when TEST_STORE is "database", which runs the tests
+// that use the fixture over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{SettingsKey: NewSettingsPG(d), StatusKey: NewStatusPG(d), DraftsKey: NewDraftsPG(d)}, Rest: &kv.Memory{}}
+}
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{store: NewMemoryStore(), model: &model{}, console: &console{}, props: &MemoryProposer{}, clock: &clock{t: time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC)}}
@@ -152,7 +167,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(f.conf.Close)
 	f.conf.Now = f.clock.now
 	f.creds = credentials.New(credentials.Options{HTTP: f.conf.Client()})
-	f.s = New(Options{Credentials: f.creds, Store: f.store, Model: f.model, Console: f.console, Proposer: f.props, Dir: t.TempDir(), HTTP: f.conf.Client(), Now: f.clock.now,
+	f.s = New(Options{Backend: testStore(t), Credentials: f.creds, Store: f.store, Model: f.model, Console: f.console, Proposer: f.props, Dir: t.TempDir(), HTTP: f.conf.Client(), Now: f.clock.now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Audit:  func(e audit.Event) { f.mu.Lock(); f.audits = append(f.audits, e); f.mu.Unlock() }})
 	// Registered after t.TempDir, so it runs first: the background work

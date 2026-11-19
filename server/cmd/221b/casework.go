@@ -230,7 +230,7 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 			st.Cards = w.cardsBackend
 		}
 		if w.knowledgeStored != nil {
-			st.Knowledge = w.knowledgeStored
+			st.Knowledge = w.knowledgeBackend
 		}
 		go func() {
 			runCleanStart(ctx, cfg, st, w.knowledgeSvc, w.elector.IsLeader, w.auditLog, log)

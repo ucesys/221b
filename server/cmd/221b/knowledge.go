@@ -18,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/issues"
@@ -45,6 +46,8 @@ type knowledgeOptions struct {
 	console  knowledge.Console
 	proposer knowledge.Proposer
 	log      *slog.Logger
+	// wrap routes the keys the database keeps to it.
+	wrap func(kv.Backend) kv.Backend
 }
 
 // openKnowledge builds the knowledge service. It
@@ -62,6 +65,11 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		backend = stored
 	} else {
 		o.log.Warn("Mycroft's sources and drafts are kept in memory and lost on restart (set -knowledge-configmap to keep them)")
+	}
+	// With a database the sources, the syncs' state and the page changes
+	// that wait for review are kept there.
+	if o.wrap != nil {
+		backend = o.wrap(backend)
 	}
 	var secrets knowledge.SecretStore = &knowledge.MemorySecret{}
 	if cfg.ConnectionsSecrets != "" {
@@ -770,7 +778,19 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	// Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
 	// wiki's local copy and index on every replica.
 	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
-		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log})
+		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log,
+		wrap: func(b kv.Backend) kv.Backend {
+			// Mycroft's sources, the syncs' state and the runs of page
+			// changes are rows (DB-48 to DB-50). The fixes and the
+			// exceptions, Knowledge's too, are routed with the case work.
+			if w.database != nil {
+				w.inDatabase = append(w.inDatabase, "knowledge")
+			}
+			w.knowledgeBackend = w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
+				return map[string]movedDoc{knowledge.SettingsKey: knowledge.NewSettingsPG(d), knowledge.StatusKey: knowledge.NewStatusPG(d), knowledge.DraftsKey: knowledge.NewDraftsPG(d)}
+			})
+			return w.knowledgeBackend
+		}})
 	if err != nil {
 		return err
 	}

@@ -164,8 +164,10 @@ type wiring struct {
 	// cardsBackend is the same for the cards: the proposed changes'
 	// ConfigMap, with what the database keeps of it routed there.
 	cardsBackend kv.Backend
-	mailSvc      *mail.Service
-	lessonsSvc   *lessons.Service
+	// knowledgeBackend is the same for Mycroft's knowledge.
+	knowledgeBackend kv.Backend
+	mailSvc          *mail.Service
+	lessonsSvc       *lessons.Service
 
 	// The backups and the HTTP API.
 	backups *backup.Scheduler
