@@ -3,15 +3,22 @@
 
 CREATE TABLE audit_events (
     audit_event_id uuid PRIMARY KEY,
-    at text NOT NULL DEFAULT '',
+    at timestamptz NOT NULL DEFAULT now(),
+    -- Who did it: the name shown, and the subject and email the sign-in gave.
     actor text NOT NULL DEFAULT '',
+    actor_subject text NOT NULL DEFAULT '',
+    actor_email text NOT NULL DEFAULT '',
     action text NOT NULL DEFAULT '',
     cluster_id text NOT NULL DEFAULT '',
     target text NOT NULL DEFAULT '',
     outcome text NOT NULL DEFAULT '',
-    detail jsonb,
-    source_ip text NOT NULL DEFAULT ''
+    -- A sentence, searched by word; never a credential.
+    detail text NOT NULL DEFAULT '',
+    source_ip text NOT NULL DEFAULT '',
+    -- Set on an event that came back from a backup: when the backup was taken.
+    restored_at timestamptz
 );
+
 COMMENT ON TABLE audit_events IS 'Every recorded action: who, what, cluster, target, outcome';
 
 CREATE TABLE toolbox_sessions (

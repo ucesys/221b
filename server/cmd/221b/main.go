@@ -220,7 +220,7 @@ func run(args []string) error {
 		return err
 	}
 	w.twoPerson.SetBackend(w.spendBackend)
-	if auditStore := keepAudit(w.auditLog, w.spendBackend, log.With("component", "audit")); auditStore != nil {
+	if auditStore := w.keepAudit(ctx, w.spendBackend, log.With("component", "audit")); auditStore != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -365,11 +365,57 @@ func workWithin(grace time.Duration) time.Duration {
 	return max(grace-settleWithin-closeWithin-stopMargin, 0)
 }
 
+// auditRetention is how long the database keeps an audit event for the
+// Audit log page; the stream and the webhook are the full record.
+const auditRetention = 365 * 24 * time.Hour
+
 // keepAudit gives the log its store for Administration › Audit log, and
-// returns it to close: beside the settings, or in memory on a laptop, where
-// the page says so.
-func keepAudit(l *audit.Log, b kv.Backend, logger *slog.Logger) *audit.KVStore {
-	if _, inMemory := b.(*kv.Memory); inMemory {
+// returns it to close: the database's audit_events when there is a
+// database (Phase 13), else beside the settings, or in memory on a laptop,
+// where the page says so.
+func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logger) interface {
+	Close(ctx context.Context) error
+} {
+	l := w.auditLog
+	_, inMemory := b.(*kv.Memory)
+	if w.database != nil {
+		st := audit.NewPGStore(w.database, logger)
+		l.SetStore(st)
+		w.inDatabase = append(w.inDatabase, "activity")
+		go func() {
+			// What a release before Phase 13 kept in the ConfigMap, once.
+			if !inMemory {
+				ictx, cancel := context.WithTimeout(ctx, time.Minute)
+				n, err := st.Import(ictx, &audit.KVStore{Backend: b, Key: audit.StoreKey, Logger: logger}, "configmap key "+audit.StoreKey)
+				cancel()
+				switch {
+				case err != nil:
+					logger.Warn("copying the audit log from its ConfigMap failed; the next start tries again", "err", err)
+				case n > 0:
+					logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
+				}
+			}
+			// Retention, once a day on whichever replica gets the lock.
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for {
+				tctx, cancel := context.WithTimeout(ctx, time.Minute)
+				if n, err := st.Trim(tctx, time.Now().Add(-auditRetention)); err != nil {
+					logger.Warn("trimming the audit log failed", "err", err)
+				} else if n > 0 {
+					logger.Info("trimmed the audit log", "events", n)
+				}
+				cancel()
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+		return st
+	}
+	if inMemory {
 		l.KeepInMemory(audit.DefaultKeep)
 		return nil
 	}

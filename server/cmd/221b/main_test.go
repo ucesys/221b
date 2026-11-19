@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/leader"
 )
@@ -76,7 +78,7 @@ type persistent struct{ kv.Memory }
 // The Audit log page says events are in memory exactly when they are.
 func TestTheAuditStoreIsOnlyUsedOverStorageThatPersists(t *testing.T) {
 	mem := audit.New(audit.Options{})
-	if st := keepAudit(mem, &kv.Memory{}, slog.Default()); st != nil || mem.Stored() {
+	if st := (&wiring{auditLog: mem}).keepAudit(t.Context(), &kv.Memory{}, slog.Default()); st != nil || mem.Stored() {
 		t.Fatalf("over memory: store %v, stored %v", st, mem.Stored())
 	}
 	mem.Record(audit.Event{Action: "signin"})
@@ -84,11 +86,45 @@ func TestTheAuditStoreIsOnlyUsedOverStorageThatPersists(t *testing.T) {
 		t.Fatalf("the page lists %+v", got)
 	}
 	kept := audit.New(audit.Options{})
-	st := keepAudit(kept, &persistent{}, slog.Default())
+	st := (&wiring{auditLog: kept}).keepAudit(t.Context(), &persistent{}, slog.Default())
 	if st == nil || !kept.Stored() {
 		t.Fatalf("over a ConfigMap: store %v, stored %v", st, kept.Stored())
 	}
 	if err := st.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With a database the audit log is kept in it (Phase 13), and what the
+// ConfigMap held from the release before is copied over once.
+func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := t.Context()
+	cm := &persistent{}
+	old := audit.NewKVStore(cm, slog.Default())
+	old.Add(audit.Event{Time: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Action: "signin", Outcome: "ok"})
+	if err := old.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	l := audit.New(audit.Options{})
+	w := &wiring{auditLog: l, database: d}
+	st := w.keepAudit(ctx, cm, slog.Default())
+	if _, ok := st.(*audit.PGStore); !ok || !l.Stored() || !slices.Contains(w.inDatabase, "activity") {
+		t.Fatalf("store %T, stored %v, domains %v", st, l.Stored(), w.inDatabase)
+	}
+	l.Record(audit.Event{Action: "settings.update", Outcome: "ok"})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := l.Events(ctx)
+		if err == nil && len(got) == 2 && got[0].Action == "settings.update" && got[1].Action == "signin" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the page lists %+v: %v", got, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := st.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

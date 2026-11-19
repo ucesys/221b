@@ -77,7 +77,7 @@ func TestMigrate(t *testing.T) {
 	}
 	var tables int
 	if err := d.Pool().QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name <> 'schema_migrations'`).Scan(&tables); err != nil {
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name NOT IN ('schema_migrations', 'imports')`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
 	if tables != 73 {
