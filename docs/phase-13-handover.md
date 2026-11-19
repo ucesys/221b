@@ -19,6 +19,7 @@ Everything is on `phase-13-store`, pushed. Nothing is merged, there is no pull r
 | `Platform: the shared settings and the acknowledged alerts…`, `…the repositories…` | `settings/pg.go`, `apps/pg.go`. |
 | `Hosts carry no labels (to-do 1, server side)` | The first of the code to-do items. |
 | `Inventory: hosts, pairings, fleets and facts…` | Package `inventory`; `nodessh/pg.go`, `automation/pg_facts.go`, fleets in `settings/pg.go`. |
+| `Automation: script groups and execution profiles…` | `automation/pg_defs.go`. |
 | `Docs: Phase 13…` | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first commit on the branch, `CI: cache Playwright browsers…` (pushed by the owner's other session), was reviewed and left as it is: no problems found.
@@ -74,7 +75,7 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 
 ### 2. Move the domains
 
-**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap.
+**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap; of Automation the script groups and the execution profiles.
 
 **How each moved, and what that leaves to do.**
 
@@ -82,13 +83,12 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 | --- | --- | --- |
 | The audit log; the Toolbox's session records; the backups' settings and runs | A repository (`audit.PGStore`, `sessions.PGHistory`, `backup.PGRepo`). | None. |
 | Getting started, Settings › Email, the case work's settings | Scopes of `settings` (`db.ScopeKV`). | None: they are singletons. |
-| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
+| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts, script groups and execution profiles (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
 
 **Still to move**, in this order. The owner's rule: **every field a column** (no record kept as JSON beside its keys), `db.Doc` allowed as the first step where a service edits its whole document in many places.
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| 1 | `automation.GroupsKey`, `ProfilesKey` | `script_groups`, `run_profiles`, `run_profile_fleets` | Small. `run_profile_fleets.fleet_id` points at `fleets`: look a fleet up by cluster and `fleet_key`. |
 | 2 | `automation.ScriptsKey`, `VariablesKey`, `ChangesKey` | `scripts`, `script_versions`, `script_version_parameters`, `variables`, `variable_changes`, `variable_change_items` | Variables point at `fleets` and `hosts` (`inventory.EnsureHost`). |
 | 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. |
 | 4 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | Seed `agents` from the catalog first; `ai_spend` is a ledger (a row a call, summed on read): a repository. |
@@ -132,7 +132,7 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 
 The last full run in this session, on a 2-core machine, on the branch's last code commit: `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`.
 
-- **All 55 packages passed, none failed**, `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions` and `cmd/221b` with their database tests among them. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
+- **All 55 packages that have tests passed, none failed**, with every database test among them (`internal/db`, `audit`, `backup`, `sessions`, `twoperson`, `cards`, `settings`, `apps`, `nodessh`, `automation`, `cmd/221b`). This run was made again after the last code commit, `Automation: script groups and execution profiles…`. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
 - **One test is flaky under load: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It failed in the full run before this one and passed in this one. It is sensitive to timing: it expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores sometimes none are. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without. Fix it on its own (make the waiting cases wait on the test's own gate, not on the scheduler); if it fails in CI, run it again before looking further.
 - **`internal/api` took 566 seconds** under the race detector here, close to `go test`'s 10-minute limit per package. CI's runners are faster; on a small machine pass `-timeout 30m`.
 - Before the changes, `go test ./...` without `-race` passed all 54 packages on the branch's first commit.
