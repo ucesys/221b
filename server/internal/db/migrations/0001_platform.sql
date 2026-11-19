@@ -64,7 +64,7 @@ CREATE TABLE applications (
     application_id uuid PRIMARY KEY,
     cluster_id text NOT NULL,
     repository_id uuid,
-    credential_id uuid,
+    credential_id text,
     namespace text NOT NULL DEFAULT '',
     name text NOT NULL DEFAULT '',
     source_kind text NOT NULL DEFAULT '',
@@ -79,22 +79,37 @@ COMMENT ON TABLE applications IS 'Helm apps deployed to a cluster: source kind a
 
 CREATE TABLE repositories (
     repository_id uuid PRIMARY KEY,
-    credential_id uuid,
+    credential_id text,
+    -- Its place in the list.
+    position integer NOT NULL DEFAULT 0,
     name text NOT NULL DEFAULT '',
+    -- helm, oci or git.
     kind text NOT NULL DEFAULT '',
     url text NOT NULL DEFAULT '',
     default_branch text NOT NULL DEFAULT '',
+    -- What a repository from before Administration › Credentials still signs in with.
     auth_method text NOT NULL DEFAULT '',
-    pinned_cert text NOT NULL DEFAULT '',
+    username text NOT NULL DEFAULT '',
+    is_secret_set boolean NOT NULL DEFAULT false,
+    is_credential_migrated boolean NOT NULL DEFAULT false,
+    -- The one certificate trusted for its address when no CA signed it.
+    pinned_cert_sha256 text NOT NULL DEFAULT '',
+    pinned_cert_subject text NOT NULL DEFAULT '',
+    pinned_cert_issuer text NOT NULL DEFAULT '',
+    pinned_cert_not_after timestamptz,
+    pinned_by text NOT NULL DEFAULT '',
+    pinned_at timestamptz,
     is_test_ok boolean NOT NULL DEFAULT false,
+    test_result text NOT NULL DEFAULT '',
     tested_at timestamptz,
     updated_by text NOT NULL DEFAULT '',
     updated_at timestamptz
 );
+
 COMMENT ON TABLE repositories IS 'Registered chart and runbook sources: Git repositories, Helm repositories and OCI registries';
 
 CREATE TABLE credentials (
-    credential_id uuid PRIMARY KEY,
+    credential_id text PRIMARY KEY,
     name text NOT NULL DEFAULT '',
     kind text NOT NULL DEFAULT '',
     endpoint text NOT NULL DEFAULT '',

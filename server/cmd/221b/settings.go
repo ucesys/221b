@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -44,7 +45,7 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// approval_requests, and the shared settings. Every reader of this
 	// backend, the backup among them, finds both where they are kept.
 	spendBackend = w.inTables(ctx, spendBackend, func(d *db.DB) map[string]movedDoc {
-		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d), kube.SettingsKey: settings.NewPG(d)}
+		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d), kube.SettingsKey: settings.NewPG(d), apps.RepositoriesKey: apps.NewReposPG(d)}
 	})
 	// The shared settings themselves: three scopes and the acknowledged
 	// alerts' rows, read through the same backend.

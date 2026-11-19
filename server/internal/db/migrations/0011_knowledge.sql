@@ -29,7 +29,7 @@ COMMENT ON TABLE wiki_changes IS 'Proposed page changes awaiting approval, kept 
 CREATE TABLE knowledge_sources (
     knowledge_source_id uuid PRIMARY KEY,
     repository_id uuid,
-    credential_id uuid,
+    credential_id text,
     name text NOT NULL DEFAULT '',
     kind text NOT NULL DEFAULT '',
     url text NOT NULL DEFAULT '',
