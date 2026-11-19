@@ -113,10 +113,10 @@ Agreed during the data model's review on November 18, 2026; none of it is done. 
 
 ## Test results
 
-The last full run in this session, on a 2-core machine: `TEST_DATABASE=127.0.0.1:55432 go test -race ./...` in `server/`, after every code change on the branch but the last (the Toolbox's session records, whose packages, `internal/sessions`, `cmd/221b` and the backup tests of `internal/api`, were run again after it and pass).
+The last full run in this session, on a 2-core machine, on the branch's last code commit: `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`.
 
-- **54 packages passed**, `internal/db`, `internal/audit`, `internal/backup` and `cmd/221b` with their database tests among them. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
-- **One test failed: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It is sensitive to timing: it expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores none were. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without; on the branch 2 in 10 in one batch and 0 in 25 in another. Treat it as a flaky test to fix on its own (make the waiting cases wait on the test's own gate, not on the scheduler), not as a regression; if it fails in CI, run it again before looking further.
+- **All 55 packages passed, none failed**, `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions` and `cmd/221b` with their database tests among them. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
+- **One test is flaky under load: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It failed in the full run before this one and passed in this one. It is sensitive to timing: it expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores sometimes none are. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without. Fix it on its own (make the waiting cases wait on the test's own gate, not on the scheduler); if it fails in CI, run it again before looking further.
 - **`internal/api` took 566 seconds** under the race detector here, close to `go test`'s 10-minute limit per package. CI's runners are faster; on a small machine pass `-timeout 30m`.
 - Before the changes, `go test ./...` without `-race` passed all 54 packages on the branch's first commit.
 - The browser app's tests (`npm test`, `make e2e-sim`) were not run: the app was not changed.
