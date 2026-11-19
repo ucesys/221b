@@ -122,3 +122,42 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 	}
 	return &kv.Keyed{Keys: keys, Rest: b}
 }
+
+// movedDoc is one of a service's documents kept as rows of the model's
+// tables (db.Doc), which can copy what the ConfigMap held.
+type movedDoc interface {
+	kv.Backend
+	Import(ctx context.Context, from kv.Backend, source string) (bool, error)
+}
+
+// inTables keeps the documents under the keys named in the database, each
+// through its own mapping to tables, and every other key in b as before;
+// without a database it is b. make is given the database and returns the
+// mappings, so nothing is made without one. What b held under those keys
+// is copied once.
+func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB) map[string]movedDoc) kv.Backend {
+	if w.database == nil {
+		return b
+	}
+	if b == nil {
+		b = &kv.Memory{}
+	}
+	log := w.log.With("component", "database")
+	_, inMemory := b.(*kv.Memory)
+	keys := map[string]kv.Backend{}
+	for key, doc := range make(w.database) {
+		keys[key] = doc
+		if inMemory {
+			continue
+		}
+		ictx, cancel := context.WithTimeout(ctx, time.Minute)
+		copied, err := doc.Import(ictx, b, "configmap")
+		cancel()
+		if err != nil {
+			log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "key", key, "err", err)
+		} else if copied {
+			log.Info("copied records from their ConfigMap into the database", "key", key)
+		}
+	}
+	return &kv.Keyed{Keys: keys, Rest: b}
+}

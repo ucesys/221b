@@ -7,8 +7,9 @@
 | Domain | In the database | Still in ConfigMaps |
 | --- | --- | --- |
 | Activity log | the audit log (`audit_events`) and the Toolbox's session records (`toolbox_sessions`): the whole domain | |
-| Platform | the backups' settings (`settings`, scope `backup`) and runs (`backup_runs`) | settings, acknowledged alerts, applications, repositories, credentials' list, cluster connections |
-| Identity, Approvals, Inventory, Automation, AI configuration, Jobs, Cases, Changes, Knowledge | | everything |
+| Platform | the backups' settings (`settings`, scope `backup`) and runs (`backup_runs`); getting started's dismissed steps, Settings › Email and the case work's settings (`settings`, scopes `setup`, `email`, `cases`) | the shared settings, acknowledged alerts, applications, repositories, credentials' list, cluster connections |
+| Approvals | the requests that wait for a second person and their decisions (`approval_requests`, `approval_decisions`), the standing approvals (`approval_policies`), the notification channels (`notification_channels`): the whole domain | |
+| Identity, Inventory, Automation, AI configuration, Jobs, Cases, Changes, Knowledge | | everything |
 
 `GET /api/v1/database` and Administration's metrics say the same of a running console.
 
@@ -75,6 +76,12 @@ Availability and backups of an external database are yours. The console's own ba
 | An external database | Yours; the console checks the minimum version at start. |
 
 ## Writing a domain's repository
+
+Three shapes, by what the service is like:
+
+- **A singleton document** (a page's settings, read whole): a scope of `settings` through `db.ScopeKV`, which is the `kv.Backend` the service already uses. Nothing else to write.
+- **A service with few, clear operations**: a repository, as below. This is the end state for every service.
+- **A service that edits one JSON document in many places**: `db.Doc`, an interim step. The service stays as it is; a `Read` builds its document from the model's tables and a `Write` changes the rows from what they hold to what the service saved, every field a column (`twoperson/pg.go`, `cards/pg_approvals.go`). Its records are then rows, keyed and joinable, but the service still reads them all to change one, and writers of one document take turns. Each `db.Doc` is listed in the handover for a repository of its own.
 
 Every domain keeps its records through an interface of its own, defined in its package, with what the services need and nothing of where the records are (ADR-162). `backup.Repo` is the pattern:
 

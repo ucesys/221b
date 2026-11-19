@@ -15,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -27,6 +28,8 @@ import (
 // addresses, and what the console actions work on.
 
 type cardsOptions struct {
+	// wrap routes the keys the database keeps to it.
+	wrap     func(kv.Backend) kv.Backend
 	auditLog *audit.Log
 	manager  *clusters.Manager
 	shared   *settings.Service
@@ -68,6 +71,10 @@ func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o c
 			return nil, nil, fmt.Errorf("the notification channels' Secret: %w", err)
 		}
 		secrets = sk
+	}
+	// With a database some of what the store keeps is kept there.
+	if o.wrap != nil {
+		backend = o.wrap(backend)
 	}
 	st := cards.New(cards.Options{
 		Backend: backend,
@@ -223,7 +230,13 @@ func (w *wiring) wireCards(ctx context.Context) error {
 	// Watson cards (Phase 12, ADR-99 to ADR-102): the agents'
 	// proposals, durable in <release>-cases, with the console actions they
 	// may carry; expired on the leader.
-	cardStore, cardsStored, err := openCards(ctx, cfg, w.restCfg, cardsOptions{auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
+	cardStore, cardsStored, err := openCards(ctx, cfg, w.restCfg, cardsOptions{wrap: func(b kv.Backend) kv.Backend {
+		// The standing approvals and the notification channels: rows of
+		// approval_policies and notification_channels (Phase 13).
+		return w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
+			return map[string]movedDoc{cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d)}
+		})
+	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
 	if err != nil {
 		return err
 	}

@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
 // The shared settings.
@@ -45,6 +47,12 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// Getting started's dismissed steps (GS-04) are a scope of the
 	// database's settings when there is a database (Phase 13).
 	spendBackend = w.inScopes(ctx, spendBackend, map[string]string{api.SetupKey: "setup"})
+	// The requests that wait for a second person: rows of the database's
+	// approval_requests. Every reader of this backend, the backup among
+	// them, finds both where they are kept.
+	spendBackend = w.inTables(ctx, spendBackend, func(d *db.DB) map[string]movedDoc {
+		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d)}
+	})
 	w.spendBackend, w.stored, w.shared = spendBackend, stored, shared
 	return nil
 }
