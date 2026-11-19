@@ -11,7 +11,7 @@
 | Approvals | the requests that wait for a second person and their decisions (`approval_requests`, `approval_decisions`), the standing approvals (`approval_policies`), the notification channels (`notification_channels`): the whole domain | |
 | Inventory | the hosts outside Kubernetes and the paired nodes (`hosts`, `host_logins`, `host_pairings`), the fleets and the members of listed fleets (`fleets`, `fleet_hosts`), what was last read from each node (`host_facts`) | `data_centers`, a host's rack and data center: nothing sets them yet |
 | Identity | | the sign-in sessions (in a Secret); local accounts stay in their Secret for good |
-| Automation | the script groups (`script_groups`) and the execution profiles (`run_profiles`, `run_profile_fleets`) | the scripts and their versions, the variables and their changes, the runs |
+| Automation | the scripts and their versions (`scripts`, `script_versions`, `script_version_parameters`, `script_version_kube_actions`, `script_version_findings`, `script_version_actions`), the script groups (`script_groups`) and the execution profiles (`run_profiles`, `run_profile_fleets`) | the variables and their changes, the runs |
 | AI configuration, Jobs, Cases, Changes, Knowledge | | everything |
 
 `GET /api/v1/database` and Administration's metrics say the same of a running console.

@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL (Phase 13): 73 tables in eleven domains and three tiers. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
+What 221B keeps in PostgreSQL (Phase 13): 76 tables in eleven domains and three tiers (the model's 73, and 3 that hold what a script version kept in lists). The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
 
 Each table's columns are listed with their marks: **PK** is the key, **FK** a key into another table, **FK?** one that may be empty, and ↗ a key into another domain.
 
@@ -34,6 +34,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 - `credentials.credential_id`, and the columns that point at it, are text: the id the console gives a credential. `repositories` has `position`, `username`, `is_secret_set`, `is_credential_migrated`, the pinned certificate's parts as `pinned_cert_*`, `pinned_by`, `pinned_at` and `test_result`.
 - `clusters` and `credentials` hold, for now, a row with only its id for each cluster or credential another table points at; their own records are still in Secrets.
 - `run_profiles.run_profile_id` is the id the console gives a profile (the built-in ones are fixed), and `run_profile_fleets` holds `fleet_key`, not a key to `fleets`: a profile is not of one cluster and names a fleet as runs do.
+- **Scripts** (step `0016`): `script_versions.header` and `review`, which were JSON, are columns and rows: every field of a version is a column, a scalar list (`facts`) an array, and a list of records a table. A script may be in no group; a group a script names gets its row then, and keeps it while scripts are in it.
 - Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps, each with the time of the newest record copied where the set only grows.
 - The columns of a domain that has not moved yet are the model's first cut: they are settled, and may change in place, when the domain's repository is written. Once a release ships a step, it is never edited.
 
@@ -109,14 +110,17 @@ Both tables are indexed by time and trimmed by retention, never updated in place
 
 ### Automation: scripts and variables
 
-Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`.
+Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`, and `0016_automation_scripts.sql` for the scripts.
 
 | Table | Holds | Columns |
 | --- | --- | --- |
 | `script_groups` | Named groups of scripts | `script_group_id` PK, `name`, `description` |
-| `scripts` | Script identity: name and group | `script_id` PK, `script_group_id` FK, `name`, `created_at`, `updated_at` |
-| `script_versions` | Immutable, hashed versions with their state, header and review | `script_version_id` PK, `script_id` FK, `version_number`, `hash`, `body`, `state`, `header` JSON, `review` JSON, `author`, `approval_request_id` FK? ↗, `created_at` |
-| `script_version_parameters` | Parameters each version declares in its header | `script_version_id` PK FK, `name` PK, `is_required`, `is_secret`, `description` |
+| `scripts` | Script identity: name and group | `script_id` PK, `script_group_id` FK?, `name` (unique), `created_at`, `updated_at` |
+| `script_versions` | A script's hashed texts, each with its state, what its header declares, its author and Sherlock's reading | `script_version_id` PK, `script_id` FK, `version_number` (one per script), `hash`, `body`, `state`, `description`, `privilege`, `has_dry_run`, `target`, `runs_as`, `facts` (text array), `author`, `author_user`, `same_as_version`, `review_summary`, `reviewed_at`, `approval_request_id` FK? ↗, `created_at` |
+| `script_version_parameters` | Parameters each version declares in its header | `script_version_id` PK FK, `name` PK, `position`, `is_required`, `is_secret`, `description` |
+| `script_version_kube_actions` | What a Kubernetes script's header says it may do | `script_version_id` PK FK, `position` PK, `verb`, `resource` |
+| `script_version_findings` | What the checks and Sherlock found in a version, on its lines | `script_version_id` PK FK, `source` PK (`checks`, `review`), `position` PK, `level`, `line`, `code`, `message` |
+| `script_version_actions` | What people did with a version: saved its draft, submitted, approved, rejected it, took an approval back | `script_version_id` PK FK, `kind` PK (`edited`, `submitted`, `approved`, `revoked`, `withdrawn`, `rejected`), `position` PK, `by_name`, `by_user`, `at`, `comment` |
 | `run_profiles` | Execution profiles: SSH privilege or Kubernetes identity | `run_profile_id` PK, `name`, `kind`, `privilege`, `namespace`, `service_account`, `is_built_in`, `description` |
 | `run_profile_fleets` | Fleets a profile may run on | `run_profile_id` PK FK, `fleet_id` PK FK ↗ |
 | `variables` | Variables scripts read, each on one fleet or one host | `variable_id` PK, `scope`, `fleet_id` FK? ↗, `host_id` FK? ↗, `name`, `value`, `is_sensitive`, `updated_by`, `updated_at` |

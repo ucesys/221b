@@ -1,6 +1,6 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 18, 2026, at the end of the session that started Phase 13, for the session that continues it. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 73 tables and their rules) first; the requirements are DB-01 to DB-31 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 18, 2026, at the end of the session that started Phase 13, for the session that continues it. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 73 tables and their rules) first; the requirements are DB-01 to DB-32 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
 
 ## The cluster test of November 19, 2026
 
@@ -110,7 +110,7 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 
 ### 2. Move the domains
 
-**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap; of Automation the script groups and the execution profiles.
+**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap; of Automation the scripts with their versions, the script groups and the execution profiles.
 
 **How each moved, and what that leaves to do.**
 
@@ -118,13 +118,13 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 | --- | --- | --- |
 | The audit log; the Toolbox's session records; the backups' settings and runs | A repository (`audit.PGStore`, `sessions.PGHistory`, `backup.PGRepo`). | None. |
 | Getting started, Settings › Email, the case work's settings | Scopes of `settings` (`db.ScopeKV`). | None: they are singletons. |
-| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts, script groups and execution profiles (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
+| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts, script groups, execution profiles and the scripts with their versions (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
 
 **Still to move**, in this order. The owner's rule: **every field a column** (no record kept as JSON beside its keys), `db.Doc` allowed as the first step where a service edits its whole document in many places.
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| 2 | `automation.ScriptsKey`, `VariablesKey`, `ChangesKey` | `scripts`, `script_versions`, `script_version_parameters`, `variables`, `variable_changes`, `variable_change_items` | Variables point at `fleets` and `hosts` (`inventory.EnsureHost`). |
+| 2 | `automation.VariablesKey`, `ChangesKey` (the scripts are done: `pg_scripts.go`, step `0016`, `TestScriptsInTheDatabase`, which runs the same steps on a ConfigMap and on the database and compares every field; use it as the model for a test) | `variables`, `variable_changes`, `variable_change_items` | See *Variables and changes: what to settle first* below. |
 | 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. |
 | 4 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | Seed `agents` from the catalog first; `ai_spend` is a ledger (a row a call, summed on read): a repository. |
 | 5 | `jobs.JobsKey`, `RunsKey`; `casework.ChecksKey`, `RulesKey`, `FoundKey` | the 6 Jobs tables | `db.Claim` on `schedule_claims` replaces "on the leader" for schedules. |
@@ -132,6 +132,12 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 | 7 | `cards.CardsKey`, `ChatsKey` | the 5 Changes tables | `cards.StandingKey` and `NotifyKey` are done; extend `cmd/221b/cards.go`'s `wrap`. |
 | 8 | `knowledge.SettingsKey`, `DraftsKey`, `StatusKey`; `fixes.Key`; `lessons.ExceptionsKey`; `issues.KnownKey` | the 10 Knowledge tables | Wiki bodies stay in git or S3. |
 | 9 | What is kept in **Secrets**: the applications (`apps.Store`), the credentials' list (`credentials`), the cluster connections (`clusters.Manager`), the sign-in sessions (`kube.SessionStore`) | `applications`, `credentials`, `clusters`, `auth_sessions` | Skipped on purpose, with the owner told: they have no 1 MiB problem, each needs a store that keeps the metadata in the table and the secret part in the Secret, and sessions touch sign-in (to-do 12, 13). `wireDatabase` must then run before `wireClusters`. Fill the rows of `clusters` and `credentials` that today hold only an id, and remove a cluster's row when its connection goes (to-do 3). |
+
+**Variables and changes: what to settle first.** They were looked at and left, because the model's tables do not hold the documents as they are, and the choices touch the agreed model:
+
+- `params.json` is cluster → fleet id → `FleetVariables`: the fleet's values, each node's overrides, the privilege ceiling, the names that are sensitive, the reboot minutes, and reboot minutes for single nodes. The model puts the ceiling and the reboot minutes on `fleets` (`privilege_ceiling`, `reboot_minutes`), which another document owns (`settings/pg.go` writes fleets and leaves those two columns alone, so they are free to use). A variable row needs a fleet's row: check what fleet ids the variables can name that are not in the settings' list (a deleted fleet, a fleet of all nodes), because `variables.fleet_id` cascades on delete and a row made only to be pointed at would show up as a fleet in `readFleets`. A node's override is on a host and a fleet at once (`Nodes[node][name]` under a fleet), which `CHECK (num_nonnulls(fleet_id, host_id) = 1)` does not allow as it stands; so are a node's reboot minutes.
+- `changes.json` holds, for each change, the fleet's whole `FleetVariables` before and after, not items: `variable_change_items` (name, old value, new value) cannot give back node overrides, the ceiling or the sensitive names. Either the change's tables grow to hold both sides in full, or the service is changed to keep items. It also holds the **runs that wait for approval** (`WaitingRun`, with a rollout, hooks and the person), which belong with the runs of order 3, and whose `approval_request_id` is the link to Approvals that nothing fills yet.
+- The owner's rule is every field a column, so the JSON columns still in step `0006` (`variable_changes.impact`, `script_runs.rollout`, `hooks`) become columns or tables when their record set moves, in a new step as `0016` did for the scripts.
 
 How to add one (each of the moved ones is a model): write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in its migration file, test the service over it with `dbtest.Open`, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). A time read back from PostgreSQL has microseconds, not nanoseconds: tests use whole seconds.
 
@@ -166,7 +172,7 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 
 ## Test results
 
-After the cluster test's fixes (`Storage: what the first cluster test found`), the same full run passed again: 55 packages, none failed, with step `0015` in every test database; `make lint-go` (which now runs `hack/check-db-backup.sh`), `shellcheck` on `hack/` and `deploy/postgres/`, and all 107 chart checks pass. The paragraphs below are from the run before it.
+After the cluster test's fixes (`Storage: what the first cluster test found`), the same full run passed again: 55 packages, none failed, with step `0015` in every test database; `make lint-go` (which now runs `hack/check-db-backup.sh`), `shellcheck` on `hack/` and `deploy/postgres/`, and all 107 chart checks pass. The same run passed once more after the scripts moved (`Automation: the scripts and their versions…`, step `0016`). The paragraphs below are from the run before both.
 
 The last full run in this session, on a 2-core machine, on the branch's last code commit: `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`.
 

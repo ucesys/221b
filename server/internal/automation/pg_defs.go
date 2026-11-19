@@ -55,7 +55,9 @@ func NewGroupsPG(d *db.DB) *db.Doc[[]Group] {
 					}
 				}
 			}
-			_, err := tx.Exec(ctx, "DELETE FROM script_groups WHERE NOT (name = ANY($1))", names)
+			// A group scripts are in stays, as it does in the store's list.
+			_, err := tx.Exec(ctx, `DELETE FROM script_groups g WHERE NOT (g.name = ANY($1))
+				AND NOT EXISTS (SELECT 1 FROM scripts s WHERE s.script_group_id = g.script_group_id)`, names)
 			return err
 		}}
 }
