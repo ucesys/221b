@@ -19,16 +19,21 @@ COMMENT ON TABLE clusters IS 'Connection metadata per cluster, keyed by the cons
 CREATE TABLE alert_acks (
     alert_ack_id uuid PRIMARY KEY,
     cluster_id text NOT NULL,
+    -- The alert, and what it looked like when it was acknowledged: an alert that changes is
+    -- unacknowledged again.
     alert_key text NOT NULL DEFAULT '',
     fingerprint text NOT NULL DEFAULT '',
     is_expected boolean NOT NULL DEFAULT false,
     reason text NOT NULL DEFAULT '',
-    job_run_id uuid,
-    case_id uuid,
-    exception_id uuid,
+    -- The run, case or exception that acknowledged it, by the ids those carry: plain
+    -- columns, since a foundation table never keys up.
+    job_run_id text NOT NULL DEFAULT '',
+    case_id text NOT NULL DEFAULT '',
+    exception_id text NOT NULL DEFAULT '',
     acked_by text NOT NULL DEFAULT '',
-    acked_at timestamptz
+    acked_at timestamptz NOT NULL DEFAULT now()
 );
+
 COMMENT ON TABLE alert_acks IS 'Acknowledged alerts per cluster: who, when, why, and the run, case or exception that acknowledged them';
 
 CREATE TABLE backup_runs (

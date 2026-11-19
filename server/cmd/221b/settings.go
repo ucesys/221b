@@ -37,6 +37,20 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 		}
 		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
+	// Getting started's dismissed steps (GS-04) are a scope of the
+	// database's settings when there is a database (Phase 13).
+	spendBackend = w.inScopes(ctx, spendBackend, map[string]string{api.SetupKey: "setup"})
+	// The requests that wait for a second person, rows of the database's
+	// approval_requests, and the shared settings. Every reader of this
+	// backend, the backup among them, finds both where they are kept.
+	spendBackend = w.inTables(ctx, spendBackend, func(d *db.DB) map[string]movedDoc {
+		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d), kube.SettingsKey: settings.NewPG(d)}
+	})
+	// The shared settings themselves: three scopes and the acknowledged
+	// alerts' rows, read through the same backend.
+	if w.database != nil {
+		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
+	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
 		w.manager.SetSettings(st.Refresh(), b)
@@ -44,15 +58,6 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// Read again every few seconds: a change saved through another replica,
 	// or by hand, reaches this one's browsers within seconds (P7-02).
 	go shared.Run(ctx, 3*time.Second)
-	// Getting started's dismissed steps (GS-04) are a scope of the
-	// database's settings when there is a database (Phase 13).
-	spendBackend = w.inScopes(ctx, spendBackend, map[string]string{api.SetupKey: "setup"})
-	// The requests that wait for a second person: rows of the database's
-	// approval_requests. Every reader of this backend, the backup among
-	// them, finds both where they are kept.
-	spendBackend = w.inTables(ctx, spendBackend, func(d *db.DB) map[string]movedDoc {
-		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d)}
-	})
 	w.spendBackend, w.stored, w.shared = spendBackend, stored, shared
 	return nil
 }
