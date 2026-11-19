@@ -4,16 +4,32 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 var olivia = Person{Subject: "olivia", Name: "Olivia"}
 
-func setup() (*Service, *time.Time) {
+// testStore is where a test's fixes are kept: memory, or the database's
+// tables over memory when TEST_STORE is "database", which runs every
+// test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	return &kv.Keyed{Keys: map[string]kv.Backend{Key: NewPG(dbtest.Open(t))}, Rest: &kv.Memory{}}
+}
+
+func setup(t *testing.T) (*Service, *time.Time) {
+	t.Helper()
 	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
-	s := New(Options{Now: func() time.Time { return now }})
+	s := New(Options{Backend: testStore(t), Now: func() time.Time { return now }})
 	return s, &now
 }
 
@@ -30,7 +46,7 @@ func save(t *testing.T, s *Service, c, title, key, steps string) Saved {
 // the pair is not flagged again; deleting one ends the other's
 // contradiction (CF-51, CF-53).
 func TestAcceptingAContradictionCF51(t *testing.T) {
-	s, _ := setup()
+	s, _ := setup(t)
 	ctx := context.Background()
 	save(t, s, "C-1", "Web has no limits", "pod.no-limits", "Raise the memory limit to 512Mi in the chart")
 	got := save(t, s, "C-2", "Web has no limits", "pod.no-limits", "Move the app to the operator")
@@ -80,7 +96,7 @@ func TestAcceptingAContradictionCF51(t *testing.T) {
 // The housekeeping keeps the fix that fixed more cases, and flags fixes of
 // one problem that say otherwise (CF-53).
 func TestHousekeepingFixesCF53(t *testing.T) {
-	s, now := setup()
+	s, now := setup(t)
 	ctx := context.Background()
 	save(t, s, "C-1", "Ingress certificate expired", "", "Renew the certificate with cert-manager")
 	*now = now.Add(time.Minute)
@@ -107,7 +123,7 @@ func TestHousekeepingFixesCF53(t *testing.T) {
 // The agents get the active fixes a text names, not pending or inactive
 // ones (CF-52).
 func TestMatchCF52(t *testing.T) {
-	s, _ := setup()
+	s, _ := setup(t)
 	ctx := context.Background()
 	save(t, s, "C-1", "Ingress certificate expired", "", "Renew it")
 	save(t, s, "C-2", "Disk of db-1 is full", "", "Rotate the logs")
@@ -124,7 +140,7 @@ func TestMatchCF52(t *testing.T) {
 
 // Who reads the cases reads the fixes; who works them changes them.
 func TestRoutesCF51(t *testing.T) {
-	s, _ := setup()
+	s, _ := setup(t)
 	save(t, s, "C-1", "Ingress certificate expired", "", "Renew it")
 	mux := http.NewServeMux()
 	reader := false

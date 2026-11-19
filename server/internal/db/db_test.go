@@ -588,3 +588,27 @@ func TestADocumentIsReadOnOneSnapshot(t *testing.T) {
 		t.Fatalf("read after the save: %s, %v", got, err)
 	}
 }
+
+// The places of a list's records: one that comes in at the end or goes
+// from anywhere moves no other; anything else places them all again.
+func TestPlaces(t *testing.T) {
+	for _, c := range []struct {
+		what   string
+		keys   []string
+		placed map[string]int64
+		want   []int64
+	}{
+		{"the first ones", []string{"a", "b"}, nil, []int64{1, 2}},
+		{"one more at the end", []string{"a", "b", "c"}, map[string]int64{"a": 1, "b": 2}, []int64{1, 2, 3}},
+		{"the first goes", []string{"b", "c"}, map[string]int64{"a": 1, "b": 2, "c": 3}, []int64{2, 3}},
+		{"one goes and one comes", []string{"a", "c", "d"}, map[string]int64{"a": 1, "b": 2, "c": 5}, []int64{1, 5, 6}},
+		{"one in a gap", []string{"a", "x", "c"}, map[string]int64{"a": 1, "c": 5}, []int64{1, 2, 5}},
+		{"one before another with no gap", []string{"a", "x", "b"}, map[string]int64{"a": 1, "b": 2}, []int64{1, 2, 3}},
+		{"another order", []string{"b", "a"}, map[string]int64{"a": 1, "b": 2}, []int64{1, 2}},
+		{"none", nil, map[string]int64{"a": 1}, []int64{}},
+	} {
+		if got := db.Places(c.keys, c.placed); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: %v, want %v", c.what, got, c.want)
+		}
+	}
+}

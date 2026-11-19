@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-46). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-47). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -22,8 +22,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **What the agents spend as a ledger**: with a database, each cost is a row of `ai_spend`, only ever added, and the day's and month's sums are read from the rows; replicas no longer take turns to save. This month's and last month's rows are kept. The sums the settings ConfigMap held are carried over once.
 - **The jobs, their runs and the validation rules in the database**: with a database, a job's settings, each run with its findings, facts and proposals, the checks seen on each cluster, the rules with their suggestions and what the runs found under each check are rows of `jobs`, `job_runs`, `findings`, `validation_rules`, `check_found` and the tables that hang from them, no longer bounded by a ConfigMap's size; copied once from the runs' and the cases' ConfigMaps.
 - **The proposed changes in the database**: with a database, a change the agents propose is a row of `changes`, with its evidence, actions, plans, results, approvals, history, commands and the cases it resolves as rows of their own tables, no longer bounded by a ConfigMap's size; a waiting change's conversation with Sherlock is a row of `chats` with a row of `chat_messages` a message. Copied once from the proposed changes' ConfigMap.
+- **The fixes and the accepted exceptions in the database**: with a database, a fix is a row of `fixes` with the cases it was seen in as rows of `fix_cases`, and an accepted exception a row of `exceptions`, no longer bounded by a ConfigMap's size; copied once from the case work's ConfigMap.
 - `GET /api/v1/database` names every domain moved, not only the activity log and the backups.
-- For developers: `make test-go-store` runs the agents', the jobs', the case work's and the cards' own tests with their records in the database.
+- For developers: `make test-go-store` runs the agents', the jobs', the case work's, the cards', the fixes' and the lessons' own tests with their records in the database.
 - **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
 - **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.

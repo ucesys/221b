@@ -15,7 +15,8 @@
 | AI configuration | the providers and their headers (`ai_providers`, `ai_provider_headers`), the agents' settings (`agents`), their instructions with the versions, drafts, revisions, test runs and pilots (`prompt_versions` and the tables that hang from it), the test cases (`test_cases`, `test_case_recordings`), the pilots' answers (`pilot_entries`), and what the agents spend, a row a cost (`ai_spend`): the whole domain | a provider's credential stays in its Secret |
 | Jobs | the jobs changed or added, with the time each last handled and its day's spend (`jobs`), the runs with their findings, facts and proposals (`job_runs`, `findings`, `job_run_facts`, `job_run_proposals`, `job_run_proposal_cases`), the checks seen on each cluster (`checked_clusters`, `cluster_checks`), the validation rules and their suggestions (`validation_rules`, `rule_suggestions`, `rule_suggestion_descriptions`), what the runs found under each check (`check_found` and the tables that hang from it): the whole domain | |
 | Changes | the proposed changes with their evidence, actions, plans, results, decisions, history, commands and the cases they resolve (`changes` and the tables that hang from it), and the waiting changes' conversations with Sherlock (`chats`, `chat_messages`): the whole domain | |
-| Cases, Knowledge | | everything |
+| Knowledge | the fixes with the cases each was seen in (`fixes`, `fix_cases`) and the accepted exceptions (`exceptions`) | the sources and where the wiki is kept, Mycroft's runs waiting for review, the syncs' state, the known issues (with Cases) |
+| Cases | | everything |
 
 `GET /api/v1/database` and Administration's metrics say the same of a running console.
 

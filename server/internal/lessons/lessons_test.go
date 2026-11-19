@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -55,12 +57,23 @@ type world struct {
 	now   time.Time
 	audit *bytes.Buffer
 	wiki  *fakeWiki
-	kv    *kv.Memory
+	kv    kv.Backend
+}
+
+// testStore is where a test's exceptions are kept: memory, or the
+// database's table over memory when TEST_STORE is "database", which runs
+// every test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	return &kv.Keyed{Keys: map[string]kv.Backend{ExceptionsKey: NewExceptionsPG(dbtest.Open(t))}, Rest: &kv.Memory{}}
 }
 
 func setup(t *testing.T) *world {
 	t.Helper()
-	w := &world{now: t0, audit: &bytes.Buffer{}, wiki: &fakeWiki{}, kv: &kv.Memory{}}
+	w := &world{now: t0, audit: &bytes.Buffer{}, wiki: &fakeWiki{}, kv: testStore(t)}
 	w.s = New(Options{Backend: w.kv, Audit: audit.New(audit.Options{Out: w.audit}), Now: func() time.Time { return w.now }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	w.s.SetWiki(w.wiki, func(err error) bool { return errors.Is(err, errNoStore) })
 	return w

@@ -439,50 +439,27 @@ func writeCards(ctx context.Context, tx pgx.Tx, old, next record) error {
 			return err
 		}
 	}
-	placed := map[string]int64{}
-	rows, err := tx.Query(ctx, "SELECT change_key, position FROM changes")
+	placed, err := db.Placed(ctx, tx, "changes", "change_key")
 	if err != nil {
 		return err
 	}
-	var key string
-	var position int64
-	if _, err := pgx.ForEachRow(rows, []any{&key, &position}, func() error {
-		placed[key] = position
-		return nil
-	}); err != nil {
-		return err
-	}
 	before := map[string]Card{}
+	keys := make([]string, len(next.Cards))
 	for _, c := range old.Cards {
 		before[c.ID] = c
 	}
-	// A newer card has a greater position. Cards come in at the end and go
-	// from anywhere, which leaves the others' places as they are; anything
-	// else (a new card before one that was there, cards in another order)
-	// gives every card its place again.
-	places := make([]int64, len(next.Cards))
-	last, inOrder := int64(0), true
 	for i, c := range next.Cards {
-		p, had := placed[c.ID]
-		switch {
-		case !had:
-			p = last + 1
-		case p <= last:
-			inOrder = false
-		}
-		places[i], last = p, p
+		keys[i] = c.ID
 	}
-	if !inOrder {
-		for i := range places {
-			places[i] = int64(i + 1)
-		}
-	}
+	// A newer card has a greater position. Cards come in at the end and go
+	// from anywhere, which leaves the others' places as they are.
+	places := db.Places(keys, placed)
 	kept := make([]string, 0, len(next.Cards))
 	for i, c := range next.Cards {
 		kept = append(kept, c.ID)
 		p, had := placed[c.ID]
 		if was, ok := before[c.ID]; had && ok && sameJSON(was, c) {
-			if !inOrder || p != places[i] {
+			if p != places[i] {
 				b.Queue("UPDATE changes SET position = $2 WHERE change_key = $1", c.ID, places[i])
 			}
 			continue

@@ -14,9 +14,11 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/db"
+	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -121,9 +123,12 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 		// way: a scope of the database's settings (Phase 13).
 		w.caseBackend = w.inScopes(ctx, b, map[string]string{casework.SettingsKey: "cases"})
 		// The checks seen on each cluster, the validation rules and what
-		// the runs found are rows (DB-43).
+		// the runs found are rows (DB-43); so are the accepted exceptions
+		// and the fixes, which the lessons and the fixes keep beside the
+		// cases, in the same ConfigMap (DB-47).
 		w.caseBackend = w.inTables(ctx, w.caseBackend, func(d *db.DB) map[string]movedDoc {
-			return map[string]movedDoc{casework.ChecksKey: casework.NewChecksPG(d), casework.RulesKey: casework.NewRulesPG(d), casework.FoundKey: casework.NewFoundPG(d)}
+			return map[string]movedDoc{casework.ChecksKey: casework.NewChecksPG(d), casework.RulesKey: casework.NewRulesPG(d), casework.FoundKey: casework.NewFoundPG(d),
+				lessons.ExceptionsKey: lessons.NewExceptionsPG(d), fixes.Key: fixes.NewPG(d)}
 		})
 		return w.caseBackend
 	})
@@ -163,8 +168,10 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// the casework ConfigMap beside the cases; written to the wiki too when
 	// one is kept.
 	var lessonsBackend kv.Backend
-	if caseStored != nil {
-		lessonsBackend = caseStored
+	if caseStored != nil || w.database != nil {
+		// Through the case work's backend, which routes the exceptions and
+		// the fixes to the database when there is one.
+		lessonsBackend = w.caseBackend
 	}
 	lessonsSvc := openLessons(lessonsBackend, w.auditLog, w.knowledgeSvc, log)
 	// Fixes (wave 6g, CF-50 to CF-55): beside the exceptions; the

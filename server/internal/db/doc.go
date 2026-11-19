@@ -179,3 +179,50 @@ func Diff[V any](old, next []V, key func(V) string, add func(V) error, change fu
 	}
 	return nil
 }
+
+// Places gives the records of a list, named by their keys in the list's
+// order, places that sort as the list does, changing as few as it can:
+// placed holds the places the records have now. A record with no place
+// yet is placed after the one before it; while the places then still
+// rise through the list, every record that had one keeps it, so a record
+// that comes in at the end or goes from anywhere moves no other. Any
+// other change (a new record before one that was there, another order)
+// places every record again, from 1. A list whose newest record is first
+// is given in reverse, and read by its places from the greatest down.
+func Places(keys []string, placed map[string]int64) []int64 {
+	places := make([]int64, len(keys))
+	last, rising := int64(0), true
+	for i, k := range keys {
+		p, had := placed[k]
+		switch {
+		case !had:
+			p = last + 1
+		case p <= last:
+			rising = false
+		}
+		places[i], last = p, p
+	}
+	if !rising {
+		for i := range places {
+			places[i] = int64(i + 1)
+		}
+	}
+	return places
+}
+
+// Placed reads the places the rows of a table have, by the column that
+// names them.
+func Placed(ctx context.Context, q Querier, table, key string) (map[string]int64, error) {
+	rows, err := q.Query(ctx, "SELECT "+key+", position FROM "+table)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{}
+	var k string
+	var p int64
+	_, err = pgx.ForEachRow(rows, []any{&k, &p}, func() error {
+		out[k] = p
+		return nil
+	})
+	return out, err
+}
