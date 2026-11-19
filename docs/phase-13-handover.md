@@ -79,7 +79,7 @@ Also seen, and left: the image's version comes from `git describe` and says `v0.
 
 Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1, on a 2-core machine.
 
-- **The full Go suite with the database**, `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`: all 55 packages that have tests pass. It was run after each of the last two code commits.
+- **The full Go suite with the database**, `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`: all 55 packages that have tests pass. Its last run was on `9bf78e6` (the variables). The commit after it, the second cluster test's fixes, changed two messages, the backup script and tests: for it `make lint-go`, the chart checks, the backup container's check and `go test -race` on `internal/db`, `cmd/221b` and `internal/automation` were run, not the whole suite. Run the whole suite first.
 - `make lint-go` (gofmt, `go vet ./...`, the prompt sources, `hack/check-db-backup.sh`), and `shellcheck` on `hack/` and `deploy/postgres/`: clean.
 - `hack/check-chart.sh`: all 107 checks pass, the database's included, and every render is valid against the Kubernetes 1.35 and 1.37 schemas.
 - `hack/check-db-backup.sh` runs the backup container against stand-ins for Patroni and WAL-G: who takes the base backup, when, and that it stops within a second of being told to.
