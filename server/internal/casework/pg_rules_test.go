@@ -102,6 +102,15 @@ func TestChecksRulesAndFoundInTheDatabase(t *testing.T) {
 	if n, m, k := rowsOf(t, d, "validation_rules"), rowsOf(t, d, "rule_suggestions"), rowsOf(t, d, "rule_suggestion_descriptions"); n != 2 || m != 1 || k != 2 {
 		t.Fatalf("rules %d, suggestions %d, descriptions %d", n, m, k)
 	}
+	// The ids dismissed are rows, one an id: the list grows at its end, is
+	// cut at its start, and any other change is kept too.
+	rr.Dismissed = append(rr.Dismissed[1:], "other.late")
+	savedDoc(t, rules, otherRules, RulesKey, rr)
+	rr.Dismissed = []string{"other.late", "other.flaky"}
+	savedDoc(t, rules, otherRules, RulesKey, rr)
+	if n := rowsOf(t, d, "dismissed_checks"); n != 2 {
+		t.Fatalf("dismissed %d", n)
+	}
 
 	found, otherFound := NewFoundPG(d), NewFoundPG(d)
 	fr := foundRecord{
@@ -126,5 +135,13 @@ func TestChecksRulesAndFoundInTheDatabase(t *testing.T) {
 	savedDoc(t, found, otherFound, FoundKey, fr)
 	if n := rowsOf(t, d, "check_found_titles") + rowsOf(t, d, "check_found_descriptions"); n != 0 {
 		t.Fatalf("%d rows left of a check that is gone", n)
+	}
+	if n := rowsOf(t, d, "counted_runs"); n != 4 {
+		t.Fatalf("runs counted %d", n)
+	}
+	fr.Counted, fr.Tracked = fr.Counted[2:], false
+	savedDoc(t, found, otherFound, FoundKey, fr)
+	if n := rowsOf(t, d, "counted_runs"); n != 2 {
+		t.Fatalf("runs counted after the oldest went %d", n)
 	}
 }

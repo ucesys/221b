@@ -129,3 +129,53 @@ func TestANodesOwnValueIsKeptOnceWhicheverFleetSetIt(t *testing.T) {
 		t.Fatalf("All nodes after the removal: %+v", got)
 	}
 }
+
+// Taking the sensitive mark off a variable waits for a second admin while
+// a value stays under its name; removing the variable entirely, mark and
+// values, shows nothing that was hidden and goes at once.
+func TestRemovingASensitiveVariableEntirelyNeedsNoSecondAdmin(t *testing.T) {
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	st := automation.NewStore(&kv.Memory{}, nil)
+	eng := automation.NewEngine(automation.Options{Store: st, Exec: noExec{}})
+	shared := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	srv, c, m, auditOut, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Automation, o.AutomationStore, o.Settings = eng, st, shared
+	})
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvOther, Mode: clusters.ModeWrite}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	e := autoEnv{srv: srv, c: c, store: st, engine: eng, audit: auditOut, local: local}
+	code, body := e.do(t, "GET", "/api/v1/automation/fleets", "")
+	var fl automationFleets
+	if code != 200 || json.Unmarshal([]byte(body), &fl) != nil || len(fl.Fleets[0].Nodes) < 2 {
+		t.Fatalf("fleets: %d %s", code, body)
+	}
+	a, b := fl.Fleets[0].Nodes[0].Name, fl.Fleets[0].Nodes[1].Name
+	if _, err := shared.UpdateFleets(context.Background(), clusters.LocalID, []fleets.Fleet{{ID: "left", Name: "Left", Kind: fleets.KindNodes, Nodes: []string{a, b}}}); err != nil {
+		t.Fatal(err)
+	}
+	put := func(fleet, body string, want int) {
+		t.Helper()
+		if code, out := e.do(t, "PUT", "/api/v1/automation/fleets/"+fleet+"/variables", body); code != want {
+			t.Fatalf("PUT %s %s: %d, want %d: %s", fleet, body, code, want, out)
+		}
+	}
+	// All nodes: the mark alone waits, the variable whole goes.
+	put(allNodes, `{"values":{"TOKEN":"s3cret","ZONE":"eu"},"sensitive":["TOKEN"]}`, http.StatusOK)
+	put(allNodes, `{"values":{"TOKEN":"s3cret","ZONE":"eu"}}`, http.StatusAccepted)
+	put(allNodes, `{"values":{"ZONE":"eu"}}`, http.StatusOK)
+	all, err := st.Variables(context.Background(), clusters.LocalID)
+	if _, kept := all[allNodes].Values["TOKEN"]; err != nil || kept || len(all[allNodes].Sensitive) != 0 {
+		t.Fatalf("after the removal: %+v %v", all[allNodes], err)
+	}
+	// A fleet whose member has its own value under the name: the fleet's
+	// value gone and the node's left alone is still a mark taken off a
+	// value that stays; with the node's gone too, it is a removal.
+	put("left", `{"values":{"KEY":"k1"},"nodes":{"`+b+`":{"KEY":"k2"}},"sensitive":["KEY"]}`, http.StatusOK)
+	put("left", `{"values":{}}`, http.StatusAccepted)
+	put("left", `{"values":{},"nodes":{"`+b+`":{}}}`, http.StatusOK)
+}

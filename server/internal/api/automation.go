@@ -644,9 +644,33 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	}
 	// Marked sensitive stays so until a second admin says otherwise, on any
 	// cluster: otherwise one person could unmark it and change it alone.
+	// A variable removed entirely, its mark and every value under its name,
+	// shows nothing that was hidden, and goes as any other removal does
+	// (decided with the owner on November 19, 2026). A value that stays is
+	// the fleet's, a node's the request names, or a member's own that the
+	// request leaves alone.
+	stays := func(name string) bool {
+		if _, ok := next.Values[name]; ok {
+			return true
+		}
+		for _, m := range next.Nodes {
+			if _, ok := m[name]; ok {
+				return true
+			}
+		}
+		if id == allNodes {
+			return false
+		}
+		for n, m := range automation.View(all, id, nil).Nodes {
+			if _, ok := m[name]; ok && fleet.has(n) && !slices.Contains(scope, n) {
+				return true
+			}
+		}
+		return false
+	}
 	unmarked := false
 	for _, name := range before.Sensitive {
-		if !slices.Contains(next.Sensitive, name) {
+		if !slices.Contains(next.Sensitive, name) && stays(name) {
 			unmarked = true
 			changed = append(changed, name+" stops being sensitive")
 			impact = append(impact, automation.ImpactItem{Script: name, Decision: automation.ImpactApproval, Why: "it stops being sensitive", By: "rule"})

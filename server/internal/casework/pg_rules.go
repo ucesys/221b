@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"time"
 
@@ -15,21 +16,55 @@ import (
 // The checks seen on each cluster, the validation rules with their
 // suggestions, and what the runs found under each check, in the database
 // (Phase 13, DB-43). The service is unchanged and reaches the rows through
-// db.Doc. Three lists that are of no row are settings scopes: the
-// suggestions dismissed, and the runs counted with whether counting began.
+// db.Doc. The suggestions dismissed and the runs counted are lists of ids,
+// a row an id (dismissed_checks, counted_runs); whether counting began,
+// one flag of no row, is a settings scope.
 
-const (
-	rulesScope = "case-rules"
-	foundScope = "case-found"
-)
-
-type rulesKept struct {
-	Dismissed []string `json:"dismissed,omitempty"`
-}
+const foundScope = "case-found"
 
 type foundKept struct {
-	Counted []string `json:"counted,omitempty"`
-	Tracked bool     `json:"tracked,omitempty"`
+	Tracked bool `json:"tracked,omitempty"`
+}
+
+// readList is a list of ids kept a row an id, in its order.
+func readList(ctx context.Context, q db.Querier, table, column string) ([]string, error) {
+	rows, err := q.Query(ctx, "SELECT "+column+" FROM "+table+" ORDER BY position, "+column)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	var id string
+	_, err = pgx.ForEachRow(rows, []any{&id}, func() error {
+		out = append(out, id)
+		return nil
+	})
+	return out, err
+}
+
+// queueList writes a list of ids that became next. Such a list grows at
+// its end and is cut at its start, which leaves the other rows as they
+// are; anything else writes it whole.
+func queueList(b *pgx.Batch, table, column string, old, next []string) {
+	if sameDoc(old, next) {
+		return
+	}
+	drop := 0
+	for ; drop < len(old); drop++ {
+		if rest := old[drop:]; len(rest) <= len(next) && slices.Equal(rest, next[:len(rest)]) {
+			break
+		}
+	}
+	fresh := next[len(old)-drop:]
+	if drop == len(old) {
+		b.Queue("DELETE FROM " + table)
+		fresh = next
+	} else if drop > 0 {
+		b.Queue("DELETE FROM "+table+" WHERE "+column+" = ANY($1)", old[:drop])
+	}
+	for _, id := range fresh {
+		// After the last one there; an id is in the list once.
+		b.Queue("INSERT INTO "+table+" ("+column+", position) VALUES ($1, (SELECT coalesce(max(position), 0) + 1 FROM "+table+")) ON CONFLICT ("+column+") DO NOTHING", id)
+	}
 }
 
 func sameDoc(a, b any) bool {
@@ -238,12 +273,12 @@ func queueDescriptions(b *pgx.Batch, table, key string, of any, list []Descripti
 
 func readRules(ctx context.Context, q db.Querier) (rulesRecord, bool, error) {
 	var rec rulesRecord
-	var kept rulesKept
-	found, err := loadKept(ctx, q, rulesScope, &kept)
+	dismissed, err := readList(ctx, q, "dismissed_checks", "check_name")
 	if err != nil {
 		return rec, false, err
 	}
-	rec.Dismissed = kept.Dismissed
+	rec.Dismissed = dismissed
+	found := len(dismissed) > 0
 	rows, err := q.Query(ctx, `SELECT validation_rule_id, says, case_type, job_kinds, control, NOT is_built_in, is_auto, state = 'retired',
 			coalesce(replaced_by_validation_rule_id, ''), updated_at, updated_by
 		FROM validation_rules`)
@@ -300,12 +335,8 @@ func readRules(ctx context.Context, q db.Querier) (rulesRecord, bool, error) {
 }
 
 func writeRules(ctx context.Context, tx pgx.Tx, old, next rulesRecord) error {
-	if !sameDoc(old.Dismissed, next.Dismissed) {
-		if err := saveKept(ctx, tx, rulesScope, rulesKept{Dismissed: next.Dismissed}); err != nil {
-			return err
-		}
-	}
 	b := &pgx.Batch{}
+	queueList(b, "dismissed_checks", "check_name", old.Dismissed, next.Dismissed)
 	for _, id := range sorted(old.Rules, next.Rules) {
 		was, r := old.Rules[id], next.Rules[id]
 		if r == nil {
@@ -365,7 +396,11 @@ func readFound(ctx context.Context, q db.Querier) (foundRecord, bool, error) {
 	if err != nil {
 		return rec, false, err
 	}
-	rec.Counted, rec.Tracked = kept.Counted, kept.Tracked
+	rec.Tracked = kept.Tracked
+	if rec.Counted, err = readList(ctx, q, "counted_runs", "run_key"); err != nil {
+		return rec, false, err
+	}
+	found = found || len(rec.Counted) > 0
 	titles := map[string][]TitleCount{}
 	rows, err := q.Query(ctx, "SELECT check_name, title, title_count FROM check_found_titles ORDER BY check_name, position")
 	if err != nil {
@@ -438,12 +473,13 @@ func readFound(ctx context.Context, q db.Querier) (foundRecord, bool, error) {
 }
 
 func writeFound(ctx context.Context, tx pgx.Tx, old, next foundRecord) error {
-	if !sameDoc(old.Counted, next.Counted) || old.Tracked != next.Tracked {
-		if err := saveKept(ctx, tx, foundScope, foundKept{Counted: next.Counted, Tracked: next.Tracked}); err != nil {
+	if old.Tracked != next.Tracked {
+		if err := saveKept(ctx, tx, foundScope, foundKept{Tracked: next.Tracked}); err != nil {
 			return err
 		}
 	}
 	b := &pgx.Batch{}
+	queueList(b, "counted_runs", "run_key", old.Counted, next.Counted)
 	for _, id := range sorted(old.IDs, next.IDs) {
 		was, st := old.IDs[id], next.IDs[id]
 		if was != nil && st != nil && sameDoc(was, st) {
