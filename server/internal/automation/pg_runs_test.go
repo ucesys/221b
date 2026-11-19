@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,5 +140,56 @@ func TestRunsInTheDatabase(t *testing.T) {
 	}
 	if err := d.Pool().QueryRow(ctx, q).Scan(&after); err != nil || after != before {
 		t.Errorf("n1's row changed from %s to %s: %v", before, after, err)
+	}
+}
+
+// The engine runs a script over the database's store as over a
+// ConfigMap's: each node's result is saved as it comes, and another
+// replica's store reads the finished run with every node's part.
+func TestTheEngineRunsOverTheDatabase(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	backend := func() kv.Backend {
+		return &kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d)}, Rest: &kv.Memory{}}
+	}
+	x := &stubExec{run: func(node, _, _ string, out io.Writer) (int, error) {
+		io.WriteString(out, "hello from "+node+"\n")
+		if node == "b" {
+			return 3, nil
+		}
+		return 0, nil
+	}}
+	st := NewStore(backend(), time.Now)
+	e := NewEngine(Options{Store: st, Exec: x})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a", "b", "c"},
+		Rollout: Rollout{Mode: RolloutSize, Size: 1}, Values: map[string]map[string]string{"a": {"MODE": "x"}, "b": {"MODE": "y"}, "c": {"MODE": "z"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRun(t, e, r.ID)
+	if done.State == RunRunning || done.Ended == nil {
+		t.Fatalf("the run did not end: %+v", done)
+	}
+	runs, err := NewStore(backend(), time.Now).Runs(ctx)
+	if err != nil || len(runs) != 1 || len(runs[0].Nodes) != 3 {
+		t.Fatalf("another replica reads %+v: %v", runs, err)
+	}
+	got := runs[0]
+	if a, b := got.Nodes[0], got.Nodes[1]; a.Node != "a" || a.Exit == nil || *a.Exit != 0 || !strings.Contains(a.Tail, "hello from a") || a.Values["MODE"] != "x" ||
+		b.Exit == nil || *b.Exit != 3 || b.State != NodeFailed || b.Started == nil || b.Ended == nil {
+		t.Fatalf("the nodes' parts: %+v", got.Nodes)
+	}
+	want, _ := json.Marshal(done)
+	have, _ := json.Marshal(got)
+	// The engine's own copy has the times to the nanosecond.
+	var w, h Run
+	_ = json.Unmarshal(want, &w)
+	_ = json.Unmarshal(have, &h)
+	if w.State != h.State || w.Note != h.Note || len(w.Nodes) != len(h.Nodes) || w.Nodes[2].State != h.Nodes[2].State {
+		t.Fatalf("the run as the engine left it\n%s\nas the database has it\n%s", want, have)
+	}
+	var hosts, values int
+	if err := d.Pool().QueryRow(ctx, "SELECT (SELECT count(*) FROM script_run_hosts), (SELECT count(*) FROM script_run_values WHERE scope = 'host')").Scan(&hosts, &values); err != nil || hosts != 3 || values != 3 {
+		t.Fatalf("%d hosts' rows and %d values' rows: %v", hosts, values, err)
 	}
 }
