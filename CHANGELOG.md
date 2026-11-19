@@ -31,6 +31,10 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **The chart's version is 0.13.0** on this branch.
 - For developers: `hack/check-db-backup.sh` checks the database's backup container without a database; `make image` and `make image-postgres` turn BuildKit on, which Docker before 23 needs. `make test-db` runs the Go tests with those that need PostgreSQL (`TEST_DATABASE=host:port`; they are skipped without it); `make image-postgres` builds the database's image.
 
+### Fixed
+
+- When the default provider has no key, the agents' pages said an administrator adds one "in Settings"; the key is added in Administration › AI › Providers, and the message says so.
+
 ## 0.12.1 (2026-11-18)
 
 Phase 12.1: the agents' and jobs' instructions after a review against open-source prompts (`docs/phase-12.1-prompts.md`, PM-C1 to PM-S1), and who does what among the agents (PM-D1 to PM-D7).

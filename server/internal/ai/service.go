@@ -344,7 +344,7 @@ func (s *Service) allSecrets(snap snapshot) []string {
 func (s *Service) usable(p Provider) string {
 	if p.Provider.Normalized(s.opts.DefaultURL).Auth == sherlock.AuthHeader && s.KeysFor(p.ID).Key() == "" && !KeylessOK(p) {
 		if p.ID == DefaultProvider {
-			return "Sherlock has no API key. An administrator adds one in Settings."
+			return "Sherlock has no API key. An administrator adds one in Administration › AI › Providers."
 		}
 		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Administration › AI › Providers.", p.Name)
 	}
