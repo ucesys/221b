@@ -34,7 +34,10 @@ const runsScope = "automation-runs"
 
 // NewRunsPG keeps the runs in d.
 func NewRunsPG(d *db.DB) *db.Doc[runsRecord] {
-	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, Read: readRuns, Write: writeRuns}
+	// The jobs' runs are runs.json too, in another ConfigMap: each is copied
+	// under a name of its own (the fifth cluster test, F2). A database
+	// that copied these under the old name holds them, and is left alone.
+	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, ImportAs: "automation/" + RunsKey, Read: readRuns, Write: writeRuns}
 }
 
 func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {

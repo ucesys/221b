@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -108,6 +109,10 @@ type wiring struct {
 	database      *db.DB
 	schemaVersion int
 	inDatabase    []string
+	// importIDs are the names record sets are copied under, each once;
+	// importClash those named twice (claimImport).
+	importIDs   map[string]bool
+	importClash []string
 
 	// The settings and what is kept beside them (settings.go); stored are
 	// the ConfigMaps whose sizes the metrics show.
@@ -272,6 +277,9 @@ func run(args []string) error {
 	w.wireSessions(ctx)
 	if err := w.wireBackups(ctx); err != nil {
 		return err
+	}
+	if len(w.importClash) > 0 {
+		return fmt.Errorf("two record sets would be copied into the database under one name, and the second never would be: %s; give one a name of its own (db.Doc.ImportAs)", strings.Join(w.importClash, ", "))
 	}
 	if err := w.wireAPI(); err != nil {
 		return err

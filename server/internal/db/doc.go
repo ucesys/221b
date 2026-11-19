@@ -29,6 +29,14 @@ type Doc[T any] struct {
 	DB *DB
 	// Key is the key the service knows the document by.
 	Key string
+	// ImportAs is the name the one-time copy is recorded under when it is
+	// not Key. Two record sets whose ConfigMaps name their key alike (the
+	// jobs' and Automation's runs.json) would otherwise share one record
+	// of having been copied, and the second would never be copied. A
+	// document with ImportAs is copied only into a database that does not
+	// hold it yet: the name may be new to a database that holds the
+	// records already, and what it holds is newer than the ConfigMap.
+	ImportAs string
 	// Read returns the document and whether anything is kept at all.
 	Read func(ctx context.Context, q Querier) (T, bool, error)
 	// Write changes the rows from old to new, inside tx.
@@ -127,7 +135,12 @@ func (d *Doc[T]) DeleteKey(ctx context.Context, _ string) error {
 // whether it copied.
 func (d *Doc[T]) Import(ctx context.Context, from kv.Backend, source string) (bool, error) {
 	copied := false
-	_, err := d.DB.ImportOnce(ctx, d.Key, source, func(ctx context.Context, tx pgx.Tx) (int, error) {
+	_, err := d.DB.ImportOnce(ctx, d.ImportID(), source, func(ctx context.Context, tx pgx.Tx) (int, error) {
+		if d.ImportAs != "" {
+			if _, held, err := d.Read(ctx, tx); err != nil || held {
+				return 0, err
+			}
+		}
 		b, _, err := from.LoadKey(ctx, d.Key)
 		if errors.Is(err, kv.ErrNotFound) {
 			return 0, nil
@@ -144,6 +157,16 @@ func (d *Doc[T]) Import(ctx context.Context, from kv.Backend, source string) (bo
 		return 1, d.Write(ctx, tx, none, doc)
 	})
 	return copied, err
+}
+
+// ImportID is the name the one-time copy is recorded under in the imports
+// table. It is one record set's alone: the console does not start when
+// two of its record sets would share one.
+func (d *Doc[T]) ImportID() string {
+	if d.ImportAs != "" {
+		return d.ImportAs
+	}
+	return d.Key
 }
 
 // Diff walks two lists of records matched by key, and calls add for a

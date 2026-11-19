@@ -287,6 +287,14 @@ spec:
               value: "false"
             - name: PATRONI_KUBERNETES_LABELS
               value: {{ printf "{app.kubernetes.io/name: 221b-db, app.kubernetes.io/instance: %s, 221b.io/patroni-scope: %s}" .Release.Name $name | quote }}
+            # The label Patroni finds its own members by. It adds the scope
+            # under this label to the labels above when it lists pods, and
+            # its default, cluster-name, is on no pod here: each member
+            # then saw only itself, and a standby could never copy from the
+            # leader (the fifth cluster test, F1). The pods carry the scope
+            # as 221b.io/patroni-scope.
+            - name: PATRONI_KUBERNETES_SCOPE_LABEL
+              value: 221b.io/patroni-scope
             - name: PATRONI_KUBERNETES_LEADER_LABEL_VALUE
               value: primary
             - name: PATRONI_KUBERNETES_FOLLOWER_LABEL_VALUE

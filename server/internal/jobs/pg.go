@@ -240,7 +240,9 @@ func writeJobs(ctx context.Context, tx pgx.Tx, old, next jobsRecord) error {
 
 // NewRunsPG keeps the jobs' runs in d.
 func NewRunsPG(d *db.DB) *db.Doc[runsRecord] {
-	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, Read: readRuns, Write: writeRuns}
+	// Automation's runs are runs.json too, in another ConfigMap: each is
+	// copied under a name of its own (the fifth cluster test, F2).
+	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, ImportAs: "jobs/" + RunsKey, Read: readRuns, Write: writeRuns}
 }
 
 func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {

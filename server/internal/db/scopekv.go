@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"sort"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -96,6 +97,16 @@ func (s *ScopeKV) DeleteKey(ctx context.Context, key string) error {
 		_, err := q.Exec(ctx, "DELETE FROM settings WHERE scope = $1", scope)
 		return err
 	})
+}
+
+// ImportIDs are the names the one-time copies are recorded under: the keys.
+func (s *ScopeKV) ImportIDs() []string {
+	ids := make([]string, 0, len(s.scopes))
+	for key := range s.scopes {
+		ids = append(ids, key)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // Import copies each key's document from another backend into its scope,

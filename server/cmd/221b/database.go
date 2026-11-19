@@ -123,6 +123,9 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 		b = &kv.Memory{}
 	}
 	s := db.NewScopeKV(w.database, scopes)
+	for _, id := range s.ImportIDs() {
+		w.claimImport(id)
+	}
 	if _, inMemory := b.(*kv.Memory); !inMemory {
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
 		copied, err := s.Import(ictx, b, "configmap")
@@ -146,6 +149,23 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 type movedDoc interface {
 	kv.Backend
 	Import(ctx context.Context, from kv.Backend, source string) (bool, error)
+	// ImportID is the name the copy is recorded under.
+	ImportID() string
+}
+
+// claimImport notes that a record set is copied under id. Two record
+// sets under one id would share one record of having been copied, and the
+// second would never be copied (the fifth cluster test, F2: the jobs' and
+// Automation's runs.json), so the console does not start when that
+// happens: importClash is checked once everything is wired.
+func (w *wiring) claimImport(id string) {
+	if w.importIDs == nil {
+		w.importIDs = map[string]bool{}
+	}
+	if w.importIDs[id] {
+		w.importClash = append(w.importClash, id)
+	}
+	w.importIDs[id] = true
 }
 
 // inTables keeps the documents under the keys named in the database, each
@@ -165,6 +185,7 @@ func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB)
 	keys := map[string]kv.Backend{}
 	for key, doc := range make(w.database) {
 		keys[key] = doc
+		w.claimImport(doc.ImportID())
 		if inMemory {
 			continue
 		}

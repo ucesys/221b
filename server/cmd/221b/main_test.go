@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/leader"
 )
@@ -165,5 +167,24 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
 	if got, _, _ := again.LoadKey(ctx, "setup.json"); !strings.Contains(string(got), "sso") {
 		t.Fatalf("a second start reads %s", got)
+	}
+}
+
+// No two record sets are copied into the database under one name: the
+// jobs' and Automation's runs are both runs.json, each in its ConfigMap,
+// and have names of their own; a name claimed twice stops the start.
+func TestNoTwoRecordSetsAreCopiedUnderOneName(t *testing.T) {
+	if a, j := automation.NewRunsPG(nil).ImportID(), jobs.NewRunsPG(nil).ImportID(); a == j || a == automation.RunsKey || j == jobs.RunsKey {
+		t.Fatalf("automation's runs are copied as %q, the jobs' as %q", a, j)
+	}
+	w := &wiring{}
+	w.claimImport("jobs/runs.json")
+	w.claimImport("automation/runs.json")
+	if len(w.importClash) != 0 {
+		t.Fatalf("two names clash: %v", w.importClash)
+	}
+	w.claimImport("jobs/runs.json")
+	if len(w.importClash) != 1 || w.importClash[0] != "jobs/runs.json" {
+		t.Fatalf("a name claimed twice: %v", w.importClash)
 	}
 }

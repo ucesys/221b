@@ -155,6 +155,8 @@ database_modes() {
     ! has 'name: k8s-console-221b-db-replicas$' < "$d" &&
     statefulset "$d" | has 'readOnlyRootFilesystem: true' && statefulset "$d" | has 'runAsNonRoot: true' &&
     statefulset "$d" | grep -A1 'name: PATRONI_KUBERNETES_USE_ENDPOINTS' | has '"false"' &&
+    statefulset "$d" | grep -A1 'name: PATRONI_KUBERNETES_SCOPE_LABEL' | has '221b.io/patroni-scope' &&
+    statefulset "$d" | has '^        221b.io/patroni-scope: k8s-console-221b-db$' &&
     statefulset "$d" | grep -A1 'name: WALG_FILE_PREFIX' | has '/backup' && ! statefulset "$ha" | has 'WALG_FILE_PREFIX' &&
     statefulset "$ha" | grep -A1 'name: WALG_S3_PREFIX' | has '"s3://backups/221b"' &&
     grep -A1 'name: DB_HOST' "$d" | has '"k8s-console-221b-db.consoles.svc"' &&

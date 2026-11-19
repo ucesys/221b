@@ -239,6 +239,9 @@ func (p *SpendPG) DeleteKey(ctx context.Context, _ string) error {
 	})
 }
 
+// ImportID is the name the one-time copy is recorded under.
+func (p *SpendPG) ImportID() string { return SpendKey }
+
 // Import carries the sums from holds under SpendKey over, once, and says
 // whether it did.
 func (p *SpendPG) Import(ctx context.Context, from kv.Backend, source string) (bool, error) {
