@@ -12,6 +12,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
@@ -48,11 +49,15 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	spendBackend = w.inTables(ctx, spendBackend, func(d *db.DB) map[string]movedDoc {
 		return map[string]movedDoc{twoperson.Key: twoperson.NewPG(d), kube.SettingsKey: settings.NewPG(d), apps.RepositoriesKey: apps.NewReposPG(d),
 			// Inventory: the hosts outside Kubernetes and the nodes' pairings.
-			nodessh.HostsKey: nodessh.NewHostsPG(d), nodessh.PairingsKey: nodessh.NewPairingsPG(d)}
+			nodessh.HostsKey: nodessh.NewHostsPG(d), nodessh.PairingsKey: nodessh.NewPairingsPG(d),
+			// What the agents spent, for a backup and for the sums the
+			// ConfigMap held: the ledger itself adds rows (DB-41).
+			sherlock.SpendKey: sherlock.NewSpendPG(d, nil)}
 	})
 	// The shared settings themselves: three scopes and the acknowledged
 	// alerts' rows, read through the same backend.
 	if w.database != nil {
+		w.inDatabase = append(w.inDatabase, "platform", "approvals", "inventory")
 		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {

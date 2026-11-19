@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -54,8 +56,21 @@ type world struct {
 	engine *sherlock.Service
 	fake   *fakeclaude.Fake
 	set    *fakeSettings
-	kv     *kv.Memory
+	kv     kv.Backend
 	audit  *bytes.Buffer
+}
+
+// testStore is where a test's console keeps the AI keys: memory, or the
+// database's tables over memory when AI_TESTS_STORE is "database", which
+// runs every test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("AI_TESTS_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{ProvidersKey: NewProvidersPG(d), AgentsKey: NewAgentsPG(d), PromptsKey: NewPromptsPG(d),
+		TestsKey: NewTestsPG(d), PilotKey: NewPilotPG(d)}, Rest: &kv.Memory{}}
 }
 
 // setup is a console with the agents over a fake Claude API, Sherlock on
@@ -76,7 +91,7 @@ func setupWith(t *testing.T, baselines map[string]string, wrap func(http.Handler
 	}
 	api := httptest.NewServer(h)
 	t.Cleanup(api.Close)
-	w := &world{fake: fake, kv: &kv.Memory{}, audit: &bytes.Buffer{}}
+	w := &world{fake: fake, kv: testStore(t), audit: &bytes.Buffer{}}
 	w.set = &fakeSettings{sh: settings.Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200, Clusters: map[string]bool{"local": true}}}
 	keys := sherlock.NewKeys(nil, "", nil)
 	if err := keys.Set(context.Background(), "sk-ant-test-key-0123456789", "test"); err != nil {

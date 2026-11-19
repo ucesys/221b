@@ -25,7 +25,10 @@ type aiOptions struct {
 	shared        ai.SettingsStore
 	keys          *sherlock.Keys
 	chartProvider sherlock.Provider
-	log           *slog.Logger
+	// moved keeps the keys that have tables in the database, when there
+	// is one (Phase 13); nil leaves every key where it is.
+	moved func(kv.Backend) kv.Backend
+	log   *slog.Logger
 }
 
 // aiService is the agents, with the ConfigMap they are kept in, for the
@@ -51,6 +54,9 @@ func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secret
 		backend, out.stored = l, l
 	} else {
 		o.log.Warn("the AI agents' providers, instructions and test cases are kept in memory and lost on restart (set -ai-configmap to keep them)")
+	}
+	if o.moved != nil {
+		backend = o.moved(backend)
 	}
 	baselines, err := ai.LoadBaselines(cfg.AgentsDir)
 	if err != nil {

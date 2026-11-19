@@ -70,6 +70,38 @@ type Ledger struct {
 	// unsaved is why the last save failed, "" once one succeeds: what is
 	// counted here is lost on a restart until then.
 	unsaved string
+	// rows, when set, is where the spend is kept in place of the backend:
+	// each cost a row (Phase 13), and costs are what was counted here and
+	// is not saved yet, as rows.
+	rows  SpendRows
+	costs []Cost
+}
+
+// Cost is one cost counted: of an agent and the provider it was spent on,
+// "" for none, and whether it is a new question's.
+type Cost struct {
+	At       time.Time
+	Agent    string
+	Provider string
+	USD      float64
+	Asked    bool
+}
+
+// SpendRows keeps the spend as rows that are only ever added, one a cost,
+// and sums them (the database's ai_spend). No save meets another's: two
+// replicas add their own rows.
+type SpendRows interface {
+	// Sum is the spend of t's day and month (UTC).
+	Sum(ctx context.Context, t time.Time) (Spend, error)
+	// Add keeps costs, all or none.
+	Add(ctx context.Context, costs []Cost) error
+}
+
+// UseRows keeps the spend in rows from here on; before the ledger is used.
+func (l *Ledger) UseRows(rows SpendRows) {
+	l.mu.Lock()
+	l.rows = rows
+	l.mu.Unlock()
 }
 
 // SaveError says why the spend could not be saved, "" when it was.
@@ -187,6 +219,10 @@ func (s Spend) empty() bool {
 
 // read loads the saved spend and its version.
 func (l *Ledger) read(ctx context.Context) (Spend, string, error) {
+	if l.rows != nil {
+		s, err := l.rows.Sum(ctx, l.now())
+		return s, "", err
+	}
 	b, version, err := l.backend.LoadKey(ctx, SpendKey)
 	switch {
 	case errors.Is(err, kv.ErrNotFound):
@@ -256,6 +292,9 @@ func (l *Ledger) AddFor(ctx context.Context, agent, provider string, usd float64
 	}
 	l.pending.Agents = addShare(l.pending.Agents, agent, usd, asked)
 	l.pending.Providers = addShare(l.pending.Providers, provider, usd, asked)
+	if l.rows != nil {
+		l.costs = append(l.costs, Cost{At: t, Agent: agent, Provider: provider, USD: usd, Asked: asked})
+	}
 	return plus(rolled(l.saved, t), l.pending)
 }
 
@@ -291,6 +330,16 @@ func (l *Ledger) Save(ctx context.Context) (err error) {
 		}
 	}()
 	if l.pending.empty() {
+		return nil
+	}
+	if l.rows != nil {
+		// Rows are added, never written over: what another replica added
+		// meanwhile is read at the next refresh.
+		if err := l.rows.Add(ctx, l.costs); err != nil {
+			return err
+		}
+		t := l.now()
+		l.saved, l.pending, l.costs = plus(rolled(l.saved, t), rolled(l.pending, t)), Spend{}, nil
 		return nil
 	}
 	for attempt := 1; ; attempt++ {

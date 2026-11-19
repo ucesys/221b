@@ -81,6 +81,9 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 					automation.ScriptsKey: automation.NewScriptsPG(d), automation.VariablesKey: automation.NewVariablesPG(d),
 					automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
 			}), nil)
+			if w.database != nil {
+				w.inDatabase = append(w.inDatabase, "automation")
+			}
 		}
 		autoEngine = automation.NewEngine(automation.Options{
 			Node: func(cluster, node string) (automation.NodeState, bool) {
