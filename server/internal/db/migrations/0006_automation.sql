@@ -3,9 +3,12 @@
 
 CREATE TABLE script_groups (
     script_group_id uuid PRIMARY KEY,
+    -- Its place in the list.
+    position integer NOT NULL DEFAULT 0,
     name text NOT NULL DEFAULT '',
     description text NOT NULL DEFAULT ''
 );
+
 COMMENT ON TABLE script_groups IS 'Named groups of scripts';
 
 CREATE TABLE scripts (
@@ -43,8 +46,11 @@ CREATE TABLE script_version_parameters (
 COMMENT ON TABLE script_version_parameters IS 'Parameters each version declares in its header';
 
 CREATE TABLE run_profiles (
-    run_profile_id uuid PRIMARY KEY,
+    -- The id the console gives a profile; the built-in ones have fixed ids that runs name.
+    run_profile_id text PRIMARY KEY,
+    position integer NOT NULL DEFAULT 0,
     name text NOT NULL DEFAULT '',
+    -- ssh or kubernetes.
     kind text NOT NULL DEFAULT '',
     privilege text NOT NULL DEFAULT '',
     namespace text NOT NULL DEFAULT '',
@@ -52,13 +58,17 @@ CREATE TABLE run_profiles (
     is_built_in boolean NOT NULL DEFAULT false,
     description text NOT NULL DEFAULT ''
 );
+
 COMMENT ON TABLE run_profiles IS 'Execution profiles: SSH privilege or Kubernetes identity';
 
 CREATE TABLE run_profile_fleets (
-    run_profile_id uuid NOT NULL,
-    fleet_id uuid NOT NULL,
-    PRIMARY KEY (run_profile_id, fleet_id)
+    run_profile_id text NOT NULL,
+    -- The fleet by the id it has within a cluster: a profile is not of one cluster, so it
+    -- names fleets as runs do and cannot key to one fleet's row.
+    fleet_key text NOT NULL,
+    PRIMARY KEY (run_profile_id, fleet_key)
 );
+
 COMMENT ON TABLE run_profile_fleets IS 'Fleets a profile may run on';
 
 CREATE TABLE variables (
@@ -109,7 +119,7 @@ COMMENT ON TABLE script_run_fleets IS 'The fleets a run drew values from, as the
 CREATE TABLE script_runs (
     script_run_id uuid PRIMARY KEY,
     script_version_id uuid NOT NULL,
-    run_profile_id uuid NOT NULL,
+    run_profile_id text NOT NULL,
     retry_of_script_run_id uuid,
     cluster_id text NOT NULL DEFAULT '',
     fleet_id uuid,
@@ -174,9 +184,6 @@ ALTER TABLE script_version_parameters ADD CONSTRAINT script_version_parameters_s
     FOREIGN KEY (script_version_id) REFERENCES script_versions (script_version_id) ON DELETE CASCADE;
 ALTER TABLE run_profile_fleets ADD CONSTRAINT run_profile_fleets_run_profile_id_fkey
     FOREIGN KEY (run_profile_id) REFERENCES run_profiles (run_profile_id) ON DELETE CASCADE;
-ALTER TABLE run_profile_fleets ADD CONSTRAINT run_profile_fleets_fleet_id_fkey
-    FOREIGN KEY (fleet_id) REFERENCES fleets (fleet_id) ON DELETE CASCADE;
-CREATE INDEX run_profile_fleets_fleet_id_idx ON run_profile_fleets (fleet_id);
 ALTER TABLE variables ADD CONSTRAINT variables_fleet_id_fkey
     FOREIGN KEY (fleet_id) REFERENCES fleets (fleet_id) ON DELETE CASCADE;
 CREATE INDEX variables_fleet_id_idx ON variables (fleet_id);

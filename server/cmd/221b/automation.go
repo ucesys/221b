@@ -62,7 +62,8 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 			}
 		} else {
 			// With a database (Phase 13) what is known of each node is
-			// rows of host_facts; the rest is where it was, the runs in
+			// rows of host_facts, and the script groups and execution
+			// profiles rows of their tables; the rest is where it was, the runs in
 			// their own ConfigMap when there is one. The facts are copied
 			// from wherever they were kept.
 			kept := autoBackend
@@ -74,7 +75,8 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 				kept = &kv.Routed{Default: autoBackend, Routes: routes}
 			}
 			autoStore = automation.NewStore(w.inTables(ctx, kept, func(d *db.DB) map[string]movedDoc {
-				return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d)}
+				return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d),
+					automation.GroupsKey: automation.NewGroupsPG(d), automation.ProfilesKey: automation.NewProfilesPG(d)}
 			}), nil)
 		}
 		autoEngine = automation.NewEngine(automation.Options{
