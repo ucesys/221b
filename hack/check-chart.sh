@@ -140,6 +140,11 @@ netpol() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "${1:-$out}"; }
 # connections shared among the replicas, no database of the chart's. What
 # cannot work is refused.
 statefulset() { sed -n '/^kind: StatefulSet$/,/^---/p' "$1"; }
+# The Role of the bundled database's pods, of a render.
+dbrole() {
+  awk 'BEGIN { RS = "\n---\n" } /\nkind: Role\n/ && /\n  name: k8s-console-221b-db\n/' "$1"
+}
+
 database_modes() {
   local d=$WORK/chart-db.yaml ha=$WORK/chart-db-ha.yaml ext=$WORK/chart-db-external.yaml
   ! has '^kind: StatefulSet$' < "$out" && ! has 'name: DB_HOST' < "$out" && ! has '221b-db' < "$out" &&
@@ -159,7 +164,10 @@ database_modes() {
     sed -n '/^kind: Deployment$/,/^---/p' "$out" | grep -A7 'startupProbe:' | has 'failureThreshold: 12$' &&
     sed -n '/^kind: Deployment$/,/^---/p' "$d" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
     sed -n '/^kind: Deployment$/,/^---/p' "$ext" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
-    sed -n '/^kind: Role$/,/^---/p' "$d" | grep -A12 'name: k8s-console-221b-db$' | has 'configmaps' &&
+    dbrole "$d" | has 'configmaps' &&
+    dbrole "$d" | has 'k8s-console-221b-db-leader$' && dbrole "$d" | has 'k8s-console-221b-db-2$' &&
+    [ "$(dbrole "$d" | grep -c 'verbs:')" = 4 ] && [ "$(dbrole "$d" | grep -c 'resourceNames:')" = 2 ] &&
+    [ "$(dbrole "$d" | grep -c '"patch"')" = 2 ] && ! dbrole "$d" | grep -A1 'resources: \["configmaps"\]' | has '"patch"' &&
     netpol "$d" | has 'app.kubernetes.io/name: "221b-db"' &&
     netpol "$ha" | grep -A6 'port: 443$' | has 'cidr: "10.30.0.0/16"' &&
     ! has '^kind: StatefulSet$' < "$ext" &&
@@ -715,7 +723,7 @@ check "node shells run in a namespace of their own at Pod Security privileged, c
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
-check "the database: none by default; bundled as one member or three, closed to all but the console; external from values; the start waits for it; what cannot work is refused" database_modes
+check "the database: none by default; bundled as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it; what cannot work is refused" database_modes
 check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
 check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress

@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-35). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-36). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -25,6 +25,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **The backups' settings and runs in the database**: the settings as a row of `settings`, each run a row of `backup_runs`; copied once from the ConfigMap, the newest scheduled time handled included.
 - `GET /api/v1/database`: whether the console has a database and whether it answers; for a SuperAdmin also why not, the schema's version and the domains moved. Metrics `b221_database_up`, `b221_database_schema_version`, `b221_database_connections` and `b221_database_connections_max`.
 - Server flags `-db-host`, `-db-port`, `-db-name`, `-db-user`, `-db-password-file`, `-db-sslmode`, `-db-ca-file`, `-db-client-cert-file`, `-db-client-key-file`, `-db-max-connections`, `-db-listener-host` and `-db-poll-interval` (`DB_*` in the environment).
+- **The bundled database's pods can change only Patroni's own ConfigMaps and their own pods**, not every ConfigMap and pod of the namespace.
 - **A schema step is never edited**: every step's checksum is written down and tested, and a database made by another build of the schema is refused with both checksums and what to do. A database made by a build of this branch from before November 19, 2026 is made again.
 - **The console's pod has a startup probe**, so a console that waits for its database at start (two minutes at most) is not stopped by the liveness probe.
 - **The chart's version is 0.13.0** on this branch.

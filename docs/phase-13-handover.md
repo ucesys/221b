@@ -1,14 +1,14 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 78 tables and their rules) first; the requirements are DB-01 to DB-35 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 78 tables and their rules) first; the requirements are DB-01 to DB-36 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
 
 ## Start here
 
 - **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and Automation but for the runs that wait for approval. Without a database (`database.mode=none`, the default) nothing changes for an installation.
-- **One member of the bundled database has run in a cluster**, three times. The first test found ten things, the second four more, and the third found all fourteen fixed and nothing new but a line of noise in a log. Three members, a failover and a restore have never run. The variables' changes and the runs (steps `0018`, `0019`) have not been in a cluster.
-- **Do next, in this order:** in a cluster, what was never run and the short list after the second test (below); then the domains in the order of the table under *Move the domains*, starting with the runs that wait for approval and then AI configuration.
+- **One member of the bundled database has run in a cluster**, three times. The first test found ten things, the second four more, and the third found all fourteen fixed and nothing new but a line of noise in a log. Three members, a failover and a restore have never run. The variables' changes and the runs (steps `0018`, `0019`) and the database pods' narrowed permissions have not been in a cluster.
+- **Do next, in this order:** in a cluster, the list under *To see in a cluster next*, which starts with the database pods' narrowed permissions; then the domains in the order of the table under *Move the domains*, starting with the runs that wait for approval and then AI configuration.
 
 ## Where the branch stands
 
@@ -31,6 +31,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Automation: a node's own variables are the node's…(AU-23, DB-33)` | The service changed to fit the model: `variables.go` (`View`, `SetVariablesFor`, `nodesOwn`), the API's request to set a fleet's variables, the card action, the backup's restore; `automation/pg_variables.go`, step `0017`. |
 | `Automation: a variable change is what it alters…(DB-34)` | `automation/changeitems.go` (`Items`, `Sides`, `weigh`, `applyItems`), `pg_changes.go`, step `0018`. |
 | `Automation: the runs are rows…(DB-35)` | `automation/pg_runs.go`, step `0019`. |
+| `Storage: the bundled database's pods change only what is theirs (DB-36)` | The narrowed Role, and the decision to keep Patroni with one member. |
 | `Storage: what the second cluster test found` | B11 to B14: the steps' checksums written down and tested, the backup container's look at once and its reading of the history files, two messages. |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
@@ -82,6 +83,8 @@ Also seen, and left: the image's version comes from `git describe` and says `v0.
 
 **To see in a cluster next:**
 
+0. **First, since nothing but a cluster shows it:** the database pods' Role now lets them change only the ConfigMaps `<release>-db-config`, `-leader`, `-sync` and `-failsafe` and the pods `<release>-db-0` to `-2` (they could change every ConfigMap and pod of the namespace before). After the upgrade Patroni's log must have no `403` or `Forbidden`; delete the database pod and see it come back as the primary. If Patroni needs a verb or a name that is missing, the database does not start: put the old rule back (`database.yaml`, the Role) and report which call was refused.
+
 1. The cluster's database (schema 17) gets steps `0018` and `0019` at start; the runs of the automation ConfigMap (`runs.json`), if any, are copied once into `script_runs` and Run History shows them as before; `changes.json` of the automation ConfigMap (the third test left two changes there) is copied once into `variable_changes`, each change with what it altered in `variable_change_items`, and Automation › Variables lists them as before.
 2. With a fleet made first: a request for that fleet sets a member's own value (200, and All nodes shows it), and is refused for a node that is not a member (400).
 3. On a production connection: ask for a variable change that needs approval, set another value of the same fleet meanwhile, approve the change as a second person. Both values are in afterwards.
@@ -116,10 +119,11 @@ Asked how the variables should move, since the model's tables did not hold the s
 
 1. **Variables: follow the table design and change the service.** Done (AU-23, DB-33): a node's own values and reboot time are the node's, a variable is on one fleet or one host, the ceiling and reboot times are columns of `fleets` and `hosts`.
 2. **Variable changes: keep items** (name, old value, new value), as the model has them, not the fleet's whole variables before and after. Done (DB-34): approving a change sets what it alters, with or without a database.
+3. **Patroni stays with one member too**, for this release (asked whether a single member needs it: it does not, but it is the one path that has run in a cluster, and turning `ha` on stays a values change). Decide again once three members have run in a cluster. Agreed with it: the database pods' permissions are narrowed to Patroni's own ConfigMaps and their own pods, as far as Kubernetes allows.
 
 ## Decisions made for the owner to confirm
 
-These differ from the design document *221B storage deployment design*, or were not in it. The last thirteen rows are from November 19.
+These differ from the design document *221B storage deployment design*, or were not in it. The last fourteen rows are from November 19.
 
 | Decision | Why | To undo |
 | --- | --- | --- |
@@ -144,6 +148,7 @@ These differ from the design document *221B storage deployment design*, or were 
 | **The runs that wait for approval are JSON in a settings scope for now.** | They are in the changes' document and belong with the runs, which have not moved. | Order 3. |
 | **A run names its profile by id, not by a key** (`script_runs.run_profile_id` has no foreign key), and its key to its script's version is optional. | A run is kept after its profile and its script's version are gone; the model's keys would have stopped them being removed. | — |
 | **The schema has 78 tables**: `script_run_approvers`. | Every field a column. | — |
+| **The database pods' Role is narrowed**: get, patch, update and delete only on Patroni's four ConfigMaps by name, patch and update only on the database's own pods. They can still create, list and watch ConfigMaps and list pods in the namespace: Kubernetes cannot limit those to names. | The pods could change every ConfigMap in the console's namespace, the console's own records among them. Not yet run in a cluster. | The Role in `deploy/helm/221b/templates/database.yaml`. |
 | **A script may be in no group**, and a group a script names gets its row when the script is written. | The store allows both; `scripts.script_group_id` was required. | — |
 | **Where two fleets kept different own values for one node, the first by fleet id is used** (All nodes' before any), and the longer of two reboot times. | Such a node could not run a script that read the variable; one of the two values a person set for it is closer to what was meant than the fleet's. `upgrading.md` says so. | `nodesOwn` in `automation/variables.go`. |
 | **`fleets.kind` has `all` and `unlisted`**, rows the settings' list of fleets leaves out: All nodes, and a fleet that variables name before the list has it. | A variable must be on a fleet's row or a host's; All nodes has variables and a ceiling and was not a row. | — |
@@ -162,7 +167,7 @@ The Claude docs *221B storage deployment design*, *221B data model: domains and 
 
 ### 2. Move the domains
 
-**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap; of Automation the scripts with their versions, the script groups and the execution profiles.
+**Moved** (each with tests over the database and a one-time copy; see the table at the top of [database.md](database.md)): Activity log, Approvals and Inventory whole; of Platform everything kept in a ConfigMap; Automation whole but for the runs that wait for approval, which are in the database as JSON, not as columns.
 
 **How each moved, and what that leaves to do.**
 
@@ -170,7 +175,7 @@ The Claude docs *221B storage deployment design*, *221B data model: domains and 
 | --- | --- | --- |
 | The audit log; the Toolbox's session records; the backups' settings and runs | A repository (`audit.PGStore`, `sessions.PGHistory`, `backup.PGRepo`). | None. |
 | Getting started, Settings › Email, the case work's settings | Scopes of `settings` (`db.ScopeKV`). | None: they are singletons. |
-| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts, script groups, execution profiles and the scripts with their versions (`automation`) | `db.Doc`: the service is unchanged, its document is rows with every field a column. | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
+| Approval requests and decisions (`twoperson`); standing approvals and channels (`cards`); the shared settings and acknowledged alerts (`settings`); the repositories (`apps`); hosts and pairings (`nodessh`); fleets (`settings`); node facts, script groups, execution profiles, the scripts with their versions, the variables, their changes and the runs (`automation`) | `db.Doc`: the service's document is rows with every field a column. The service is unchanged, except for the variables and their changes, where it was changed to fit the tables (AU-23, DB-34). | A repository for each service, with operations of its own (`Ack`, `Unack`, `SaveFleet`, `PairHost`…), so that one record is read and written without the others and writers no longer take turns per document. `twoperson.prune` and the stores' byte limits are the ConfigMap's and can go then. `settings.Service` should reload on `db.Subscribe` instead of every 3 seconds. |
 
 **Still to move**, in this order. The owner's rule: **every field a column** (no record kept as JSON beside its keys), `db.Doc` allowed as the first step where a service edits its whole document in many places.
 

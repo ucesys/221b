@@ -78,12 +78,30 @@ metadata:
   labels:
     {{- include "b221.dbLabels" . | nindent 4 }}
 rules:
+  # Kubernetes cannot limit create, list and watch to names, so the
+  # database's pods can list the namespace's ConfigMaps and pods. What they
+  # can change is limited to Patroni's own ConfigMaps and their own pods.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+    verbs: ["create", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ $name }}-config
+      - {{ $name }}-leader
+      - {{ $name }}-sync
+      - {{ $name }}-failsafe
+    verbs: ["get", "patch", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames:
+      - {{ $name }}-0
+      - {{ $name }}-1
+      - {{ $name }}-2
+    verbs: ["patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
