@@ -1,14 +1,14 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 76 tables and their rules) first; the requirements are DB-01 to DB-32 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 76 tables and their rules) first; the requirements are DB-01 to DB-33 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
 
 ## Start here
 
-- **The branch is `phase-13-store`**, 22 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
+- **The branch is `phase-13-store`**, 23 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
-- **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation the scripts, groups and profiles. Without a database (`database.mode=none`, the default) nothing changes for an installation.
+- **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation the scripts, groups, profiles and variables. Without a database (`database.mode=none`, the default) nothing changes for an installation.
 - **One member of the bundled database has run in a cluster.** Ten things were found there and fixed since; none of the fixes has run in a cluster yet. Three members, a failover and a restore have never run.
-- **Do next, in this order:** the cluster re-test (seven items, below); the owner's answers to two questions about the variables (below); then the domains in the order of the table under *Move the domains*.
+- **Do next, in this order:** the cluster re-test (seven items, below); then the domains in the order of the table under *Move the domains*, starting with the variables' changes, which the owner has decided are kept as items.
 
 ## Where the branch stands
 
@@ -28,6 +28,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Automation: script groups and execution profiles…` | `automation/pg_defs.go`. |
 | `Storage: what the first cluster test found (DB-17, DB-18, DB-31)` | The ten fixes of the cluster test; `db.ImportNewer`, step `0015`; `hack/check-db-backup.sh`; the chart and the app at 0.13.0. |
 | `Automation: the scripts and their versions…(DB-32)` | `automation/pg_scripts.go`, step `0016`: three more tables, 76 in all. |
+| `Automation: a node's own variables are the node's…(AU-23, DB-33)` | The service changed to fit the model: `variables.go` (`View`, `SetVariablesFor`, `nodesOwn`), the API's request to set a fleet's variables, the card action, the backup's restore; `automation/pg_variables.go`, step `0017`. |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).
@@ -57,7 +58,7 @@ A second session built both images and upgraded a 0.12.0 release in place on the
 
 1. Build both images from the branch as it is now, without the working-copy patch, with `sudo make image image-postgres`.
 2. Delete the database pod again: the outage should be about twenty seconds, not sixty-eight, and the console pod should not be restarted by its probe when it starts while the database is away.
-3. The existing test databases get steps `0015` and `0016` at start (they have 14); `imports` rows from before `0015` count from `imported_at`. With Automation's scripts in the release's ConfigMap, they are copied once into `scripts` and `script_versions`, and the Automation tab shows them as before.
+3. The existing test databases get steps `0015` to `0017` at start (they have 14); `imports` rows from before `0015` count from `imported_at`. With Automation's scripts in the release's ConfigMap, they are copied once into `scripts` and `script_versions`, and the Automation tab shows them as before. The same for its variables (`params.json`): rows of `variables`, All nodes as a row of `fleets` of kind `all`, and Automation › Variables as before.
 4. Rollback, sign in so that audit events are written to the ConfigMap, upgrade again to the same database: those events, and only those, appear in `audit_events` once.
 5. B9: after a rollback to revision 13, an upgrade with `database.mode=external` must be refused with the sentence that names the Secret; with `database.mode=bundled` it must go through. This is a `lookup`, which no test without a cluster reaches, so it matters most.
 6. The backup container on a fresh volume takes a base backup as soon as the primary runs (log line `this volume has no log up to timeline 1`), writes `/backup/.primary-timeline`, and does not take another after its own restart.
@@ -79,26 +80,25 @@ Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1, on a 2-core machine.
 **Not tested anywhere:**
 
 - `hack/e2e-kind.sh`, `ha-kind.sh`, `upgrade-kind.sh` were not run; each needs a database variant.
-- The browser app was not changed, and its tests (`npm test`, `make e2e-sim`) were not run. Its version is 0.13.0 now.
+- The browser app was not changed, and its tests (`npm test`, `make e2e-sim`) were not run. Its version is 0.13.0 now. AU-23 kept the API's shape and the app's own rule (it edits a node's own values under All nodes, `web/src/lib/variables.ts`), so the Variables page should need no change; it has not been looked at in a browser since.
 - CI has not run on the branch. Its chart job has a new step (the backup container's check) and runs `shellcheck` on `deploy/postgres/` too, and its Go job has a `postgres:18` service.
 
 **Two notes on the Go suite:**
 
 - **One test is flaky under load: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It failed in one full run and passed in every one since. It expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores sometimes none are. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without. Fix it on its own (make the waiting cases wait on the test's own gate, not on the scheduler); if it fails in CI, run it again before looking further.
+- **A second one failed once under the same load: `TestTransformsKeepTheCacheSmall` in `internal/kube`**, also untouched by this branch. It found the informers' cache not filled yet (most kinds at zero) in one full run, and passed three times of three alone under the race detector. It needs to wait for the cache instead of expecting it.
 - **`internal/api` takes about 570 seconds** under the race detector on two cores, close to `go test`'s 10-minute limit per package. CI's runners are faster; on a small machine pass `-timeout 30m`.
 
-## Questions the owner has not answered yet
+## What the owner decided on November 19
 
-Both are about Automation's variables, the next record set, and both touch the agreed data model.
+Asked how the variables should move, since the model's tables did not hold the service's documents as they were:
 
-1. **Variables.** The model puts the privilege ceiling and the reboot minutes on `fleets`, and each variable on one fleet or one host. The service keeps a node's override under a fleet (on both at once), and can name fleets that have no row. Change the service to fit the model, or the tables to fit the service?
-2. **Variable changes.** The service keeps a fleet's whole variables before and after each change; the model keeps items (name, old value, new value), which cannot give back node overrides, the ceiling or the sensitive names. Grow the tables to hold both sides in full, or change the service to keep items?
-
-The detail is under *Variables and changes: what to settle first*, below.
+1. **Variables: follow the table design and change the service.** Done (AU-23, DB-33): a node's own values and reboot time are the node's, a variable is on one fleet or one host, the ceiling and reboot times are columns of `fleets` and `hosts`.
+2. **Variable changes: keep items** (name, old value, new value), as the model has them, not the fleet's whole variables before and after. Not built yet; see *The variables' changes* below.
 
 ## Decisions made for the owner to confirm
 
-These differ from the design document *221B storage deployment design*, or were not in it. The last five rows are from November 19.
+These differ from the design document *221B storage deployment design*, or were not in it. The last eight rows are from November 19.
 
 | Decision | Why | To undo |
 | --- | --- | --- |
@@ -119,6 +119,9 @@ These differ from the design document *221B storage deployment design*, or were 
 | **While the bundled database's Secret exists, any mode but `bundled` is refused** without `allowModeChange`, also on a first install under a name used before. | The Secret and the volumes are kept on purpose; a rollback leaves nothing else to go by. | Delete the Secret, or drop the check in `b221.validateDatabase`. |
 | **The schema has 76 tables, not the model's 73.** Every field a column means a version's lists of records are tables: `script_version_kube_actions`, `script_version_findings`, `script_version_actions`. A list of plain values is an array column (`script_versions.facts`). | The owner's rule for the move: no record kept as JSON beside its keys. | Fold them back into JSON columns in a new step. |
 | **A script may be in no group**, and a group a script names gets its row when the script is written. | The store allows both; `scripts.script_group_id` was required. | — |
+| **Where two fleets kept different own values for one node, the first by fleet id is used** (All nodes' before any), and the longer of two reboot times. | Such a node could not run a script that read the variable; one of the two values a person set for it is closer to what was meant than the fleet's. `upgrading.md` says so. | `nodesOwn` in `automation/variables.go`. |
+| **`fleets.kind` has `all` and `unlisted`**, rows the settings' list of fleets leaves out: All nodes, and a fleet that variables name before the list has it. | A variable must be on a fleet's row or a host's; All nodes has variables and a ceiling and was not a row. | — |
+| **At most 5,000 nodes of a cluster may have own values** (was 500 a fleet). | They are kept once a cluster now. In a ConfigMap the document's 64 KiB is still the limit. | `maxNodeOverride`. |
 
 The Claude docs *221B storage deployment design*, *221B data model: domains and tables* and *221B storage engine options* (not in the repository) have not been updated with any of these: the owner asked that changes to the data model be collected and made when he says.
 
@@ -147,7 +150,7 @@ The Claude docs *221B storage deployment design*, *221B data model: domains and 
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| 2 | `automation.VariablesKey`, `ChangesKey` | `variables`, `variable_changes`, `variable_change_items` | Waits for the owner's two answers; see below. |
+| 2 | `automation.ChangesKey` (the variables are done) | `variable_changes`, `variable_change_items` | As items, by the owner's decision; see *The variables' changes* below. The same document holds the runs that wait for approval, so do it back to back with order 3. |
 | 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. `script_runs` points at `script_versions` with `ON DELETE RESTRICT`, and `writeScripts` deletes a version the document no longer has: settle which gives way. |
 | 4 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | Seed `agents` from the catalog first; `ai_spend` is a ledger (a row a call, summed on read): a repository. |
 | 5 | `jobs.JobsKey`, `RunsKey`; `casework.ChecksKey`, `RulesKey`, `FoundKey` | the 6 Jobs tables | `db.Claim` on `schedule_claims` replaces "on the leader" for schedules. |
@@ -156,17 +159,20 @@ The Claude docs *221B storage deployment design*, *221B data model: domains and 
 | 8 | `knowledge.SettingsKey`, `DraftsKey`, `StatusKey`; `fixes.Key`; `lessons.ExceptionsKey`; `issues.KnownKey` | the 10 Knowledge tables | Wiki bodies stay in git or S3. |
 | 9 | What is kept in **Secrets**: the applications (`apps.Store`), the credentials' list (`credentials`), the cluster connections (`clusters.Manager`), the sign-in sessions (`kube.SessionStore`) | `applications`, `credentials`, `clusters`, `auth_sessions` | Skipped on purpose, with the owner told: they have no 1 MiB problem, each needs a store that keeps the metadata in the table and the secret part in the Secret, and sessions touch sign-in (to-do 12, 13). `wireDatabase` must then run before `wireClusters`. Fill the rows of `clusters` and `credentials` that today hold only an id, and remove a cluster's row when its connection goes (to-do 3). |
 
-**Variables and changes: what to settle first.** They were looked at and left, because the model's tables do not hold the documents as they are, and the choices touch the agreed model:
+**The variables' changes: what is decided and what is left.** `changes.json` holds, for each change, the fleet's variables before and after as its page showed them (`Before`, `After`), and the runs that wait for approval (`WaitingRun`).
 
-- `params.json` is cluster → fleet id → `FleetVariables`: the fleet's values, each node's overrides, the privilege ceiling, the names that are sensitive, the reboot minutes, and reboot minutes for single nodes. The model puts the ceiling and the reboot minutes on `fleets` (`privilege_ceiling`, `reboot_minutes`), which another document owns (`settings/pg.go` writes fleets and leaves those two columns alone, so they are free to use). A variable row needs a fleet's row: check what fleet ids the variables can name that are not in the settings' list (a deleted fleet, a fleet of all nodes), because `variables.fleet_id` cascades on delete and a row made only to be pointed at would show up as a fleet in `readFleets`. A node's override is on a host and a fleet at once (`Nodes[node][name]` under a fleet), which `CHECK (num_nonnulls(fleet_id, host_id) = 1)` does not allow as it stands; so are a node's reboot minutes.
-- `changes.json` holds, for each change, the fleet's whole `FleetVariables` before and after, not items: `variable_change_items` (name, old value, new value) cannot give back node overrides, the ceiling or the sensitive names. Either the change's tables grow to hold both sides in full, or the service is changed to keep items. It also holds the **runs that wait for approval** (`WaitingRun`, with a rollout, hooks and the person), which belong with the runs of order 3, and whose `approval_request_id` is the link to Approvals that nothing fills yet.
-- The JSON columns still in step `0006` (`variable_changes.impact`, `script_runs.rollout`, `hooks`) become columns or tables when their record set moves, in a new step as `0016` did for the scripts.
+- **Decided:** in the database a change is rows of `variable_change_items`: one for each thing it alters. An item needs, beyond the model's name, old value and new value: what kind of thing it is (a value, the ceiling, a sensitive mark, a reboot time) and the host, for a node's own. The page works out what changed from before and after (`valueChanges` in `VariableChanges.tsx`), so a before and after that hold only the changed entries serve it.
+- **Already so in the service:** approving compares and applies only the nodes a change names (`DecideChange` with `NamedNodes`), and leaves every other node's own values alone. The fleet's own values are still replaced whole by `After`; with items they must be applied as differences, which gives the same result because a change overtaken by a newer one cannot be approved.
+- **The ConfigMap's document keeps its shape**, whole before and after, so that an earlier release can still approve a waiting change after a rollback.
+- `variable_changes.impact` is JSON in step `0006`: it becomes rows (script, version, decision, why, by) in a new step. `approval_request_id` is `NOT NULL` there and nothing fills it yet: decide whether a change makes an approval request, or the column becomes optional.
+- **The waiting runs** have a rollout, hooks and the person who asked: they belong with the runs of order 3, in the same step.
 
-**How to add one.** Write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in a new migration step, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). The scripts are the fullest model: `automation/pg_scripts.go`, step `0016`, and `TestScriptsInTheDatabase`, which runs the same steps on a ConfigMap and on the database and compares every field of what they keep. Write each new test that way. Three things to know:
+**How to add one.** Write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in a new migration step, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). The scripts are the fullest model of a document moved as it is: `automation/pg_scripts.go`, step `0016`, and `TestScriptsInTheDatabase`, which runs the same steps on a ConfigMap and on the database and compares every field of what they keep. The variables are the model of a service changed to fit the tables: the change was made in the service first, for both ways of keeping the records, with the ConfigMap's document left readable by the release before (`nodesOwn`), and the tables then held it as it was. Write each new test as those two are. Three things to know:
 
 - A time read back from PostgreSQL has microseconds, not nanoseconds: tests use whole seconds, and a comparison with a stored time goes through `db.After`.
 - `pgx.ForEachRow` reads every row into the same variables: copy a slice before keeping it.
 - A parameter that may be null inside `coalesce` needs its type (`coalesce($4::timestamptz, now())`).
+- In `automation`, a nil list of nodes means every node (`View`, `SetVariablesFor`); `NamedNodes` never returns nil. Pass an empty list, not nil, for no node.
 
 For each: the backup's export and restore read through the service or through `w.spendBackend`, which is wrapped once so they find the moved keys; check them. Remove a domain's ConfigMap from the chart one release after its move.
 
@@ -193,7 +199,7 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 ## Working on this
 
 - Go tests that need PostgreSQL: `make test-db` (Docker), or `TEST_DATABASE=host:port go test ./...` against any PostgreSQL 16 or later that lets `postgres` in without a password (`TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD` otherwise). Each test makes and drops its own database. Without `TEST_DATABASE` the database tests are skipped, so a run without it proves little.
-- **Migrations: a change is a new step.** The test cluster has databases at step 14, and the checksum check refuses an edited step, so `0015` and `0016` were added and none was edited. A step may reshape an earlier step's tables while they hold no rows, as `0016` does. `TestMigrate` counts the tables (76): change the number with the step.
+- **Migrations: a change is a new step.** The test cluster has databases at step 14, and the checksum check refuses an edited step, so `0015` to `0017` were added and none was edited. A step may reshape an earlier step's tables while they hold no rows, as `0016` and `0017` do. `TestMigrate` counts the tables (76): change the number with the step.
 - Both images need BuildKit; the Makefile turns it on. The bundled database's members are kept on different nodes, so three members need the image in a registry or on three nodes.
 - A Helm `lookup` (the mode guard, the generated passwords and certificates) returns nothing in `helm template`: only a cluster exercises it.
 - Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md`, `docs/data-model.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).

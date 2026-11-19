@@ -49,7 +49,7 @@ type MemberBook interface {
 // ParamBook keeps Automation's parameters; *automation.Store is one.
 type ParamBook interface {
 	Variables(ctx context.Context, cluster string) (map[string]automation.FleetVariables, error)
-	SetVariables(ctx context.Context, cluster, fleet string, fp automation.FleetVariables) error
+	SetVariablesFor(ctx context.Context, cluster, fleet string, fp automation.FleetVariables, nodes []string) error
 }
 
 // Console is what the console actions work on; a nil part leaves its
@@ -616,6 +616,24 @@ func (in paramsArgs) next(cur automation.FleetVariables) automation.FleetVariabl
 	return out
 }
 
+// nodes are the nodes the card names; never nil, which would mean every
+// node.
+func (in paramsArgs) nodes() []string {
+	seen := map[string]bool{}
+	for n := range in.Nodes {
+		seen[n] = true
+	}
+	for n := range in.UnsetNodes {
+		seen[n] = true
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (p params) fleetName(cluster, id string) (string, bool) {
 	for _, f := range p.c.Fleets.Fleets(cluster) {
 		if f.ID == id {
@@ -665,7 +683,7 @@ func (p params) Describe(ctx context.Context, cluster string, a Action) (Plan, e
 	if err != nil {
 		return pl, err
 	}
-	cur := all[in.Fleet]
+	cur := automation.View(all, in.Fleet, in.nodes())
 	next := in.next(cur)
 	pl.Fingerprint = digest(cur)
 	pl.Impact = changes("", cur.Values, next.Values)
@@ -699,12 +717,15 @@ func (p params) Apply(ctx context.Context, c Card, i int, by Approver) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	next := in.next(all[in.Fleet])
-	if err := p.c.Params.SetVariables(ctx, c.Cluster, in.Fleet, next); err != nil {
+	// A node's own values are the node's, kept once whatever fleets it is
+	// in: the card sets those of the nodes it names, and no other node's.
+	cur := automation.View(all, in.Fleet, in.nodes())
+	next := in.next(cur)
+	if err := p.c.Params.SetVariablesFor(ctx, c.Cluster, in.Fleet, next, in.nodes()); err != nil {
 		p.c.record(audit.ActionAutomationParams, c, by, "fleet "+in.Fleet, audit.OutcomeFailed, err.Error())
 		return Result{}, err
 	}
-	changed := changes("", all[in.Fleet].Values, next.Values)
+	changed := changes("", cur.Values, next.Values)
 	p.c.record(audit.ActionAutomationParams, c, by, "fleet "+in.Fleet, audit.OutcomeOK, "parameters set: "+strings.Join(changed, ", "))
 	return Result{OK: true, Summary: "parameters of fleet " + name + " set"}, nil
 }

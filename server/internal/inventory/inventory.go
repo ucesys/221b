@@ -65,12 +65,15 @@ func EnsureHost(ctx context.Context, tx pgx.Tx, cluster, name string) (string, e
 }
 
 // Collect removes the rows of nodes nothing points at any more: no
-// pairing, no facts, no fleet lists them. A node's row is made at its
-// first use and goes when it leaves.
+// pairing, no facts, no fleet lists them, and they have no variables or
+// reboot time of their own. A node's row is made at its first use and
+// goes when it leaves.
 func Collect(ctx context.Context, tx pgx.Tx) error {
 	_, err := tx.Exec(ctx, `DELETE FROM hosts h WHERE h.is_kubernetes_node
 		AND NOT EXISTS (SELECT FROM host_pairings p WHERE p.host_id = h.host_id)
 		AND NOT EXISTS (SELECT FROM host_facts f WHERE f.host_id = h.host_id)
-		AND NOT EXISTS (SELECT FROM fleet_hosts m WHERE m.host_id = h.host_id)`)
+		AND NOT EXISTS (SELECT FROM fleet_hosts m WHERE m.host_id = h.host_id)
+		AND NOT EXISTS (SELECT FROM variables v WHERE v.host_id = h.host_id)
+		AND h.reboot_minutes IS NULL`)
 	return err
 }

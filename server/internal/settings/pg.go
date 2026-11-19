@@ -193,7 +193,7 @@ func kindOf(f fleets.Fleet) string {
 func readFleets(ctx context.Context, q db.Querier) (map[string][]fleets.Fleet, error) {
 	rows, err := q.Query(ctx, `SELECT coalesce(f.cluster_id, ''), f.fleet_key, f.name, f.color, f.description, f.labels, f.taints, f.kind, f.deploy_label,
 			coalesce((SELECT array_agg(h.name ORDER BY m.position, h.name) FROM fleet_hosts m JOIN hosts h ON h.host_id = m.host_id WHERE m.fleet_id = f.fleet_id), '{}')
-		FROM fleets f ORDER BY f.cluster_id, f.position, f.fleet_key`)
+		FROM fleets f WHERE f.kind IN ('selector', 'list') ORDER BY f.cluster_id, f.position, f.fleet_key`)
 	if err != nil {
 		return nil, err
 	}

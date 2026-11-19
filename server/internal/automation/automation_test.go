@@ -278,7 +278,9 @@ func TestParams(t *testing.T) {
 	if err := st.SetVariables(ctx, "local", "gpu", FleetVariables{Ceiling: "limited"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a bad ceiling: %v", err)
 	}
-	got, _ := st.Variables(ctx, "local")
+	kept, _ := st.Variables(ctx, "local")
+	// The fleet as its page shows it, with its nodes' own values.
+	got := map[string]FleetVariables{"gpu": View(kept, "gpu", []string{"gpu-01", "gpu-07"})}
 	h, _ := ParseHeader(goodScript)
 	r := Resolve(h, got["gpu"], "gpu-07", map[string]string{"THRESHOLD": "90"})
 	if r.Values["MOUNT"] != "/data" || r.Sources["MOUNT"] != SourceNode || r.Values["THRESHOLD"] != "90" || r.Sources["THRESHOLD"] != SourceRun {

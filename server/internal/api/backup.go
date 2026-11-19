@@ -1293,23 +1293,33 @@ func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken ti
 			}
 			production = sum.Env == clusters.EnvProduction
 		}
-		have, err := st.Variables(ctx, cluster)
-		if err != nil {
-			note("Automation parameters of cluster %q: %v", cluster, err)
-			continue
-		}
 		fleetIDs := make([]string, 0, len(a.Variables[cluster]))
 		for f := range a.Variables[cluster] {
 			fleetIDs = append(fleetIDs, f)
 		}
 		sort.Strings(fleetIDs)
 		for _, fleet := range fleetIDs {
-			next, before := a.Variables[cluster][fleet], have[fleet]
+			// A node's own values are the node's: a fleet of the archive
+			// sets those of the nodes it names (an archive from before
+			// 0.13 kept them under the node's fleets), All nodes every
+			// node's. Read again for each fleet, since the one before may
+			// have set a node's.
+			have, err := st.Variables(ctx, cluster)
+			if err != nil {
+				note("Automation parameters of cluster %q: %v", cluster, err)
+				break
+			}
+			next := a.Variables[cluster][fleet]
+			nodes := automation.NamedNodes(next)
+			if fleet == automation.AllNodes {
+				nodes = nil
+			}
+			before := automation.View(have, fleet, nodes)
 			if err := automation.ValidateVariables(next); err != nil {
 				note("Automation parameters of fleet %s: %v", fleet, err)
 				continue
 			}
-			if reflect.DeepEqual(next, before) {
+			if next.Same(before) && !automation.RebootChanged(before, next) {
 				continue
 			}
 			changed := automation.ChangedVariables(before, next)
@@ -1328,7 +1338,7 @@ func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken ti
 				n++
 				continue
 			}
-			if err := st.SetVariables(ctx, cluster, fleet, next); err != nil {
+			if err := st.SetVariablesFor(ctx, cluster, fleet, next, nodes); err != nil {
 				note("Automation parameters of fleet %s: %v", fleet, err)
 				continue
 			}

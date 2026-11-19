@@ -28,7 +28,7 @@ import (
 
 // allNodes is the fleet of every node of a cluster, for a cluster with no
 // fleets; a fleet's id never starts with an underscore.
-const allNodes = "_all"
+const allNodes = automation.AllNodes
 
 const maxAutomationBody = 64 << 10
 
@@ -422,6 +422,19 @@ type automationFleets struct {
 	name      string
 }
 
+// has says whether a node is one of the fleet's.
+func (f automationFleet) has(node string) bool {
+	if f.ID == allNodes {
+		return true
+	}
+	for _, n := range f.Nodes {
+		if n.Name == node {
+			return true
+		}
+	}
+	return false
+}
+
 // layersOf are the fleets a node belongs to, then All nodes.
 func (f automationFleets) layersOf(node string) []automation.Layer {
 	var out []automation.Layer
@@ -533,6 +546,8 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		defs = s.opts.Settings.Current().Fleets[c.ID]
 	}
 	for _, f := range defs {
+		// A fleet's own. A node's own values are the node's, whatever fleets
+		// it is in: All nodes, below, has them.
 		af := automationFleet{ID: f.ID, Name: f.Name, Nodes: []automationNode{}, Params: params[f.ID]}
 		for _, n := range nodes {
 			if f.Takes(n) {
@@ -541,7 +556,7 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		}
 		out.Fleets = append(out.Fleets, af)
 	}
-	all := automationFleet{ID: allNodes, Name: "All nodes", Nodes: []automationNode{}, Params: params[allNodes]}
+	all := automationFleet{ID: allNodes, Name: "All nodes", Nodes: []automationNode{}, Params: automation.View(params, allNodes, nil)}
 	for _, n := range nodes {
 		all.Nodes = append(all.Nodes, member(n))
 	}
@@ -583,9 +598,10 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("fleet")
 	fleetName := ""
 	found := false
+	var fleet automationFleet
 	for _, f := range list.Fleets {
 		if f.ID == id {
-			found, fleetName = true, f.Name
+			found, fleetName, fleet = true, f.Name, f
 		}
 	}
 	if !found {
@@ -597,12 +613,26 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, automationStatus(err), err.Error())
 		return
 	}
+	// A node's own values are the node's, kept once and shown with All
+	// nodes. All nodes' page sets every node's, also a node's that has left
+	// the cluster. Another fleet sets those of the nodes the request
+	// names, which must be its members, and leaves every other node's.
+	var scope []string
+	if id != allNodes {
+		scope = automation.NamedNodes(next)
+		for _, n := range scope {
+			if !fleet.has(n) {
+				jsonError(w, http.StatusBadRequest, "node "+strconv.Quote(n)+" is not in this fleet: set its own values from a fleet it is in, or from All nodes")
+				return
+			}
+		}
+	}
 	all, err := s.opts.AutomationStore.Variables(r.Context(), list.Cluster)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	before := all[id]
+	before := automation.View(all, id, scope)
 	changed := automation.ChangedVariables(before, next)
 	impact, note := s.weighChange(r, list.Cluster, before, next, changed)
 	if automation.RebootChanged(before, next) {
@@ -640,7 +670,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		answerJSON(w, r, variablesAnswer{Params: before, Change: &saved})
 		return
 	}
-	if err := s.opts.AutomationStore.SetVariables(r.Context(), list.Cluster, id, next); err != nil {
+	if err := s.opts.AutomationStore.SetVariablesFor(r.Context(), list.Cluster, id, next, scope); err != nil {
 		s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeFailed, err.Error())
 		jsonError(w, automationStatus(err), err.Error())
 		return
@@ -659,7 +689,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeOK,
 		fmt.Sprintf("values %s; %d nodes with their own; ceiling %s", strings.Join(names, ", "), len(next.Nodes), next.CeilingOrDefault()))
 	params, _ := s.opts.AutomationStore.Variables(r.Context(), list.Cluster)
-	answerJSON(w, r, variablesAnswer{Params: params[id], Change: kept})
+	answerJSON(w, r, variablesAnswer{Params: automation.View(params, id, scope), Change: kept})
 }
 
 // ---------- runs ----------

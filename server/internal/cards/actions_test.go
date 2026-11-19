@@ -87,7 +87,7 @@ func (f *fakeParams) Variables(context.Context, string) (map[string]automation.F
 	return maps.Clone(f.vars), nil
 }
 
-func (f *fakeParams) SetVariables(_ context.Context, _, fleet string, fp automation.FleetVariables) error {
+func (f *fakeParams) SetVariablesFor(_ context.Context, _, fleet string, fp automation.FleetVariables, _ []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vars[fleet] = fp

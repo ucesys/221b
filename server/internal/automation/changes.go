@@ -271,25 +271,19 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		}
 		// The values first: should marking it approved then fail, approving
 		// it again finds them in and only marks it.
+		// The nodes the change says something of: their own values are
+		// compared and written, and no other node's.
+		nodes := NamedNodes(c.Before, c.After)
 		err = change(ctx, st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
-			cur := vr.Clusters[cluster][c.Fleet]
+			vr.nodesOwn()
+			cur := View(vr.Clusters[cluster], c.Fleet, nodes)
 			switch {
 			case cur.Same(c.After):
 				return errNoChange
 			case !cur.Same(c.Before):
 				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(differences(c.Before, cur), ", ")))
 			}
-			if vr.Clusters == nil {
-				vr.Clusters = map[string]map[string]FleetVariables{}
-			}
-			if vr.Clusters[cluster] == nil {
-				vr.Clusters[cluster] = map[string]FleetVariables{}
-			}
-			if c.After.Empty() {
-				delete(vr.Clusters[cluster], c.Fleet)
-			} else {
-				vr.Clusters[cluster][c.Fleet] = c.After
-			}
+			vr.put(cluster, c.Fleet, c.After, nodes)
 			return nil
 		})
 		if err != nil {

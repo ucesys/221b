@@ -120,3 +120,43 @@ func TestSettingsInTheDatabase(t *testing.T) {
 		t.Fatalf("the fleets kept: %+v", kept)
 	}
 }
+
+// The fleets table also holds rows the settings' list is not of: All
+// nodes, which carries a cluster's variables, and a fleet that variables
+// name before the list has it. The list leaves them out, keeps them when
+// it is saved, and takes an unlisted one over, with what is set on it,
+// when a fleet of that id is added.
+func TestTheFleetsListLeavesOutRowsThatAreNotItsOwn(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	if err := d.Do(ctx, func(q db.Querier) error {
+		_, err := q.Exec(ctx, `INSERT INTO clusters (cluster_id) VALUES ('c1');
+			INSERT INTO fleets (fleet_id, cluster_id, fleet_key, name, kind, position, privilege_ceiling) VALUES
+				('00000000-0000-7000-8000-000000000001', 'c1', '_all', 'All nodes', 'all', -1, 'full'),
+				('00000000-0000-7000-8000-000000000002', 'c1', 'gpu', '', 'unlisted', -1, 'full')`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := settings.NewService(ctx, keyed{settings.NewPG(d)}, settings.Default, quiet, nil)
+	if list := svc.Current().Settings.Fleets["c1"]; len(list) != 0 {
+		t.Fatalf("the list has %+v", list)
+	}
+	if _, err := svc.UpdateFleets(ctx, "c1", []fleets.Fleet{{ID: "gpu", Name: "GPU", Labels: []string{"gpu=true"}}, {ID: "db", Name: "DB", Labels: []string{"db=true"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var all, gpu, rows int
+	var id, ceiling string
+	_ = d.Do(ctx, func(q db.Querier) error {
+		_ = q.QueryRow(ctx, "SELECT count(*) FROM fleets WHERE fleet_key = '_all' AND kind = 'all' AND privilege_ceiling = 'full'").Scan(&all)
+		_ = q.QueryRow(ctx, "SELECT count(*) FROM fleets WHERE fleet_key = 'gpu'").Scan(&gpu)
+		_ = q.QueryRow(ctx, "SELECT count(*) FROM fleets").Scan(&rows)
+		return q.QueryRow(ctx, "SELECT fleet_id::text, privilege_ceiling FROM fleets WHERE fleet_key = 'gpu' AND kind = 'selector' AND name = 'GPU'").Scan(&id, &ceiling)
+	})
+	if all != 1 || gpu != 1 || rows != 3 || id != "00000000-0000-7000-8000-000000000002" || ceiling != "full" {
+		t.Fatalf("All nodes' rows %d, gpu's rows %d, rows %d; gpu is row %s with ceiling %q", all, gpu, rows, id, ceiling)
+	}
+	if list := settings.NewService(ctx, keyed{settings.NewPG(d)}, settings.Default, quiet, nil).Current().Settings.Fleets["c1"]; len(list) != 2 || list[0].ID != "gpu" {
+		t.Fatalf("the list read back: %+v", list)
+	}
+}

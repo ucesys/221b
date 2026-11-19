@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 )
@@ -21,14 +22,20 @@ const (
 	SourceVariable  = "variable"
 	SourceMissing   = ""
 	defaultCeiling  = PrivilegeNobody
-	maxNodeOverride = 500
+	maxNodeOverride = 5000
+	// AllNodes is the id of the fleet every node of a cluster is in. A
+	// node's own values and reboot time are the node's, whatever fleets it
+	// is in, and are kept under it.
+	AllNodes = "_all"
 	// MaxRebootMinutes is the longest a node may be given to come back
 	// from a reboot.
 	MaxRebootMinutes = 240
 )
 
-// FleetVariables are a fleet's parameter values, its nodes' overrides and the
-// most privilege a run on it may get.
+// FleetVariables are a fleet's parameter values, its nodes' own values and
+// the most privilege a run on it may get. A node's own values and reboot
+// time belong to the node, not to the fleet: kept once, under AllNodes,
+// and shown with every fleet the node is in (View).
 type FleetVariables struct {
 	Values map[string]string            `json:"values,omitempty"`
 	Nodes  map[string]map[string]string `json:"nodes,omitempty"`
@@ -193,12 +200,180 @@ type variablesRecord struct {
 	Clusters map[string]map[string]FleetVariables `json:"clusters"`
 }
 
-// Params returns a cluster's fleets' parameters, by fleet id.
+// nodesOwn moves what a document from before 0.13 kept of a node under one
+// of its fleets to where a node's own values are kept, under AllNodes. A
+// node's own value was the node's then too: it won over every fleet's. Two
+// fleets that kept different values for one node were a conflict that
+// stopped its runs; the first by fleet id is kept, All nodes' before any,
+// and of two reboot times the longer, as a run took it.
+func (rec *variablesRecord) nodesOwn() {
+	for cluster, fleets := range rec.Clusters {
+		ids := make([]string, 0, len(fleets))
+		for id, fp := range fleets {
+			if id != AllNodes && (len(fp.Nodes) > 0 || len(fp.NodeReboot) > 0) {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		sort.Strings(ids)
+		all := fleets[AllNodes]
+		for _, id := range ids {
+			fp := fleets[id]
+			for node, values := range fp.Nodes {
+				for name, v := range values {
+					if _, set := all.Nodes[node][name]; set {
+						continue
+					}
+					if all.Nodes == nil {
+						all.Nodes = map[string]map[string]string{}
+					}
+					if all.Nodes[node] == nil {
+						all.Nodes[node] = map[string]string{}
+					}
+					all.Nodes[node][name] = v
+				}
+			}
+			for node, m := range fp.NodeReboot {
+				if all.NodeReboot == nil {
+					all.NodeReboot = map[string]int{}
+				}
+				all.NodeReboot[node] = max(all.NodeReboot[node], m)
+			}
+			fp.Nodes, fp.NodeReboot = nil, nil
+			if fp.Empty() {
+				delete(fleets, id)
+			} else {
+				fleets[id] = fp
+			}
+		}
+		fleets[AllNodes] = all
+		rec.Clusters[cluster] = fleets
+	}
+}
+
+// View is a fleet's variables as its page shows them: the fleet's own
+// and, of the nodes' own values and reboot times, those of the nodes
+// given: the fleet's members. For nil it is every node's, as All nodes
+// shows them.
+func View(all map[string]FleetVariables, fleet string, nodes []string) FleetVariables {
+	fp, kept := all[fleet], all[AllNodes]
+	fp.Nodes, fp.NodeReboot = nil, nil
+	take := func(node string) {
+		if m := kept.Nodes[node]; len(m) > 0 {
+			if fp.Nodes == nil {
+				fp.Nodes = map[string]map[string]string{}
+			}
+			fp.Nodes[node] = maps.Clone(m)
+		}
+		if m := kept.NodeReboot[node]; m > 0 {
+			if fp.NodeReboot == nil {
+				fp.NodeReboot = map[string]int{}
+			}
+			fp.NodeReboot[node] = m
+		}
+	}
+	if nodes != nil {
+		for _, n := range nodes {
+			take(n)
+		}
+		return fp
+	}
+	for n := range kept.Nodes {
+		take(n)
+	}
+	for n := range kept.NodeReboot {
+		take(n)
+	}
+	return fp
+}
+
+// NamedNodes are the nodes a fleet's variables say something of. Never
+// nil, which View and SetVariablesFor take for every node.
+func NamedNodes(fps ...FleetVariables) []string {
+	seen := map[string]bool{}
+	for _, fp := range fps {
+		for n := range fp.Nodes {
+			seen[n] = true
+		}
+		for n := range fp.NodeReboot {
+			seen[n] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// put writes a fleet's variables as a caller saw and changed them: the
+// fleet's own, and the own values and reboot times of the nodes given,
+// every node's for nil. A node of those that fp says nothing of has none
+// from then on.
+func (rec *variablesRecord) put(cluster, fleet string, fp FleetVariables, nodes []string) {
+	if rec.Clusters == nil {
+		rec.Clusters = map[string]map[string]FleetVariables{}
+	}
+	if rec.Clusters[cluster] == nil {
+		rec.Clusters[cluster] = map[string]FleetVariables{}
+	}
+	fleets := rec.Clusters[cluster]
+	all := fleets[AllNodes]
+	if nodes == nil {
+		all.Nodes, all.NodeReboot = nil, nil
+		nodes = NamedNodes(fp)
+	}
+	for _, n := range nodes {
+		delete(all.Nodes, n)
+		delete(all.NodeReboot, n)
+		if m := fp.Nodes[n]; len(m) > 0 {
+			if all.Nodes == nil {
+				all.Nodes = map[string]map[string]string{}
+			}
+			all.Nodes[n] = maps.Clone(m)
+		}
+		if m := fp.NodeReboot[n]; m > 0 {
+			if all.NodeReboot == nil {
+				all.NodeReboot = map[string]int{}
+			}
+			all.NodeReboot[n] = m
+		}
+	}
+	if len(all.Nodes) == 0 {
+		all.Nodes = nil
+	}
+	if len(all.NodeReboot) == 0 {
+		all.NodeReboot = nil
+	}
+	own := fp
+	own.Nodes, own.NodeReboot = nil, nil
+	if fleet == AllNodes {
+		own.Nodes, own.NodeReboot = all.Nodes, all.NodeReboot
+		all = own
+	} else if own.Empty() {
+		delete(fleets, fleet)
+	} else {
+		fleets[fleet] = own
+	}
+	if all.Empty() {
+		delete(fleets, AllNodes)
+	} else {
+		fleets[AllNodes] = all
+	}
+}
+
+// Variables returns a cluster's variables as they are kept, by fleet id:
+// each fleet's own, and under AllNodes also every node's own values and
+// reboot time. View gives a fleet's as its page shows them.
 func (st *Store) Variables(ctx context.Context, cluster string) (map[string]FleetVariables, error) {
 	var rec variablesRecord
 	if _, err := st.load(ctx, VariablesKey, &rec); err != nil {
 		return nil, err
 	}
+	rec.nodesOwn()
 	out := rec.Clusters[cluster]
 	if out == nil {
 		out = map[string]FleetVariables{}
@@ -206,28 +381,35 @@ func (st *Store) Variables(ctx context.Context, cluster string) (map[string]Flee
 	return out, nil
 }
 
-// SetVariables replaces a fleet's parameters.
+// SetVariables sets a fleet's own variables to fp's, and the own values
+// and reboot times of the nodes fp names; a node it does not name keeps
+// its own. All nodes' are replaced whole, every node's own with them.
 func (st *Store) SetVariables(ctx context.Context, cluster, fleet string, fp FleetVariables) error {
+	if fleet == AllNodes {
+		return st.SetVariablesFor(ctx, cluster, fleet, fp, nil)
+	}
+	return st.SetVariablesFor(ctx, cluster, fleet, fp, NamedNodes(fp))
+}
+
+// SetVariablesFor sets a fleet's variables as someone who saw them with
+// the own values of the nodes given, and changed them, leaves them: the
+// fleet's own are fp's, and so are those nodes' own values and reboot
+// times, none for a node fp no longer names. For nil the nodes are all
+// the cluster's.
+func (st *Store) SetVariablesFor(ctx context.Context, cluster, fleet string, fp FleetVariables, nodes []string) error {
 	if err := ValidateVariables(fp); err != nil {
 		return err
 	}
-	for node, m := range fp.Nodes {
-		if len(m) == 0 {
-			delete(fp.Nodes, node)
+	if nodes != nil {
+		for _, n := range NamedNodes(fp) {
+			if !slices.Contains(nodes, n) {
+				return fmt.Errorf("%w: node %s is not one of this fleet's", ErrInvalid, n)
+			}
 		}
 	}
 	return change(ctx, st, VariablesKey, maxVariablesBytes, func(rec *variablesRecord) error {
-		if rec.Clusters == nil {
-			rec.Clusters = map[string]map[string]FleetVariables{}
-		}
-		if rec.Clusters[cluster] == nil {
-			rec.Clusters[cluster] = map[string]FleetVariables{}
-		}
-		if fp.Empty() {
-			delete(rec.Clusters[cluster], fleet)
-		} else {
-			rec.Clusters[cluster][fleet] = fp
-		}
+		rec.nodesOwn()
+		rec.put(cluster, fleet, fp, nodes)
 		return nil
 	})
 }
@@ -264,8 +446,9 @@ type Conflict struct {
 }
 
 // inherited is what a node gets for a parameter: its own value wins, then
-// its fleets', then All nodes'. Two fleets that set it are a conflict; so
-// are two different values for the node itself, kept under two fleets.
+// its fleets', then All nodes'. Two fleets that set it are a conflict. A
+// node's own value is kept once and shown with each of its fleets, so the
+// layers that have it agree.
 func inherited(layers []Layer, node, name string) (value, source string, conflict []string) {
 	var own, fleets []Layer
 	var fallback *Layer
@@ -408,6 +591,7 @@ func (st *Store) AllVariables(ctx context.Context) (map[string]map[string]FleetV
 	if _, err := st.load(ctx, VariablesKey, &rec); err != nil {
 		return nil, err
 	}
+	rec.nodesOwn()
 	if rec.Clusters == nil {
 		rec.Clusters = map[string]map[string]FleetVariables{}
 	}
