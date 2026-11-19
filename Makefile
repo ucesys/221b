@@ -19,7 +19,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim cli cli-release test test-go test-web lint lint-go lint-web licenses image image-postgres test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
+.PHONY: help build web ui server sim cli cli-release test test-go test-go-store test-web lint lint-go lint-web licenses image image-postgres test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,6 +57,9 @@ test: test-go test-web ## Run the Go and browser unit tests
 
 test-go:
 	cd server && $(GO) test -race ./...
+
+test-go-store: ## Run the agents', the jobs' and the case work's tests with their records in the database TEST_DATABASE names
+	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/
 
 test-web: web/node_modules
 	cd web && $(NPM) test

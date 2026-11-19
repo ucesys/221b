@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
@@ -65,7 +67,7 @@ func (f *fakeAgents) n() int {
 type world struct {
 	s      *Service
 	clock  *clock
-	kv     *kv.Memory
+	kv     kv.Backend
 	agents *fakeAgents
 	props  *MemoryProposer
 	audit  *bytes.Buffer
@@ -78,9 +80,21 @@ type world struct {
 
 var day1 = time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 
+// testStore is where a test's jobs are kept: memory, or the database's
+// tables over memory when TEST_STORE is "database", which runs every
+// test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{JobsKey: NewJobsPG(d), RunsKey: NewRunsPG(d)}, Rest: &kv.Memory{}}
+}
+
 func setup(t *testing.T) *world {
 	t.Helper()
-	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: &kv.Memory{}, agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
+	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: testStore(t), agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
 	w.s = w.service(w.kv)
 	w.kinds.Register(Kind{ID: "test", Label: "Test job", Agent: "auditor", AgentName: "Auditor", Schedulable: true, Events: []string{EventAlert},
 		Default: When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "02:00"}},

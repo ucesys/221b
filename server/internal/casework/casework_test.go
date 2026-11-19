@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -100,6 +102,9 @@ type world struct {
 	fixes   *fixes.Service
 	audit   *bytes.Buffer
 	backend *kv.Memory
+	// store is where the service keeps its keys: backend, or the database's
+	// tables over it.
+	store   kv.Backend
 	objects *kv.MemoryObjects
 	now     time.Time
 	runs    int
@@ -132,6 +137,15 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 		props: &jobs.MemoryProposer{}, audit: &bytes.Buffer{}, backend: backend, objects: &kv.MemoryObjects{},
 		now: time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)}
 	log := audit.New(audit.Options{Out: w.audit})
+	// TEST_STORE=database runs every test of this package with
+	// the checks, the rules and what the runs found in the database's
+	// tables (Phase 13).
+	var store kv.Backend = backend
+	if os.Getenv("TEST_STORE") == "database" {
+		d := dbtest.Open(t)
+		store = &kv.Keyed{Keys: map[string]kv.Backend{ChecksKey: NewChecksPG(d), RulesKey: NewRulesPG(d), FoundKey: NewFoundPG(d)}, Rest: backend}
+	}
+	w.store = store
 	kinds := jobs.NewRegistry()
 	clusters := func() []jobs.Cluster {
 		return []jobs.Cluster{{ID: "local", Name: "local"}, {ID: "prod", Name: "Production"}}
@@ -142,7 +156,7 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 	w.iss = issues.New(issues.Options{Backend: issueBackend, Cases: w.objects, Logger: logger, Now: clock})
 	w.lessons = lessons.New(lessons.Options{Audit: log, Logger: logger, Now: clock})
 	w.fixes = fixes.New(fixes.Options{Audit: log, Logger: logger, Now: clock})
-	w.svc = New(Options{Backend: w.backend, Issues: w.iss, Jobs: w.jobs, Lessons: w.lessons, Fixes: w.fixes, Clusters: clusters, Audit: log, Logger: logger, Now: clock,
+	w.svc = New(Options{Backend: store, Issues: w.iss, Jobs: w.jobs, Lessons: w.lessons, Fixes: w.fixes, Clusters: clusters, Audit: log, Logger: logger, Now: clock,
 		CommandOK: func(line string) error {
 			if strings.Contains(line, "delete namespace") {
 				return errors.New("Watson does not delete namespaces")

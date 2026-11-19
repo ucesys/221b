@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-41). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-43). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -20,6 +20,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **Automation's scripts in the database**: with a database, a script is a row of `scripts` and each version a row of `script_versions`, with its parameters, Kubernetes actions, findings and approvals as rows of their own tables; copied once from the ConfigMap. The script groups and execution profiles are rows of `script_groups`, `run_profiles` and `run_profile_fleets`. The variables are rows of `variables`, each on one fleet or on one host, with the ceiling and the reboot time as columns of `fleets` and `hosts`. Their changes are rows of `variable_changes`, each with what it alters in `variable_change_items`. The runs are rows of `script_runs`, each node of a run a row of `script_run_hosts`, with the values it got in `script_run_values`; the runs that wait for approval, were rejected or expired are rows of the same table.
 - **The AI agents' configuration in the database**: with a database, the providers, the agents' settings, their instructions with every version, draft and test run, their test cases and the pilots' answers are rows of `ai_providers`, `agents`, `prompt_versions`, `test_runs`, `test_cases`, `pilot_entries` and the tables that hang from them, no longer bounded by a ConfigMap's size; copied once from the AI ConfigMap.
 - **What the agents spend as a ledger**: with a database, each cost is a row of `ai_spend`, only ever added, and the day's and month's sums are read from the rows; replicas no longer take turns to save, and earlier months stay. The sums the settings ConfigMap held are carried over once.
+- **The jobs, their runs and the validation rules in the database**: with a database, a job's settings, each run with its findings, facts and proposals, the checks seen on each cluster, the rules with their suggestions and what the runs found under each check are rows of `jobs`, `job_runs`, `findings`, `validation_rules`, `check_found` and the tables that hang from them, no longer bounded by a ConfigMap's size; copied once from the runs' and the cases' ConfigMaps.
+- `GET /api/v1/database` names every domain moved, not only the activity log and the backups.
+- For developers: `make test-go-store` runs the agents', the jobs' and the case work's own tests with their records in the database.
 - **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
 - **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.

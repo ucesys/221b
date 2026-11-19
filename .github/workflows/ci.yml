@@ -61,6 +61,10 @@ jobs:
         run: make lint-go 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Unit and integration tests
         run: make test-go 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      # The agents', the jobs' and the case work's own tests again, with
+      # their records in the database's tables (Phase 13, DB-40, DB-42, DB-43).
+      - name: The services' tests over the database
+        run: make test-go-store 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Sherlock's evaluation, against the fake Claude API
         # The nightly run asks the real API (sherlock-eval.yml); here the
         # cases are found in the simulator and asked end to end.

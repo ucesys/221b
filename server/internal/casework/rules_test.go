@@ -689,7 +689,7 @@ func TestRecountIsIdempotentCF85(t *testing.T) {
 	ctx := context.Background()
 	t0 := w.now.Add(-24 * time.Hour)
 	// The record as the counter before CF-85 left it: run-12 counted.
-	if err := update(ctx, w.backend, FoundKey, func(rec *foundRecord) error {
+	if err := update(ctx, w.store, FoundKey, func(rec *foundRecord) error {
 		rec.IDs = map[string]*foundStat{"other.node-cordoned-by-power-manager": {Findings: 1, Runs: 1, Clusters: []string{"prod"}, Jobs: []string{jobs.KindAlert}, First: t0, Last: t0,
 			Titles: []TitleCount{{Text: "Cordoned by its power manager", N: 1}}}}
 		return nil
@@ -718,13 +718,13 @@ func TestRecountIsIdempotentCF85(t *testing.T) {
 		t.Errorf("run-12 counted twice: %+v", c)
 	}
 	// Again, at the housekeeping and on the leader: nothing more.
-	before, _, _ := w.backend.LoadKey(ctx, FoundKey)
+	before, _, _ := w.store.LoadKey(ctx, FoundKey)
 	if n, err := w.svc.Rules().Recount(ctx); n != 0 || err != nil {
 		t.Errorf("again: %d %v", n, err)
 	}
 	w.svc.Housekeep(ctx)
 	w.svc.Rules().recountOnce(ctx)
-	after, _, _ := w.backend.LoadKey(ctx, FoundKey)
+	after, _, _ := w.store.LoadKey(ctx, FoundKey)
 	if string(before) != string(after) {
 		t.Errorf("the record changed:\n%s\n%s", before, after)
 	}
@@ -784,7 +784,7 @@ func TestTheAgentsDescriptionIsKeptCF86(t *testing.T) {
 	for i := 0; i < 300; i++ {
 		w.routeJob(t, "nightly-audit", why(finding(fmt.Sprintf("other.id-%d", i), "Node/cp-1", strings.Repeat("t", 100)), strings.Repeat("w", 500)))
 	}
-	raw, _, _ := w.backend.LoadKey(ctx, FoundKey)
+	raw, _, _ := w.store.LoadKey(ctx, FoundKey)
 	var rec foundRecord
 	if err := json.Unmarshal(raw, &rec); err != nil || len(raw) > foundBudget || len(rec.IDs) > maxFound || len(rec.Counted) != w.runs {
 		t.Errorf("the record: %d bytes, %d ids, %d runs counted: %v", len(raw), len(rec.IDs), len(rec.Counted), err)

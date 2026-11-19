@@ -13,6 +13,7 @@ import (
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -119,6 +120,11 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 		// Administration › AI › Cases, with the counter and the analyses under
 		// way: a scope of the database's settings (Phase 13).
 		w.caseBackend = w.inScopes(ctx, b, map[string]string{casework.SettingsKey: "cases"})
+		// The checks seen on each cluster, the validation rules and what
+		// the runs found are rows (DB-43).
+		w.caseBackend = w.inTables(ctx, w.caseBackend, func(d *db.DB) map[string]movedDoc {
+			return map[string]movedDoc{casework.ChecksKey: casework.NewChecksPG(d), casework.RulesKey: casework.NewRulesPG(d), casework.FoundKey: casework.NewFoundPG(d)}
+		})
 		return w.caseBackend
 	})
 	if err != nil {

@@ -61,11 +61,11 @@ type world struct {
 }
 
 // testStore is where a test's console keeps the AI keys: memory, or the
-// database's tables over memory when AI_TESTS_STORE is "database", which
+// database's tables over memory when TEST_STORE is "database", which
 // runs every test of this package over the database (Phase 13).
 func testStore(t *testing.T) kv.Backend {
 	t.Helper()
-	if os.Getenv("AI_TESTS_STORE") != "database" {
+	if os.Getenv("TEST_STORE") != "database" {
 		return &kv.Memory{}
 	}
 	d := dbtest.Open(t)

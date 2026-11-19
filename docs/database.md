@@ -13,7 +13,8 @@
 | Identity | | the sign-in sessions (in a Secret); local accounts stay in their Secret for good |
 | Automation | the scripts and their versions (`scripts`, `script_versions`, `script_version_parameters`, `script_version_kube_actions`, `script_version_findings`, `script_version_actions`), the script groups (`script_groups`), the execution profiles (`run_profiles`, `run_profile_fleets`) the variables (`variables`, with columns of `fleets` and `hosts`) their changes (`variable_changes`, `variable_change_items`, `variable_change_impacts`) and the runs, with the ones that wait for approval (`script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_host_fleets`, `script_run_values`, `script_run_approvers`, `script_run_impacts`): the whole domain | |
 | AI configuration | the providers and their headers (`ai_providers`, `ai_provider_headers`), the agents' settings (`agents`), their instructions with the versions, drafts, revisions, test runs and pilots (`prompt_versions` and the tables that hang from it), the test cases (`test_cases`, `test_case_recordings`), the pilots' answers (`pilot_entries`), and what the agents spend, a row a cost (`ai_spend`): the whole domain | a provider's credential stays in its Secret |
-| Jobs, Cases, Changes, Knowledge | | everything |
+| Jobs | the jobs changed or added, with the time each last handled and its day's spend (`jobs`), the runs with their findings, facts and proposals (`job_runs`, `findings`, `job_run_facts`, `job_run_proposals`, `job_run_proposal_cases`), the checks seen on each cluster (`checked_clusters`, `cluster_checks`), the validation rules and their suggestions (`validation_rules`, `rule_suggestions`, `rule_suggestion_descriptions`), what the runs found under each check (`check_found` and the tables that hang from it): the whole domain | |
+| Cases, Changes, Knowledge | | everything |
 
 `GET /api/v1/database` and Administration's metrics say the same of a running console.
 
