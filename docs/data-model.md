@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL (Phase 13): 76 tables in eleven domains and three tiers (the model's 73, and 3 that hold what a script version kept in lists). The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
+What 221B keeps in PostgreSQL (Phase 13): 77 tables in eleven domains and three tiers (the model's 73, 3 that hold what a script version kept in lists, and the script versions a variable change touches). The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
 
 Each table's columns are listed with their marks: **PK** is the key, **FK** a key into another table, **FK?** one that may be empty, and ↗ a key into another domain.
 
@@ -36,6 +36,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 - `run_profiles.run_profile_id` is the id the console gives a profile (the built-in ones are fixed), and `run_profile_fleets` holds `fleet_key`, not a key to `fleets`: a profile is not of one cluster and names a fleet as runs do.
 - **Scripts** (step `0016`): `script_versions.header` and `review`, which were JSON, are columns and rows: every field of a version is a column, a scalar list (`facts`) an array, and a list of records a table. A script may be in no group; a group a script names gets its row then, and keeps it while scripts are in it.
 - **Variables** (step `0017`): as the model has them, on one fleet or one host; the service was changed so that a node's own values are the node's (AU-23). `fleets.kind` has two more values, which the settings' list of fleets leaves out: `all`, the cluster's fleet of every node, which carries All nodes' variables, ceiling and reboot time; and `unlisted`, a fleet that variables name and the list does not have. A node's own reboot time is `hosts.reboot_minutes`.
+- **Variable changes** (step `0018`): a change is on a fleet, named by `cluster_id` and `fleet_key` as a run names it, since a change outlives its fleet; the model's `scope`, `fleet_id` and `host_id` are gone, the items saying which nodes' own values it alters. `impact`, which was JSON, is the table `variable_change_impacts`. `approval_request_id` is optional: nothing joins a change to Approvals yet.
 - Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps, each with the time of the newest record copied where the set only grows.
 - The columns of a domain that has not moved yet are the model's first cut: they are settled, and may change in place, when the domain's repository is written. Once a release ships a step, it is never edited.
 
@@ -111,7 +112,7 @@ Both tables are indexed by time and trimmed by retention, never updated in place
 
 ### Automation: scripts and variables
 
-Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`, `0016_automation_scripts.sql` for the scripts and `0017_automation_variables.sql` for the variables.
+Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`, `0016_automation_scripts.sql` for the scripts, `0017_automation_variables.sql` for the variables and `0018_automation_variable_changes.sql` for their changes.
 
 | Table | Holds | Columns |
 | --- | --- | --- |
@@ -125,8 +126,9 @@ Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `
 | `run_profiles` | Execution profiles: SSH privilege or Kubernetes identity | `run_profile_id` PK, `name`, `kind`, `privilege`, `namespace`, `service_account`, `is_built_in`, `description` |
 | `run_profile_fleets` | Fleets a profile may run on | `run_profile_id` PK FK, `fleet_id` PK FK ↗ |
 | `variables` | Variables scripts read, each on one fleet or one host | `variable_id` PK, `scope` (`fleet`, `host`), `fleet_id` FK? ↗, `host_id` FK? ↗, `name` (one per fleet, one per host), `value` (none where a fleet only marks the name sensitive), `is_sensitive`, `updated_by`, `updated_at` |
-| `variable_changes` | A proposed change to one fleet's or host's variables, with its impact and approval | `variable_change_id` PK, `scope`, `fleet_id` FK? ↗, `host_id` FK? ↗, `reason`, `impact` JSON, `state`, `approval_request_id` FK ↗, `requested_by`, `requested_at` |
-| `variable_change_items` | Each variable a change adds, edits or removes | `variable_change_id` PK FK, `name` PK, `old_value`, `new_value` |
+| `variable_changes` | A change to one fleet's variables: who asked, why, its state and who decided | `variable_change_id` PK, `change_number` (unique), `cluster_id`, `fleet_key`, `fleet_name`, `reason`, `changed` (text array), `note`, `state`, `requested_by`, `requested_by_user`, `requested_at`, `decided_by`, `decided_by_user`, `decided_at`, `comment`, `approval_request_id` FK? ↗ |
+| `variable_change_items` | Each thing a change alters, before and after | `variable_change_id` PK FK, `position` PK, `kind` (`value`, `node_value`, `ceiling`, `sensitive`, `reboot_minutes`, `node_reboot_minutes`), `node`, `name`, `old_value`, `new_value` |
+| `variable_change_impacts` | The approved script versions a change touches, and whether each needs it approved | `variable_change_id` PK FK, `position` PK, `script`, `version_number`, `decision`, `why`, `decided_by` |
 
 A variable or change sets exactly one of fleet_id and host_id. A run takes its own value first, then the host's, then the fleet's.
 

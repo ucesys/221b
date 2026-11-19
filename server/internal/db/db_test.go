@@ -116,10 +116,11 @@ func TestMigrate(t *testing.T) {
 		WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name NOT IN ('schema_migrations', 'imports')`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	// The model's 73, and 3 that hold what a script version's document
-	// kept in lists (step 0016).
-	if tables != 76 {
-		t.Errorf("the schema has %d tables; the data model has 76", tables)
+	// The model's 73, 3 that hold what a script version's document kept in
+	// lists (step 0016), and the script versions a variable change touches
+	// (step 0018).
+	if tables != 77 {
+		t.Errorf("the schema has %d tables; the data model has 77", tables)
 	}
 	// No bare "id" column anywhere, and every uuid or text key column that
 	// is a table's whole key ends in _id, scope or path.

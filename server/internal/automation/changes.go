@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -247,11 +246,10 @@ func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChang
 }
 
 // DecideChange approves or rejects a waiting change; whoever asked for it
-// cannot approve it, and a rejection says why. Approving applies it, and
-// only the newest change on a fleet can be approved: each carries all the
-// fleet's values as they were when it was asked for, so an older one would
-// undo a newer one. Its values go in only over the ones it was asked
-// against.
+// cannot approve it, and a rejection says why. Approving applies what the
+// change alters (Items) and leaves the rest of the fleet's variables as
+// they are. Only the newest change on a fleet can be approved, and only
+// while what it alters is still as it was when it was asked for.
 func (st *Store) DecideChange(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
 	comment = strings.TrimSpace(comment)
 	if !approve && comment == "" {
@@ -271,19 +269,22 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		}
 		// The values first: should marking it approved then fail, approving
 		// it again finds them in and only marks it.
-		// The nodes the change says something of: their own values are
-		// compared and written, and no other node's.
+		// A change is what it alters: the fleet's values, marks, ceiling and
+		// reboot time it names, and the own values of the nodes it names.
+		// Those are compared and set, and nothing else of the fleet's.
+		items := Items(c.Before, c.After)
 		nodes := NamedNodes(c.Before, c.After)
 		err = change(ctx, st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
 			vr.nodesOwn()
 			cur := View(vr.Clusters[cluster], c.Fleet, nodes)
+			done, moved := weigh(cur, items)
 			switch {
-			case cur.Same(c.After):
+			case done:
 				return errNoChange
-			case !cur.Same(c.Before):
-				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(differences(c.Before, cur), ", ")))
+			case len(moved) > 0:
+				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(moved, ", ")))
 			}
-			vr.put(cluster, c.Fleet, c.After, nodes)
+			vr.put(cluster, c.Fleet, applyItems(cur, items), nodes)
 			return nil
 		})
 		if err != nil {
@@ -382,24 +383,6 @@ func (c VariableChange) fleetName() string {
 		return c.FleetName
 	}
 	return c.Fleet
-}
-
-// differences names what differs between two fleets' parameters.
-func differences(a, b FleetVariables) []string {
-	out := ChangedVariables(a, b)
-	if a.CeilingOrDefault() != b.CeilingOrDefault() {
-		out = append(out, "the privilege ceiling")
-	}
-	if !slices.Equal(slices.Sorted(slices.Values(a.Sensitive)), slices.Sorted(slices.Values(b.Sensitive))) {
-		out = append(out, "the sensitive marks")
-	}
-	if RebootChanged(a, b) {
-		out = append(out, "the reboot timeout")
-	}
-	if len(out) == 0 {
-		out = append(out, "the values")
-	}
-	return out
 }
 
 // Suspended names the waiting change that holds a version on a fleet, or 0.
