@@ -80,6 +80,9 @@ type Options struct {
 	Registry *Registry
 	// Store keeps the settings and the status (the settings ConfigMap).
 	Store kv.Backend
+	// Repo keeps the settings and the runs (repo.go); nil keeps them in
+	// Store, as before Phase 13.
+	Repo Repo
 	// Secrets keeps the access key and the passphrase.
 	Secrets SecretStore
 	// Leads says whether this replica is the leader (ADR-70): only the
@@ -112,6 +115,9 @@ func NewScheduler(o Options) *Scheduler {
 	}
 	if o.Store == nil {
 		o.Store = &kv.Memory{}
+	}
+	if o.Repo == nil {
+		o.Repo = NewKVRepo(o.Store)
 	}
 	if o.Secrets == nil {
 		o.Secrets = &MemorySecret{}
@@ -157,18 +163,7 @@ func (s *Scheduler) IdentityAvailable() bool { return s.o.Identity.Available() }
 
 // Settings are the saved settings, or the defaults.
 func (s *Scheduler) Settings(ctx context.Context) (S3Settings, bool, error) {
-	b, _, err := s.o.Store.LoadKey(ctx, SettingsKey)
-	if errors.Is(err, kv.ErrNotFound) {
-		return DefaultSettings(), false, nil
-	}
-	if err != nil {
-		return DefaultSettings(), false, err
-	}
-	set := DefaultSettings()
-	if err := json.Unmarshal(b, &set); err != nil {
-		return DefaultSettings(), false, fmt.Errorf("the saved settings of the backups to S3 cannot be read: %w", err)
-	}
-	return set, true, nil
+	return s.o.Repo.Settings(ctx)
 }
 
 // Keys says which of the Secret's keys are set.
@@ -208,8 +203,7 @@ func (s *Scheduler) Save(ctx context.Context, in S3Settings, kc KeysChange, by s
 			return in, "", fmt.Errorf("saving the backup's Secret: %w", err)
 		}
 	}
-	b, _ := json.Marshal(in)
-	if _, err := s.o.Store.SaveKey(ctx, SettingsKey, b, ""); err != nil {
+	if err := s.o.Repo.SaveSettings(ctx, in); err != nil {
 		return in, "", err
 	}
 	return in, describeChange(before, in, saved, kc), nil
@@ -254,43 +248,7 @@ func describeSchedule(sp schedule.Spec) string {
 }
 
 // Status is the runs so far.
-func (s *Scheduler) Status(ctx context.Context) (Status, error) {
-	var st Status
-	b, _, err := s.o.Store.LoadKey(ctx, StatusKey)
-	if errors.Is(err, kv.ErrNotFound) {
-		return st, nil
-	}
-	if err != nil {
-		return st, err
-	}
-	return st, json.Unmarshal(b, &st)
-}
-
-// update changes the status over the version read, again when another
-// replica wrote it first.
-func (s *Scheduler) update(ctx context.Context, f func(*Status)) error {
-	for try := 0; try < 8; try++ {
-		var st Status
-		b, version, err := s.o.Store.LoadKey(ctx, StatusKey)
-		if err == nil {
-			if err := json.Unmarshal(b, &st); err != nil {
-				st = Status{}
-			}
-		} else if !errors.Is(err, kv.ErrNotFound) {
-			return err
-		}
-		f(&st)
-		if len(st.Recent) > recentRuns {
-			st.Recent = st.Recent[:recentRuns]
-		}
-		out, _ := json.Marshal(st)
-		if _, err = s.o.Store.SaveKey(ctx, StatusKey, out, version); errors.Is(err, kv.ErrConflict) {
-			continue
-		}
-		return err
-	}
-	return errors.New("the backups' status kept changing")
-}
+func (s *Scheduler) Status(ctx context.Context) (Status, error) { return s.o.Repo.Status(ctx) }
 
 // Next is when the schedule runs next, zero when it is off.
 func (s *Scheduler) Next(set S3Settings) time.Time {
@@ -343,16 +301,12 @@ func (s *Scheduler) Tick(ctx context.Context) {
 	// The time is claimed before the run starts, over the version read, so
 	// a new leader, or an old one that has not yet seen it lost the Lease,
 	// does not run it again.
-	claimed := false
-	if err := s.update(ctx, func(st *Status) {
-		if claimed = st.Handled.Before(due); !claimed {
-			return
-		}
-		st.Handled = due
-		if why != "" {
-			st.Recent = append([]Run{{Started: now.UTC(), Ended: now.UTC(), Slot: due, By: ScheduledBy, Missed: true, Error: why}}, st.Recent...)
-		}
-	}); err != nil || !claimed {
+	var missed *Run
+	if why != "" {
+		missed = &Run{Started: now.UTC(), Ended: now.UTC(), Slot: due, By: ScheduledBy, Missed: true, Error: why}
+	}
+	claimed, err := s.o.Repo.Claim(ctx, due, missed)
+	if err != nil || !claimed {
 		if err != nil {
 			s.o.Logger.Warn("the backups' status cannot be saved", "err", err)
 		}
@@ -475,13 +429,7 @@ func (s *Scheduler) backup(ctx context.Context, set S3Settings, who audit.Who, f
 	// Recorded even when the run was cut short by a shutdown.
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if uerr := s.update(sctx, func(st *Status) {
-		st.Recent = append([]Run{r}, st.Recent...)
-		if r.OK {
-			rr := r
-			st.LastOK = &rr
-		}
-	}); uerr != nil {
+	if uerr := s.o.Repo.AddRun(sctx, r); uerr != nil {
 		s.o.Logger.Warn("the backups' status cannot be saved", "err", uerr)
 	}
 	s.record(who, from, outcome, detail)

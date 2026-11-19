@@ -320,3 +320,35 @@ func TestHealthFollowsTheDatabase(t *testing.T) {
 		t.Errorf("health after reconnecting: %+v", h)
 	}
 }
+
+// A scope is saved over the version read: of two writers that read the
+// same version, the second is told.
+func TestScopes(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	q := d.Pool()
+	if _, v, err := db.LoadScope(ctx, q, "backup"); !errors.Is(err, db.ErrNotFound) || v != 0 {
+		t.Fatalf("a scope never saved: version %d, %v", v, err)
+	}
+	v1, err := db.SaveScope(ctx, q, "backup", []byte(`{"bucket":"a"}`), 0, "ada")
+	if err != nil || v1 != 1 {
+		t.Fatalf("first save: version %d, %v", v1, err)
+	}
+	if _, err := db.SaveScope(ctx, q, "backup", []byte(`{"bucket":"b"}`), 0, "bob"); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a second first save: %v", err)
+	}
+	v2, err := db.SaveScope(ctx, q, "backup", []byte(`{"bucket":"c"}`), v1, "ada")
+	if err != nil || v2 != 2 {
+		t.Fatalf("save over version 1: version %d, %v", v2, err)
+	}
+	if _, err := db.SaveScope(ctx, q, "backup", []byte(`{"bucket":"d"}`), v1, "bob"); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a save over a stale version: %v", err)
+	}
+	if v, err := db.SaveScope(ctx, q, "backup", []byte(`{"bucket":"e"}`), db.AnyVersion, "bob"); err != nil || v != 3 {
+		t.Fatalf("a save over any version: version %d, %v", v, err)
+	}
+	b, v, err := db.LoadScope(ctx, q, "backup")
+	if err != nil || v != 3 || !strings.Contains(string(b), `"e"`) {
+		t.Fatalf("read back %s at version %d: %v", b, v, err)
+	}
+}
