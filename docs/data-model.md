@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL (Phase 13): 77 tables in eleven domains and three tiers (the model's 73, 3 that hold what a script version kept in lists, and the script versions a variable change touches). The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
+What 221B keeps in PostgreSQL (Phase 13): 78 tables in eleven domains and three tiers (the model's 73, 3 that hold what a script version kept in lists, the script versions a variable change touches, and who had approved a run's version). The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), one file per domain; this page says what each table holds and the rules every table follows. [database.md](database.md) says how the database is run, and which domains have moved to it so far.
 
 Each table's columns are listed with their marks: **PK** is the key, **FK** a key into another table, **FK?** one that may be empty, and ↗ a key into another domain.
 
@@ -37,6 +37,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 - **Scripts** (step `0016`): `script_versions.header` and `review`, which were JSON, are columns and rows: every field of a version is a column, a scalar list (`facts`) an array, and a list of records a table. A script may be in no group; a group a script names gets its row then, and keeps it while scripts are in it.
 - **Variables** (step `0017`): as the model has them, on one fleet or one host; the service was changed so that a node's own values are the node's (AU-23). `fleets.kind` has two more values, which the settings' list of fleets leaves out: `all`, the cluster's fleet of every node, which carries All nodes' variables, ceiling and reboot time; and `unlisted`, a fleet that variables name and the list does not have. A node's own reboot time is `hosts.reboot_minutes`.
 - **Variable changes** (step `0018`): a change is on a fleet, named by `cluster_id` and `fleet_key` as a run names it, since a change outlives its fleet; the model's `scope`, `fleet_id` and `host_id` are gone, the items saying which nodes' own values it alters. `impact`, which was JSON, is the table `variable_change_impacts`. `approval_request_id` is optional: nothing joins a change to Approvals yet.
+- **Runs** (step `0019`): `script_runs.rollout` and `hooks`, which were JSON, are columns. A run is kept after its script's version, its profile, its fleet, its nodes and the run it retries are gone, so it has each as its document named it (`script_name` and `version_number`, `run_profile_id` as plain text, `fleet_key`, `host_name`, `retry_of_number`) beside the key, which is filled while the row exists. `script_run_hosts` has `position`, `message` and `error`; one row a node of a run. `script_run_values` holds a run's own values (scope `run`) and what each host got (scope `host`); scope `fleet`, `script_run_fleets` and `script_run_host_fleets` wait for the engine to record a run's fleets.
 - Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps, each with the time of the newest record copied where the set only grows.
 - The columns of a domain that has not moved yet are the model's first cut: they are settled, and may change in place, when the domain's repository is written. Once a release ships a step, it is never edited.
 
@@ -112,7 +113,7 @@ Both tables are indexed by time and trimmed by retention, never updated in place
 
 ### Automation: scripts and variables
 
-Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`, `0016_automation_scripts.sql` for the scripts, `0017_automation_variables.sql` for the variables and `0018_automation_variable_changes.sql` for their changes.
+Scripts are versioned and approved; variables sit on fleets and hosts. Schema: `0006_automation.sql`, `0016_automation_scripts.sql` for the scripts, `0017_automation_variables.sql` for the variables, `0018_automation_variable_changes.sql` for their changes and `0019_automation_runs.sql` for the runs.
 
 | Table | Holds | Columns |
 | --- | --- | --- |
@@ -139,7 +140,8 @@ Each run records its fleets, hosts and the values each host got. Schema: `0006_a
 | Table | Holds | Columns |
 | --- | --- | --- |
 | `script_run_fleets` | The fleets a run drew values from, as they were when it started | `script_run_fleet_id` PK, `script_run_id` FK, `fleet_id` FK? ↗, `fleet_name` |
-| `script_runs` | Runs: script version, profile, target fleet, rollout, state; a production run with its own values points to their approval | `script_run_id` PK, `script_version_id` FK, `run_profile_id` FK, `retry_of_script_run_id` FK?, `cluster_id`, `fleet_id` FK? ↗, `fleet_name`, `is_dry_run`, `rollout` JSON, `hooks` JSON, `state`, `approval_request_id` FK? ↗, `started_by`, `heartbeat_at`, `started_at`, `ended_at` |
+| `script_runs` | Runs: the script version, profile and fleet each names, its rollout, state and who started it | `script_run_id` PK, `run_number` (unique), `script_version_id` FK?, `script_name`, `version_number`, `version_hash`, `run_profile_id` (the id, not a key), `retry_of_script_run_id` FK?, `retry_of_number`, `cluster_id`, `cluster_name`, `fleet_id` FK? ↗, `fleet_key`, `fleet_name`, `is_dry_run`, `privilege`, `target`, `identity`, `basis`, `rollout_mode`, `rollout_size`, `rollout_stop_after`, `rollout_timeout_minutes`, `hook_names`, `hooks_before`, `hooks_after` (text arrays), `state`, `note`, `request_key`, `is_cancel_asked`, `values_request_number`, `values_approved_by`, `values_approved_by_user`, `values_approved_at`, `approval_request_id` FK? ↗, `started_by`, `started_by_user`, `heartbeat_at`, `started_at`, `ended_at` |
+| `script_run_approvers` | Who had approved the script's version when the run started | `script_run_id` PK FK, `position` PK, `name`, `user_name` |
 | `script_run_hosts` | Result per host of a run: batch, state, exit code, output tail; keeps the host name | `script_run_host_id` PK, `script_run_id` FK, `host_id` FK? ↗, `host_name`, `batch`, `state`, `exit_code`, `output_tail`, `reboot_minutes`, `is_cordoned`, `started_at`, `ended_at` |
 | `script_run_values` | Values a run used, at run, fleet or host level, as they were when it started | `script_run_value_id` PK, `script_run_id` FK, `scope`, `script_run_fleet_id` FK?, `script_run_host_id` FK?, `name`, `value` |
 | `script_run_host_fleets` | The fleets each host of a run was in when it started | `script_run_host_id` PK FK, `script_run_fleet_id` PK FK |

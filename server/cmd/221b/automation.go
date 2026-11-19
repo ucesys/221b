@@ -63,11 +63,10 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 		} else {
 			// With a database (Phase 13) what is known of each node is
 			// rows of host_facts, and the scripts with their versions, the
-			// script groups, the execution profiles, the variables and
-			// their changes rows of their tables; the rest is where it was,
-			// the runs in
-			// their own ConfigMap when there is one. The facts are copied
-			// from wherever they were kept.
+			// script groups, the execution profiles, the variables, their
+			// changes and the runs rows of their tables. The runs and the
+			// facts are copied from wherever they were kept: their own
+			// ConfigMap when there is one.
 			kept := autoBackend
 			if runsBackend != nil {
 				routes := map[string]kv.Backend{}
@@ -80,7 +79,7 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 				return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d),
 					automation.GroupsKey: automation.NewGroupsPG(d), automation.ProfilesKey: automation.NewProfilesPG(d),
 					automation.ScriptsKey: automation.NewScriptsPG(d), automation.VariablesKey: automation.NewVariablesPG(d),
-					automation.ChangesKey: automation.NewChangesPG(d)}
+					automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
 			}), nil)
 		}
 		autoEngine = automation.NewEngine(automation.Options{
