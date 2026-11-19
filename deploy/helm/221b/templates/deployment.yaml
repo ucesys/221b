@@ -473,6 +473,16 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # With a database the console does not listen until it has
+          # reached it (two minutes of trying) and brought its schema up to
+          # date (five at most), so the liveness probe waits for the start.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: {{ ternary 12 90 (eq (include "b221.dbMode" .) "none") }}
           livenessProbe:
             httpGet:
               path: /healthz

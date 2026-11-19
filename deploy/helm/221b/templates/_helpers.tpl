@@ -251,11 +251,20 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- /* An installed release keeps its mode: bundled to external, or back, is a migration. */ -}}
+{{- /* An installed release keeps its mode: bundled to external, or back, is
+a migration. The Deployment says which it has. After a rollback to a
+revision from before the database it says nothing, so the bundled
+database's Secret, which is kept through a rollback as its volumes are,
+is asked too. */ -}}
 {{- $was := "" -}}
 {{- $d := lookup "apps/v1" "Deployment" .Release.Namespace (include "b221.fullname" .) -}}
 {{- if $d -}}
 {{- $was = get ($d.metadata.annotations | default dict) "221b.io/database-mode" | default "" -}}
+{{- end -}}
+{{- if and (or (not $was) (eq $was "none")) (ne $mode "bundled") (not .Values.database.allowModeChange) -}}
+{{- if lookup "v1" "Secret" .Release.Namespace (include "b221.dbSecret" .) -}}
+{{- fail (printf "this release has a bundled database from an earlier revision (its Secret %s and its volumes are kept), and database.mode is now %s, which leaves the records in it behind. Set database.mode=bundled to go on with it. If it is no longer wanted, delete that Secret, the Secret %s and the volume claims of %s-db, or set database.allowModeChange=true (docs/database.md)" (include "b221.dbSecret" .) $mode (include "b221.dbTLSSecret" .) (include "b221.fullname" .)) -}}
+{{- end -}}
 {{- end -}}
 {{- if and $was (ne $was "none") (ne $was $mode) (not .Values.database.allowModeChange) -}}
 {{- fail (printf "this release keeps its records in a %s database and database.mode is now %s. The records do not move by themselves: take a backup in Administration › Backup, install with the new mode, restore it there (docs/database.md), and set database.allowModeChange=true for the upgrade that switches" $was $mode) -}}

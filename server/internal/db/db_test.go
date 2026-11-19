@@ -408,3 +408,65 @@ func TestScopeKV(t *testing.T) {
 		t.Fatalf("after deleting: %v", err)
 	}
 }
+
+// A record set that only grows is copied from where the last copy stopped:
+// the first copy takes everything, a later one what is newer, and a copy
+// written down before the newest time was kept counts from when it was made.
+func TestImportNewer(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	base := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	kept := []time.Time{base, base.Add(time.Second)}
+	run := func(id string) (int, time.Time) {
+		t.Helper()
+		var got time.Time
+		n, err := d.ImportNewer(ctx, id, "test", func(_ context.Context, _ pgx.Tx, since time.Time) (int, time.Time, error) {
+			got = since
+			n, newest := 0, time.Time{}
+			for _, at := range kept {
+				if at.After(newest) {
+					newest = at
+				}
+				if db.After(at, since) {
+					n++
+				}
+			}
+			return n, newest, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, got
+	}
+	if n, since := run("log"); n != 2 || !since.IsZero() {
+		t.Fatalf("the first copy took %d since %v", n, since)
+	}
+	if n, since := run("log"); n != 0 || !since.Equal(kept[1]) {
+		t.Fatalf("the second copy took %d since %v", n, since)
+	}
+	// Less than a microsecond after the newest is the newest, as the
+	// database keeps it; a second later is new.
+	kept = append(kept, kept[1].Add(300*time.Nanosecond), base.Add(2*time.Second))
+	if n, _ := run("log"); n != 1 {
+		t.Fatalf("the copy after a rollback took %d", n)
+	}
+	if n, _ := run("log"); n != 0 {
+		t.Fatalf("the copy after that took %d", n)
+	}
+	var count int
+	var newest time.Time
+	if err := d.Pool().QueryRow(ctx, "SELECT record_count, newest_at FROM imports WHERE import_id = 'log'").Scan(&count, &newest); err != nil || count != 3 || !newest.Equal(base.Add(2*time.Second)) {
+		t.Fatalf("written down: %d records, the newest %v: %v", count, newest, err)
+	}
+	// A copy of nothing, or one from before the newest time was written
+	// down: what is later than the copy itself is new.
+	if _, err := d.Pool().Exec(ctx, "INSERT INTO imports (import_id, source, imported_at) VALUES ('old', 'test', $1)", base.Add(1500*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if n, since := run("old"); n != 1 || !since.Equal(base.Add(1500*time.Millisecond)) {
+		t.Fatalf("after an older copy: %d since %v", n, since)
+	}
+	if n, _ := run("old"); n != 0 {
+		t.Fatalf("after an older copy, the second time: %d", n)
+	}
+}

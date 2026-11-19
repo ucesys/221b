@@ -156,14 +156,29 @@ func (h *PGHistory) List() []Record {
 	return append(out, h.last...)
 }
 
-// Import copies the records another history kept, once (DB-17).
+// Import copies the records another history kept (DB-17). The records
+// only grow, so every start copies those that ended after the newest of
+// the last copy: none as a rule, and after a rollback to a release without
+// a database the sessions that ended meanwhile.
 func (h *PGHistory) Import(ctx context.Context, from History, source string) (int, error) {
-	copied := 0
-	_, err := h.DB.ImportOnce(ctx, HistoryKey, source, func(ctx context.Context, tx pgx.Tx) (n int, err error) {
-		if copied, err = insertRecords(ctx, tx, from.List()); err != nil {
-			return 0, err
+	return h.DB.ImportNewer(ctx, HistoryKey, source, func(ctx context.Context, tx pgx.Tx, since time.Time) (int, time.Time, error) {
+		var newest time.Time
+		var later []Record
+		for _, r := range from.List() {
+			if r.Ended.After(newest) {
+				newest = r.Ended
+			}
+			if db.After(r.Ended, since) {
+				later = append(later, r)
+			}
 		}
-		return copied, h.trim(ctx, tx)
+		if len(later) == 0 {
+			return 0, newest, nil
+		}
+		n, err := insertRecords(ctx, tx, later)
+		if err != nil {
+			return 0, newest, err
+		}
+		return n, newest, h.trim(ctx, tx)
 	})
-	return copied, err
 }

@@ -22,7 +22,7 @@ ARG WALG_VERSION=v3.0.10
 ARG TARGETARCH
 
 ENV LANG=C.UTF-8 \
-    PATH=/usr/lib/postgresql/${PG_MAJOR}/bin:/opt/patroni/bin:/usr/local/bin:/usr/bin:/bin \
+    PATH=/usr/lib/postgresql/${PG_MAJOR}/bin:/opt/patroni/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PGDATA=/var/lib/postgresql/data/pgdata
 
 # The postgres user is 999 whatever the package would pick, so the chart's

@@ -190,26 +190,32 @@ func (s *PGStore) Trim(ctx context.Context, before time.Time) (int64, error) {
 	return n, err
 }
 
-// Import copies the events another store kept, once (DB-17): the audit log
-// a release before Phase 13 kept in a ConfigMap. It says how many it
-// copied, 0 when they were copied before.
+// Import copies the events another store kept (DB-17): the audit log a
+// release before Phase 13 kept in a ConfigMap. The log only grows, so every
+// start copies what is newer than the last copy: nothing as a rule, and
+// after a rollback to that release the events it wrote meanwhile. It says
+// how many it copied.
 func (s *PGStore) Import(ctx context.Context, from Store, source string) (int, error) {
-	copied := 0
-	_, err := s.DB.ImportOnce(ctx, StoreKey, source, func(ctx context.Context, tx pgx.Tx) (int, error) {
+	return s.DB.ImportNewer(ctx, StoreKey, source, func(ctx context.Context, tx pgx.Tx, since time.Time) (int, time.Time, error) {
+		var newest time.Time
 		list, err := from.List(ctx)
 		if err != nil || len(list) == 0 {
-			return 0, err
+			return 0, newest, err
 		}
-		events := make([]pgEvent, len(list))
 		// Oldest first, so the keys sort as the events happened.
-		for i, e := range list {
-			events[len(list)-1-i] = pgEvent{Event: e}
+		events := make([]pgEvent, 0, len(list))
+		for i := len(list) - 1; i >= 0; i-- {
+			e := list[i]
+			if e.Time.After(newest) {
+				newest = e.Time
+			}
+			if db.After(e.Time, since) {
+				events = append(events, pgEvent{Event: e, id: db.NewID()})
+			}
 		}
-		for i := range events {
-			events[i].id = db.NewID()
+		if len(events) == 0 {
+			return 0, newest, nil
 		}
-		copied = len(events)
-		return copied, insertEvents(ctx, tx, events)
+		return len(events), newest, insertEvents(ctx, tx, events)
 	})
-	return copied, err
 }

@@ -15,6 +15,21 @@ import (
 // one the operator runs. A domain whose repository is written keeps its
 // records there; the others stay in their ConfigMaps until theirs is.
 
+// databaseWait is how long a start waits for a database that does not
+// answer, and databaseMigrate how long the schema's steps may take. The
+// chart's startup probe (deployment.yaml) is sized from their sum.
+const (
+	databaseWait    = 2 * time.Minute
+	databaseMigrate = 5 * time.Minute
+)
+
+func earlier(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
 // wireDatabase opens the database when one is configured, brings its
 // schema to this build's, and starts hearing the other replicas.
 func (w *wiring) wireDatabase(ctx context.Context) error {
@@ -27,18 +42,21 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 		cfg.AppName = "221b/" + host
 	}
 	// The bundled database may still be starting, or failing over, when
-	// the console does: try for two minutes before giving up, and let the
-	// pod start again after that.
+	// the console does: try for databaseWait before giving up, and let the
+	// pod start again after that. The chart's startup probe allows for
+	// this wait and the schema's steps after it; the console does not
+	// listen until both are done.
 	var d *db.DB
 	var err error
-	for try := 0; ; try++ {
-		octx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	deadline := time.Now().Add(databaseWait)
+	for first := true; ; first = false {
+		octx, cancel := context.WithDeadline(ctx, earlier(time.Now().Add(15*time.Second), deadline))
 		d, err = db.Open(octx, cfg, log)
 		cancel()
-		if err == nil || try == 23 {
+		if err == nil || !time.Now().Add(5*time.Second).Before(deadline) {
 			break
 		}
-		if try == 0 {
+		if first {
 			log.Warn("the database does not answer yet; trying for two minutes", "host", cfg.Host, "err", err)
 		}
 		select {
@@ -50,7 +68,7 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("the database (-db-host, database.* in the chart): %w", err)
 	}
-	mctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	mctx, cancel := context.WithTimeout(ctx, databaseMigrate)
 	defer cancel()
 	n, err := d.Migrate(mctx)
 	if err != nil {

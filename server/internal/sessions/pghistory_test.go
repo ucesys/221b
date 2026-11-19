@@ -37,7 +37,7 @@ func TestPGHistory(t *testing.T) {
 }
 
 // A backup's records are merged by id, and the ConfigMap's are copied
-// once.
+// once, with what it got later copied by a later start.
 func TestPGHistoryMergeAndImport(t *testing.T) {
 	h := &PGHistory{DB: dbtest.Open(t), Keep: 50}
 	ctx := context.Background()
@@ -51,11 +51,19 @@ func TestPGHistoryMergeAndImport(t *testing.T) {
 	if n, err := h.Import(ctx, old, "test"); err != nil || n != 1 {
 		t.Fatalf("copied %d: %v", n, err)
 	}
-	old.Add(recordAt("00000000000000dd", 4))
 	if n, err := h.Import(ctx, old, "test"); err != nil || n != 0 {
 		t.Fatalf("copied %d the second time: %v", n, err)
 	}
-	if got := h.List(); len(got) != 3 || got[0].ID != "00000000000000cc" {
+	// What a console rolled back to a release without a database added to
+	// the ConfigMap since is copied by the next start, and nothing older.
+	old.Add(recordAt("00000000000000dd", 4))
+	if n, err := h.Import(ctx, old, "test"); err != nil || n != 1 {
+		t.Fatalf("copied %d after the rollback: %v", n, err)
+	}
+	if n, err := h.Import(ctx, old, "test"); err != nil || n != 0 {
+		t.Fatalf("copied %d the time after: %v", n, err)
+	}
+	if got := h.List(); len(got) != 4 || got[0].ID != "00000000000000dd" {
 		t.Fatalf("%d kept, the newest %s", len(got), got[0].ID)
 	}
 }

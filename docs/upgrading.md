@@ -54,12 +54,12 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, and from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## Unreleased (Phase 13)
+## 0.13.0 (unreleased; Phase 13)
 
 - **Nothing moves unless you choose a database.** `database.mode` is `none` by default, and the console keeps every record in its ConfigMaps as before.
-- **With `database.mode: bundled` or `external`**, the domains that have moved ([docs/database.md](database.md)) copy their records from their ConfigMaps at the first start, once. The ConfigMaps are left as they were at the copy. Going back to the release before, or to `database.mode: none`, returns to those records; what was recorded after the copy stays in the database and is not carried back.
+- **With `database.mode: bundled` or `external`**, the domains that have moved ([docs/database.md](database.md)) copy their records from their ConfigMaps at the first start, once. The ConfigMaps are left as they were at the copy. Going back to the release before, or to `database.mode: none`, returns to those records; what was recorded after the copy stays in the database and is not carried back. Upgrading again to the same database copies the audit events and Toolbox session records the rolled-back console wrote; for everything else the database's records count, not what changed in a ConfigMap meanwhile.
 - **The bundled database's Secrets and volumes are kept** by `helm uninstall` (`<release>-db`, `<release>-db-tls`, the StatefulSet's claims), so a reinstall in the same namespace finds its database. Delete them by hand to start empty.
-- **Between `bundled` and `external`** the records move through Administration › Backup; the chart refuses to flip the mode of an installed release without `database.allowModeChange=true`.
+- **Between `bundled` and `external`** the records move through Administration › Backup; the chart refuses to flip the mode of an installed release without `database.allowModeChange=true`, also after a rollback, for as long as the bundled database's Secret is there.
 
 ## 0.12.1 (2026-11-18)
 

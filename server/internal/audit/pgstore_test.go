@@ -89,7 +89,8 @@ func TestPGStoreTrim(t *testing.T) {
 }
 
 // The ConfigMap's events are copied once, in their order; a second start
-// copies nothing, also when the first copy's events were trimmed since.
+// copies nothing, also when the first copy's events were trimmed since, and
+// a later one copies what the ConfigMap got since.
 func TestPGStoreImportsOnce(t *testing.T) {
 	s := pgStore(t)
 	ctx := context.Background()
@@ -112,5 +113,19 @@ func TestPGStoreImportsOnce(t *testing.T) {
 	}
 	if list, _ := s.List(ctx); len(list) != 0 {
 		t.Fatalf("%d events came back", len(list))
+	}
+	// A console rolled back to a release without a database went on writing
+	// to the ConfigMap: the next start with one copies those events, and
+	// only those, once.
+	old.Add(eventAt(3, "rolled back"))
+	old.Add(eventAt(4, "rolled back"))
+	if n, err := s.Import(ctx, old, "configmap consoles/221b-audit"); err != nil || n != 2 {
+		t.Fatalf("copied %d after the rollback: %v", n, err)
+	}
+	if n, err := s.Import(ctx, old, "configmap consoles/221b-audit"); err != nil || n != 0 {
+		t.Fatalf("copied %d the time after: %v", n, err)
+	}
+	if list, _ := s.List(ctx); len(list) != 2 || list[0].Time.Second() != 4 {
+		t.Fatalf("after the rollback: %+v", list)
 	}
 }

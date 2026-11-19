@@ -582,7 +582,8 @@ database:
       retainBaseBackups: 7
       s3:
         # Empty: the backups go to a second volume instead, which does not
-        # survive losing the namespace's storage.
+        # survive losing the namespace's storage. Each member has its own,
+        # so with ha a bucket is the better place (docs/database.md).
         bucket: ""
         prefix: 221b
         # For MinIO and other S3-compatible stores.
@@ -600,7 +601,10 @@ database:
         storageClass: ""
     restore:
       # A new installation that starts from the archive instead of empty:
-      # set on the first install only, then remove.
+      # set on the first install only, then remove. It needs the Secret
+      # the backups were made with (its backup-key), and a backup volume
+      # is found only under the same release name and namespace
+      # (docs/database.md, Restore).
       fromBackup: false
       # RFC 3339; empty restores to the newest point.
       targetTime: ""

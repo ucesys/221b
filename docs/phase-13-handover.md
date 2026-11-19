@@ -1,6 +1,37 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 18, 2026, at the end of the session that started Phase 13, for the session that continues it. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 73 tables and their rules) first; the requirements are DB-01 to DB-22 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 18, 2026, at the end of the session that started Phase 13, for the session that continues it. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 73 tables and their rules) first; the requirements are DB-01 to DB-31 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+
+## The cluster test of November 19, 2026
+
+A second session built both images and upgraded a 0.12.0 release in place on the owner's RKE2 cluster (namespace `221b-github`), on commit `dc0fe32`. Its report is `phase-13-findings.md` (with the owner; the raw logs are in `~/p13` on `rke2cp1`).
+
+**What held:** the upgrade to `bundled` (primary labelled, the Service, `verify-full` over TLS 1.3, the role and database, schema 14, `GET /api/v1/database`); the copy of the audit log (126 events, once, ConfigMaps untouched, nothing twice after a restart); new audit events in the database; the database pod deleted and back on its volume with the console reconnecting by itself; a base backup to the volume; the rollback to 0.12.0; `external` with `verify-full` and a CA, as a role that is not a superuser.
+
+**What it found, and what was done about each** (commit `Storage: what the first cluster test found`):
+
+| # | Found | Done |
+| --- | --- | --- |
+| B1 | `make image` and `make image-postgres` need BuildKit; Docker 20.10 does not use it unasked. | The Makefile sets `DOCKER_BUILDKIT=1`. |
+| B2 | The database image never built: its `PATH` had no `sbin`, so `groupadd` was not found. | `PATH` has the `sbin` directories. With that the image built there: PostgreSQL 18.7, Patroni 4.1.5, WAL-G v3.0.10. |
+| B3 | The backup container ignored SIGTERM, so every stop of a database pod took the whole 60-second grace period (47 s of a 68 s outage). | `backup.sh` traps TERM and INT and waits on what it runs, also during a base backup. |
+| B4 | The console waits for the database before it listens, and the liveness probe killed it after 60 s. The wait was also up to eight minutes, not two. | A startup probe (seven and a half minutes with a database, one without); the wait is two minutes by the clock (`databaseWait`). |
+| B5 | A day's base backup was given up if Patroni did not answer in the one minute it was due. | Due from `dailyAt` until the day's end; a day is marked done only once someone took it; a restart after the hour does not take it twice; a failed one is tried again after ten minutes. |
+| B6 | To a volume with three members, the base backup went to a standby's volume and the log to the primary's, so no volume could restore. | To a volume the primary takes it, and a member that becomes the primary after another one was takes one at once. To a bucket nothing changes. Still true: after a failover the time before it is only in the old primary's volume, so the docs recommend a bucket with `ha`. |
+| B7 | The docs did not say that a restore needs the old Secret's `backup-key` and, to a volume, the old backup volume. | `database.md`, *Restore*, and the values file say what to keep and copy. |
+| B8 | The chart still said 0.12.1. | 0.13.0 in `Chart.yaml`, `web/package.json` and the lock file; the changelog's section is `0.13.0 (unreleased)`. |
+| B9 | After `helm rollback` to a revision from before the database, the mode guard saw no annotation and let `external` through, leaving the bundled database's records behind. | The guard also looks for the bundled database's kept Secret, and refuses any mode but `bundled` while it is there (or `allowModeChange`). An external database leaves nothing to go by; the docs say so. |
+| B10 | After upgrade, rollback, upgrade again, what the rolled-back console wrote to the ConfigMaps was never copied. | The audit log and the Toolbox's session records are read at every start and what is newer than the last copy is copied (`db.ImportNewer`, `imports.newest_at`, migration `0015`). Record sets edited in place are not merged; the docs say the database's count. The backups' runs are among those. |
+
+**Not verified in a cluster yet, so test these next** (none of the fixes above has run in one):
+
+1. Build both images from the branch as it is now, without the working-copy patch, with `sudo make image image-postgres`.
+2. Delete the database pod again: the outage should be about twenty seconds, not sixty-eight, and the console pod should not be restarted by its probe when it starts while the database is away.
+3. The existing test databases get step `0015` at start (they have 14); `imports` rows from before it count from `imported_at`.
+4. Rollback, sign in so that audit events are written to the ConfigMap, upgrade again to the same database: those events, and only those, appear in `audit_events` once.
+5. B9: after a rollback to revision 13, an upgrade with `database.mode=external` must be refused with the sentence that names the Secret; with `database.mode=bundled` it must go through. This is a `lookup`, which no test without a cluster reaches.
+6. The backup container on a fresh volume takes a base backup as soon as the primary runs (log line `this volume has no log up to timeline 1`), writes `/backup/.primary-timeline`, and does not take another after its own restart.
+7. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record (the test release's cluster was read-only).
 
 ## Where the branch stands
 
@@ -36,6 +67,8 @@ The first commit on the branch, `CI: cache Playwright browsers…` (pushed by th
 
 **Not tested: do these first.**
 
+*Items 1 to 3 were then run in a cluster, in part; see the cluster test above for what is left of them.*
+
 1. **The `221b-postgres` image has never been built.** There was no Docker daemon. Run `make image-postgres` and fix what fails; the likeliest spots are the pgdg package step and the WAL-G file name (`wal-g-pg-24.04-{amd64,aarch64}.tar.gz` of v3.0.10 exist; that the tarball holds a file of the same name without `.tar.gz` is assumed).
 2. **The bundled database has never run.** Install the chart in kind with `database.mode=bundled`, then with `database.bundled.ha=true`, and check: the first pod initializes and is labelled `role=primary`; the Service `<release>-db` reaches it; the console connects with `verify-full`; `app_221b` and the database `221b` exist; deleting the primary's pod promotes a standby and the console reconnects; `ha` turned on later adds two standbys; the backup container takes a base backup (set `dailyAt` a minute ahead); `restore.fromBackup` brings a new installation back. Things to watch: Patroni's label value for the leader (`PATRONI_KUBERNETES_LEADER_LABEL_VALUE=primary` is set explicitly), the TLS key's file mode under `fsGroup` (0440, owned by root: PostgreSQL accepts that), and `readOnlyRootFilesystem` (writable paths are the data volume, `/var/run/postgresql`, `/run/patroni`, `/tmp`).
 3. **External mode against a real server with TLS** (`verify-full` with a CA, a client certificate, a pooler with `listenerHost`). Only `sslmode=disable` ran here.
@@ -50,11 +83,13 @@ These differ from the design document *221B storage deployment design*, or were 
 | --- | --- | --- |
 | `database.mode` defaults to **`none`**, not `bundled`. | Six domains are still in ConfigMaps, and the image has not run; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
 | The base backup runs at a **time of day** (`backup.dailyAt: "02:00"`), not a cron expression. | A shell loop in the pod cannot parse cron. | Replace `backup.sh` with a small program. |
-| The member that takes the backup is **picked from Patroni's `/cluster`** (first standby by name, else the primary), not by an advisory lock. | Simpler, and nothing is run in another pod either way. | — |
+| The member that takes the backup is **picked from Patroni's `/cluster`**, not by an advisory lock: to a bucket the first standby by name, else the primary; to a volume always the primary, where the log is, and a new primary takes one at once. | Simpler, and nothing is run in another pod either way. The volume's rule came from the cluster test (B6). | — |
 | **`iamAuth`** (RDS, Cloud SQL tokens) is not implemented. | Time. | Add a token source in `db.open`'s `BeforeConnect`. |
 | **Quorum commit is on with one member too** (it waits for nobody then). | So turning `ha` on needs no change to Patroni's stored configuration. | — |
 | The audit log's **retention is a year**, a constant. | It needs a setting and a place on the page. | `auditRetention` in `cmd/221b/main.go`. |
 | The import is written down in a table, **`imports`**; the ConfigMap is not annotated. | One transaction with the copy. | — |
+| **Only the audit log and the session records are copied again after a rollback** (what is newer than the last copy). Everything edited in place is copied once, and the database's records count from then on. | A log can be merged by time; a settings document changed on both sides cannot. | Say which side wins per record set, if another answer is wanted. |
+| **While the bundled database's Secret exists, any mode but `bundled` is refused** without `allowModeChange`, also on a first install under a name used before. | The Secret and the volumes are kept on purpose; a rollback leaves nothing else to go by. | Delete the Secret, or drop the check in `b221.validateDatabase`. |
 | Columns **`check` and `window` are `check_name` and `time_window`**: both are reserved words in SQL. `audit_events.detail` is text. | — | — |
 | **The Lease stays.** Claims, sweeps and notices are there and tested, but Sherlock's conversations and Watson's cards still live in the leader's memory. | ADR-163. | Remove it when cards, conversations and runs are rows. |
 | Tables that point at a **cluster or a credential** get that row made with only its id. | The clusters' and credentials' own records are in Secrets and have not moved. | Fill the rows when those move (order 9). |
@@ -125,10 +160,13 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 ## Working on this
 
 - Go tests that need PostgreSQL: `make test-db` (Docker), or `TEST_DATABASE=host:port go test ./...` against any PostgreSQL 16 or later that lets `postgres` in without a password (`TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD` otherwise). Each test makes and drops its own database.
-- A migration file may be edited in place until a release ships it; after that a change is a new file, and the checksum check refuses an edited one. Editing one makes existing development databases refuse to start: drop them.
+- A migration file may be edited in place until a release ships it; after that a change is a new file, and the checksum check refuses an edited one. Editing one makes existing development databases refuse to start: drop them. The test cluster now has two databases at step 14, so the change after its test went into a new step, `0015`, and later ones should too while those are in use.
+- `hack/check-db-backup.sh` runs the database's backup container against stand-ins for Patroni and WAL-G (who takes the base backup, when, and that it stops when told to); `make lint-go` and CI's chart job run it.
 - Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).
 
 ## Test results
+
+After the cluster test's fixes (`Storage: what the first cluster test found`), the same full run passed again: 55 packages, none failed, with step `0015` in every test database; `make lint-go` (which now runs `hack/check-db-backup.sh`), `shellcheck` on `hack/` and `deploy/postgres/`, and all 107 chart checks pass. The paragraphs below are from the run before it.
 
 The last full run in this session, on a 2-core machine, on the branch's last code commit: `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`.
 

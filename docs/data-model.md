@@ -34,7 +34,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 - `credentials.credential_id`, and the columns that point at it, are text: the id the console gives a credential. `repositories` has `position`, `username`, `is_secret_set`, `is_credential_migrated`, the pinned certificate's parts as `pinned_cert_*`, `pinned_by`, `pinned_at` and `test_result`.
 - `clusters` and `credentials` hold, for now, a row with only its id for each cluster or credential another table points at; their own records are still in Secrets.
 - `run_profiles.run_profile_id` is the id the console gives a profile (the built-in ones are fixed), and `run_profile_fleets` holds `fleet_key`, not a key to `fleets`: a profile is not of one cluster and names a fleet as runs do.
-- Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps.
+- Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps, each with the time of the newest record copied where the set only grows.
 - The columns of a domain that has not moved yet are the model's first cut: they are settled, and may change in place, when the domain's repository is written. Once a release ships a step, it is never edited.
 
 ## Foundation tier

@@ -2,9 +2,9 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## Unreleased
+## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-22). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-31). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -12,9 +12,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Added
 
-- **`database.mode`** in the chart: `none` (the default until the move is complete), `bundled` or `external`. `bundled` runs PostgreSQL beside the console from a second image of the release, `221b-postgres` (PostgreSQL 18, Patroni, WAL-G): one member, or three with `database.bundled.ha`, a commit waiting for one of the two standbys; passwords and a certificate made once; the write-ahead log archived and a base backup a day, to S3 or a second volume. `external` connects to a PostgreSQL 16 or later that you run (`database.external.host`, `port`, `database`, `user`, `passwordSecret`, `sslMode`, `caSecret`, `clientCertSecret`, `maxConnections`, `listenerHost` for a pooler in transaction mode). **The bundled database has not been run in a cluster yet.**
-- **The audit log in the database**: with a database, Administration › Audit log reads `audit_events`, where each event is a row added and never changed; it is no longer bounded by a ConfigMap, and is kept a year. What the ConfigMap held is copied once.
-- **The Toolbox's session records in the database**: with a database, each ended session is a row of `toolbox_sessions`, no longer bounded by a ConfigMap's size; the newest `toolbox.history.keep` are kept, and the ConfigMap's are copied once.
+- **`database.mode`** in the chart: `none` (the default until the move is complete), `bundled` or `external`. `bundled` runs PostgreSQL beside the console from a second image of the release, `221b-postgres` (PostgreSQL 18, Patroni, WAL-G): one member, or three with `database.bundled.ha`, a commit waiting for one of the two standbys; passwords and a certificate made once; the write-ahead log archived and a base backup a day, to S3 or a second volume. `external` connects to a PostgreSQL 16 or later that you run (`database.external.host`, `port`, `database`, `user`, `passwordSecret`, `sslMode`, `caSecret`, `clientCertSecret`, `maxConnections`, `listenerHost` for a pooler in transaction mode). One member has been run in a cluster (upgrade, copy, restart, base backup, rollback); **three members, a failover and a restore have not been run yet.** To a volume, the primary takes the base backup and a new primary takes one at once; with three members a bucket is the better place.
+- **The audit log in the database**: with a database, Administration › Audit log reads `audit_events`, where each event is a row added and never changed; it is no longer bounded by a ConfigMap, and is kept a year. What the ConfigMap held is copied once, and after a rollback to a release without a database and an upgrade again, the events written meanwhile are copied too.
+- **The Toolbox's session records in the database**: with a database, each ended session is a row of `toolbox_sessions`, no longer bounded by a ConfigMap's size; the newest `toolbox.history.keep` are kept, and the ConfigMap's are copied once, with those a rolled-back console added copied at the next start with the database.
 - **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
 - **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.
@@ -22,7 +22,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **The backups' settings and runs in the database**: the settings as a row of `settings`, each run a row of `backup_runs`; copied once from the ConfigMap, the newest scheduled time handled included.
 - `GET /api/v1/database`: whether the console has a database and whether it answers; for a SuperAdmin also why not, the schema's version and the domains moved. Metrics `b221_database_up`, `b221_database_schema_version`, `b221_database_connections` and `b221_database_connections_max`.
 - Server flags `-db-host`, `-db-port`, `-db-name`, `-db-user`, `-db-password-file`, `-db-sslmode`, `-db-ca-file`, `-db-client-cert-file`, `-db-client-key-file`, `-db-max-connections`, `-db-listener-host` and `-db-poll-interval` (`DB_*` in the environment).
-- For developers: `make test-db` runs the Go tests with those that need PostgreSQL (`TEST_DATABASE=host:port`; they are skipped without it); `make image-postgres` builds the database's image.
+- **The console's pod has a startup probe**, so a console that waits for its database at start (two minutes at most) is not stopped by the liveness probe.
+- **The chart's version is 0.13.0** on this branch.
+- For developers: `hack/check-db-backup.sh` checks the database's backup container without a database; `make image` and `make image-postgres` turn BuildKit on, which Docker before 23 needs. `make test-db` runs the Go tests with those that need PostgreSQL (`TEST_DATABASE=host:port`; they are skipped without it); `make image-postgres` builds the database's image.
 
 ## 0.12.1 (2026-11-18)
 

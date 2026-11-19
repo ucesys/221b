@@ -68,6 +68,7 @@ lint-go:
 	if [ -n "$$out" ]; then echo "Run gofmt on:"; echo "$$out"; exit 1; fi
 	cd server && $(GO) vet ./...
 	hack/check-prompt-sources.sh
+	hack/check-db-backup.sh
 
 lint-web: web/node_modules
 	cd web && $(NPM) run typecheck && $(NPM) run lint && $(NPM) run format:check
@@ -77,11 +78,13 @@ licenses: web/node_modules ## Check that every dependency's license is allowed
 	cd server && $(GO) run github.com/google/go-licenses/v2@v2.0.1 check ./... \
 		--disallowed_types=forbidden,restricted,unknown --ignore github.com/ucesys/221b
 
+# Both Dockerfiles need BuildKit (--platform=$BUILDPLATFORM, COPY --chmod),
+# which Docker before 23 does not use unless it is told to.
 image: ## Build the container image as $(IMAGE):$(TAG)
-	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE):$(TAG) .
+	DOCKER_BUILDKIT=1 docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE):$(TAG) .
 
 image-postgres: ## Build the bundled database's image as $(IMAGE)-postgres:$(TAG)
-	docker build -t $(IMAGE)-postgres:$(TAG) deploy/postgres
+	DOCKER_BUILDKIT=1 docker build -t $(IMAGE)-postgres:$(TAG) deploy/postgres
 
 test-db: ## Run the Go tests with those that need PostgreSQL, against a throwaway one in Docker, or the one TEST_DATABASE names (host:port)
 	@if [ -z "$$TEST_DATABASE" ]; then \
