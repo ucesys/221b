@@ -286,3 +286,11 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 - Both images need BuildKit; the Makefile turns it on. The bundled database's members are kept on different nodes, so three members need the image in a registry or on three nodes.
 - A Helm `lookup` (the mode guard, the generated passwords and certificates) returns nothing in `helm template`: only a cluster exercises it.
 - Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md`, `docs/data-model.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).
+
+**Setting up a new workspace without Docker** (what the sessions in the Claude app used; their workspaces reach GitHub and the package registries only, and nothing is shared between sessions):
+
+- **Go 1.26**: the workspace's own Go is older than `server/go.mod` asks for, and the toolchain download is not reachable. Build it from source with the Go that is there: clone `https://github.com/golang/go` at the tag `go1.26.9` into `~/gosrc/go1.26`, run `./make.bash` in its `src`, and put `~/gosrc/go1.26/bin` first in `PATH` with `GOTOOLCHAIN=local`.
+- **PostgreSQL**: install the distribution's (16 is enough) with `apt-get install postgresql`; `initdb` a data directory as the user `postgres` with `--auth=trust`, and start it on `127.0.0.1:55432` (`pg_ctl -D <dir> -o '-p 55432 -k /tmp -c listen_addresses=127.0.0.1 -c fsync=off -c max_connections=300' -w start`). It stops when a turn ends: keep the start in a script and run it before each test run. Then `TEST_DATABASE=127.0.0.1:55432`.
+- **Helm** (for `hack/check-chart.sh`): the binary from its GitHub release, anywhere in `PATH`. **shellcheck**: `apt-get install shellcheck`, or its GitHub release.
+- **The browser app's tests**: `npm ci` in `web/`, then `npx vitest run <file>` and `npx tsc --noEmit`.
+- The repository needs push access to `phase-13-store`.
