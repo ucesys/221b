@@ -13,6 +13,7 @@ Everything is on `phase-13-store`, pushed. Nothing is merged, there is no pull r
 | `Storage: the 221b-postgres image and the chart's database modes` | `deploy/postgres` (Dockerfile, Patroni entrypoint, bootstrap, restore and backup scripts); `database.mode` none, bundled, external in the chart; `hack/check-chart.sh`. |
 | `Activity log: the audit log is kept in the database when there is one` | `audit.PGStore`, `db.ImportOnce`, the `imports` table. |
 | `Backups: the settings and the runs behind a repository…` | `backup.Repo` with `KVRepo` and `PGRepo`, `db.LoadScope`/`SaveScope`. The pattern for every other domain. |
+| `Activity log: the Toolbox's session records…` | `sessions.PGHistory` and `sessions.Archive`; the backup reads and merges through it. Activity log is the first domain wholly moved. |
 | `Docs: Phase 13…` | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first commit on the branch, `CI: cache Playwright browsers…` (pushed by the owner's other session), was reviewed and left as it is: no problems found.
@@ -22,7 +23,7 @@ The first commit on the branch, `CI: cache Playwright browsers…` (pushed by th
 **Tested here** (Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1):
 
 - `go build ./...`, `gofmt`, `go vet` on the changed packages: clean.
-- `go test -race` with `TEST_DATABASE` set, on `internal/db`, `internal/audit`, `internal/backup`, `cmd/221b`: pass. The whole suite without `-race` passed before the changes (54 packages); see *Test results* at the end for the last full run.
+- `go test -race` with `TEST_DATABASE` set, on `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions`, `cmd/221b`: pass. The whole suite without `-race` passed before the changes (54 packages); see *Test results* at the end for the last full run.
 - `hack/check-chart.sh`: all 107 checks pass, the database's included, and every render is valid against the Kubernetes 1.35 and 1.37 schemas.
 - The Patroni file the entrypoint writes parses as YAML in its three shapes (plain, with backups, restoring), and `post-bootstrap.sh` was run twice against a real PostgreSQL (it makes the role and the database once, then only resets the password).
 
@@ -40,7 +41,7 @@ These differ from the design document *221B storage deployment design*, or were 
 
 | Decision | Why | To undo |
 | --- | --- | --- |
-| `database.mode` defaults to **`none`**, not `bundled`. | Only two record sets have moved; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
+| `database.mode` defaults to **`none`**, not `bundled`. | Only three record sets have moved; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
 | The base backup runs at a **time of day** (`backup.dailyAt: "02:00"`), not a cron expression. | A shell loop in the pod cannot parse cron. | Replace `backup.sh` with a small program. |
 | The member that takes the backup is **picked from Patroni's `/cluster`** (first standby by name, else the primary), not by an advisory lock. | Simpler, and nothing is run in another pod either way. | — |
 | **`iamAuth`** (RDS, Cloud SQL tokens) is not implemented. | Time. | Add a token source in `db.open`'s `BeforeConnect`. |
@@ -68,7 +69,7 @@ One repository at a time, as [database.md](database.md) describes, in this order
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| 1 | `sessions.HistoryKey`, `sessions` | `toolbox_sessions` | A ledger with an end state; like the audit log. Finishes Activity log. |
+| done | `audit.StoreKey`, `audit`; `sessions.HistoryKey`, `sessions`; `backup.SettingsKey` and `StatusKey`, `backup` | `audit_events`; `toolbox_sessions`; `settings` scope `backup`, `backup_runs` | Moved in this session. |
 | 2 | `api.SetupKey`; `mail.ConfigKey`; `casework.SettingsKey` | `settings` scopes `setup`, `email`, `cases` | Singletons: `db.LoadScope`/`SaveScope`, as `backup.PGRepo.Settings`. |
 | 3 | `kube.SettingsKey`, `settings.Service` | `settings` scopes `general`, `sherlock`, `watson`; `alert_acks`; selector `fleets` | The hardest of Platform: one document today, three tables. Give `settings.Service` a repository with `SaveGeneral`, `SaveSherlock`, `SaveWatson`, `Ack`, `Unack`, `SaveFleets`; it keeps its in-memory `State` and reloads on a notice (`db.Subscribe("settings", …)`) instead of every 3 seconds. Fleets need Inventory's decisions (to-do 1 to 3 below). |
 | 4 | `apps.RepositoriesKey`, `apps.Repos`; the applications' records; the credentials' index; the cluster connections' metadata | `repositories`, `applications`, `credentials`, `clusters` | Secrets stay in Secrets; the tables hold the metadata and `secret_ref`. `clusters` must exist before Inventory's and Platform's keys into it mean anything. |
@@ -112,7 +113,7 @@ Agreed during the data model's review on November 18, 2026; none of it is done. 
 
 ## Test results
 
-The last full run in this session, on a 2-core machine: `TEST_DATABASE=127.0.0.1:55432 go test -race ./...` in `server/`, after every code change on the branch.
+The last full run in this session, on a 2-core machine: `TEST_DATABASE=127.0.0.1:55432 go test -race ./...` in `server/`, after every code change on the branch but the last (the Toolbox's session records, whose packages, `internal/sessions`, `cmd/221b` and the backup tests of `internal/api`, were run again after it and pass).
 
 - **54 packages passed**, `internal/db`, `internal/audit`, `internal/backup` and `cmd/221b` with their database tests among them. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
 - **One test failed: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It is sensitive to timing: it expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores none were. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without; on the branch 2 in 10 in one batch and 0 in 25 in another. Treat it as a flaky test to fix on its own (make the waiting cases wait on the test's own gate, not on the scheduler), not as a regression; if it fails in CI, run it again before looking further.

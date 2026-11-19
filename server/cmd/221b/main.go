@@ -138,6 +138,9 @@ type wiring struct {
 	autoEngine  *automation.Engine
 	autoStore   *automation.Store
 	sessionsMgr *sessions.Manager
+	// sessionRecords are the ended sessions' records, which the backup
+	// reads and merges into.
+	sessionRecords sessions.Archive
 
 	// The jobs, the cases, Mycroft's knowledge and the proposed changes.
 	jobsW            *jobsWiring

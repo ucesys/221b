@@ -29,7 +29,7 @@ CREATE TRIGGER ai_spend_append_only BEFORE UPDATE ON ai_spend
 
 -- Lists by time.
 CREATE INDEX audit_events_at_idx ON audit_events (at DESC);
-CREATE INDEX toolbox_sessions_started_at_idx ON toolbox_sessions (started_at DESC);
+CREATE INDEX toolbox_sessions_ended_at_idx ON toolbox_sessions (ended_at DESC);
 CREATE INDEX ai_spend_spent_at_idx ON ai_spend (spent_at);
 CREATE INDEX script_runs_started_at_idx ON script_runs (started_at DESC);
 CREATE INDEX job_runs_started_at_idx ON job_runs (started_at DESC);

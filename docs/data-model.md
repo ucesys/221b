@@ -27,6 +27,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 
 - `check` and `window` are reserved words in SQL: the columns are `check_name` (in `findings`, `cluster_checks` and `exceptions`) and `time_window` (in `known_issues`).
 - `audit_events` has `actor`, `actor_subject` and `actor_email` for who, `detail` as text (it is a sentence, searched by word), and `restored_at` for an event that came back from a backup.
+- `toolbox_sessions.toolbox_session_id` is the Toolbox's own id, sixteen hex digits, not a UUID: the audit log and the transcripts' file names carry it. The table also has the session's `summary`, `node`, `owner_user`, `approved_by`, `reason`, `created_at`, `ended_by`, `end_note`, `is_recorded`, `byte_count`, `connection_count` and `watched_by`.
 - Two tables are the database's own and not part of the model: `schema_migrations`, the steps applied, and `imports`, the record sets copied from the ConfigMaps.
 - The columns of a domain that has not moved yet are the model's first cut: they are settled, and may change in place, when the domain's repository is written. Once a release ships a step, it is never edited.
 

@@ -49,6 +49,7 @@ func (w *wiring) wireAPI() error {
 		ImageChecks:             images,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                w.sessionsMgr,
+		SessionRecords:          w.sessionRecords,
 		Automation:              w.autoEngine,
 		AutomationStore:         w.autoStore,
 		TwoPerson:               w.twoPerson,

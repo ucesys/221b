@@ -22,22 +22,40 @@ CREATE TABLE audit_events (
 COMMENT ON TABLE audit_events IS 'Every recorded action: who, what, cluster, target, outcome';
 
 CREATE TABLE toolbox_sessions (
-    toolbox_session_id uuid PRIMARY KEY,
+    -- The id the Toolbox gave the session, sixteen hex digits: what the audit log and the
+    -- transcript's file name carry.
+    toolbox_session_id text PRIMARY KEY,
     approval_request_id uuid,
     change_id uuid,
     cluster_id text NOT NULL DEFAULT '',
+    -- shell, forward, debug, node: the tool.
     kind text NOT NULL DEFAULT '',
+    summary text NOT NULL DEFAULT '',
     namespace text NOT NULL DEFAULT '',
     pod text NOT NULL DEFAULT '',
     container text NOT NULL DEFAULT '',
+    node text NOT NULL DEFAULT '',
+    -- The owner as shown, and the user name the session ran as.
     owner text NOT NULL DEFAULT '',
+    owner_user text NOT NULL DEFAULT '',
+    approved_by text NOT NULL DEFAULT '',
+    reason text NOT NULL DEFAULT '',
     state text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
     ends_at timestamptz,
     ended_at timestamptz,
+    ended_by text NOT NULL DEFAULT '',
+    end_note text NOT NULL DEFAULT '',
     exit_code integer,
-    transcript_ref text NOT NULL DEFAULT ''
+    is_recorded boolean NOT NULL DEFAULT false,
+    transcript_ref text NOT NULL DEFAULT '',
+    -- What passed through: bytes, and for a port forward its connections.
+    byte_count bigint NOT NULL DEFAULT 0,
+    connection_count integer NOT NULL DEFAULT 0,
+    watched_by text[] NOT NULL DEFAULT '{}'
 );
+
 COMMENT ON TABLE toolbox_sessions IS 'Shell, port-forward and debug sessions: owner, target, limits, end and exit; a production session points to its approval request';
 
 -- Keys.

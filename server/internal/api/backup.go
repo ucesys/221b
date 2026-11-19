@@ -450,6 +450,12 @@ func (s *Server) registerBackupParts() {
 		How:     "are merged with those here",
 		LeftOut: []string{"the Toolbox's session recordings, which are in the transcript store"},
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.SessionRecords != nil {
+				if list := s.opts.SessionRecords.List(); len(list) > 0 {
+					return list, nil
+				}
+				return nil, nil
+			}
 			var list []sessions.Record
 			if _, ok := s.loadKV(ctx, sessions.HistoryKey, &list); ok {
 				return list, nil
@@ -1069,6 +1075,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 // mergeSessions adds the backup's session records to those kept, by id,
 // and keeps as many as the toolbox does.
 func (s *Server) mergeSessions(ctx context.Context, add []sessions.Record) (int, error) {
+	if s.opts.SessionRecords != nil {
+		return s.opts.SessionRecords.Merge(ctx, add)
+	}
 	keep := tb.Default().History.Keep
 	if s.opts.Sessions != nil {
 		keep = s.opts.Sessions.Config().History.Keep

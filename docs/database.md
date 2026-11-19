@@ -6,7 +6,7 @@
 
 | Domain | In the database | Still in ConfigMaps |
 | --- | --- | --- |
-| Activity log | the audit log (`audit_events`) | the Toolbox's session records |
+| Activity log | the audit log (`audit_events`) and the Toolbox's session records (`toolbox_sessions`): the whole domain | |
 | Platform | the backups' settings (`settings`, scope `backup`) and runs (`backup_runs`) | settings, acknowledged alerts, applications, repositories, credentials' list, cluster connections |
 | Identity, Approvals, Inventory, Automation, AI configuration, Jobs, Cases, Changes, Knowledge | | everything |
 

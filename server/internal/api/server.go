@@ -260,6 +260,9 @@ type Options struct {
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
+	// SessionRecords are the ended sessions' records, for the backup; nil
+	// reads them from KV, where they were before Phase 13.
+	SessionRecords sessions.Archive
 	// Automation runs scripts on nodes, and AutomationStore keeps them
 	// (Phase 11 part 2, ADR-73); nil leaves Automation out.
 	Automation      *automation.Engine
