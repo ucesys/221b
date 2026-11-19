@@ -3,6 +3,8 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,6 +59,39 @@ func TestMigrationsAreNumberedAndNamed(t *testing.T) {
 		if m.ID != i+1 || m.Name == "" || len(m.Checksum) != 64 || strings.TrimSpace(m.SQL) == "" {
 			t.Errorf("step %d: %+v", i+1, m)
 		}
+	}
+}
+
+// A step a database has applied is never edited: the database would refuse
+// the build (the first cluster test's did). testdata/steps.sum holds each
+// step's checksum from when it was written down, and every step is in it.
+func TestAppliedStepsAreNotEdited(t *testing.T) {
+	steps, err := db.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/steps.sum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && !strings.HasPrefix(line, "#") {
+			kept[f[0]] = f[1]
+		}
+	}
+	for _, m := range steps {
+		name := fmt.Sprintf("%04d_%s", m.ID, m.Name)
+		switch sum, ok := kept[name]; {
+		case !ok:
+			t.Errorf("step %s is not in testdata/steps.sum: add it with its checksum, %s", name, m.Checksum)
+		case sum != m.Checksum:
+			t.Errorf("step %s was edited: a database that applied it refuses this build. Put the change in a new step", name)
+		}
+		delete(kept, name)
+	}
+	for name := range kept {
+		t.Errorf("testdata/steps.sum lists %s, which is not a step any more: a step is never removed", name)
 	}
 }
 
@@ -470,5 +505,24 @@ func TestImportNewer(t *testing.T) {
 	}
 	if n, _ := run("old"); n != 0 {
 		t.Fatalf("after an older copy, the second time: %d", n)
+	}
+}
+
+// A database whose step was applied from another file is refused, with
+// both checksums and what to do, and nothing is applied to it.
+func TestADatabaseFromAnotherBuildOfTheSchemaIsRefused(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	if _, err := d.Pool().Exec(ctx, "UPDATE schema_migrations SET checksum = repeat('ab', 32) WHERE schema_migration_id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	n, err := d.Migrate(ctx)
+	if err == nil || n != 0 {
+		t.Fatalf("applied %d steps: %v", n, err)
+	}
+	for _, part := range []string{"0001_platform", "applied abababababab", "this build ", "made again, empty"} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("the refusal does not say %q: %v", part, err)
+		}
 	}
 }

@@ -85,15 +85,33 @@ cluster "$alone" 2
 run 1.5 WALG_FILE_PREFIX="$tmp/vol" DB_BACKUP_AT=$never
 check "a volume: no base backup after the primary's own restart" "$(pushes)" 0
 
-# Another member led in between: this volume has no log for that time.
+# Another member led in between: this volume has no history file of the
+# timeline it took, so no log for that time.
 reset
 cluster "$alone" 4
 run 1.5 WALG_FILE_PREFIX="$tmp/vol" DB_BACKUP_AT=$never
 check "a volume: a base backup at once when another member led in between" "$(pushes)" 1
+check "a volume: the timeline is written down after it" "$(cat "$tmp/vol/.primary-timeline" 2>/dev/null)" 4
+
+# Its own restarts, too short to be written down: the volume has the
+# history files of the timelines in between, so it has all the log.
+reset
+mkdir -p "$tmp/vol/wal_005"
+touch "$tmp/vol/wal_005/00000005.history.lz4" "$tmp/vol/wal_005/00000006.history.lz4"
+cluster "$alone" 7
+run 1.5 WALG_FILE_PREFIX="$tmp/vol" DB_BACKUP_AT=$never
+check "a volume: no base backup after several short restarts of its own" "$(pushes)" 0
+check "a volume: the timeline is written down then too" "$(cat "$tmp/vol/.primary-timeline" 2>/dev/null)" 7
+
+# The timeline is written down at once, not after the loop's first wait.
+reset
+cluster "$alone" 8
+run 0.5 WALG_FILE_PREFIX="$tmp/vol" DB_BACKUP_AT=$never NAP=30
+check "a volume: a pod that lives half a second writes its timeline down" "$(cat "$tmp/vol/.primary-timeline" 2>/dev/null)" 8
 
 # To a volume with standbys: the primary takes the day's, where the log is.
 reset
-cluster "$three" 4
+cluster "$three" 8
 run 1.5 WALG_FILE_PREFIX="$tmp/vol" DB_BACKUP_AT=$due
 check "a volume: the primary takes the day's base backup" "$(pushes)" 1
 

@@ -66,7 +66,7 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("the database (-db-host, database.* in the chart): %w", err)
+		return fmt.Errorf("the database (-db-host, database.* in the chart) did not answer in %s of trying, so the console stops here and is started again: %w", databaseWait, err)
 	}
 	mctx, cancel := context.WithTimeout(ctx, databaseMigrate)
 	defer cancel()

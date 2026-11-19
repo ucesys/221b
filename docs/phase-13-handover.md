@@ -4,11 +4,11 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 
 ## Start here
 
-- **The branch is `phase-13-store`**, 23 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
+- **The branch is `phase-13-store`**, 24 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation the scripts, groups, profiles and variables. Without a database (`database.mode=none`, the default) nothing changes for an installation.
-- **One member of the bundled database has run in a cluster.** Ten things were found there and fixed since; none of the fixes has run in a cluster yet. Three members, a failover and a restore have never run.
-- **Do next, in this order:** the cluster re-test (seven items, below); then the domains in the order of the table under *Move the domains*, starting with the variables' changes, which the owner has decided are kept as items.
+- **One member of the bundled database has run in a cluster**, twice. The first test found ten things; the second found all ten fixed and four more (B11 to B14), fixed since and not yet seen in a cluster. Three members, a failover and a restore have never run.
+- **Do next, in this order:** in a cluster, what was never run and the short list after the second test (below); then the domains in the order of the table under *Move the domains*, starting with the variables' changes, which the owner has decided are kept as items.
 
 ## Where the branch stands
 
@@ -29,6 +29,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Storage: what the first cluster test found (DB-17, DB-18, DB-31)` | The ten fixes of the cluster test; `db.ImportNewer`, step `0015`; `hack/check-db-backup.sh`; the chart and the app at 0.13.0. |
 | `Automation: the scripts and their versions…(DB-32)` | `automation/pg_scripts.go`, step `0016`: three more tables, 76 in all. |
 | `Automation: a node's own variables are the node's…(AU-23, DB-33)` | The service changed to fit the model: `variables.go` (`View`, `SetVariablesFor`, `nodesOwn`), the API's request to set a fleet's variables, the card action, the backup's restore; `automation/pg_variables.go`, step `0017`. |
+| `Storage: what the second cluster test found` | B11 to B14: the steps' checksums written down and tested, the backup container's look at once and its reading of the history files, two messages. |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).
@@ -39,7 +40,7 @@ A second session built both images and upgraded a 0.12.0 release in place on the
 
 **What held:** the upgrade to `bundled` (primary labelled, the Service, `verify-full` over TLS 1.3, the role and database, schema 14, `GET /api/v1/database`); the copy of the audit log (126 events, once, ConfigMaps untouched, nothing twice after a restart); new audit events in the database; the database pod deleted and back on its volume with the console reconnecting by itself; a base backup to the volume; the rollback to 0.12.0; `external` with `verify-full` and a CA, as a role that is not a superuser.
 
-**What it found, and what was done about each:**
+**What the first test found, and what was done about each:**
 
 | # | Found | Done |
 | --- | --- | --- |
@@ -54,17 +55,25 @@ A second session built both images and upgraded a 0.12.0 release in place on the
 | B9 | After `helm rollback` to a revision from before the database, the mode guard saw no annotation and let `external` through, leaving the bundled database's records behind. | The guard also looks for the bundled database's kept Secret, and refuses any mode but `bundled` while it is there (or `allowModeChange`). An external database leaves nothing to go by; the docs say so. |
 | B10 | After upgrade, rollback, upgrade again, what the rolled-back console wrote to the ConfigMaps was never copied. | The audit log and the Toolbox's session records are read at every start and what is newer than the last copy is copied (`db.ImportNewer`, `imports.newest_at`, step `0015`). Record sets edited in place are not merged; the docs say the database's count. The backups' runs are among those. |
 
-**The re-test: none of these fixes has run in a cluster.**
+**The second test, the same day**, on commit `79440d3` (report: `~/phase-13-findings-2.md` on `rke2cp1`, logs in `~/p13-2`): all ten fixes held. Both images build with no patch and BuildKit unset. After a rollback, `external` and `none` are refused with the sentence that names the Secret, and `allowModeChange` lets them through. After a rollback and a roll forward, exactly the six events the rolled-back console wrote were copied, once. The database pod was gone in 2.8 s and the console had its database back at 9.4 s (was 68 s). A console that started with the database away for 100 s was not restarted; away for 200 s, it stopped by itself at about 116 s and was started again once. The backup container took its first base backup at once, none after its own restart, one at `dailyAt`. A script made, read and deleted through the API was rows of `scripts`, `script_versions` and `script_groups`. The release was left at revision 25: `bundled`, the images of `79440d3`, schema 16.
 
-1. Build both images from the branch as it is now, without the working-copy patch, with `sudo make image image-postgres`.
-2. Delete the database pod again: the outage should be about twenty seconds, not sixty-eight, and the console pod should not be restarted by its probe when it starts while the database is away.
-3. The existing test databases get steps `0015` to `0017` at start (they have 14); `imports` rows from before `0015` count from `imported_at`. With Automation's scripts in the release's ConfigMap, they are copied once into `scripts` and `script_versions`, and the Automation tab shows them as before. The same for its variables (`params.json`): rows of `variables`, All nodes as a row of `fleets` of kind `all`, and Automation › Variables as before.
-4. Rollback, sign in so that audit events are written to the ConfigMap, upgrade again to the same database: those events, and only those, appear in `audit_events` once.
-5. B9: after a rollback to revision 13, an upgrade with `database.mode=external` must be refused with the sentence that names the Secret; with `database.mode=bundled` it must go through. This is a `lookup`, which no test without a cluster reaches, so it matters most.
-6. The backup container on a fresh volume takes a base backup as soon as the primary runs (log line `this volume has no log up to timeline 1`), writes `/backup/.primary-timeline`, and does not take another after its own restart.
-7. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record (the test release's cluster was read-only).
+It found four more things, fixed in `Storage: what the second cluster test found`:
 
-What to give the testing session: *Pull `phase-13-store`. Read `docs/phase-13-handover.md`, the section on the cluster test, and run its seven re-test items in namespace `221b-github`. Change nothing in the repository. Write the findings to a file.*
+| # | Found | Done |
+| --- | --- | --- |
+| B11 | The first test's database (schema 14, from `dc0fe32`) could not be opened: steps `0001`, `0003`, `0004`, `0006` and `0011` had been edited after that build, while the domains moved, and the checksum check refused them. The handover of that morning was wrong to say such a database would get the later steps. The test went on with a new database. | No step is edited any more: `internal/db/testdata/steps.sum` holds every step's checksum and `TestAppliedStepsAreNotEdited` fails on an edit. The refusal names both checksums and says that a development build's database is made again. `database.md` has the rule. Steps `0001` to `0016` are as the cluster's database applied them. |
+| B12 | The backup container wrote down the timeline it led only after its first 30-second wait, so pods that lived less never did, and the next start took a base backup that was not needed. | It looks at once. And whether another member led in between is read from the volume: the member that takes a timeline archives its history file, so with the history files of every timeline in between, the volume has all the log. |
+| B13 | The mode guard's refusal named the Secrets and the volume claims to delete, not Patroni's ConfigMaps. | It names them. |
+| B14 | After the two-minute wait the console's last message did not say that it had waited and was stopping to be started again. | It says so. |
+
+Also seen, and left: the image's version comes from `git describe` and says `v0.12.1-NN` until a `v0.13.0` tag exists, while the chart says 0.13.0.
+
+**To see in a cluster next:**
+
+1. The cluster's database (schema 16) gets step `0017` at start. With variables in the release's `params.json`, they are rows of `variables`, All nodes is a row of `fleets` of kind `all`, and Automation › Variables shows them as before. Set a node's own value there and remove it again.
+2. B12: delete the database pod twice within 30 seconds. Expected: no base backup at the next start, and `/backup/.primary-timeline` holds the timeline.
+3. B13 and B14: the two messages, as worded above.
+4. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record (the test release's cluster was read-only).
 
 ## What was tested without a cluster
 
@@ -199,7 +208,7 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 ## Working on this
 
 - Go tests that need PostgreSQL: `make test-db` (Docker), or `TEST_DATABASE=host:port go test ./...` against any PostgreSQL 16 or later that lets `postgres` in without a password (`TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD` otherwise). Each test makes and drops its own database. Without `TEST_DATABASE` the database tests are skipped, so a run without it proves little.
-- **Migrations: a change is a new step.** The test cluster has databases at step 14, and the checksum check refuses an edited step, so `0015` to `0017` were added and none was edited. A step may reshape an earlier step's tables while they hold no rows, as `0016` and `0017` do. `TestMigrate` counts the tables (76): change the number with the step.
+- **Migrations: a change is a new step, always.** Steps `0001`, `0003`, `0004`, `0006` and `0011` were edited while the domains moved, up to `a04cd87`; a database made by a build before that is refused and is made again (B11). Since then none is edited: `internal/db/testdata/steps.sum` and `TestAppliedStepsAreNotEdited` hold that. Add a new step's line to that file. A step may reshape an earlier step's tables while they hold no rows, as `0016` and `0017` do. `TestMigrate` counts the tables (76): change the number with the step.
 - Both images need BuildKit; the Makefile turns it on. The bundled database's members are kept on different nodes, so three members need the image in a registry or on three nodes.
 - A Helm `lookup` (the mode guard, the generated passwords and certificates) returns nothing in `helm template`: only a cluster exercises it.
 - Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md`, `docs/data-model.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).

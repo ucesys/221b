@@ -123,7 +123,7 @@ func (d *DB) migrate(ctx context.Context, steps []Migration) (int, error) {
 	for _, m := range steps {
 		if sum, ok := applied[m.ID]; ok {
 			if sum != m.Checksum {
-				return done, fmt.Errorf("schema step %04d_%s was applied from a different file than this build's; a shipped step is never edited", m.ID, m.Name)
+				return done, fmt.Errorf("schema step %04d_%s was applied to this database from a different file than this build's (applied %.12s, this build %.12s). A step is never edited once a database has applied it, so this database was made by another build of the schema: a development build's database is made again, empty; one made by a release is a fault to report", m.ID, m.Name, sum, m.Checksum)
 			}
 			continue
 		}

@@ -13,7 +13,9 @@
 # next to the log that follows it, so there the primary takes it. A member
 # that becomes the primary after another one was takes a base backup at
 # once: its volume has no log for the time in between, so nothing older in
-# it can be rolled forward to now.
+# it can be rolled forward to now. Whether another one was is read from the
+# volume: the member that takes a timeline archives that timeline's history
+# file, so a timeline whose history file is not here was another member's.
 set -uo pipefail
 
 : "${PGDATA:?}"
@@ -79,6 +81,16 @@ sys.exit(0 if any((b.get("start_time") or b.get("time") or "") >= since for b in
 ' "$1"
 }
 
+# Whether this member's volume has the history file of every timeline from
+# $1 to $2, both included: it was the primary through all of them.
+led() {
+  local t
+  for ((t = $1; t <= $2; t++)); do
+    compgen -G "$volume/wal_005/$(printf '%08X' "$t").history*" > /dev/null || return 1
+  done
+  return 0
+}
+
 # After a failure the next try waits ten minutes.
 hold=0
 take() {
@@ -98,8 +110,12 @@ silent=
 where="the bucket"
 [ -z "$volume" ] || where="the volume of this member"
 log "a base backup every day at $at UTC, keeping $retain, to $where"
+first=1
 while true; do
-  run sleep 30
+  # The first look is at once: a pod that lives less than the wait must
+  # still write down the timeline it led.
+  [ -n "$first" ] || run sleep 30
+  first=
   if ! state=$(cluster) || [ -z "$state" ]; then
     # Not an answer about who takes it, so the day is not marked as done.
     [ -n "$silent" ] || log "Patroni does not answer; trying again"
@@ -113,9 +129,11 @@ while true; do
   if [ -n "$volume" ] && [ "$leader" = "$me" ] && [ "$timeline" -gt 0 ]; then
     seen=$(cat "$marker" 2>/dev/null || echo 0)
     if [ "$seen" != "$timeline" ]; then
-      # One timeline on from the last this member led is its own restart.
-      # Anything else is a first time, or another member led in between.
-      if [ "$seen" -eq 0 ] || [ $((timeline - seen)) -ne 1 ]; then
+      # This member led the timeline written down. It leads this one. If
+      # it took every timeline in between, its volume has all the log: its
+      # own restarts, also ones too short to be written down. Otherwise it
+      # is here for the first time, or another member led in between.
+      if [ "$seen" -eq 0 ] || [ "$timeline" -lt "$seen" ] || ! led $((seen + 1)) $((timeline - 1)); then
         take "this volume has no log up to timeline $timeline" || continue
         last=$(date -u +%Y-%m-%d)
       fi
