@@ -45,11 +45,13 @@ func docVersion(v any) string {
 }
 
 // LoadKey returns the document as JSON and its version, a digest of it; a
-// document nothing is kept of is kv.ErrNotFound.
+// document nothing is kept of is kv.ErrNotFound. Read's statements run on
+// one snapshot, so the document is one that was saved, never the rows of
+// two saves.
 func (d *Doc[T]) LoadKey(ctx context.Context, _ string) ([]byte, string, error) {
 	var doc T
 	var found bool
-	err := d.DB.Do(ctx, func(q Querier) (err error) {
+	err := d.DB.Snapshot(ctx, func(q Querier) (err error) {
 		doc, found, err = d.Read(ctx, q)
 		return err
 	})

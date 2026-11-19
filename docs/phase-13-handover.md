@@ -39,6 +39,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Jobs: the jobs, their runs, the checks, the rules and what the runs found are rows (DB-42, DB-43)` | `jobs/pg.go`, `casework/pg_rules.go`; steps `0025`, `0026`; `make test-go-store` and its CI step. |
 | `AI spend: no history is kept (DB-41)`; `Case work: the suggestions dismissed and the runs counted are rows; a sensitive variable removed entirely needs no second person` | What the owner decided after the fourth test: `SpendPG.Add` removes old rows; step `0027`; the API's rule for a sensitive mark. |
 | `Storage: what the fourth cluster test found` | F1: the database pods' Role names Patroni's `-failover` ConfigMap too. F2: Run History shows a node's batch as the engine counts it. |
+| `Storage: a document kept as rows is read on one snapshot (DB-44)` | `db.Snapshot`, used by `db.Doc`'s `LoadKey`. Found while the cards' tests first ran over the database: a read made of several statements could return one table's rows of one save beside another's of the next. It was so for every document moved before, too. |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).

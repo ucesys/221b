@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-43). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-44). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -39,6 +39,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- With a database, a page could for a moment show a record with parts of two saves: a job's run with the findings of the save before, a script without its newest version's parameters. A service's records are read in several statements, and a save that landed between two of them showed in the later ones. They are read on one snapshot now. Nothing kept was wrong, and a save made over such a read was already refused.
 - Removing a sensitive variable entirely, its mark and every value under its name, no longer waits for a second administrator; taking the mark off a value that stays still does.
 - Run History showed each node's batch one too high: a run's first batch read as 2.
 - The bundled database's pods may write the ConfigMap Patroni uses for a switchover or a failover (`<release>-db-failover`), which the narrowed permissions had left out.

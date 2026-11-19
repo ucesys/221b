@@ -267,6 +267,18 @@ func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
 	return d.note(fn(d.pool))
 }
 
+// Snapshot runs a read made of several statements on one snapshot of the
+// database: a read-only transaction in which every statement sees what
+// was committed when the first one ran. Without it each statement sees
+// what is committed when it runs, so a read of a parent's rows and its
+// children's can return the children of one write beside the parent of
+// the next.
+func (d *DB) Snapshot(ctx context.Context, fn func(q Querier) error) error {
+	return d.note(pgx.BeginTxFunc(ctx, d.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		return fn(tx)
+	}))
+}
+
 // note keeps the health in step with what the calls meet, and wraps a
 // failure to reach the database in ErrUnavailable.
 func (d *DB) note(err error) error {

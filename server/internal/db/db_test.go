@@ -530,3 +530,61 @@ func TestADatabaseFromAnotherBuildOfTheSchemaIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A document read with several statements is one that was saved: a save
+// that lands between two of the read's statements does not show in the
+// second, so a parent's rows never come with another save's children.
+func TestADocumentIsReadOnOneSnapshot(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	type pair struct {
+		A string `json:"a"`
+		B string `json:"b"`
+	}
+	scope := func(q db.Querier, name string) (string, error) {
+		b, _, err := db.LoadScope(ctx, q, name)
+		if errors.Is(err, db.ErrNotFound) {
+			return "", nil
+		}
+		return strings.Trim(string(b), `"`), err
+	}
+	var between func()
+	doc := &db.Doc[pair]{DB: d, Key: "pair.json",
+		Read: func(ctx context.Context, q db.Querier) (p pair, found bool, err error) {
+			if p.A, err = scope(q, "pair-a"); err != nil {
+				return p, false, err
+			}
+			if f := between; f != nil {
+				between = nil
+				f()
+			}
+			p.B, err = scope(q, "pair-b")
+			return p, p.A != "" || p.B != "", err
+		},
+		Write: func(ctx context.Context, tx pgx.Tx, _, next pair) error {
+			if _, err := db.SaveScope(ctx, tx, "pair-a", []byte(`"`+next.A+`"`), db.AnyVersion, ""); err != nil {
+				return err
+			}
+			_, err := db.SaveScope(ctx, tx, "pair-b", []byte(`"`+next.B+`"`), db.AnyVersion, "")
+			return err
+		}}
+	if _, err := doc.SaveKey(ctx, doc.Key, []byte(`{"a":"one","b":"one"}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	between = func() {
+		if _, err := doc.SaveKey(ctx, doc.Key, []byte(`{"a":"two","b":"two"}`), ""); err != nil {
+			t.Error(err)
+		}
+	}
+	got, version, err := doc.LoadKey(ctx, doc.Key)
+	if err != nil || string(got) != `{"a":"one","b":"one"}` {
+		t.Fatalf("read across a save: %s, %v", got, err)
+	}
+	// What it read is no longer what is kept, and a save over it is refused.
+	if _, err := doc.SaveKey(ctx, doc.Key, []byte(`{"a":"three","b":"three"}`), version); !errors.Is(err, kv.ErrConflict) {
+		t.Fatalf("a save over what was read before another save: %v", err)
+	}
+	if got, _, err := doc.LoadKey(ctx, doc.Key); err != nil || string(got) != `{"a":"two","b":"two"}` {
+		t.Fatalf("read after the save: %s, %v", got, err)
+	}
+}
