@@ -48,6 +48,9 @@ type jobsWiring struct {
 	svc    *jobs.Service
 	inv    *investigate.Investigator
 	stored *kv.Limited
+	// backend is what the jobs read and write through: their ConfigMap,
+	// with the keys the database keeps routed to it.
+	backend kv.Backend
 
 	mu     sync.Mutex
 	issues *issues.Service
@@ -76,6 +79,7 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 	if moved != nil {
 		backend = moved(backend)
 	}
+	w.backend = backend
 	w.svc = jobs.New(jobs.Options{
 		Backend: backend,
 		Kinds:   jobs.Default,

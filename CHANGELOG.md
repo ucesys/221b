@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-44). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-46). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -21,8 +21,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **The AI agents' configuration in the database**: with a database, the providers, the agents' settings, their instructions with every version, draft and test run, their test cases and the pilots' answers are rows of `ai_providers`, `agents`, `prompt_versions`, `test_runs`, `test_cases`, `pilot_entries` and the tables that hang from them, no longer bounded by a ConfigMap's size; copied once from the AI ConfigMap.
 - **What the agents spend as a ledger**: with a database, each cost is a row of `ai_spend`, only ever added, and the day's and month's sums are read from the rows; replicas no longer take turns to save. This month's and last month's rows are kept. The sums the settings ConfigMap held are carried over once.
 - **The jobs, their runs and the validation rules in the database**: with a database, a job's settings, each run with its findings, facts and proposals, the checks seen on each cluster, the rules with their suggestions and what the runs found under each check are rows of `jobs`, `job_runs`, `findings`, `validation_rules`, `check_found` and the tables that hang from them, no longer bounded by a ConfigMap's size; copied once from the runs' and the cases' ConfigMaps.
+- **The proposed changes in the database**: with a database, a change the agents propose is a row of `changes`, with its evidence, actions, plans, results, approvals, history, commands and the cases it resolves as rows of their own tables, no longer bounded by a ConfigMap's size; a waiting change's conversation with Sherlock is a row of `chats` with a row of `chat_messages` a message. Copied once from the proposed changes' ConfigMap.
 - `GET /api/v1/database` names every domain moved, not only the activity log and the backups.
-- For developers: `make test-go-store` runs the agents', the jobs' and the case work's own tests with their records in the database.
+- For developers: `make test-go-store` runs the agents', the jobs', the case work's and the cards' own tests with their records in the database.
 - **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
 - **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.
@@ -39,6 +40,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- With a database, a clean start (`cases.cleanStart.token`) left the jobs' runs where they were: it emptied the runs' key of the ConfigMap, which the console no longer read. It empties the runs, and the agents' proposed changes for cases and runs, where the console keeps them.
 - With a database, a page could for a moment show a record with parts of two saves: a job's run with the findings of the save before, a script without its newest version's parameters. A service's records are read in several statements, and a save that landed between two of them showed in the later ones. They are read on one snapshot now. Nothing kept was wrong, and a save made over such a read was already refused.
 - Removing a sensitive variable entirely, its mark and every value under its name, no longer waits for a second administrator; taking the mark off a value that stays still does.
 - Run History showed each node's batch one too high: a run's first batch read as 2.

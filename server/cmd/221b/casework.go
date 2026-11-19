@@ -214,11 +214,13 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 			// database keeps of it is cleaned there.
 			st.Casework = w.caseBackend
 		}
+		// The runs and the cards through the backends their services read,
+		// for the same reason.
 		if w.jobsW.stored != nil {
-			st.Runs = w.jobsW.stored
+			st.Runs = w.jobsW.backend
 		}
 		if w.cardsStored != nil {
-			st.Cards = w.cardsStored
+			st.Cards = w.cardsBackend
 		}
 		if w.knowledgeStored != nil {
 			st.Knowledge = w.knowledgeStored

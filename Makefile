@@ -58,8 +58,8 @@ test: test-go test-web ## Run the Go and browser unit tests
 test-go:
 	cd server && $(GO) test -race ./...
 
-test-go-store: ## Run the agents', the jobs' and the case work's tests with their records in the database TEST_DATABASE names
-	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/
+test-go-store: ## Run the agents', the jobs', the case work's and the cards' tests with their records in the database TEST_DATABASE names
+	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/ ./internal/cards/
 
 test-web: web/node_modules
 	cd web && $(NPM) test

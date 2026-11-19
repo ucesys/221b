@@ -231,11 +231,19 @@ func (w *wiring) wireCards(ctx context.Context) error {
 	// proposals, durable in <release>-cases, with the console actions they
 	// may carry; expired on the leader.
 	cardStore, cardsStored, err := openCards(ctx, cfg, w.restCfg, cardsOptions{wrap: func(b kv.Backend) kv.Backend {
-		// The standing approvals and the notification channels: rows of
-		// approval_policies and notification_channels (Phase 13).
-		return w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
-			return map[string]movedDoc{cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d)}
+		// With a database everything the store keeps is rows (Phase 13):
+		// the standing approvals and the notification channels
+		// (approval_policies, notification_channels), the proposed changes
+		// (changes and the tables that hang from it, DB-45) and the waiting
+		// changes' conversations with Sherlock (chats, chat_messages, DB-46).
+		if w.database != nil {
+			w.inDatabase = append(w.inDatabase, "changes")
+		}
+		w.cardsBackend = w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
+			return map[string]movedDoc{cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d),
+				cards.CardsKey: cards.NewCardsPG(d), cards.ChatsKey: cards.NewChatsPG(d)}
 		})
+		return w.cardsBackend
 	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
 	if err != nil {
 		return err
