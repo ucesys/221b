@@ -166,3 +166,35 @@ func (l *Limited) Sizes() map[string]int {
 	}
 	return out
 }
+
+// Keyed sends the keys it names to backends of their own and every other
+// key to Rest, with nothing read from Rest in their place: the records of
+// a named key were copied once (Phase 13, DB-17), and Rest's copy stays as
+// it was then.
+type Keyed struct {
+	Keys map[string]Backend
+	Rest Backend
+}
+
+func (k *Keyed) of(key string) Backend {
+	if b, ok := k.Keys[key]; ok && b != nil {
+		return b
+	}
+	return k.Rest
+}
+
+func (k *Keyed) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	return k.of(key).LoadKey(ctx, key)
+}
+
+func (k *Keyed) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	return k.of(key).SaveKey(ctx, key, b, version)
+}
+
+// DeleteKey drops a key where it is kept, when that backend can.
+func (k *Keyed) DeleteKey(ctx context.Context, key string) error {
+	if d, ok := k.of(key).(Deleter); ok {
+		return d.DeleteKey(ctx, key)
+	}
+	return nil
+}

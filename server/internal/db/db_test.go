@@ -13,6 +13,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 func ctxT(t *testing.T) context.Context {
@@ -350,5 +351,60 @@ func TestScopes(t *testing.T) {
 	b, v, err := db.LoadScope(ctx, q, "backup")
 	if err != nil || v != 3 || !strings.Contains(string(b), `"e"`) {
 		t.Fatalf("read back %s at version %d: %v", b, v, err)
+	}
+}
+
+// A service's singleton document is a scope behind the kv.Backend it
+// already uses: conditional on the version read, first save included, and
+// copied from the old backend once.
+func TestScopeKV(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	s := db.NewScopeKV(d, map[string]string{"setup.json": "setup", "cases-mail.json": "email"})
+	if _, _, err := s.LoadKey(ctx, "other.json"); err == nil {
+		t.Fatal("a key that is no scope was read")
+	}
+	_, v0, err := s.LoadKey(ctx, "setup.json")
+	if !errors.Is(err, kv.ErrNotFound) || v0 != "0" {
+		t.Fatalf("never saved: version %q, %v", v0, err)
+	}
+	v1, err := s.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["a"]}`), v0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["b"]}`), v0); !errors.Is(err, kv.ErrConflict) {
+		t.Fatalf("a second first save: %v", err)
+	}
+	if _, err := s.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["a","c"]}`), v1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveKey(ctx, "setup.json", []byte(`{}`), v1); !errors.Is(err, kv.ErrConflict) {
+		t.Fatalf("a save over a stale version: %v", err)
+	}
+	if b, _, err := s.LoadKey(ctx, "setup.json"); err != nil || !strings.Contains(string(b), `"c"`) {
+		t.Fatalf("read back %s: %v", b, err)
+	}
+	old := &kv.Memory{}
+	if _, err := old.SaveKey(ctx, "cases-mail.json", []byte(`{"host":"smtp.corp.example"}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["old"]}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := s.Import(ctx, old, "test")
+	if err != nil || len(copied) != 2 {
+		t.Fatalf("copied %v: %v", copied, err)
+	}
+	if b, _, _ := s.LoadKey(ctx, "cases-mail.json"); !strings.Contains(string(b), "smtp.corp.example") {
+		t.Fatalf("the copy holds %s", b)
+	}
+	if copied, err := s.Import(ctx, old, "test"); err != nil || len(copied) != 0 {
+		t.Fatalf("copied %v the second time: %v", copied, err)
+	}
+	if err := s.DeleteKey(ctx, "cases-mail.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.LoadKey(ctx, "cases-mail.json"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("after deleting: %v", err)
 	}
 }

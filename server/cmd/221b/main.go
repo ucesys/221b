@@ -153,8 +153,11 @@ type wiring struct {
 	cardsStored      *kv.Limited
 	caseSvc          *casework.Service
 	caseStored       *kv.Limited
-	mailSvc          *mail.Service
-	lessonsSvc       *lessons.Service
+	// caseBackend is what the case work reads and writes through: the
+	// casework ConfigMap, with what the database keeps of it routed there.
+	caseBackend kv.Backend
+	mailSvc     *mail.Service
+	lessonsSvc  *lessons.Service
 
 	// The backups and the HTTP API.
 	backups *backup.Scheduler

@@ -16,6 +16,7 @@ import (
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -33,7 +34,7 @@ import (
 // own ConfigMap; the exceptions and RCAs (lessons) in the casework
 // ConfigMap too; and the case analysis job, registered. It returns the
 // ConfigMap too, for the metrics of its size and the lessons' records.
-func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, js *jobs.Service, iss *issues.Service, auditLog *audit.Log, leads func() bool, log *slog.Logger) (*casework.Service, *kv.Limited, error) {
+func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, js *jobs.Service, iss *issues.Service, auditLog *audit.Log, leads func() bool, log *slog.Logger, wrap func(kv.Backend) kv.Backend) (*casework.Service, *kv.Limited, error) {
 	var backend kv.Backend = &kv.Memory{}
 	var stored *kv.Limited
 	if cfg.CaseworkConfigMap != "" {
@@ -45,6 +46,10 @@ func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, 
 		backend = stored
 	} else {
 		log.Warn("the cases' settings are kept in memory and lost on restart (set -casework-configmap to keep them)")
+	}
+	// With a database some of what the service keeps is kept there.
+	if wrap != nil {
+		backend = wrap(backend)
 	}
 	svc := casework.New(casework.Options{
 		Backend: backend,
@@ -110,7 +115,12 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// analysis is a job, and the changes it proposes are cards. The runs'
 	// findings are routed into cases (jobs.Router), and the exceptions and
 	// RCAs are the lessons'.
-	caseSvc, caseStored, err := openCasework(ctx, cfg, w.restCfg, w.manager, w.jobsW.svc, w.issueSvc, w.auditLog, w.elector.IsLeader, log)
+	caseSvc, caseStored, err := openCasework(ctx, cfg, w.restCfg, w.manager, w.jobsW.svc, w.issueSvc, w.auditLog, w.elector.IsLeader, log, func(b kv.Backend) kv.Backend {
+		// Administration › AI › Cases, with the counter and the analyses under
+		// way: a scope of the database's settings (Phase 13).
+		w.caseBackend = w.inScopes(ctx, b, map[string]string{casework.SettingsKey: "cases"})
+		return w.caseBackend
+	})
 	if err != nil {
 		return err
 	}
@@ -126,6 +136,8 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 		if caseStored != nil {
 			mailBackend = caseStored
 		}
+		// Settings › Email: a scope of the database's settings (Phase 13).
+		mailBackend = w.inScopes(ctx, mailBackend, map[string]string{mail.ConfigKey: "email"})
 		w.mailSvc = openMail(cfg, w.restCfg, mailBackend, w.cardStore, w.auditLog, log)
 		caseSvc.SetMail(w.mailSvc, func(id string) string {
 			if w.authSvc == nil {
@@ -192,7 +204,9 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 			st.Issues = w.issueStored
 		}
 		if caseStored != nil {
-			st.Casework = caseStored
+			// Through the same backend the service reads, so what the
+			// database keeps of it is cleaned there.
+			st.Casework = w.caseBackend
 		}
 		if w.jobsW.stored != nil {
 			st.Runs = w.jobsW.stored

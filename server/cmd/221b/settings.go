@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -41,6 +42,9 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// Read again every few seconds: a change saved through another replica,
 	// or by hand, reaches this one's browsers within seconds (P7-02).
 	go shared.Run(ctx, 3*time.Second)
+	// Getting started's dismissed steps (GS-04) are a scope of the
+	// database's settings when there is a database (Phase 13).
+	spendBackend = w.inScopes(ctx, spendBackend, map[string]string{api.SetupKey: "setup"})
 	w.spendBackend, w.stored, w.shared = spendBackend, stored, shared
 	return nil
 }

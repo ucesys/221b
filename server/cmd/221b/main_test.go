@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,5 +127,43 @@ func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 	}
 	if err := st.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// With a database a service's singleton settings are scopes of its
+// settings table: copied from the ConfigMap once, read and written there
+// from then on, while the service's other keys stay where they were.
+func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
+	ctx := t.Context()
+	cm := &persistent{}
+	if _, err := cm.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup"]}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	none := &wiring{log: slog.Default()}
+	if got := none.inScopes(ctx, cm, map[string]string{"setup.json": "setup"}); got != kv.Backend(cm) {
+		t.Fatalf("without a database the backend became %T", got)
+	}
+	w := &wiring{log: slog.Default(), database: dbtest.Open(t)}
+	b := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
+	got, version, err := b.LoadKey(ctx, "setup.json")
+	if err != nil || string(got) != `{"dismissed": ["backup"]}` {
+		t.Fatalf("the copy reads %s: %v", got, err)
+	}
+	if _, err := b.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup","sso"]}`), version); err != nil {
+		t.Fatal(err)
+	}
+	if old, _, _ := cm.LoadKey(ctx, "setup.json"); string(old) != `{"dismissed":["backup"]}` {
+		t.Fatalf("the ConfigMap's copy changed to %s", old)
+	}
+	if _, err := b.SaveKey(ctx, "other.json", []byte(`1`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, err := cm.LoadKey(ctx, "other.json"); err != nil || string(v) != "1" {
+		t.Fatalf("another key did not stay in the ConfigMap: %s %v", v, err)
+	}
+	// A second start copies nothing over what was saved since.
+	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
+	if got, _, _ := again.LoadKey(ctx, "setup.json"); !strings.Contains(string(got), "sso") {
+		t.Fatalf("a second start reads %s", got)
 	}
 }

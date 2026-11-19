@@ -8,6 +8,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/db"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // The database (Phase 13, ADR-162): PostgreSQL, the chart's bundled one or
@@ -89,4 +90,35 @@ func (w *wiring) databaseGauges() []api.Gauge {
 		{Name: "b221_database_connections", Help: "Connections this replica has open to the database.", Value: float64(stat.TotalConns())},
 		{Name: "b221_database_connections_max", Help: "Most connections this replica opens to the database.", Value: float64(stat.MaxConns())},
 	}
+}
+
+// inScopes keeps the documents under the keys named (key to scope) as
+// scopes of the database's settings table, and every other key in b as
+// before; without a database it is b. What b held under those keys is
+// copied once. These are a service's singletons, read whole and written
+// rarely (model rule 14), so they need no repository beyond the scope.
+func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]string) kv.Backend {
+	if w.database == nil {
+		return b
+	}
+	if b == nil {
+		b = &kv.Memory{}
+	}
+	s := db.NewScopeKV(w.database, scopes)
+	if _, inMemory := b.(*kv.Memory); !inMemory {
+		ictx, cancel := context.WithTimeout(ctx, time.Minute)
+		copied, err := s.Import(ictx, b, "configmap")
+		cancel()
+		log := w.log.With("component", "database")
+		if err != nil {
+			log.Warn("copying settings from their ConfigMap into the database failed; the next start tries again", "err", err)
+		} else if len(copied) > 0 {
+			log.Info("copied settings from their ConfigMap into the database", "keys", copied)
+		}
+	}
+	keys := map[string]kv.Backend{}
+	for key := range scopes {
+		keys[key] = s
+	}
+	return &kv.Keyed{Keys: keys, Rest: b}
 }
