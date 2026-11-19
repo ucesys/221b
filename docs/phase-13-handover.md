@@ -1,14 +1,44 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 18, 2026, at the end of the session that started Phase 13, for the session that continues it. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 73 tables and their rules) first; the requirements are DB-01 to DB-32 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 76 tables and their rules) first; the requirements are DB-01 to DB-32 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+
+## Start here
+
+- **The branch is `phase-13-store`**, 22 commits ahead of `main`, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
+- **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
+- **About half the record sets are in the database** when one is configured: Activity log, Approvals and Inventory whole, Platform's ConfigMap-kept records, and of Automation the scripts, groups and profiles. Without a database (`database.mode=none`, the default) nothing changes for an installation.
+- **One member of the bundled database has run in a cluster.** Ten things were found there and fixed since; none of the fixes has run in a cluster yet. Three members, a failover and a restore have never run.
+- **Do next, in this order:** the cluster re-test (seven items, below); the owner's answers to two questions about the variables (below); then the domains in the order of the table under *Move the domains*.
+
+## Where the branch stands
+
+| Commit | What |
+| --- | --- |
+| `Storage: the db package, the schema's 73 tables and the replicas' coordination` | `server/internal/db`: pool, transactions, health, UUIDv7 keys, the embedded migrations, advisory-lock sweeps, claims, `LISTEN`/`NOTIFY` with a poll; `dbtest`. |
+| `Storage: the server opens the database it is given` | The `-db-*` flags, `cmd/221b/database.go`, `GET /api/v1/database`, the `b221_database_*` metrics. |
+| `Storage: the 221b-postgres image and the chart's database modes` | `deploy/postgres` (Dockerfile, Patroni entrypoint, bootstrap, restore and backup scripts); `database.mode` none, bundled, external in the chart; `hack/check-chart.sh`. |
+| `Activity log: the audit log is kept in the database when there is one` | `audit.PGStore`, `db.ImportOnce`, the `imports` table. |
+| `Backups: the settings and the runs behind a repository…` | `backup.Repo` with `KVRepo` and `PGRepo`, `db.LoadScope`/`SaveScope`. The pattern for a repository. |
+| `Activity log: the Toolbox's session records…` | `sessions.PGHistory` and `sessions.Archive`; the backup reads and merges through it. |
+| `Platform: getting started, email and case settings…` | `db.ScopeKV`, `kv.Keyed`: a service's singleton documents as scopes of `settings`. |
+| `Approvals: requests, decisions, standing approvals and channels…` | `db.Doc` and `db.Diff`, the interim step; `twoperson/pg.go`, `cards/pg_approvals.go`. |
+| `Platform: the shared settings and the acknowledged alerts…`, `…the repositories…` | `settings/pg.go`, `apps/pg.go`. |
+| `Hosts carry no labels (to-do 1, server side)` | The first of the code to-do items. |
+| `Inventory: hosts, pairings, fleets and facts…` | Package `inventory`; `nodessh/pg.go`, `automation/pg_facts.go`, fleets in `settings/pg.go`. |
+| `Automation: script groups and execution profiles…` | `automation/pg_defs.go`. |
+| `Storage: what the first cluster test found (DB-17, DB-18, DB-31)` | The ten fixes of the cluster test; `db.ImportNewer`, step `0015`; `hack/check-db-backup.sh`; the chart and the app at 0.13.0. |
+| `Automation: the scripts and their versions…(DB-32)` | `automation/pg_scripts.go`, step `0016`: three more tables, 76 in all. |
+| `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
+
+The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).
 
 ## The cluster test of November 19, 2026
 
-A second session built both images and upgraded a 0.12.0 release in place on the owner's RKE2 cluster (namespace `221b-github`), on commit `dc0fe32`. Its report is `phase-13-findings.md` (with the owner; the raw logs are in `~/p13` on `rke2cp1`).
+A second session built both images and upgraded a 0.12.0 release in place on the owner's RKE2 cluster (namespace `221b-github`, release `221b-github`), on commit `dc0fe32`. Its report is `phase-13-findings.md` (with the owner; the raw logs are in `~/p13` on `rke2cp1`). The report ends with the commands that remove everything the test made. As the report left it, the release is at revision 17 in `external` mode against a throwaway PostgreSQL in the same namespace, on the test's image, and the bundled database's volumes and Secrets are still there.
 
 **What held:** the upgrade to `bundled` (primary labelled, the Service, `verify-full` over TLS 1.3, the role and database, schema 14, `GET /api/v1/database`); the copy of the audit log (126 events, once, ConfigMaps untouched, nothing twice after a restart); new audit events in the database; the database pod deleted and back on its volume with the console reconnecting by itself; a base backup to the volume; the rollback to 0.12.0; `external` with `verify-full` and a CA, as a role that is not a superuser.
 
-**What it found, and what was done about each** (commit `Storage: what the first cluster test found`):
+**What it found, and what was done about each:**
 
 | # | Found | Done |
 | --- | --- | --- |
@@ -21,92 +51,85 @@ A second session built both images and upgraded a 0.12.0 release in place on the
 | B7 | The docs did not say that a restore needs the old Secret's `backup-key` and, to a volume, the old backup volume. | `database.md`, *Restore*, and the values file say what to keep and copy. |
 | B8 | The chart still said 0.12.1. | 0.13.0 in `Chart.yaml`, `web/package.json` and the lock file; the changelog's section is `0.13.0 (unreleased)`. |
 | B9 | After `helm rollback` to a revision from before the database, the mode guard saw no annotation and let `external` through, leaving the bundled database's records behind. | The guard also looks for the bundled database's kept Secret, and refuses any mode but `bundled` while it is there (or `allowModeChange`). An external database leaves nothing to go by; the docs say so. |
-| B10 | After upgrade, rollback, upgrade again, what the rolled-back console wrote to the ConfigMaps was never copied. | The audit log and the Toolbox's session records are read at every start and what is newer than the last copy is copied (`db.ImportNewer`, `imports.newest_at`, migration `0015`). Record sets edited in place are not merged; the docs say the database's count. The backups' runs are among those. |
+| B10 | After upgrade, rollback, upgrade again, what the rolled-back console wrote to the ConfigMaps was never copied. | The audit log and the Toolbox's session records are read at every start and what is newer than the last copy is copied (`db.ImportNewer`, `imports.newest_at`, step `0015`). Record sets edited in place are not merged; the docs say the database's count. The backups' runs are among those. |
 
-**Not verified in a cluster yet, so test these next** (none of the fixes above has run in one):
+**The re-test: none of these fixes has run in a cluster.**
 
 1. Build both images from the branch as it is now, without the working-copy patch, with `sudo make image image-postgres`.
 2. Delete the database pod again: the outage should be about twenty seconds, not sixty-eight, and the console pod should not be restarted by its probe when it starts while the database is away.
-3. The existing test databases get step `0015` at start (they have 14); `imports` rows from before it count from `imported_at`.
+3. The existing test databases get steps `0015` and `0016` at start (they have 14); `imports` rows from before `0015` count from `imported_at`. With Automation's scripts in the release's ConfigMap, they are copied once into `scripts` and `script_versions`, and the Automation tab shows them as before.
 4. Rollback, sign in so that audit events are written to the ConfigMap, upgrade again to the same database: those events, and only those, appear in `audit_events` once.
-5. B9: after a rollback to revision 13, an upgrade with `database.mode=external` must be refused with the sentence that names the Secret; with `database.mode=bundled` it must go through. This is a `lookup`, which no test without a cluster reaches.
+5. B9: after a rollback to revision 13, an upgrade with `database.mode=external` must be refused with the sentence that names the Secret; with `database.mode=bundled` it must go through. This is a `lookup`, which no test without a cluster reaches, so it matters most.
 6. The backup container on a fresh volume takes a base backup as soon as the primary runs (log line `this volume has no log up to timeline 1`), writes `/backup/.primary-timeline`, and does not take another after its own restart.
 7. **Still never run:** three members (`ha: true`; the images must be in a registry or on three nodes, since the members are kept on different nodes), a failover and its time, a restore (`restore.fromBackup`, to the newest point and to a time), a client certificate, a pooler with `listenerHost`, a new Toolbox session record (the test release's cluster was read-only).
 
-## Where the branch stands
+What to give the testing session: *Pull `phase-13-store`. Read `docs/phase-13-handover.md`, the section on the cluster test, and run its seven re-test items in namespace `221b-github`. Change nothing in the repository. Write the findings to a file.*
 
-Everything is on `phase-13-store`, pushed. Nothing is merged, there is no pull request, no release, and CI has not run (the owner asked for none yet; CI runs on a pull request or a push to `main`).
+## What was tested without a cluster
 
-| Commit | What |
-| --- | --- |
-| `Storage: the db package, the schema's 73 tables and the replicas' coordination` | `server/internal/db`: pool, transactions, health, UUIDv7 keys, the embedded migrations, advisory-lock sweeps, claims, `LISTEN`/`NOTIFY` with a poll; `dbtest`. |
-| `Storage: the server opens the database it is given` | The `-db-*` flags, `cmd/221b/database.go`, `GET /api/v1/database`, the `b221_database_*` metrics. |
-| `Storage: the 221b-postgres image and the chart's database modes` | `deploy/postgres` (Dockerfile, Patroni entrypoint, bootstrap, restore and backup scripts); `database.mode` none, bundled, external in the chart; `hack/check-chart.sh`. |
-| `Activity log: the audit log is kept in the database when there is one` | `audit.PGStore`, `db.ImportOnce`, the `imports` table. |
-| `Backups: the settings and the runs behind a repository…` | `backup.Repo` with `KVRepo` and `PGRepo`, `db.LoadScope`/`SaveScope`. The pattern for every other domain. |
-| `Activity log: the Toolbox's session records…` | `sessions.PGHistory` and `sessions.Archive`; the backup reads and merges through it. Activity log is the first domain wholly moved. |
-| `Platform: getting started, email and case settings…` | `db.ScopeKV`, `kv.Keyed`: a service's singleton documents as scopes of `settings`. |
-| `Approvals: requests, decisions, standing approvals and channels…` | `db.Doc` and `db.Diff`, the interim step; `twoperson/pg.go`, `cards/pg_approvals.go`. |
-| `Platform: the shared settings and the acknowledged alerts…`, `…the repositories…` | `settings/pg.go`, `apps/pg.go`. |
-| `Hosts carry no labels (to-do 1, server side)` | The first of the code to-do items. |
-| `Inventory: hosts, pairings, fleets and facts…` | Package `inventory`; `nodessh/pg.go`, `automation/pg_facts.go`, fleets in `settings/pg.go`. |
-| `Automation: script groups and execution profiles…` | `automation/pg_defs.go`. |
-| `Docs: Phase 13…` | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
+Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1, on a 2-core machine.
 
-The first commit on the branch, `CI: cache Playwright browsers…` (pushed by the owner's other session), was reviewed and left as it is: no problems found.
-
-## What was tested, and what was not
-
-**Tested here** (Go 1.26.9, PostgreSQL 16.15, Helm 4.3.1):
-
-- `go build ./...`, `gofmt`, `go vet` on the changed packages: clean.
-- `go test -race` with `TEST_DATABASE` set, on `internal/db`, `internal/audit`, `internal/backup`, `internal/sessions`, `internal/twoperson`, `internal/cards`, `internal/settings`, `internal/apps`, `internal/nodessh`, `internal/automation`, `cmd/221b`: pass.
-- The real server was started against the simulator with its ConfigMaps and a database: it migrated, copied each of the 13 moved record sets once, served `GET /api/v1/database`, logged no error, and at a second start copied nothing. Sign-in was off there, so no change was made through the API; the services' own tests cover that. The whole suite without `-race` passed before the changes (54 packages); see *Test results* at the end for the last full run.
+- **The full Go suite with the database**, `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`: all 55 packages that have tests pass. It was run after each of the last two code commits.
+- `make lint-go` (gofmt, `go vet ./...`, the prompt sources, `hack/check-db-backup.sh`), and `shellcheck` on `hack/` and `deploy/postgres/`: clean.
 - `hack/check-chart.sh`: all 107 checks pass, the database's included, and every render is valid against the Kubernetes 1.35 and 1.37 schemas.
-- The Patroni file the entrypoint writes parses as YAML in its three shapes (plain, with backups, restoring), and `post-bootstrap.sh` was run twice against a real PostgreSQL (it makes the role and the database once, then only resets the password).
+- `hack/check-db-backup.sh` runs the backup container against stand-ins for Patroni and WAL-G: who takes the base backup, when, and that it stops within a second of being told to.
+- Before the cluster test, the real server was started against the simulator with its ConfigMaps and a database: it migrated, copied each of the 13 record sets moved by then once, served `GET /api/v1/database`, logged no error, and at a second start copied nothing. This was not repeated after the scripts moved; their copy is covered by `TestScriptsInTheDatabase` and re-test item 3.
+- The Patroni file the entrypoint writes parses as YAML in its three shapes (plain, with backups, restoring), and `post-bootstrap.sh` was run twice against a real PostgreSQL.
 
-**Not tested: do these first.**
+**Not tested anywhere:**
 
-*Items 1 to 3 were then run in a cluster, in part; see the cluster test above for what is left of them.*
+- `hack/e2e-kind.sh`, `ha-kind.sh`, `upgrade-kind.sh` were not run; each needs a database variant.
+- The browser app was not changed, and its tests (`npm test`, `make e2e-sim`) were not run. Its version is 0.13.0 now.
+- CI has not run on the branch. Its chart job has a new step (the backup container's check) and runs `shellcheck` on `deploy/postgres/` too, and its Go job has a `postgres:18` service.
 
-1. **The `221b-postgres` image has never been built.** There was no Docker daemon. Run `make image-postgres` and fix what fails; the likeliest spots are the pgdg package step and the WAL-G file name (`wal-g-pg-24.04-{amd64,aarch64}.tar.gz` of v3.0.10 exist; that the tarball holds a file of the same name without `.tar.gz` is assumed).
-2. **The bundled database has never run.** Install the chart in kind with `database.mode=bundled`, then with `database.bundled.ha=true`, and check: the first pod initializes and is labelled `role=primary`; the Service `<release>-db` reaches it; the console connects with `verify-full`; `app_221b` and the database `221b` exist; deleting the primary's pod promotes a standby and the console reconnects; `ha` turned on later adds two standbys; the backup container takes a base backup (set `dailyAt` a minute ahead); `restore.fromBackup` brings a new installation back. Things to watch: Patroni's label value for the leader (`PATRONI_KUBERNETES_LEADER_LABEL_VALUE=primary` is set explicitly), the TLS key's file mode under `fsGroup` (0440, owned by root: PostgreSQL accepts that), and `readOnlyRootFilesystem` (writable paths are the data volume, `/var/run/postgresql`, `/run/patroni`, `/tmp`).
-3. **External mode against a real server with TLS** (`verify-full` with a CA, a client certificate, a pooler with `listenerHost`). Only `sslmode=disable` ran here.
-4. **`hack/e2e-kind.sh`, `ha-kind.sh`, `upgrade-kind.sh`** were not run; add a database variant to each.
-5. **The browser app was not touched**, and its tests were not run.
+**Two notes on the Go suite:**
 
-## Decisions made in this session for the owner to confirm
+- **One test is flaky under load: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It failed in one full run and passed in every one since. It expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores sometimes none are. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without. Fix it on its own (make the waiting cases wait on the test's own gate, not on the scheduler); if it fails in CI, run it again before looking further.
+- **`internal/api` takes about 570 seconds** under the race detector on two cores, close to `go test`'s 10-minute limit per package. CI's runners are faster; on a small machine pass `-timeout 30m`.
 
-These differ from the design document *221B storage deployment design*, or were not in it.
+## Questions the owner has not answered yet
+
+Both are about Automation's variables, the next record set, and both touch the agreed data model.
+
+1. **Variables.** The model puts the privilege ceiling and the reboot minutes on `fleets`, and each variable on one fleet or one host. The service keeps a node's override under a fleet (on both at once), and can name fleets that have no row. Change the service to fit the model, or the tables to fit the service?
+2. **Variable changes.** The service keeps a fleet's whole variables before and after each change; the model keeps items (name, old value, new value), which cannot give back node overrides, the ceiling or the sensitive names. Grow the tables to hold both sides in full, or change the service to keep items?
+
+The detail is under *Variables and changes: what to settle first*, below.
+
+## Decisions made for the owner to confirm
+
+These differ from the design document *221B storage deployment design*, or were not in it. The last five rows are from November 19.
 
 | Decision | Why | To undo |
 | --- | --- | --- |
-| `database.mode` defaults to **`none`**, not `bundled`. | Six domains are still in ConfigMaps, and the image has not run; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
+| `database.mode` defaults to **`none`**, not `bundled`. | Six domains are still in ConfigMaps; a default that adds a StatefulSet, a volume and a second image to every upgrade, before the records use it, would break upgrades and CI. | Flip the default when the move is complete. |
 | The base backup runs at a **time of day** (`backup.dailyAt: "02:00"`), not a cron expression. | A shell loop in the pod cannot parse cron. | Replace `backup.sh` with a small program. |
-| The member that takes the backup is **picked from Patroni's `/cluster`**, not by an advisory lock: to a bucket the first standby by name, else the primary; to a volume always the primary, where the log is, and a new primary takes one at once. | Simpler, and nothing is run in another pod either way. The volume's rule came from the cluster test (B6). | — |
 | **`iamAuth`** (RDS, Cloud SQL tokens) is not implemented. | Time. | Add a token source in `db.open`'s `BeforeConnect`. |
 | **Quorum commit is on with one member too** (it waits for nobody then). | So turning `ha` on needs no change to Patroni's stored configuration. | — |
 | The audit log's **retention is a year**, a constant. | It needs a setting and a place on the page. | `auditRetention` in `cmd/221b/main.go`. |
 | The import is written down in a table, **`imports`**; the ConfigMap is not annotated. | One transaction with the copy. | — |
-| **Only the audit log and the session records are copied again after a rollback** (what is newer than the last copy). Everything edited in place is copied once, and the database's records count from then on. | A log can be merged by time; a settings document changed on both sides cannot. | Say which side wins per record set, if another answer is wanted. |
-| **While the bundled database's Secret exists, any mode but `bundled` is refused** without `allowModeChange`, also on a first install under a name used before. | The Secret and the volumes are kept on purpose; a rollback leaves nothing else to go by. | Delete the Secret, or drop the check in `b221.validateDatabase`. |
 | Columns **`check` and `window` are `check_name` and `time_window`**: both are reserved words in SQL. `audit_events.detail` is text. | — | — |
 | **The Lease stays.** Claims, sweeps and notices are there and tested, but Sherlock's conversations and Watson's cards still live in the leader's memory. | ADR-163. | Remove it when cards, conversations and runs are rows. |
 | Tables that point at a **cluster or a credential** get that row made with only its id. | The clusters' and credentials' own records are in Secrets and have not moved. | Fill the rows when those move (order 9). |
 | Ids the console already gives are kept as **text keys**: Toolbox sessions, standing approvals, channels, credentials; a fleet keeps `fleet_key` beside its UUID. | The audit log, the Secrets and other records carry those ids. | — |
 | The **Secret-kept record sets** (applications, credentials, connections, sessions) are left for last. | See order 9. | — |
 | PostgreSQL **18** in the bundled image; **16** the minimum for an external one. | Open question 1 of the design document. | `PG_MAJOR` in the Dockerfile; `db.MinServerVersion`. |
+| The member that takes the backup is **picked from Patroni's `/cluster`**, not by an advisory lock: to a bucket the first standby by name, else the primary; to a volume always the primary, where the log is, and a new primary takes one at once. | Nothing is run in another pod either way. The volume's rule came from the cluster test (B6). | — |
+| **Only the audit log and the session records are copied again after a rollback** (what is newer than the last copy). Everything edited in place is copied once, and the database's records count from then on. | A log can be merged by time; a settings document changed on both sides cannot. | Say which side wins per record set, if another answer is wanted. |
+| **While the bundled database's Secret exists, any mode but `bundled` is refused** without `allowModeChange`, also on a first install under a name used before. | The Secret and the volumes are kept on purpose; a rollback leaves nothing else to go by. | Delete the Secret, or drop the check in `b221.validateDatabase`. |
+| **The schema has 76 tables, not the model's 73.** Every field a column means a version's lists of records are tables: `script_version_kube_actions`, `script_version_findings`, `script_version_actions`. A list of plain values is an array column (`script_versions.facts`). | The owner's rule for the move: no record kept as JSON beside its keys. | Fold them back into JSON columns in a new step. |
+| **A script may be in no group**, and a group a script names gets its row when the script is written. | The store allows both; `scripts.script_group_id` was required. | — |
 
-The design document and *221B storage engine options* (Claude docs, not in the repository) have not been updated with these.
+The Claude docs *221B storage deployment design*, *221B data model: domains and tables* and *221B storage engine options* (not in the repository) have not been updated with any of these: the owner asked that changes to the data model be collected and made when he says.
 
 ## What to do next, in order
 
 ### 1. Verify and ship what is here
 
-- The five untested items above.
+- The re-test above, and what was never run (three members, a failover, a restore).
 - **CI and release**: build, scan, sign and publish `221b-postgres` beside `221b` in `ci.yml` and `release.yml` (same tag, SBOM and provenance as the console's image); pin `debian:13-slim` and the Go job's `postgres:18` service by digest in `hack/base-images.env`, as the other images are; check that the licence step accepts pgx and puddle (MIT) and pgpassfile, pgservicefile (MIT).
 - **The app**: a banner on pages that need the database while `GET /api/v1/database` says it is away, and the database's state on Administration's home (DB-15).
-- **`-race` on CI's two cores**: see *Test results*.
+- A database variant of `hack/e2e-kind.sh`, `ha-kind.sh` and `upgrade-kind.sh`.
 
 ### 2. Move the domains
 
@@ -124,8 +147,8 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 
 | Order | Record set (key, package) | Tables | Notes |
 | --- | --- | --- | --- |
-| 2 | `automation.VariablesKey`, `ChangesKey` (the scripts are done: `pg_scripts.go`, step `0016`, `TestScriptsInTheDatabase`, which runs the same steps on a ConfigMap and on the database and compares every field; use it as the model for a test) | `variables`, `variable_changes`, `variable_change_items` | See *Variables and changes: what to settle first* below. |
-| 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. |
+| 2 | `automation.VariablesKey`, `ChangesKey` | `variables`, `variable_changes`, `variable_change_items` | Waits for the owner's two answers; see below. |
+| 3 | `automation.RunsKey` | `script_runs`, `script_run_hosts`, `script_run_fleets`, `script_run_values`, `script_run_host_fleets` | With to-do 11. The largest record set; a ledger with a state, so a repository rather than a `db.Doc`. `script_runs` points at `script_versions` with `ON DELETE RESTRICT`, and `writeScripts` deletes a version the document no longer has: settle which gives way. |
 | 4 | `ai.ProvidersKey`, `AgentsKey`, `PromptsKey`, `TestsKey`, `PilotKey`; `sherlock.SpendKey` | the 9 AI configuration tables | Seed `agents` from the catalog first; `ai_spend` is a ledger (a row a call, summed on read): a repository. |
 | 5 | `jobs.JobsKey`, `RunsKey`; `casework.ChecksKey`, `RulesKey`, `FoundKey` | the 6 Jobs tables | `db.Claim` on `schedule_claims` replaces "on the leader" for schedules. |
 | 6 | `issues.IndexKey` and the case ConfigMaps (`kv.Objects`); `issues.ConfigKey`; the case work; the RCAs | the 8 Cases tables | `kv.Objects` needs its own adapter or, better, a repository. `casework/clean.go` has the old shapes. |
@@ -137,9 +160,13 @@ The design document and *221B storage engine options* (Claude docs, not in the r
 
 - `params.json` is cluster → fleet id → `FleetVariables`: the fleet's values, each node's overrides, the privilege ceiling, the names that are sensitive, the reboot minutes, and reboot minutes for single nodes. The model puts the ceiling and the reboot minutes on `fleets` (`privilege_ceiling`, `reboot_minutes`), which another document owns (`settings/pg.go` writes fleets and leaves those two columns alone, so they are free to use). A variable row needs a fleet's row: check what fleet ids the variables can name that are not in the settings' list (a deleted fleet, a fleet of all nodes), because `variables.fleet_id` cascades on delete and a row made only to be pointed at would show up as a fleet in `readFleets`. A node's override is on a host and a fleet at once (`Nodes[node][name]` under a fleet), which `CHECK (num_nonnulls(fleet_id, host_id) = 1)` does not allow as it stands; so are a node's reboot minutes.
 - `changes.json` holds, for each change, the fleet's whole `FleetVariables` before and after, not items: `variable_change_items` (name, old value, new value) cannot give back node overrides, the ceiling or the sensitive names. Either the change's tables grow to hold both sides in full, or the service is changed to keep items. It also holds the **runs that wait for approval** (`WaitingRun`, with a rollout, hooks and the person), which belong with the runs of order 3, and whose `approval_request_id` is the link to Approvals that nothing fills yet.
-- The owner's rule is every field a column, so the JSON columns still in step `0006` (`variable_changes.impact`, `script_runs.rollout`, `hooks`) become columns or tables when their record set moves, in a new step as `0016` did for the scripts.
+- The JSON columns still in step `0006` (`variable_changes.impact`, `script_runs.rollout`, `hooks`) become columns or tables when their record set moves, in a new step as `0016` did for the scripts.
 
-How to add one (each of the moved ones is a model): write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in its migration file, test the service over it with `dbtest.Open`, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). A time read back from PostgreSQL has microseconds, not nanoseconds: tests use whole seconds.
+**How to add one.** Write `NewXPG(d) *db.Doc[T]` with `Read` and `Write` beside the service, settle the table's columns in a new migration step, and add the key to the map in the service's wiring (`w.inTables` in `cmd/221b/settings.go`, `cards.go`, `automation.go`). The scripts are the fullest model: `automation/pg_scripts.go`, step `0016`, and `TestScriptsInTheDatabase`, which runs the same steps on a ConfigMap and on the database and compares every field of what they keep. Write each new test that way. Three things to know:
+
+- A time read back from PostgreSQL has microseconds, not nanoseconds: tests use whole seconds, and a comparison with a stored time goes through `db.After`.
+- `pgx.ForEachRow` reads every row into the same variables: copy a slice before keeping it.
+- A parameter that may be null inside `coalesce` needs its type (`coalesce($4::timestamptz, now())`).
 
 For each: the backup's export and restore read through the service or through `w.spendBackend`, which is wrapped once so they find the moved keys; check them. Remove a domain's ConfigMap from the chart one release after its move.
 
@@ -165,19 +192,8 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 
 ## Working on this
 
-- Go tests that need PostgreSQL: `make test-db` (Docker), or `TEST_DATABASE=host:port go test ./...` against any PostgreSQL 16 or later that lets `postgres` in without a password (`TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD` otherwise). Each test makes and drops its own database.
-- A migration file may be edited in place until a release ships it; after that a change is a new file, and the checksum check refuses an edited one. Editing one makes existing development databases refuse to start: drop them. The test cluster now has two databases at step 14, so the change after its test went into a new step, `0015`, and later ones should too while those are in use.
-- `hack/check-db-backup.sh` runs the database's backup container against stand-ins for Patroni and WAL-G (who takes the base backup, when, and that it stops when told to); `make lint-go` and CI's chart job run it.
-- Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).
-
-## Test results
-
-After the cluster test's fixes (`Storage: what the first cluster test found`), the same full run passed again: 55 packages, none failed, with step `0015` in every test database; `make lint-go` (which now runs `hack/check-db-backup.sh`), `shellcheck` on `hack/` and `deploy/postgres/`, and all 107 chart checks pass. The same run passed once more after the scripts moved (`Automation: the scripts and their versions…`, step `0016`). The paragraphs below are from the run before both.
-
-The last full run in this session, on a 2-core machine, on the branch's last code commit: `TEST_DATABASE=127.0.0.1:55432 go test -race -timeout 30m ./...` in `server/`.
-
-- **All 55 packages that have tests passed, none failed**, with every database test among them (`internal/db`, `audit`, `backup`, `sessions`, `twoperson`, `cards`, `settings`, `apps`, `nodessh`, `automation`, `cmd/221b`). This run was made again after the last code commit, `Automation: script groups and execution profiles…`. `make lint-go` (gofmt, `go vet ./...`, the prompt sources) is clean.
-- **One test is flaky under load: `TestACapLoweredDuringARunHolds` in `internal/ai`**, a package this branch does not touch. It failed in the full run before this one and passed in this one. It is sensitive to timing: it expects some test cases to be still waiting when a cap stops the run, and under the race detector on two busy cores sometimes none are. On `main`'s code it failed 1 time in 50 under the same load and 0 in 19 without. Fix it on its own (make the waiting cases wait on the test's own gate, not on the scheduler); if it fails in CI, run it again before looking further.
-- **`internal/api` took 566 seconds** under the race detector here, close to `go test`'s 10-minute limit per package. CI's runners are faster; on a small machine pass `-timeout 30m`.
-- Before the changes, `go test ./...` without `-race` passed all 54 packages on the branch's first commit.
-- The browser app's tests (`npm test`, `make e2e-sim`) were not run: the app was not changed.
+- Go tests that need PostgreSQL: `make test-db` (Docker), or `TEST_DATABASE=host:port go test ./...` against any PostgreSQL 16 or later that lets `postgres` in without a password (`TEST_DATABASE_USER`, `TEST_DATABASE_PASSWORD` otherwise). Each test makes and drops its own database. Without `TEST_DATABASE` the database tests are skipped, so a run without it proves little.
+- **Migrations: a change is a new step.** The test cluster has databases at step 14, and the checksum check refuses an edited step, so `0015` and `0016` were added and none was edited. A step may reshape an earlier step's tables while they hold no rows, as `0016` does. `TestMigrate` counts the tables (76): change the number with the step.
+- Both images need BuildKit; the Makefile turns it on. The bundled database's members are kept on different nodes, so three members need the image in a registry or on three nodes.
+- A Helm `lookup` (the mode guard, the generated passwords and certificates) returns nothing in `helm template`: only a cluster exercises it.
+- Every commit is signed off (`git commit -s`), names its requirement, and keeps `docs/requirements.md`, `docs/architecture.md`, `docs/data-model.md` and `CHANGELOG.md` in step (CONTRIBUTING.md).
