@@ -178,7 +178,10 @@ type Options struct {
 	UI http.Handler
 	// Gauges adds cluster figures to /metrics.
 	Gauges func() []Gauge
-	Logger *slog.Logger
+	// Database says how the database is (Phase 13); nil for a console that
+	// keeps its records in ConfigMaps.
+	Database func() DatabaseState
+	Logger   *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
 	// Leader, with several replicas, says whether this one reads the
@@ -605,6 +608,7 @@ func New(o Options) *Server {
 	s.handle("GET /healthz", "healthz", s.healthz)
 	s.handle("GET /readyz", "readyz", s.readyz)
 	s.handle("GET /metrics", "metrics", s.metrics)
+	s.handle("GET /api/v1/database", "database", s.getDatabase)
 	s.handle("GET /", "ui", o.UI.ServeHTTP)
 	return s
 }

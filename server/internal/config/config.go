@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -36,6 +37,10 @@ type Config struct {
 	// SettingsConfigMap is the "namespace/name" of the ConfigMap the
 	// settings are kept in. Empty keeps them in memory until a restart.
 	SettingsConfigMap string
+	// Database is the PostgreSQL the console keeps its records in (Phase
+	// 13, DB-01): the chart's bundled one or one the operator runs. With no
+	// host, every record stays in the ConfigMaps below.
+	Database db.Config
 	// Automation turns Automation on (Phase 11 part 2, ADR-73); it runs
 	// only where SSH is on too. AutomationConfigMap is the "namespace/name"
 	// of its own ConfigMap; empty keeps its records in memory.
@@ -250,6 +255,19 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.Context, "context", env("KUBE_CONTEXT", ""), "kubeconfig context to use (outside a cluster only)")
 	fs.StringVar(&c.APIServer, "api-server", env("API_SERVER", ""), "connect to this API server URL without credentials (simulator and tests)")
 	fs.DurationVar(&c.Refresh, "refresh", envDuration("REFRESH", 3*time.Second), "how often to update browsers and read CPU and memory in use, until changed in Settings")
+	// --- The database (Phase 13) ---
+	fs.StringVar(&c.Database.Host, "db-host", env("DB_HOST", ""), "host of the PostgreSQL the console keeps its records in, its read-write endpoint (empty: no database; the records stay in ConfigMaps)")
+	fs.IntVar(&c.Database.Port, "db-port", envInt("DB_PORT", 5432), "port of the database")
+	fs.StringVar(&c.Database.Name, "db-name", env("DB_NAME", "221b"), "name of the database")
+	fs.StringVar(&c.Database.User, "db-user", env("DB_USER", "app_221b"), "role the console signs in to the database as; it owns the tables and migrates them")
+	fs.StringVar(&c.Database.PasswordFile, "db-password-file", env("DB_PASSWORD_FILE", ""), "file holding the role's password, read at every connection so a rotated Secret needs no restart (empty: no password, for client certificates)")
+	fs.StringVar(&c.Database.SSLMode, "db-sslmode", env("DB_SSLMODE", "verify-full"), "how the connection to the database is secured: verify-full, verify-ca, require or disable")
+	fs.StringVar(&c.Database.CAFile, "db-ca-file", env("DB_CA_FILE", ""), "CA bundle the database's certificate is verified against (empty: the system's)")
+	fs.StringVar(&c.Database.ClientCertFile, "db-client-cert-file", env("DB_CLIENT_CERT_FILE", ""), "client certificate for a database that asks for one")
+	fs.StringVar(&c.Database.ClientKeyFile, "db-client-key-file", env("DB_CLIENT_KEY_FILE", ""), "the client certificate's key")
+	fs.IntVar(&c.Database.MaxConns, "db-max-connections", envInt("DB_MAX_CONNECTIONS", 10), "most connections this replica opens to the database")
+	fs.StringVar(&c.Database.ListenerHost, "db-listener-host", env("DB_LISTENER_HOST", ""), "direct address of the database for the listener and the locks, when -db-host is a pooler in transaction mode (empty: -db-host)")
+	fs.DurationVar(&c.Database.Poll, "db-poll-interval", envDuration("DB_POLL_INTERVAL", db.DefaultPoll), "how often a replica looks for changes other replicas made, besides being told")
 	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
 	fs.BoolVar(&c.Automation, "automation", envBool("AUTOMATION", true), "offer Automation: scripts run on paired nodes over SSH (needs the toolbox's SSH on)")
 	fs.StringVar(&c.AutomationConfigMap, "automation-configmap", env("AUTOMATION_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Automation's scripts, parameters and runs in (empty: in memory)")
@@ -387,6 +405,9 @@ func splitList(s string) []string {
 
 func (c Config) validate() error {
 	var errs []error
+	if err := c.Database.Validate(); err != nil {
+		errs = append(errs, err)
+	}
 	for _, r := range append(append([]string(nil), c.IssuesReportRoles...), c.IssuesOperatorRoles...) {
 		if !roles.Valid(r) {
 			errs = append(errs, fmt.Errorf("-issues-report-roles and -issues-operator-roles take superAdmin, superViewer, admin and viewer, not %q", r))
@@ -458,6 +479,13 @@ func (c Config) validate() error {
 func env(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key))); err == nil {
+		return n
 	}
 	return def
 }

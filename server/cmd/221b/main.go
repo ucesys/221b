@@ -30,6 +30,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -101,6 +102,12 @@ type wiring struct {
 	leading    chan struct{}
 	lost       chan struct{}
 	leaderDone chan struct{}
+
+	// The database (database.go): nil while the records are in ConfigMaps.
+	// inDatabase names the domains whose records it holds.
+	database      *db.DB
+	schemaVersion int
+	inDatabase    []string
 
 	// The settings and what is kept beside them (settings.go); stored are
 	// the ConfigMaps whose sizes the metrics show.
@@ -193,6 +200,12 @@ func run(args []string) error {
 	}
 	if err := w.wireClusters(ctx); err != nil {
 		return err
+	}
+	if err := w.wireDatabase(ctx); err != nil {
+		return err
+	}
+	if w.database != nil {
+		defer w.database.Close()
 	}
 	if err := w.wireSettings(ctx); err != nil {
 		return err

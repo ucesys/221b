@@ -91,7 +91,16 @@ func (w *wiring) wireAPI() error {
 		Logger:                  w.log.With("component", "http"),
 		AllowedHosts:            cfg.AllowedHosts,
 		Gauges:                  w.gauges,
+		Database:                databaseOption(w),
 	})
 	w.handler = handler
 	return nil
+}
+
+// databaseOption is the API's view of the database, nil without one.
+func databaseOption(w *wiring) func() api.DatabaseState {
+	if w.database == nil {
+		return nil
+	}
+	return w.databaseState
 }

@@ -32,7 +32,7 @@ func (w *wiring) gauges() []api.Gauge {
 	if info.Metrics == kube.MetricsAvailable {
 		metricsUp = 1
 	}
-	gauges := []api.Gauge{}
+	gauges := w.databaseGauges()
 	for _, o := range w.stored {
 		sizes := o.Sizes()
 		for _, key := range slices.Sorted(maps.Keys(sizes)) {
