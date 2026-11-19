@@ -2,6 +2,19 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## Unreleased
+
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-22). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+
+### Added
+
+- **`database.mode`** in the chart: `none` (the default until the move is complete), `bundled` or `external`. `bundled` runs PostgreSQL beside the console from a second image of the release, `221b-postgres` (PostgreSQL 18, Patroni, WAL-G): one member, or three with `database.bundled.ha`, a commit waiting for one of the two standbys; passwords and a certificate made once; the write-ahead log archived and a base backup a day, to S3 or a second volume. `external` connects to a PostgreSQL 16 or later that you run (`database.external.host`, `port`, `database`, `user`, `passwordSecret`, `sslMode`, `caSecret`, `clientCertSecret`, `maxConnections`, `listenerHost` for a pooler in transaction mode). **The bundled database has not been run in a cluster yet.**
+- **The audit log in the database**: with a database, Administration › Audit log reads `audit_events`, where each event is a row added and never changed; it is no longer bounded by a ConfigMap, and is kept a year. What the ConfigMap held is copied once.
+- **The backups' settings and runs in the database**: the settings as a row of `settings`, each run a row of `backup_runs`; copied once from the ConfigMap, the newest scheduled time handled included.
+- `GET /api/v1/database`: whether the console has a database and whether it answers; for a SuperAdmin also why not, the schema's version and the domains moved. Metrics `b221_database_up`, `b221_database_schema_version`, `b221_database_connections` and `b221_database_connections_max`.
+- Server flags `-db-host`, `-db-port`, `-db-name`, `-db-user`, `-db-password-file`, `-db-sslmode`, `-db-ca-file`, `-db-client-cert-file`, `-db-client-key-file`, `-db-max-connections`, `-db-listener-host` and `-db-poll-interval` (`DB_*` in the environment).
+- For developers: `make test-db` runs the Go tests with those that need PostgreSQL (`TEST_DATABASE=host:port`; they are skipped without it); `make image-postgres` builds the database's image.
+
 ## 0.12.1 (2026-11-18)
 
 Phase 12.1: the agents' and jobs' instructions after a review against open-source prompts (`docs/phase-12.1-prompts.md`, PM-C1 to PM-S1), and who does what among the agents (PM-D1 to PM-D7).
