@@ -18,7 +18,8 @@ func asJSON(v any) string {
 
 // The ledger over the database counts what it counts over a ConfigMap:
 // the same costs give the same sums, through a new day and a new month,
-// each cost is a row, and two replicas' rows never meet.
+// each cost is a row, two replicas' rows never meet, and rows from before
+// last month are removed.
 func TestTheLedgerOverTheDatabase(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := context.Background()
@@ -87,6 +88,14 @@ func TestTheLedgerOverTheDatabase(t *testing.T) {
 	same("the next month")
 	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM ai_spend").Scan(&rows); err != nil || rows != 7 {
 		t.Fatalf("rows kept %d: %v", rows, err)
+	}
+	// No history: two months on, the rows from before last month are gone,
+	// and the sums are what they would be anyway.
+	now = now.Add(62 * 24 * time.Hour)
+	spend(a, "auditor", "default", 0.25, true)
+	same("two months on")
+	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM ai_spend").Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows left two months on %d: %v", rows, err)
 	}
 }
 

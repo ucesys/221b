@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,9 +22,17 @@ import (
 // under SpendKey for a backup and for the copy from the ConfigMap, which
 // hold sums and no rows: read, it is the sums of now; written, the month's
 // rows give way to rows that carry those sums over.
+//
+// No history is kept (decided with the owner on November 19, 2026): the
+// limits are of a day and a month, so rows from before the month before
+// this one are removed, once a day, when a cost is added.
 type SpendPG struct {
 	d   *db.DB
 	now func() time.Time
+
+	mu sync.Mutex
+	// swept is the day (UTC) old rows were last removed by this process.
+	swept string
 }
 
 // NewSpendPG keeps the spend in d; now is the clock (time.Now when nil).
@@ -99,8 +108,16 @@ func (p *SpendPG) Add(ctx context.Context, costs []Cost) error {
 	if len(costs) == 0 {
 		return nil
 	}
-	return p.d.Tx(ctx, func(tx pgx.Tx) error {
+	day, _, month, _ := spans(p.now())
+	p.mu.Lock()
+	sweep := p.swept != day.Format("2006-01-02")
+	p.mu.Unlock()
+	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
 		b := &pgx.Batch{}
+		if sweep {
+			// The month before this one stays, to look back at.
+			b.Queue("DELETE FROM ai_spend WHERE spent_at < $1", month.AddDate(0, -1, 0))
+		}
 		agents := map[string]bool{}
 		for _, c := range costs {
 			// What an agent spent points at the agent's row.
@@ -117,6 +134,12 @@ func (p *SpendPG) Add(ctx context.Context, costs []Cost) error {
 		}
 		return tx.SendBatch(ctx, b).Close()
 	})
+	if err == nil && sweep {
+		p.mu.Lock()
+		p.swept = day.Format("2006-01-02")
+		p.mu.Unlock()
+	}
+	return err
 }
 
 // carry puts sums in place of the rows of t's month: the total as rows
