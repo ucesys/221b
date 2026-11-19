@@ -445,9 +445,6 @@ func (c consoleKnowledge) Items(ctx context.Context) ([]knowledge.ConsoleItem, e
 			for _, h := range c.hosts.Cached(sum.ID) {
 				var b strings.Builder
 				fmt.Fprintf(&b, "Host %s outside Kubernetes, in the cluster %s. Address %s, port %d. State: %s.\n", h.Name, sum.Name, h.Address, h.Port, h.State)
-				for k, v := range h.Labels {
-					fmt.Fprintf(&b, "- label %s=%s\n", k, v)
-				}
 				if f, ok := facts[h.Name]; ok {
 					b.WriteString("Facts, as read on " + f.At.UTC().Format("2006-01-02") + ":\n" + factLines(f))
 				}
@@ -528,7 +525,7 @@ func fleetNodes(manager *clusters.Manager, hosts *nodessh.Hosts, cluster string)
 	if hosts != nil {
 		for _, h := range hosts.Cached(cluster) {
 			if !known[h.Name] {
-				out = append(out, fleets.Node{Name: h.Name, Labels: h.Labels})
+				out = append(out, fleets.Node{Name: h.Name})
 			}
 		}
 	}
@@ -699,7 +696,7 @@ func (c consoleKnowledge) Hosts(ctx context.Context) ([]knowledge.ConsoleHost, e
 		}
 		if c.hosts != nil {
 			for _, h := range c.hosts.Cached(sum.ID) {
-				out = append(out, knowledge.ConsoleHost{Cluster: sum.ID, Name: h.Name, Address: h.Address, Kind: "host", Answering: h.State == nodessh.HostPaired && h.Mismatch == "", Labels: h.Labels})
+				out = append(out, knowledge.ConsoleHost{Cluster: sum.ID, Name: h.Name, Address: h.Address, Kind: "host", Answering: h.State == nodessh.HostPaired && h.Mismatch == ""})
 			}
 		}
 	}

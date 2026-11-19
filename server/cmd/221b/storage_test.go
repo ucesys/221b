@@ -68,7 +68,7 @@ func TestTheHostsHaveRoomInTheSettings(t *testing.T) {
 	for i := range nodessh.MaxHosts {
 		name := fmt.Sprintf("backup-server-%03d.example.internal", i)
 		m["k8s-production-eu/"+name] = nodessh.Host{Cluster: "k8s-production-eu", Name: name, Address: "10.120.14." + strconv.Itoa(i), Port: 22, LoginUser: "root",
-			Labels: map[string]string{"site": "frankfurt-2", "role": "backup", "team": "storage-ops"}, State: nodessh.HostPaired, AddedBy: "Pat Example", AddedAt: at,
+			State: nodessh.HostPaired, AddedBy: "Pat Example", AddedAt: at,
 			HostKey: key, Fingerprint: "SHA256:7mZ9dQ1yW3Qh3dS2x6Lr2gF0aH0dJk3Xv8tC5nB1pQo", TrustedBy: "Pat Example", TrustedAt: &at, Offered: key, PairedBy: "Pat Example", PairedAt: &at}
 	}
 	b, _ := json.Marshal(m)

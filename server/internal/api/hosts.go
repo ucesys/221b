@@ -75,7 +75,7 @@ type hostView struct {
 }
 
 func viewOfHost(h nodessh.Host) hostView {
-	return hostView{Name: h.Name, Address: h.Address, Port: h.Port, LoginUser: h.LoginUser, Labels: h.Labels, State: h.State, Fingerprint: h.Fingerprint, KeyChanged: h.Mismatch != "",
+	return hostView{Name: h.Name, Address: h.Address, Port: h.Port, LoginUser: h.LoginUser, State: h.State, Fingerprint: h.Fingerprint, KeyChanged: h.Mismatch != "",
 		AddedBy: h.AddedBy, AddedAt: h.AddedAt, TrustedBy: h.TrustedBy, TrustedAt: h.TrustedAt, PairedBy: h.PairedBy, PairedAt: h.PairedAt}
 }
 
@@ -175,7 +175,7 @@ func (s *Server) postHost(w http.ResponseWriter, r *http.Request) {
 		in.LoginUser = s.opts.Sessions.Config().SSH.LoginUser
 	}
 	who := s.watsonWho(r)
-	h, err := s.opts.Hosts.AddHost(r.Context(), nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser, Labels: in.Labels}, who.Name)
+	h, err := s.opts.Hosts.AddHost(r.Context(), nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser}, who.Name)
 	if err != nil {
 		hostError(w, err)
 		return

@@ -485,7 +485,7 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		for _, h := range list {
 			if !known[h.Name] {
 				hosts[h.Name] = h
-				nodes = append(nodes, fleets.Node{Name: h.Name, Labels: h.Labels})
+				nodes = append(nodes, fleets.Node{Name: h.Name})
 			}
 		}
 	}

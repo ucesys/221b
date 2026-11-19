@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodes"
@@ -32,25 +31,21 @@ const (
 
 // Limits keep the record small: the settings ConfigMap gives the hosts
 // 128 KiB, which this many typical hosts fit.
-const (
-	MaxHosts      = 150
-	maxHostLabels = 10
-)
+const MaxHosts = 150
 
 // Host is a machine outside Kubernetes that Automation reaches by SSH
 // from the console, and treats as a node once paired (Phase 12). Its name
 // is its node name for fleets and runs; its host key is pinned once a
 // SuperAdmin confirmed its fingerprint, before any credential is sent.
 type Host struct {
-	Cluster   string            `json:"cluster"`
-	Name      string            `json:"name"`
-	Address   string            `json:"address"`
-	Port      int               `json:"port"`
-	LoginUser string            `json:"loginUser"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	State     string            `json:"state"`
-	AddedBy   string            `json:"addedBy,omitempty"`
-	AddedAt   time.Time         `json:"addedAt"`
+	Cluster   string    `json:"cluster"`
+	Name      string    `json:"name"`
+	Address   string    `json:"address"`
+	Port      int       `json:"port"`
+	LoginUser string    `json:"loginUser"`
+	State     string    `json:"state"`
+	AddedBy   string    `json:"addedBy,omitempty"`
+	AddedAt   time.Time `json:"addedAt"`
 	// HostKey is the pinned key, as known_hosts takes it (type and
 	// base64), and Fingerprint its SHA256 fingerprint. The key never
 	// leaves the server: the page gets the fingerprint.
@@ -112,7 +107,7 @@ func (h *Hosts) OnRead(fn func(map[string]Host)) {
 func HostRows(list []Host) []nodes.Row {
 	out := make([]nodes.Row, 0, len(list))
 	for _, x := range list {
-		out = append(out, nodes.HostRow(x.Name, x.Labels, x.AddedAt, nodes.Host{Address: x.Address, Port: x.Port, LoginUser: x.LoginUser, State: x.State,
+		out = append(out, nodes.HostRow(x.Name, nil, x.AddedAt, nodes.Host{Address: x.Address, Port: x.Port, LoginUser: x.LoginUser, State: x.State,
 			Fingerprint: x.Fingerprint, KeyChanged: x.Mismatch != "", AddedBy: x.AddedBy, TrustedBy: x.TrustedBy, TrustedAt: x.TrustedAt, PairedBy: x.PairedBy, PairedAt: x.PairedAt}))
 	}
 	return out
@@ -261,16 +256,6 @@ func (x *Host) Validate() error {
 		return fmt.Errorf("%w: the SSH port is 1 to 65535", ErrInvalid)
 	case !toolbox.LoginUserRE.MatchString(x.LoginUser):
 		return fmt.Errorf("%w: the login user is not a Unix user name", ErrInvalid)
-	case len(x.Labels) > maxHostLabels:
-		return fmt.Errorf("%w: at most %d labels", ErrInvalid, maxHostLabels)
-	}
-	for k, v := range x.Labels {
-		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
-			return fmt.Errorf("%w: label key %q: %s", ErrInvalid, k, errs[0])
-		}
-		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
-			return fmt.Errorf("%w: label value %q: %s", ErrInvalid, v, errs[0])
-		}
 	}
 	return nil
 }
@@ -383,18 +368,4 @@ func fingerprintOf(line string) string {
 		return ""
 	}
 	return ssh.FingerprintSHA256(k)
-}
-
-// SetLabels replaces a host's labels (Phase 12, a Watson card's
-// host.label): checked as a host's labels are when it is added.
-func (h *Hosts) SetLabels(ctx context.Context, cluster, name string, labels map[string]string) (Host, error) {
-	return h.update(ctx, cluster, name, func(x *Host) error {
-		next := *x
-		next.Labels = labels
-		if err := next.Validate(); err != nil {
-			return err
-		}
-		x.Labels = next.Labels
-		return nil
-	})
 }
