@@ -1,0 +1,399 @@
+// Package db is the console's connection to PostgreSQL (Phase 13, DB-01):
+// the pool, transactions, the schema's migrations, the locks and notices the
+// replicas coordinate through, and whether the database answers. It is the
+// only package that imports the driver; each domain keeps its records
+// through a repository of its own, written on what is here (ADR-162).
+//
+// The database is the chart's bundled one or one the operator runs
+// (database.mode); to this package both are an address. Nothing here keeps
+// a password: it is read from a file, a mounted Secret, each time a
+// connection is opened, so rotating it needs no restart (DB-04).
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// MinServerVersion is the oldest PostgreSQL the console runs on (DB-03),
+// as server_version_num gives it.
+const MinServerVersion = 160000
+
+// DefaultPoll is how often what a notice would have said is looked for
+// anyway, so a lost notice delays a change and never loses it (DB-12).
+const DefaultPoll = 30 * time.Second
+
+// ErrNotFound is what a repository returns for a record that is not there.
+var ErrNotFound = errors.New("not found")
+
+// ErrConflict is what a repository returns when a record changed since the
+// version a save was made against.
+var ErrConflict = errors.New("changed since it was read")
+
+// ErrUnavailable wraps what a call returns while the database cannot be
+// reached, so a page can say so rather than show an error of the driver's.
+var ErrUnavailable = errors.New("the database is unavailable")
+
+// Config is where the database is and how to sign in to it.
+type Config struct {
+	// Host, Port, Name and User are the read-write endpoint, the database
+	// and the role that owns its tables. An empty Host means no database:
+	// the console keeps its records in ConfigMaps as before.
+	Host string
+	Port int
+	Name string
+	User string
+	// PasswordFile holds the role's password; empty when the server takes
+	// a client certificate alone.
+	PasswordFile string
+	// SSLMode is verify-full, verify-ca, require or disable, as libpq
+	// means them. CAFile verifies the server; ClientCertFile and
+	// ClientKeyFile sign the console in where the server asks for one.
+	SSLMode        string
+	CAFile         string
+	ClientCertFile string
+	ClientKeyFile  string
+	// MaxConns bounds this replica's pool.
+	MaxConns int
+	// ListenerHost is a direct address for the connections that must stay
+	// one session, the listener's and the locks', when Host is a pooler in
+	// transaction mode (DB-06). Empty uses Host.
+	ListenerHost string
+	// Poll is DefaultPoll unless set.
+	Poll time.Duration
+	// AppName is what pg_stat_activity shows for this replica.
+	AppName string
+}
+
+// Enabled says whether a database is configured at all.
+func (c Config) Enabled() bool { return c.Host != "" }
+
+// Validate refuses what cannot work, in the words of the chart's values.
+func (c Config) Validate() error {
+	if !c.Enabled() {
+		return nil
+	}
+	switch c.SSLMode {
+	case "verify-full", "verify-ca", "require", "disable":
+	default:
+		return fmt.Errorf("database sslMode %q: give verify-full, verify-ca, require or disable", c.SSLMode)
+	}
+	if c.Name == "" || c.User == "" {
+		return errors.New("the database needs a name and a user")
+	}
+	if c.Port <= 0 || c.Port > 65535 {
+		return fmt.Errorf("database port %d: give 1 to 65535", c.Port)
+	}
+	if (c.ClientCertFile == "") != (c.ClientKeyFile == "") {
+		return errors.New("a database client certificate needs both its certificate and its key")
+	}
+	if c.MaxConns < 2 {
+		return fmt.Errorf("database maxConnections %d: give 2 or more", c.MaxConns)
+	}
+	return nil
+}
+
+// dsn is the connection string for one host, in libpq's keyword form. The
+// password is not in it; BeforeConnect reads it.
+func (c Config) dsn(host string) string {
+	kv := []string{"host", host, "port", strconv.Itoa(c.Port), "dbname", c.Name, "user", c.User, "sslmode", c.SSLMode, "connect_timeout", "5"}
+	if c.CAFile != "" {
+		kv = append(kv, "sslrootcert", c.CAFile)
+	}
+	if c.ClientCertFile != "" {
+		kv = append(kv, "sslcert", c.ClientCertFile, "sslkey", c.ClientKeyFile)
+	}
+	if c.AppName != "" {
+		kv = append(kv, "application_name", c.AppName)
+	}
+	var b strings.Builder
+	for i := 0; i < len(kv); i += 2 {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(kv[i])
+		b.WriteString("='")
+		b.WriteString(strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(kv[i+1]))
+		b.WriteByte('\'')
+	}
+	return b.String()
+}
+
+// DB is an open database. Its methods are safe for use by every goroutine.
+type DB struct {
+	cfg  Config
+	log  *slog.Logger
+	pool *pgxpool.Pool
+	// direct holds the sessions that must not pass through a pooler: the
+	// listener's and the advisory locks'.
+	direct *pgxpool.Pool
+
+	mu     sync.Mutex
+	health Health
+	onUp   []func()
+	subs   map[string][]func()
+}
+
+// Health is whether the database answered the last time it was asked.
+type Health struct {
+	Available bool `json:"available"`
+	// Since is when it last changed between answering and not.
+	Since time.Time `json:"since"`
+	// Error is why not, in a sentence, when it is not.
+	Error string `json:"error,omitempty"`
+}
+
+// Open connects to the database and checks its version. It does not
+// migrate; Migrate does. A database that does not answer is an error here:
+// a console that has never seen its database does not start (DB-02), while
+// one that loses it later goes on serving what does not need it (DB-14).
+func Open(ctx context.Context, cfg Config, log *slog.Logger) (*DB, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if cfg.Poll <= 0 {
+		cfg.Poll = DefaultPoll
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	d := &DB{cfg: cfg, log: log, subs: map[string][]func(){}}
+	var err error
+	if d.pool, err = d.open(ctx, cfg.Host, int32(cfg.MaxConns)); err != nil {
+		return nil, err
+	}
+	direct := cfg.ListenerHost
+	if direct == "" {
+		direct = cfg.Host
+	}
+	// One session for the listener and a few for the locks held at once.
+	if d.direct, err = d.open(ctx, direct, 4); err != nil {
+		d.pool.Close()
+		return nil, err
+	}
+	var version int
+	if err := d.pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&version); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("connecting to the database at %s:%d: %w", cfg.Host, cfg.Port, describe(err))
+	}
+	if version < MinServerVersion {
+		d.Close()
+		return nil, fmt.Errorf("the database runs PostgreSQL %d, and the console needs %d or later", version/10000, MinServerVersion/10000)
+	}
+	var stamps string
+	if err := d.pool.QueryRow(ctx, "SELECT current_setting('track_commit_timestamp')").Scan(&stamps); err == nil && stamps != "on" {
+		log.Warn("the database has track_commit_timestamp off; turn it on before running two sites against it")
+	}
+	d.health = Health{Available: true, Since: time.Now()}
+	return d, nil
+}
+
+func (d *DB) open(ctx context.Context, host string, max int32) (*pgxpool.Pool, error) {
+	pc, err := pgxpool.ParseConfig(d.cfg.dsn(host))
+	if err != nil {
+		return nil, fmt.Errorf("the database settings: %w", err)
+	}
+	pc.MaxConns = max
+	pc.MaxConnIdleTime = 5 * time.Minute
+	pc.HealthCheckPeriod = 30 * time.Second
+	file := d.cfg.PasswordFile
+	pc.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		if file == "" {
+			return nil
+		}
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("reading the database password: %w", err)
+		}
+		cc.Password = strings.TrimRight(string(b), "\r\n")
+		return nil
+	}
+	return pgxpool.NewWithConfig(ctx, pc)
+}
+
+// Close ends every connection.
+func (d *DB) Close() {
+	if d.direct != nil {
+		d.direct.Close()
+	}
+	if d.pool != nil {
+		d.pool.Close()
+	}
+}
+
+// Pool is the pool repositories query through.
+func (d *DB) Pool() *pgxpool.Pool { return d.pool }
+
+// Querier is what a repository's read or write runs on: the pool, or the
+// transaction it is part of.
+type Querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// Tx runs fn in one transaction: committed when fn returns nil, rolled
+// back otherwise. A transaction PostgreSQL ended because another one
+// changed the same rows first is run again, a few times, so fn must read
+// what it writes from inside it.
+func (d *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	var err error
+	for try := 0; try < 4; try++ {
+		err = pgx.BeginFunc(ctx, d.pool, fn)
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && (pg.Code == "40001" || pg.Code == "40P01") {
+			continue
+		}
+		break
+	}
+	return d.note(err)
+}
+
+// Do runs one read or write that needs no transaction, and notes whether
+// the database answered.
+func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
+	return d.note(fn(d.pool))
+}
+
+// note keeps the health in step with what the calls meet, and wraps a
+// failure to reach the database in ErrUnavailable.
+func (d *DB) note(err error) error {
+	switch {
+	case err == nil:
+		d.set(true, "")
+		return nil
+	case unreachable(err):
+		d.set(false, describe(err).Error())
+		return fmt.Errorf("%w: %w", ErrUnavailable, describe(err))
+	}
+	return err
+}
+
+// Health is how the database last answered.
+func (d *DB) Health() Health {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.health
+}
+
+// OnAvailable calls fn each time the database answers again after not
+// answering: what waited for it starts over.
+func (d *DB) OnAvailable(fn func()) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.onUp = append(d.onUp, fn)
+}
+
+func (d *DB) set(ok bool, why string) {
+	d.mu.Lock()
+	changed := d.health.Available != ok
+	if changed {
+		d.health = Health{Available: ok, Since: time.Now(), Error: why}
+	} else if !ok {
+		d.health.Error = why
+	}
+	up := append([]func(){}, d.onUp...)
+	d.mu.Unlock()
+	if !changed {
+		return
+	}
+	if ok {
+		d.log.Info("the database answers again")
+		for _, fn := range up {
+			go fn()
+		}
+		return
+	}
+	d.log.Error("the database is unavailable; pages that need it say so, and the rest go on", "err", why)
+}
+
+// Watch asks the database whether it is there every interval until ctx
+// ends, so the health is right also while nobody uses the console.
+func (d *DB) Watch(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := d.pool.Ping(pctx)
+			cancel()
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				d.set(false, describe(err).Error())
+			} else {
+				d.set(true, "")
+			}
+		}
+	}
+}
+
+// unreachable says whether err is the database not answering, rather than
+// the database refusing what was asked.
+func unreachable(err error) bool {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		// Class 08 is a connection exception, 57P a shutdown, and 53300
+		// too many connections; 25006 is a write sent to a standby during
+		// a failover.
+		return strings.HasPrefix(pg.Code, "08") || strings.HasPrefix(pg.Code, "57P") || pg.Code == "53300" || pg.Code == "25006"
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, pgx.ErrNoRows) || errors.Is(err, pgx.ErrTxClosed) {
+		return false
+	}
+	var ce *pgconn.ConnectError
+	if errors.As(err, &ce) {
+		return true
+	}
+	return pgconn.SafeToRetry(err) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "conn closed") || strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "broken pipe") || strings.Contains(err.Error(), "unexpected EOF")
+}
+
+// describe shortens the driver's errors to what an operator needs.
+func describe(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return fmt.Errorf("%s (PostgreSQL %s)", pg.Message, pg.Code)
+	}
+	return err
+}
+
+// NewID is a new key: a UUIDv7, which sorts by when it was made and needs
+// no sequence, so two sites can make keys at once (model rule 3).
+func NewID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		// The system's random source failed; nothing sensible can follow.
+		panic("making an id: " + err.Error())
+	}
+	return id.String()
+}
+
+// IsUnique says whether err is a row refused because its key or a unique
+// column is taken.
+func IsUnique(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505"
+}
+
+// IsForeignKey says whether err is a row refused because what it points to
+// is not there, or a delete refused because rows still point to it.
+func IsForeignKey(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503"
+}
