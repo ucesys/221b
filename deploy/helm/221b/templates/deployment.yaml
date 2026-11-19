@@ -22,6 +22,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "b221.labels" . | nindent 4 }}
+  annotations:
+    # Where this release keeps its records, so an upgrade that would point
+    # it at another database is noticed (database.allowModeChange).
+    221b.io/database-mode: {{ include "b221.dbMode" . | quote }}
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 3
@@ -123,6 +127,57 @@ spec:
             # keeps the choice in the ConfigMap named here.
             - name: REFRESH
               value: {{ .Values.refresh | quote }}
+            {{- $dbMode := include "b221.dbMode" . }}
+            {{- if eq $dbMode "bundled" }}
+            # The database (Phase 13): the chart's own, at its read-write
+            # Service, verified against the CA the chart made for it.
+            - name: DB_HOST
+              value: {{ printf "%s.%s.svc" (include "b221.dbName" .) .Release.Namespace | quote }}
+            - name: DB_PASSWORD_FILE
+              value: /etc/221b/db/password
+            - name: DB_SSLMODE
+              value: verify-full
+            - name: DB_CA_FILE
+              value: /etc/221b/db-ca/ca.crt
+            - name: DB_POLL_INTERVAL
+              value: {{ .Values.database.pollInterval | quote }}
+            {{- else if eq $dbMode "external" }}
+            {{- $e := .Values.database.external }}
+            # The database (Phase 13): one the operator runs.
+            - name: DB_HOST
+              value: {{ $e.host | quote }}
+            - name: DB_PORT
+              value: {{ $e.port | quote }}
+            - name: DB_NAME
+              value: {{ $e.database | quote }}
+            - name: DB_USER
+              value: {{ $e.user | quote }}
+            {{- if $e.passwordSecret.name }}
+            - name: DB_PASSWORD_FILE
+              value: /etc/221b/db/password
+            {{- end }}
+            - name: DB_SSLMODE
+              value: {{ $e.sslMode | quote }}
+            {{- if $e.caSecret }}
+            - name: DB_CA_FILE
+              value: /etc/221b/db-ca/ca.crt
+            {{- end }}
+            {{- if $e.clientCertSecret }}
+            - name: DB_CLIENT_CERT_FILE
+              value: /etc/221b/db-client/tls.crt
+            - name: DB_CLIENT_KEY_FILE
+              value: /etc/221b/db-client/tls.key
+            {{- end }}
+            # The replicas share what the database allows the console.
+            - name: DB_MAX_CONNECTIONS
+              value: {{ div (int $e.maxConnections) (int .Values.replicaCount) | quote }}
+            {{- with $e.listenerHost }}
+            - name: DB_LISTENER_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: DB_POLL_INTERVAL
+              value: {{ .Values.database.pollInterval | quote }}
+            {{- end }}
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: AUDIT_CONFIGMAP
@@ -376,6 +431,30 @@ spec:
               readOnly: true
             - name: knowledge
               mountPath: /var/lib/221b/knowledge
+            {{- if eq $dbMode "bundled" }}
+            - name: db-password
+              mountPath: /etc/221b/db
+              readOnly: true
+            - name: db-ca
+              mountPath: /etc/221b/db-ca
+              readOnly: true
+            {{- else if eq $dbMode "external" }}
+            {{- if .Values.database.external.passwordSecret.name }}
+            - name: db-password
+              mountPath: /etc/221b/db
+              readOnly: true
+            {{- end }}
+            {{- if .Values.database.external.caSecret }}
+            - name: db-ca
+              mountPath: /etc/221b/db-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.database.external.clientCertSecret }}
+            - name: db-client
+              mountPath: /etc/221b/db-client
+              readOnly: true
+            {{- end }}
+            {{- end }}
             {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
             - name: transcripts
               mountPath: /var/lib/221b/transcripts
@@ -420,6 +499,48 @@ spec:
         - name: agents
           configMap:
             name: {{ include "b221.fullname" . }}-agents
+        {{- if eq $dbMode "bundled" }}
+        # The console's own password for the database, and the CA its
+        # certificate is verified against; a rotated Secret is read at the
+        # next connection.
+        - name: db-password
+          secret:
+            secretName: {{ include "b221.dbSecret" . }}
+            items:
+              - key: app-password
+                path: password
+        - name: db-ca
+          secret:
+            secretName: {{ include "b221.dbTLSSecret" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- else if eq $dbMode "external" }}
+        {{- $e := .Values.database.external }}
+        {{- if $e.passwordSecret.name }}
+        - name: db-password
+          secret:
+            secretName: {{ $e.passwordSecret.name }}
+            items:
+              - key: {{ $e.passwordSecret.key }}
+                path: password
+        {{- end }}
+        {{- with $e.caSecret }}
+        - name: db-ca
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        {{- with $e.clientCertSecret }}
+        - name: db-client
+          secret:
+            secretName: {{ . }}
+            # The driver refuses a key others can read.
+            defaultMode: 0440
+        {{- end }}
+        {{- end }}
         # The wiki's local copy (Phase 12): each replica's own, read again
         # at start.
         - name: knowledge

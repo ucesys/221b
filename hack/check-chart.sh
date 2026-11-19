@@ -108,6 +108,17 @@ render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "
 render k8s-console --set clusterName=ci --set image.digest=sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d | tee "$WORK/chart-digest.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=main --set image.pullPolicy=IfNotPresent | tee "$WORK/chart-policy.yaml" | validate
 
+# --- The database (Phase 13): none by default, the chart's own, or the
+# operator's.
+echo "--- the bundled database: one member, then three with backups to S3"
+render k8s-console --set clusterName=ci --set database.mode=bundled | tee "$WORK/chart-db.yaml" | validate
+render k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.ha=true \
+  --set database.bundled.backup.s3.bucket=backups --set 'database.bundled.backup.s3.egressCIDRs[0]=10.30.0.0/16' | tee "$WORK/chart-db-ha.yaml" | validate
+echo "--- an external database"
+render k8s-console --set clusterName=ci --set replicaCount=2 --set database.mode=external --set database.external.host=pg.example.com \
+  --set database.external.passwordSecret.name=pg --set database.external.caSecret=pg-ca --set database.external.port=6432 \
+  --set database.external.listenerHost=pg-direct.example.com | tee "$WORK/chart-db-external.yaml" | validate
+refused() { ! helm template k8s-console "$CHART" --namespace consoles --set clusterName=ci "$@" > /dev/null 2>&1; }
 fail=0
 check() {
   local what=$1
@@ -121,6 +132,45 @@ check() {
 }
 out=$WORK/chart-default.yaml
 netpol() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "${1:-$out}"; }
+# The database (Phase 13). By default there is none and nothing of it is
+# rendered. Bundled: a StatefulSet of one member, or three kept apart with a
+# budget; the console is given its Service, its own password and the CA, and
+# nothing else of the Secret; the members are closed to all but the console
+# and themselves. External: the address, port and Secrets from values, the
+# connections shared among the replicas, no database of the chart's. What
+# cannot work is refused.
+statefulset() { sed -n '/^kind: StatefulSet$/,/^---/p' "$1"; }
+database_modes() {
+  local d=$WORK/chart-db.yaml ha=$WORK/chart-db-ha.yaml ext=$WORK/chart-db-external.yaml
+  ! has '^kind: StatefulSet$' < "$out" && ! has 'name: DB_HOST' < "$out" && ! has '221b-db' < "$out" &&
+    has '221b.io/database-mode: "none"' < "$out" &&
+    statefulset "$d" | has '^  replicas: 1$' && statefulset "$ha" | has '^  replicas: 3$' &&
+    statefulset "$ha" | has 'requiredDuringSchedulingIgnoredDuringExecution' && ! statefulset "$d" | has 'podAntiAffinity' &&
+    has '^kind: PodDisruptionBudget$' < "$ha" && has 'name: k8s-console-221b-db-replicas$' < "$ha" &&
+    ! has 'name: k8s-console-221b-db-replicas$' < "$d" &&
+    statefulset "$d" | has 'readOnlyRootFilesystem: true' && statefulset "$d" | has 'runAsNonRoot: true' &&
+    statefulset "$d" | grep -A1 'name: PATRONI_KUBERNETES_USE_ENDPOINTS' | has '"false"' &&
+    statefulset "$d" | grep -A1 'name: WALG_FILE_PREFIX' | has '/backup' && ! statefulset "$ha" | has 'WALG_FILE_PREFIX' &&
+    statefulset "$ha" | grep -A1 'name: WALG_S3_PREFIX' | has '"s3://backups/221b"' &&
+    grep -A1 'name: DB_HOST' "$d" | has '"k8s-console-221b-db.consoles.svc"' &&
+    grep -A1 'name: DB_SSLMODE' "$d" | has 'verify-full' &&
+    sed -n '/^kind: Deployment$/,/^---/p' "$d" | grep -B1 -A4 'secretName: k8s-console-221b-db$' | has 'key: app-password' &&
+    ! sed -n '/^kind: Deployment$/,/^---/p' "$d" | has 'superuser-password' &&
+    sed -n '/^kind: Role$/,/^---/p' "$d" | grep -A12 'name: k8s-console-221b-db$' | has 'configmaps' &&
+    netpol "$d" | has 'app.kubernetes.io/name: "221b-db"' &&
+    netpol "$ha" | grep -A6 'port: 443$' | has 'cidr: "10.30.0.0/16"' &&
+    ! has '^kind: StatefulSet$' < "$ext" &&
+    grep -A1 'name: DB_HOST' "$ext" | has '"pg.example.com"' && grep -A1 'name: DB_PORT' "$ext" | has '"6432"' &&
+    grep -A1 'name: DB_MAX_CONNECTIONS' "$ext" | has '"10"' &&
+    grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
+    grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
+    netpol "$ext" | has 'port: 6432$' &&
+    refused --set database.mode=mongo && refused --set database.mode=external &&
+    refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
+    ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
+    refused --set database.mode=bundled --set database.bundled.backup.dailyAt=2am &&
+    refused --set database.mode=bundled --set database.bundled.backup.enabled=false --set database.bundled.restore.fromBackup=true
+}
 # SSH to nodes (Phase 11): the toolbox config carries toolbox.ssh.
 ssh_values() {
   grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml" &&
@@ -662,6 +712,7 @@ check "node shells run in a namespace of their own at Pod Security privileged, c
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
+check "the database: none by default; bundled as one member or three, closed to all but the console; external from values; what cannot work is refused" database_modes
 check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
 check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress

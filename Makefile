@@ -19,7 +19,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim cli cli-release test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
+.PHONY: help build web ui server sim cli cli-release test test-go test-web lint lint-go lint-web licenses image image-postgres test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -79,6 +79,16 @@ licenses: web/node_modules ## Check that every dependency's license is allowed
 
 image: ## Build the container image as $(IMAGE):$(TAG)
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE):$(TAG) .
+
+image-postgres: ## Build the bundled database's image as $(IMAGE)-postgres:$(TAG)
+	docker build -t $(IMAGE)-postgres:$(TAG) deploy/postgres
+
+test-db: ## Run the Go tests with those that need PostgreSQL, against a throwaway one in Docker, or the one TEST_DATABASE names (host:port)
+	@if [ -z "$$TEST_DATABASE" ]; then \
+	  docker run -d --rm --name 221b-test-db -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:18 > /dev/null; \
+	  trap 'docker rm -f 221b-test-db > /dev/null' EXIT; export TEST_DATABASE=127.0.0.1:55432; \
+	  until docker exec 221b-test-db pg_isready -q; do sleep 1; done; \
+	fi; cd server && $(GO) test -race ./...
 
 chart-lint: ## Lint and render the Helm chart
 	helm lint deploy/helm/221b --strict --set clusterName=ci

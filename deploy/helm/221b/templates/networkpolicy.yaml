@@ -75,6 +75,29 @@ spec:
             cidr: {{ . | quote }}
         {{- end }}
       {{- end }}
+    {{- if eq (include "b221.dbMode" .) "bundled" }}
+    # The bundled database (Phase 13).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.dbSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- else if eq (include "b221.dbMode" .) "external" }}
+    # The database the operator runs (Phase 13), at the addresses
+    # database.external.egressCIDRs lists when it lists any.
+    - ports:
+        - port: {{ .Values.database.external.port }}
+          protocol: TCP
+      {{- with .Values.database.external.egressCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
     # DNS, for whatever the console reaches by name: the API servers of the
     # other clusters it shows, the OIDC provider, the audit webhook.
     - ports:

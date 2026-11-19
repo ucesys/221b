@@ -1,0 +1,589 @@
+{{- if ne (include "b221.shared" .) "only" }}
+{{- include "b221.validateDatabase" . }}
+{{- if eq (include "b221.dbMode" .) "bundled" }}
+{{- $b := .Values.database.bundled }}
+{{- $name := include "b221.dbName" . }}
+{{- $ns := .Release.Namespace }}
+{{- $members := ternary 3 1 $b.ha }}
+{{- $toS3 := and $b.backup.enabled $b.backup.s3.bucket }}
+{{- $toVolume := and $b.backup.enabled (not $b.backup.s3.bucket) }}
+{{- if not $b.existingSecret }}
+{{- /* The passwords are made once: the volumes hold a database that knows
+     them, and outlive upgrades and an uninstall, so the Secret does too. */ -}}
+{{- $old := (lookup "v1" "Secret" $ns $name).data | default dict }}
+# The bundled database's passwords (Phase 13). The console is given only
+# app-password; the other two are Patroni's.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  superuser-password: {{ get $old "superuser-password" | default (randAlphaNum 32 | b64enc) | quote }}
+  replication-password: {{ get $old "replication-password" | default (randAlphaNum 32 | b64enc) | quote }}
+  app-password: {{ get $old "app-password" | default (randAlphaNum 32 | b64enc) | quote }}
+  # What WAL-G encrypts the backups with before they leave the pod.
+  backup-key: {{ get $old "backup-key" | default (randBytes 32 | b64dec | printf "%x" | b64enc) | quote }}
+---
+{{- end }}
+{{- if not $b.tls.secretName }}
+{{- $tlsName := printf "%s-tls" $name }}
+{{- $old := (lookup "v1" "Secret" $ns $tlsName).data | default dict }}
+{{- $ca := genCA (printf "%s database CA" (include "b221.fullname" .)) 3650 }}
+{{- $names := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.cluster.local" $name $ns) (printf "%s-replicas" $name) (printf "%s-replicas.%s.svc" $name $ns) (printf "%s-replicas.%s.svc.cluster.local" $name $ns) (printf "*.%s-members.%s.svc" $name $ns) (printf "*.%s-members.%s.svc.cluster.local" $name $ns) "localhost" }}
+{{- $cert := genSignedCert $name (list "127.0.0.1") $names 3650 $ca }}
+# The database's certificate and the CA the console verifies it against,
+# made once and kept through upgrades.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tlsName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ get $old "tls.crt" | default ($cert.Cert | b64enc) | quote }}
+  tls.key: {{ get $old "tls.key" | default ($cert.Key | b64enc) | quote }}
+  ca.crt: {{ get $old "ca.crt" | default ($ca.Cert | b64enc) | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+  {{- with $b.serviceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+# What Patroni needs of Kubernetes, in this namespace only: the ConfigMaps
+# it keeps the leader lock and the cluster's state in, and its own pods,
+# which it labels with their role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+# The console's one address for the database: the member Patroni labels as
+# the primary.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "b221.dbSelectorLabels" . | nindent 4 }}
+    role: primary
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+{{- if $b.ha }}
+# The standbys, for reads that may lag. The console does not use it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-replicas
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "b221.dbSelectorLabels" . | nindent 4 }}
+    role: replica
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+{{- end }}
+# A name for each member, ready or not, for the StatefulSet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-members
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "b221.dbSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+    - name: patroni
+      port: 8008
+      targetPort: patroni
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}-members
+  replicas: {{ $members }}
+  # The members start and stop on their own: Patroni decides who leads, and
+  # a member that cannot start must not hold back the others.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "b221.dbSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "b221.dbLabels" . | nindent 8 }}
+        # What Patroni finds its members and its ConfigMaps by.
+        221b.io/patroni-scope: {{ $name }}
+      {{- with $b.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      # Long enough for the primary to hand over before it stops.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $b.ha }}
+      # Three members on one node are one member.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "b221.dbSelectorLabels" . | nindent 18 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "b221.dbSelectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with $b.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ include "b221.dbImage" . | quote }}
+          {{- with $b.image.pullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
+          env: &dbEnv
+            - name: PATRONI_SCOPE
+              value: {{ $name }}
+            - name: PATRONI_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PATRONI_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PATRONI_KUBERNETES_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # The leader lock and the cluster's state live in ConfigMaps;
+            # Kubernetes is moving away from the Endpoints API.
+            - name: PATRONI_KUBERNETES_USE_ENDPOINTS
+              value: "false"
+            - name: PATRONI_KUBERNETES_LABELS
+              value: {{ printf "{app.kubernetes.io/name: 221b-db, app.kubernetes.io/instance: %s, 221b.io/patroni-scope: %s}" .Release.Name $name | quote }}
+            - name: PATRONI_KUBERNETES_LEADER_LABEL_VALUE
+              value: primary
+            - name: PATRONI_KUBERNETES_FOLLOWER_LABEL_VALUE
+              value: replica
+            - name: PATRONI_SUPERUSER_USERNAME
+              value: postgres
+            - name: PATRONI_SUPERUSER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "b221.dbSecret" . }}
+                  key: superuser-password
+            - name: PATRONI_SUPERUSER_SSLMODE
+              value: require
+            - name: PATRONI_REPLICATION_USERNAME
+              value: replicator
+            - name: PATRONI_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "b221.dbSecret" . }}
+                  key: replication-password
+            - name: PATRONI_REPLICATION_SSLMODE
+              value: require
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: PGHOST
+              value: /var/run/postgresql
+            - name: PGUSER
+              value: postgres
+            - name: DB_APP_USER
+              value: app_221b
+            - name: DB_APP_DATABASE
+              value: "221b"
+            - name: DB_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "b221.dbSecret" . }}
+                  key: app-password
+            - name: DB_SYNCHRONOUS
+              value: {{ $b.synchronous | quote }}
+            - name: DB_MAX_CONNECTIONS
+              value: {{ $b.maxConnections | quote }}
+            - name: DB_BACKUP
+              value: {{ $b.backup.enabled | quote }}
+            {{- if $b.backup.enabled }}
+            - name: DB_BACKUP_AT
+              value: {{ $b.backup.dailyAt | quote }}
+            - name: DB_BACKUP_RETAIN
+              value: {{ $b.backup.retainBaseBackups | quote }}
+            - name: WALG_LIBSODIUM_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "b221.dbSecret" . }}
+                  key: backup-key
+            - name: WALG_LIBSODIUM_KEY_TRANSFORM
+              value: hex
+            {{- end }}
+            {{- if $toS3 }}
+            - name: WALG_S3_PREFIX
+              value: {{ printf "s3://%s/%s" $b.backup.s3.bucket (trimAll "/" $b.backup.s3.prefix) | quote }}
+            {{- with $b.backup.s3.endpoint }}
+            - name: AWS_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $b.backup.s3.region }}
+            - name: AWS_REGION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $b.backup.s3.forcePathStyle }}
+            - name: AWS_S3_FORCE_PATH_STYLE
+              value: "true"
+            {{- end }}
+            {{- with $b.backup.s3.credentialsSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: secret-access-key
+            {{- end }}
+            {{- end }}
+            {{- if $toVolume }}
+            - name: WALG_FILE_PREFIX
+              value: /backup
+            {{- end }}
+            {{- if $b.restore.fromBackup }}
+            - name: DB_RESTORE
+              value: "true"
+            - name: DB_RESTORE_TARGET_TIME
+              value: {{ $b.restore.targetTime | quote }}
+            {{- end }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+            - name: patroni
+              containerPort: 8008
+              protocol: TCP
+          # Patroni answers for PostgreSQL: ready once this member serves,
+          # as the primary or as a standby that follows it.
+          startupProbe:
+            httpGet:
+              path: /liveness
+              port: patroni
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: patroni
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: patroni
+            periodSeconds: 5
+            timeoutSeconds: 3
+          securityContext: &dbSecurity
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          volumeMounts: &dbMounts
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run-postgresql
+              mountPath: /var/run/postgresql
+            - name: run-patroni
+              mountPath: /run/patroni
+            - name: tmp
+              mountPath: /tmp
+            - name: tls
+              mountPath: /etc/221b-db/tls
+              readOnly: true
+            {{- if $toVolume }}
+            - name: backup
+              mountPath: /backup
+            {{- end }}
+        {{- if $b.backup.enabled }}
+        # Takes the daily base backup when this member is the one to take
+        # it; the write-ahead log is archived by PostgreSQL itself.
+        - name: backup
+          image: {{ include "b221.dbImage" . | quote }}
+          {{- with $b.image.pullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
+          command: ["/usr/local/bin/backup.sh"]
+          env: *dbEnv
+          securityContext: *dbSecurity
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts: *dbMounts
+        {{- end }}
+      volumes:
+        - name: run-postgresql
+          emptyDir: {}
+        - name: run-patroni
+          emptyDir:
+            medium: Memory
+        - name: tmp
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: {{ include "b221.dbTLSSecret" . }}
+            # Readable by the postgres group and nobody else: PostgreSQL
+            # refuses a key that others can read.
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "b221.dbSelectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $b.storage.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $b.storage.size | quote }}
+    {{- if $toVolume }}
+    - metadata:
+        name: backup
+        labels:
+          {{- include "b221.dbSelectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $b.backup.volume.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $b.backup.volume.size | quote }}
+    {{- end }}
+{{- if $b.ha }}
+---
+# A node drain takes one member at a time, so two always remain to agree
+# on the primary.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "b221.dbSelectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Only the console and the members themselves reach PostgreSQL, and only
+# the members reach Patroni's API; the members reach each other, the
+# Kubernetes API, DNS and the backups' store.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "b221.dbSelectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.selectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "b221.dbSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: postgres
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.dbSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: patroni
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.dbSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: postgres
+          protocol: TCP
+        - port: patroni
+          protocol: TCP
+    - ports:
+        {{- range .Values.networkPolicy.apiServerPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      {{- with .Values.networkPolicy.apiServerCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if $toS3 }}
+    - ports:
+        {{- range $b.backup.s3.egressPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      {{- with $b.backup.s3.egressCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- if $b.podMonitor }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "b221.dbLabels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "b221.dbSelectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: patroni
+      path: /metrics
+{{- end }}
+{{- end }}
+{{- end }}

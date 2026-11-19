@@ -512,6 +512,136 @@ jobs:
   # Europe/Berlin; each schedule can have its own. Empty is UTC.
   timeZone: ""
 
+# --- The database (Phase 13, docs/database.md) ---
+# The console is moving its records from ConfigMaps to PostgreSQL, a domain
+# at a time. This says which PostgreSQL:
+#   none      no database; every record stays in its ConfigMap. The default
+#             until the move is complete.
+#   bundled   the chart runs one beside the console, from the image
+#             221b-postgres: PostgreSQL with Patroni and WAL-G.
+#   external  one you run: a managed service, your own Patroni or
+#             CloudNativePG cluster, a central database platform.
+# Moving between bundled and external later is a migration (a backup export
+# restored into the new one), so the chart refuses to flip the mode of an
+# installed release unless allowModeChange says the data was moved.
+database:
+  mode: none
+  allowModeChange: false
+  # How often a replica looks for changes the others made, besides being
+  # told through LISTEN/NOTIFY.
+  pollInterval: 30s
+
+  bundled:
+    # One member, or three with a commit waiting for one of the two
+    # standbys. Turning it on later adds the standbys while the primary
+    # keeps serving.
+    ha: false
+    # One member is refused in a namespace labelled
+    # 221b.io/environment=production unless this says it is meant.
+    acknowledgeNoHA: false
+    image:
+      repository: ghcr.io/ucesys/221b-postgres
+      # Defaults to the chart's appVersion; a digest replaces the tag.
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    storage:
+      size: 10Gi
+      # Empty uses the cluster's default class.
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    # quorum: with standbys, a commit waits for one of them, so a failover
+    # loses nothing committed; alone, it waits for none. off: never waits.
+    synchronous: quorum
+    maxConnections: 100
+    # The three passwords (keys superuser-password, replication-password,
+    # app-password) and the backups' encryption key (backup-key, 64 hex
+    # digits). Empty: the chart makes the Secret <release>-db once and keeps
+    # it through upgrades and an uninstall, since the volumes outlive both.
+    existingSecret: ""
+    tls:
+      # A Secret with tls.crt, tls.key and ca.crt for the database's
+      # address. Empty: the chart makes a CA and a certificate, valid ten
+      # years, in <release>-db-tls.
+      secretName: ""
+    # A PodMonitor for Patroni's metrics, where the Prometheus Operator is.
+    podMonitor: false
+    backup:
+      # The write-ahead log is archived continuously and a base backup is
+      # taken every day, so the database can be restored to any moment
+      # since the oldest base backup kept.
+      enabled: true
+      # UTC, HH:MM.
+      dailyAt: "02:00"
+      retainBaseBackups: 7
+      s3:
+        # Empty: the backups go to a second volume instead, which does not
+        # survive losing the namespace's storage.
+        bucket: ""
+        prefix: 221b
+        # For MinIO and other S3-compatible stores.
+        endpoint: ""
+        region: ""
+        forcePathStyle: false
+        # A Secret with access-key-id and secret-access-key. Empty: the pod's
+        # own AWS identity (serviceAccountAnnotations below).
+        credentialsSecret: ""
+        # The store's addresses and ports, for the network policy.
+        egressCIDRs: []
+        egressPorts: [443]
+      volume:
+        size: 20Gi
+        storageClass: ""
+    restore:
+      # A new installation that starts from the archive instead of empty:
+      # set on the first install only, then remove.
+      fromBackup: false
+      # RFC 3339; empty restores to the newest point.
+      targetTime: ""
+    serviceAccountAnnotations: {}
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    priorityClassName: ""
+
+  external:
+    # The read-write endpoint: for CloudNativePG the cluster's -rw Service,
+    # for Patroni the primary's Service or a load balancer that follows it.
+    host: ""
+    port: 5432
+    # Made beforehand, owned by the user below; the console makes its
+    # tables in it. PostgreSQL 16 or later.
+    database: "221b"
+    user: "app_221b"
+    # The Secret and key holding the password. No name: no password, for a
+    # server that takes the client certificate alone.
+    passwordSecret:
+      name: ""
+      key: password
+    # verify-full, verify-ca or require; disable only with allowInsecure.
+    sslMode: verify-full
+    allowInsecure: false
+    # A Secret with ca.crt, the CA the server's certificate is verified
+    # against. Empty: the system's CAs.
+    caSecret: ""
+    # A Secret with tls.crt and tls.key, for a server that asks for a
+    # client certificate.
+    clientCertSecret: ""
+    # Most connections all the console's replicas open between them.
+    maxConnections: 20
+    # A direct address for the listener and the locks when host is a pooler
+    # in transaction mode (PgBouncer), which keeps neither.
+    listenerHost: ""
+    # The database's addresses, for the network policy. Empty allows any
+    # address on the port.
+    egressCIDRs: []
+
 backup:
   # Scheduled backups to S3 (Phase 12, ADR-81): set up on Administration ›
   # Backup, where a SuperAdmin names the bucket, the schedule, retention

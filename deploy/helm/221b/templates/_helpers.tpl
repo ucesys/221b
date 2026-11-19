@@ -163,3 +163,101 @@ file from before has no agents block; a key that is no agent is refused.
 {{- end }}
 {{- end }}
 {{- end }}
+
+
+{{/* --- The database (Phase 13) --- */}}
+
+{{/* none, bundled or external. Values kept from before have no block. */}}
+{{- define "b221.dbMode" -}}
+{{- (.Values.database | default dict).mode | default "none" -}}
+{{- end -}}
+
+{{/* The bundled database's objects are named after this, and its
+     read-write Service has this name. */}}
+{{- define "b221.dbName" -}}
+{{- printf "%s-db" (include "b221.fullname" . | trunc 56 | trimSuffix "-") -}}
+{{- end -}}
+
+{{/* The database pods carry a name of their own, so the console's
+     selectors (its Service, its network policy) never match them. */}}
+{{- define "b221.dbSelectorLabels" -}}
+app.kubernetes.io/name: "221b-db"
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
+{{- end -}}
+
+{{- define "b221.dbLabels" -}}
+{{ include "b221.dbSelectorLabels" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | quote }}
+{{- end -}}
+
+{{- define "b221.dbImage" -}}
+{{- $i := .Values.database.bundled.image -}}
+{{- if $i.digest -}}
+{{- printf "%s@%s" $i.repository $i.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $i.repository (default .Chart.AppVersion $i.tag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret with the bundled database's passwords. */}}
+{{- define "b221.dbSecret" -}}
+{{- .Values.database.bundled.existingSecret | default (include "b221.dbName" .) -}}
+{{- end -}}
+
+{{- define "b221.dbTLSSecret" -}}
+{{- .Values.database.bundled.tls.secretName | default (printf "%s-tls" (include "b221.dbName" .)) -}}
+{{- end -}}
+
+{{/* What cannot work is refused when the chart is rendered. */}}
+{{- define "b221.validateDatabase" -}}
+{{- $mode := include "b221.dbMode" . -}}
+{{- if not (has $mode (list "none" "bundled" "external")) -}}
+{{- fail (printf "database.mode must be none, bundled or external, not %q" $mode) -}}
+{{- end -}}
+{{- if eq $mode "external" -}}
+{{- $e := .Values.database.external -}}
+{{- if not $e.host -}}
+{{- fail "database.mode=external needs database.external.host, the database's read-write address" -}}
+{{- end -}}
+{{- if not (has $e.sslMode (list "verify-full" "verify-ca" "require" "disable")) -}}
+{{- fail (printf "database.external.sslMode must be verify-full, verify-ca or require, not %q" (toString $e.sslMode)) -}}
+{{- end -}}
+{{- if and (eq $e.sslMode "disable") (not $e.allowInsecure) -}}
+{{- fail "database.external.sslMode=disable sends the password and every record in the clear; set database.external.allowInsecure=true if that is meant" -}}
+{{- end -}}
+{{- if lt (int $e.maxConnections) (mul 2 (int .Values.replicaCount)) -}}
+{{- fail (printf "database.external.maxConnections=%d leaves a replica fewer than 2 connections; give %d or more" (int $e.maxConnections) (mul 2 (int .Values.replicaCount))) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $mode "bundled" -}}
+{{- $b := .Values.database.bundled -}}
+{{- if not (has $b.synchronous (list "quorum" "off")) -}}
+{{- fail (printf "database.bundled.synchronous must be quorum or off, not %q" (toString $b.synchronous)) -}}
+{{- end -}}
+{{- if not (regexMatch "^([01][0-9]|2[0-3]):[0-5][0-9]$" (toString $b.backup.dailyAt)) -}}
+{{- fail (printf "database.bundled.backup.dailyAt is a time of day in UTC such as \"02:00\", not %q" (toString $b.backup.dailyAt)) -}}
+{{- end -}}
+{{- if and $b.restore.fromBackup (not $b.backup.enabled) -}}
+{{- fail "database.bundled.restore.fromBackup needs database.bundled.backup.enabled, which says where the archive is" -}}
+{{- end -}}
+{{- if and (not $b.ha) (not $b.acknowledgeNoHA) -}}
+{{- $ns := lookup "v1" "Namespace" "" .Release.Namespace -}}
+{{- if $ns -}}
+{{- if eq (get ($ns.metadata.labels | default dict) "221b.io/environment") "production" -}}
+{{- fail (printf "the namespace %s is labelled 221b.io/environment=production and database.bundled.ha is off: one database member means the console's records are away whenever its node is. Set database.bundled.ha=true, or database.bundled.acknowledgeNoHA=true if one member is meant" .Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* An installed release keeps its mode: bundled to external, or back, is a migration. */ -}}
+{{- $was := "" -}}
+{{- $d := lookup "apps/v1" "Deployment" .Release.Namespace (include "b221.fullname" .) -}}
+{{- if $d -}}
+{{- $was = get ($d.metadata.annotations | default dict) "221b.io/database-mode" | default "" -}}
+{{- end -}}
+{{- if and $was (ne $was "none") (ne $was $mode) (not .Values.database.allowModeChange) -}}
+{{- fail (printf "this release keeps its records in a %s database and database.mode is now %s. The records do not move by themselves: take a backup in Administration › Backup, install with the new mode, restore it there (docs/database.md), and set database.allowModeChange=true for the upgrade that switches" $was $mode) -}}
+{{- end -}}
+{{- end -}}
