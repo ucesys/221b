@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +157,25 @@ func TestRunRequestsKeptInTheScopeBecomeRows(t *testing.T) {
 	}
 	if list, _ := st.WaitingRuns(ctx, "c1"); len(list) != 1 || list[0].State != ChangeRejected || list[0].Params["MODE"] != "fast" {
 		t.Fatalf("read from the rows: %+v", list)
+	}
+}
+
+// A waiting run names the asker as the cluster knows them with the
+// API's names, "user" and "groups", not Go's; a record kept with Go's
+// names reads the same (the eighth cluster test's N2).
+func TestAWaitingRunsPersonHasJSONNames(t *testing.T) {
+	b, err := json.Marshal(WaitingRun{ID: 3, Person: Person{User: "ann@corp", Groups: []string{"ops"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"person":{"user":"ann@corp","groups":["ops"]}`) {
+		t.Fatalf("the JSON: %s", b)
+	}
+	var old WaitingRun
+	if err := json.Unmarshal([]byte(`{"id":3,"person":{"User":"bob@corp","Groups":["admins","ops"]}}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Person.User != "bob@corp" || len(old.Person.Groups) != 2 {
+		t.Fatalf("the shape of before: %+v", old.Person)
 	}
 }
