@@ -122,8 +122,8 @@ func TestMigrate(t *testing.T) {
 	// a run request's values mean for its script (step 0020), and a
 	// provider's headers (step 0022), and the notes, parts, planned cases,
 	// checks and recordings of the agents' instructions and tests (step 0023).
-	if tables != 121 {
-		t.Errorf("the schema has %d tables; the data model has 121", tables)
+	if tables != 120 {
+		t.Errorf("the schema has %d tables; the data model has 120", tables)
 	}
 	// No bare "id" column anywhere, and every uuid or text key column that
 	// is a table's whole key ends in _id, scope or path.

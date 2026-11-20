@@ -292,7 +292,7 @@ One list, kept at the owner's request, of what the decisions above leave to be c
 
 **At the end of the move:**
 
-11. The model's tables nothing uses: `wiki_pages`, and `schedule_claims` until item 5. Drop them or keep them: **the owner's to decide**.
+11. ~~The model's tables nothing uses.~~ Done for `wiki_pages`, dropped in step `0032` as the owner decided (120 tables). `schedule_claims` stays: the backups' schedule claims its times there, and the jobs' will (item 5). Two more tables have no code yet and stay, each for what is to come: `auth_sessions` (iteration B) and `data_centers`, which `hosts.data_center_id` points at and no page fills. Whether `data_centers` and the two columns of `hosts` (`rack_name`, `data_center_id`) are wanted before the page is: **the owner's to decide**.
 12. `database.mode` defaults to `none`. Whether a new installation gets the bundled database: **the owner's to decide**.
 13. A message's parts from `json` to `jsonb`, only if something comes to ask for a chat by its parts.
 14. The two Claude docs (*221B data model: domains and tables*, *221B storage deployment design*) brought up to date for Changes, Knowledge and Cases: **when the owner says**.
@@ -302,7 +302,7 @@ One list, kept at the owner's request, of what the decisions above leave to be c
 
 16. An audit whose identity cannot read the cluster says so, in place of reporting nothing found (the sixth test's O1).
 17. One page of all runs, the rejected ones among them (the reason the runs that wait share `script_runs`).
-18. Offered, not yet answered: a row in a person's own Inbox for what they submitted, marked as waiting for another SuperAdmin.
+18. A row in a person's own Inbox for what they submitted and cannot approve themselves (a script's version in review, to begin with), marked as waiting for another SuperAdmin. **The owner said yes on November 19.** Not built: `getApprovals` in `server/internal/api/approvals.go` lists a version in review only to those who may approve it.
 
 **Around the database:**
 
