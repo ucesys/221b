@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,8 +17,12 @@ import (
 // The agents' instructions, tests and pilot log in the database (Phase 13,
 // DB-40). An agent's instructions are rows of prompt_versions, each in
 // one state; their notes, parts and test runs hang from the row. The
-// service is unchanged and reaches the rows through db.Doc: an agent whose
-// instructions changed has its rows written again, whole.
+// service is unchanged and reaches the rows through db.Doc. A row keeps
+// its id for as long as what it holds is kept (DB-81): the row in force
+// and the draft, one an agent, a version by its number and a revision by
+// its own; a row that changed is updated in place, and of what hangs from
+// it only what changed is written, a test run's result added being one
+// insert. So a row can be pointed at (approval_request_id, item 17).
 
 // The states of a row of prompt_versions.
 const (
@@ -302,8 +307,13 @@ type promptRow struct {
 	run                    *TestRun
 }
 
-func queuePrompt(b *pgx.Batch, r promptRow) {
-	id := db.NewID()
+// promptColumns are the columns of a row of prompt_versions after its key,
+// in the order promptValues gives them.
+const promptColumns = `agent_id, state, position, version_number, revision_number, body, why, created_by, created_at, base_hash,
+	base_body, stage, request_number, restored_version, pilot_started_at, pilot_until, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
+	tested_at, tested_cases, tested_passed, tested_state`
+
+func promptValues(r promptRow) []any {
 	var pilotStarted, pilotUntil, tested *time.Time
 	var pilot Pilot
 	if r.pilot != nil {
@@ -315,35 +325,110 @@ func queuePrompt(b *pgx.Batch, r promptRow) {
 		brief = *r.test
 		tested = at(brief.At)
 	}
-	b.Queue(`INSERT INTO prompt_versions (prompt_version_id, agent_id, state, position, version_number, revision_number, body, why, created_by, created_at, base_hash,
-			base_body, stage, request_number, restored_version, pilot_started_at, pilot_until, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
-			tested_at, tested_cases, tested_passed, tested_state)
+	return []any{r.agent, r.state, r.position, r.version, r.rev, r.body, r.why, r.by, r.at, r.baseHash, r.base, r.stage, r.request, r.restored,
+		pilotStarted, pilotUntil, pilot.By, list(pilot.People), list(pilot.Clusters), r.discarded, tested, brief.Cases, brief.Passed, brief.State}
+}
+
+// queuePrompt queues a new row of prompt_versions under the key id, with
+// what hangs from it.
+func queuePrompt(b *pgx.Batch, id string, r promptRow) {
+	b.Queue(`INSERT INTO prompt_versions (prompt_version_id, `+promptColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
-		id, r.agent, r.state, r.position, r.version, r.rev, r.body, r.why, r.by, r.at, r.baseHash, r.base, r.stage, r.request, r.restored,
-		pilotStarted, pilotUntil, pilot.By, list(pilot.People), list(pilot.Clusters), r.discarded, tested, brief.Cases, brief.Passed, brief.State)
-	for k, v := range r.notes {
+		append([]any{id}, promptValues(r)...)...)
+	queueNotes(b, id, r.notes)
+	queueParts(b, id, r.parts, r.bases)
+	if r.run != nil {
+		queueTestRun(b, id, *r.run)
+	}
+}
+
+func queueNotes(b *pgx.Batch, id string, notes map[string]string) {
+	for k, v := range notes {
 		b.Queue("INSERT INTO prompt_version_notes (prompt_version_id, cluster_id, body) VALUES ($1, $2, $3)", id, k, v)
 	}
+}
+
+func queueParts(b *pgx.Batch, id string, parts, bases map[string]string) {
 	names := map[string]bool{}
-	for k := range r.parts {
+	for k := range parts {
 		names[k] = true
 	}
-	for k := range r.bases {
+	for k := range bases {
 		names[k] = true
 	}
 	for k := range names {
 		var body, base *string
-		if v, ok := r.parts[k]; ok {
+		if v, ok := parts[k]; ok {
 			body = &v
 		}
-		if v, ok := r.bases[k]; ok {
+		if v, ok := bases[k]; ok {
 			base = &v
 		}
 		b.Queue("INSERT INTO prompt_version_parts (prompt_version_id, part, body, base_hash) VALUES ($1, $2, $3, $4)", id, k, body, base)
 	}
-	if r.run != nil {
-		queueTestRun(b, id, *r.run)
+}
+
+// queuePromptChange queues what changes the row id from was to r (DB-81):
+// the row updated in place when a column changed, its notes and parts
+// written again when they changed, and its test run as queueRunChange
+// writes it.
+func queuePromptChange(b *pgx.Batch, id, runID string, was, r promptRow) {
+	if !sameDoc(promptValues(was), promptValues(r)) {
+		b.Queue(`UPDATE prompt_versions SET (`+promptColumns+`) =
+			($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) WHERE prompt_version_id = $1`,
+			append([]any{id}, promptValues(r)...)...)
 	}
+	if !sameDoc(was.notes, r.notes) {
+		b.Queue("DELETE FROM prompt_version_notes WHERE prompt_version_id = $1", id)
+		queueNotes(b, id, r.notes)
+	}
+	if !sameDoc(was.parts, r.parts) || !sameDoc(was.bases, r.bases) {
+		b.Queue("DELETE FROM prompt_version_parts WHERE prompt_version_id = $1", id)
+		queueParts(b, id, r.parts, r.bases)
+	}
+	queueRunChange(b, id, runID, was.run, r.run)
+}
+
+// queueRunChange queues what changes the test run of the row of. A run
+// that goes, or another run in its place (another start), is deleted with
+// what hangs from it; the same run (its row runID) is updated in place,
+// a result or a replay added at the end is one insert, and the cases'
+// states are written again when one changed.
+func queueRunChange(b *pgx.Batch, of, runID string, was, now *TestRun) {
+	switch {
+	case sameDoc(was, now):
+		return
+	case now == nil || was == nil || runID == "" || !was.At.Equal(now.At) || was.Rev != now.Rev:
+		if was != nil {
+			b.Queue("DELETE FROM test_runs WHERE prompt_version_id = $1", of)
+		}
+		if now != nil {
+			queueTestRun(b, of, *now)
+		}
+		return
+	}
+	t := *now
+	b.Queue(`UPDATE test_runs SET started_by = $2, case_count = $3, passed_count = $4, same_count = $5, cost_usd = $6, estimate_usd = $7, error = $8, state = $9,
+			replays_planned = $10, stopped_at_case = $11
+		WHERE test_run_id = $1`, runID, t.By, t.Cases, t.Passed, t.Same, t.CostUSD, t.Estimate, t.Error, t.State, t.ReplaysPlanned, t.StoppedAt)
+	if !sameDoc(was.Planned, t.Planned) {
+		b.Queue("DELETE FROM test_run_cases WHERE test_run_id = $1", runID)
+		queueCases(b, runID, t.Planned)
+	}
+	from := 0
+	if n := len(was.Results); n > len(t.Results) || !sameDoc(was.Results, t.Results[:n]) {
+		b.Queue("DELETE FROM test_case_results WHERE test_run_id = $1", runID)
+	} else {
+		from = n
+	}
+	queueResults(b, runID, t.Results, from)
+	from = 0
+	if n := len(was.Replays); n > len(t.Replays) || !sameDoc(was.Replays, t.Replays[:n]) {
+		b.Queue("DELETE FROM test_run_replays WHERE test_run_id = $1", runID)
+	} else {
+		from = n
+	}
+	queueReplays(b, runID, t.Replays, from)
 }
 
 func queueTestRun(b *pgx.Batch, of string, t TestRun) {
@@ -352,10 +437,20 @@ func queueTestRun(b *pgx.Batch, of string, t TestRun) {
 			error, state, replays_planned, stopped_at_case)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		id, of, t.Rev, at(t.At), t.By, t.Cases, t.Passed, t.Same, t.CostUSD, t.Estimate, t.Error, t.State, t.ReplaysPlanned, t.StoppedAt)
-	for i, c := range t.Planned {
+	queueCases(b, id, t.Planned)
+	queueResults(b, id, t.Results, 0)
+	queueReplays(b, id, t.Replays, 0)
+}
+
+func queueCases(b *pgx.Batch, id string, planned []CaseState) {
+	for i, c := range planned {
 		b.Queue("INSERT INTO test_run_cases (test_run_id, position, case_key, name, is_built_in, state) VALUES ($1, $2, $3, $4, $5, $6)", id, i, c.ID, c.Name, c.Base, c.State)
 	}
-	for i, r := range t.Results {
+}
+
+func queueResults(b *pgx.Batch, id string, results []TestResult, from int) {
+	for i := from; i < len(results); i++ {
+		r := results[i]
 		rid := db.NewID()
 		var e ExpectView
 		if r.Expect != nil {
@@ -370,10 +465,84 @@ func queueTestRun(b *pgx.Batch, of string, t TestRun) {
 			b.Queue("INSERT INTO test_case_result_checks (test_case_result_id, position, what, is_ok) VALUES ($1, $2, $3, $4)", rid, j, c.What, c.OK)
 		}
 	}
-	for i, r := range t.Replays {
+}
+
+func queueReplays(b *pgx.Batch, id string, replays []ReplayResult, from int) {
+	for i := from; i < len(replays); i++ {
+		r := replays[i]
 		b.Queue(`INSERT INTO test_run_replays (test_run_replay_id, test_run_id, position, question, cluster_id, answer_before, answer_after, is_same, cost_usd, error)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, db.NewID(), id, i, r.Question, r.Cluster, r.Before, r.After, r.Same, r.CostUSD, r.Error)
 	}
+}
+
+// promptRows are an agent's rows of prompt_versions, each under the name
+// it keeps its row by: in force and the draft one each, a version by its
+// number and a revision by its own (with its place among those of one
+// number, should two share it).
+func promptRows(id string, ap *AgentPrompt) map[string]promptRow {
+	out := map[string]promptRow{}
+	if ap == nil {
+		return out
+	}
+	seen := map[string]int{}
+	name := func(kind string, n int) string {
+		k := kind + "/" + strconv.Itoa(n)
+		seen[k]++
+		if seen[k] > 1 {
+			k += "#" + strconv.Itoa(seen[k])
+		}
+		return k
+	}
+	out[rowInForce] = promptRow{agent: id, state: rowInForce, version: ap.Live, rev: ap.Revs, body: ap.House, baseHash: ap.BaseHash, base: ap.Base,
+		notes: ap.Notes, parts: ap.Parts, bases: ap.PartBase, run: ap.BaselineCheck}
+	for i, v := range ap.Versions {
+		house := v.House
+		out[name(rowVersion, v.N)] = promptRow{agent: id, state: rowVersion, position: i, version: v.N, rev: v.Rev, body: &house, why: v.Why, by: v.By, at: at(v.At),
+			notes: v.Notes, parts: v.Parts, test: v.Test}
+	}
+	if d := ap.Draft; d != nil {
+		house := d.House
+		out[rowDraft] = promptRow{agent: id, state: rowDraft, rev: d.Rev, body: &house, by: d.By, at: at(d.At), stage: d.Stage, request: d.Request,
+			restored: d.Restored, pilot: d.Pilot, notes: d.Notes, parts: d.Parts, run: d.Test}
+	}
+	for i, r := range ap.Revisions {
+		house := r.House
+		out[name(rowRevision, r.Rev)] = promptRow{agent: id, state: rowRevision, position: i, rev: r.Rev, body: &house, why: r.Note, by: r.By, at: at(r.At),
+			discarded: r.Discarded, notes: r.Notes, parts: r.Parts, test: r.Test}
+	}
+	return out
+}
+
+// rowKeys reads the keys of an agent's rows of prompt_versions and of
+// their test runs, under the names promptRows gives them.
+func rowKeys(ctx context.Context, tx pgx.Tx, agent string) (map[string]string, map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT p.prompt_version_id::text, p.state, p.version_number, p.revision_number, coalesce(t.test_run_id::text, '')
+		FROM prompt_versions p LEFT JOIN test_runs t USING (prompt_version_id) WHERE p.agent_id = $1 ORDER BY p.state, p.position`, agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids, runs := map[string]string{}, map[string]string{}
+	seen := map[string]int{}
+	var id, state, run string
+	var version, rev int
+	_, err = pgx.ForEachRow(rows, []any{&id, &state, &version, &rev, &run}, func() error {
+		k := state
+		switch state {
+		case rowVersion:
+			k += "/" + strconv.Itoa(version)
+		case rowRevision:
+			k += "/" + strconv.Itoa(rev)
+		}
+		if state == rowVersion || state == rowRevision {
+			seen[k]++
+			if seen[k] > 1 {
+				k += "#" + strconv.Itoa(seen[k])
+			}
+		}
+		ids[k], runs[k] = id, run
+		return nil
+	})
+	return ids, runs, err
 }
 
 func writePrompts(ctx context.Context, tx pgx.Tx, old, next Prompts) error {
@@ -395,28 +564,53 @@ func writePrompts(ctx context.Context, tx pgx.Tx, old, next Prompts) error {
 		if was != nil && ap != nil && sameDoc(was, ap) {
 			continue
 		}
-		// Whole: what hangs from the rows goes with them.
-		b.Queue("DELETE FROM prompt_versions WHERE agent_id = $1", id)
 		if ap == nil {
+			b.Queue("DELETE FROM prompt_versions WHERE agent_id = $1", id)
 			continue
 		}
-		b.Queue("INSERT INTO agents (agent_id) VALUES ($1) ON CONFLICT (agent_id) DO NOTHING", id)
-		queuePrompt(b, promptRow{agent: id, state: rowInForce, version: ap.Live, rev: ap.Revs, body: ap.House, baseHash: ap.BaseHash, base: ap.Base,
-			notes: ap.Notes, parts: ap.Parts, bases: ap.PartBase, run: ap.BaselineCheck})
-		for i, v := range ap.Versions {
-			house := v.House
-			queuePrompt(b, promptRow{agent: id, state: rowVersion, position: i, version: v.N, rev: v.Rev, body: &house, why: v.Why, by: v.By, at: at(v.At),
-				notes: v.Notes, parts: v.Parts, test: v.Test})
+		if was == nil {
+			b.Queue("INSERT INTO agents (agent_id) VALUES ($1) ON CONFLICT (agent_id) DO NOTHING", id)
 		}
-		if d := ap.Draft; d != nil {
-			house := d.House
-			queuePrompt(b, promptRow{agent: id, state: rowDraft, rev: d.Rev, body: &house, by: d.By, at: at(d.At), stage: d.Stage, request: d.Request,
-				restored: d.Restored, pilot: d.Pilot, notes: d.Notes, parts: d.Parts, run: d.Test})
+		// Each row keeps its key while what it holds is kept (DB-81).
+		keys, runs, err := rowKeys(ctx, tx, id)
+		if err != nil {
+			return err
 		}
-		for i, r := range ap.Revisions {
-			house := r.House
-			queuePrompt(b, promptRow{agent: id, state: rowRevision, position: i, rev: r.Rev, body: &house, why: r.Note, by: r.By, at: at(r.At),
-				discarded: r.Discarded, notes: r.Notes, parts: r.Parts, test: r.Test})
+		before, after := promptRows(id, was), promptRows(id, ap)
+		names := make([]string, 0, len(after))
+		for k := range after {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		var gone []string
+		for k, row := range keys {
+			if _, ok := after[k]; !ok {
+				gone = append(gone, row)
+			}
+		}
+		if len(gone) > 0 {
+			sort.Strings(gone)
+			b.Queue("DELETE FROM prompt_versions WHERE prompt_version_id = ANY($1::uuid[])", gone)
+		}
+		for _, k := range names {
+			r := after[k]
+			row, had := keys[k]
+			if !had {
+				queuePrompt(b, db.NewID(), r)
+				continue
+			}
+			w, known := before[k]
+			if !known {
+				// A row the document did not read: written again, under its key.
+				b.Queue("DELETE FROM prompt_version_notes WHERE prompt_version_id = $1", row)
+				b.Queue("DELETE FROM prompt_version_parts WHERE prompt_version_id = $1", row)
+				w = promptRow{run: nil}
+				if runs[k] != "" {
+					b.Queue("DELETE FROM test_runs WHERE prompt_version_id = $1", row)
+				}
+				w.agent = "\x00"
+			}
+			queuePromptChange(b, row, runs[k], w, r)
 		}
 	}
 	if b.Len() == 0 {

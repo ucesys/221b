@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,5 +174,95 @@ func TestTestsAndThePilotLogInTheDatabase(t *testing.T) {
 	saved(t, pilot, reader, PilotKey, l)
 	if n := count(t, d, "pilot_entries"); n != 0 {
 		t.Fatalf("entries left: %d", n)
+	}
+}
+
+// An agent's instructions keep their rows' ids (DB-81): a test run that
+// saves the draft once a case updates the draft's run in place and adds
+// one result, and no row of prompt_versions is written; a version added is one row more; the draft gone live loses its
+// row, and the others keep theirs.
+func TestAnAgentsInstructionsKeepTheirRowsIDs(t *testing.T) {
+	d := dbtest.Open(t)
+	doc := NewPromptsPG(d)
+	ctx := context.Background()
+	day := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	house := "Answer briefly."
+	run := &TestRun{Rev: 2, At: day, By: "ann", Cases: 3, State: RunRunning,
+		Planned: []CaseState{{ID: "b1", Name: "one", Base: true, State: CaseWaiting}, {ID: "t1", Name: "two", State: CaseWaiting}, {ID: "t2", Name: "three", State: CaseWaiting}}}
+	ps := Prompts{Agents: map[string]*AgentPrompt{
+		Sherlock: {House: &house, Live: 1, Revs: 2, Notes: map[string]string{AllClusters: "Every cluster."},
+			Versions:  []Version{{N: 1, House: house, By: "ann", At: day.Add(-time.Hour), Why: "made live"}},
+			Draft:     &Draft{Rev: 2, House: "Answer in haiku.", By: "ann", At: day, Test: run},
+			Revisions: []Revision{{Rev: 1, House: "Answer in verse.", By: "ann", At: day.Add(-2 * time.Hour)}, {Rev: 2, House: "Answer in haiku.", By: "ann", At: day}}},
+		Auditor: {House: &house, Live: 1, Versions: []Version{{N: 1, House: house, By: "bob", At: day}}},
+	}}
+	saved(t, doc, doc, PromptsKey, ps)
+	ids := func() map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		rows, err := d.Pool().Query(ctx, `SELECT agent_id || ' ' || state || ' ' || CASE state WHEN 'version' THEN version_number::text WHEN 'revision' THEN revision_number::text ELSE '' END,
+			prompt_version_id::text || ' ' || xmin::text FROM prompt_versions`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k, v string
+			if err := rows.Scan(&k, &v); err != nil {
+				t.Fatal(err)
+			}
+			out[k] = v
+		}
+		return out
+	}
+	runRow := func() (id string) {
+		t.Helper()
+		if err := d.Pool().QueryRow(ctx, "SELECT test_run_id::text FROM test_runs").Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	was, wasRun := ids(), runRow()
+	draft := Sherlock + " draft "
+	// The test run goes case by case.
+	for i := range run.Planned {
+		run.Planned[i].State = CasePassed
+		run.Passed++
+		run.Results = append(run.Results, TestResult{ID: run.Planned[i].ID, Name: run.Planned[i].Name, Passed: true, Answer: "Yes.", Checks: []Check{{What: "says yes", OK: true}}})
+		saved(t, doc, doc, PromptsKey, ps)
+		now := ids()
+		for k, v := range was {
+			if now[k] != v {
+				t.Errorf("case %d: %s was %s and is %s", i, k, v, now[k])
+			}
+		}
+		if strings.Fields(now[draft])[0] != strings.Fields(was[draft])[0] || runRow() != wasRun {
+			t.Fatalf("case %d: the draft's row or its run has a new id", i)
+		}
+		was = now
+	}
+	if n, m := count(t, d, "test_case_results"), count(t, d, "test_case_result_checks"); n != 3 || m != 3 {
+		t.Fatalf("%d results, %d checks", n, m)
+	}
+	// The draft goes live: a version more, the draft's row gone, the rest keep their ids.
+	s := ps.Agents[Sherlock]
+	live := "Answer in haiku."
+	s.Versions = append(s.Versions, Version{N: 2, House: live, By: "ann", At: day.Add(time.Hour), Why: "made live", Rev: 2})
+	s.House, s.Live, s.Draft = &live, 2, nil
+	saved(t, doc, doc, PromptsKey, ps)
+	now := ids()
+	for k, v := range was {
+		if k == draft {
+			if _, ok := now[k]; ok {
+				t.Error("the draft's row is still there")
+			}
+			continue
+		}
+		if f := strings.Fields(now[k]); len(f) == 0 || f[0] != strings.Fields(v)[0] {
+			t.Errorf("%s had the row %s and has %q", k, v, now[k])
+		}
+	}
+	if _, ok := now[Sherlock+" version 2"]; !ok || count(t, d, "test_runs") != 0 {
+		t.Fatalf("the new version: %v, %d runs", now, count(t, d, "test_runs"))
 	}
 }
