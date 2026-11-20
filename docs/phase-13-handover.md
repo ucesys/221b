@@ -265,7 +265,50 @@ The Claude docs *221B storage deployment design* and *221B data model: domains a
 10. **Patroni stays in the bundled database with one member too.** The owner had left this to be decided again once three members had run in a cluster; they have (the fifth and sixth tests), and going from one member to three is a plain upgrade because one and three run the same way.
 11. **Iteration B starts after the seventh cluster test**, in a new code-writing session.
 
-**Waiting for the owner:** the six decisions the session that moved Changes and Knowledge made for him to confirm (the decisions table: a change's plans and results as tables; one `chats` table for both chats; a message's parts as `json`; a fix's and an exception's row ids; a source's last read as its own table; a source's repository and credential as names, with `wiki_pages` left empty). The coordinating session recommended confirming all six, and deciding at the end of the move what becomes of the model's tables that stayed empty (`wiki_pages`, `schedule_claims`).
+12. **Confirmed by the owner on November 19, the six decisions made while Changes and Knowledge moved**: a change's plans and results as tables of their own; one `chats` table, named by Sherlock's session, for both chats; a message's parts as `json`; a fix and an exception keep their row's id; a source's last read as a table of its own; a source's repository and credential as names, with `wiki_pages` left empty.
+13. **The owner asked for one list of the changes these decisions put off**: *Changes put off*, below. Whoever makes a decision that leaves something to change later adds a line there, in the same commit.
+
+Nothing waits for the owner now but the questions at the end of that list.
+
+## Changes put off
+
+One list, kept at the owner's request, of what the decisions above leave to be changed later. Each line says what, and what it waits for. Add to it in the commit that makes such a decision; strike a line through when it is done.
+
+**With a service's repository** (the service reads and writes rows itself, in place of a whole document through `db.Doc`):
+
+1. Changes: a row keeps its id when the change changes; a plan and a result folded into the action's row, if the three lists become one there; `approval_request_id` filled.
+2. Chats: two header tables with keys, `change_chats` and `case_chats`, over the one `chat_messages`, in place of `chats.session` as a name.
+3. Cases: the list of cases as a query, and with it gone the two columns worked out at each save (`line_title`, `involved`) and the object's version; a case's links, an RCA's cases and a known issue's services as tables with keys in place of number columns and arrays of ids; an RCA as a record several cases share, if that is wanted.
+4. AI configuration: an agent's instructions keep their rows' ids, and `approval_request_id` is filled; `ai_providers.secret_ref` dropped.
+5. Jobs: a scheduled time claimed through `schedule_claims` (`db.Claim`) in place of `jobs.handled_at`; the stores' byte limits of the ConfigMap's days (`fitRuns`, `fitFound`) removed.
+6. Automation: one repository for the runs and the runs that wait, which two documents write into one table now; a run's whole output kept (the fourth test's N4); `variables.updated_by` filled.
+7. Approvals: the link from a run, a variable change, a change and a draft's instructions to their request (`approval_request_id`).
+8. The Lease: whether it can go, now that cards, conversations and runs are rows.
+
+**Now that what they name has moved, or when it has:**
+
+9. A finding's case, known issue and exception, a change's resolved cases, an exception's finding, run, job and case: keys in place of ids as text (Cases, Knowledge and Jobs are all rows now; it needs the rows they name not to be deleted and written again, so it goes with items 1 and 3).
+10. A source's and a repository's credential, and the tables that point at a cluster or a credential: keys, and the rows filled, when iteration B moves those.
+
+**At the end of the move:**
+
+11. The model's tables nothing uses: `wiki_pages`, and `schedule_claims` until item 5. Drop them or keep them: **the owner's to decide**.
+12. `database.mode` defaults to `none`. Whether a new installation gets the bundled database: **the owner's to decide**.
+13. A message's parts from `json` to `jsonb`, only if something comes to ask for a chat by its parts.
+14. The two Claude docs (*221B data model: domains and tables*, *221B storage deployment design*) brought up to date for Changes, Knowledge and Cases: **when the owner says**.
+15. The 43 rows of *Decisions made for the owner to confirm* read through once by the owner before a release.
+
+**In the console, agreed and not part of the move:**
+
+16. An audit whose identity cannot read the cluster says so, in place of reporting nothing found (the sixth test's O1).
+17. One page of all runs, the rejected ones among them (the reason the runs that wait share `script_runs`).
+18. Offered, not yet answered: a row in a person's own Inbox for what they submitted, marked as waiting for another SuperAdmin.
+
+**Around the database:**
+
+19. `iamAuth` (RDS and Cloud SQL tokens) for an external database.
+20. The backup container's script as a small program, with a schedule that is more than a time of day.
+21. CI and the release job build, scan, sign and publish `221b-postgres`; database variants of the kind scripts (`e2e-kind.sh`, `ha-kind.sh`, `upgrade-kind.sh`).
 
 ## What to do next, in order
 
