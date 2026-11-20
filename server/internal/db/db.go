@@ -43,9 +43,11 @@ var ErrNotFound = errors.New("not found")
 // version a save was made against.
 var ErrConflict = errors.New("changed since it was read")
 
-// ErrUnavailable wraps what a call returns while the database cannot be
-// reached, so a page can say so rather than show an error of the driver's.
-var ErrUnavailable = errors.New("the database is unavailable")
+// ErrUnavailable is what a call returns while the database cannot be
+// reached. Its text is the sentence a page shows, and the whole of it:
+// what the driver said (the database's user, its name, its address) is
+// logged, and is in no error's text (unavailableError).
+var ErrUnavailable = errors.New("the database is unavailable; sign-in and the pages read live from the clusters still work")
 
 // ErrStartedWithout is why a console that was started without its database
 // (DB-67) is refused it: every call on its handle returns this, wrapped in
@@ -392,7 +394,7 @@ func (d *DB) Snapshot(ctx context.Context, fn func(q Querier) error) error {
 }
 
 // note is given what a call met. A failure to reach the database is
-// returned wrapped in ErrUnavailable, and has a probe
+// returned as ErrUnavailable, without the driver's text, and has a probe
 // find out whether the database is there (doubt): the call's failure alone
 // does not say so, since a slow query on a database that answers runs out
 // of its time the same way.
@@ -490,6 +492,14 @@ func (d *DB) Watch(ctx context.Context, every time.Duration) {
 // unreachable says whether err is the database not answering, rather than
 // the database refusing what was asked.
 func unreachable(err error) bool {
+	// A connection that could not be made is the database not reached,
+	// whatever the server said while refusing it (a password changed under
+	// the console): the driver's sentence for it names the user, the
+	// database and the address, and is never a person's to read.
+	var ce *pgconn.ConnectError
+	if errors.As(err, &ce) {
+		return true
+	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		// Class 08 is a connection exception, 57P a shutdown, and 53300
@@ -499,10 +509,6 @@ func unreachable(err error) bool {
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, pgx.ErrNoRows) || errors.Is(err, pgx.ErrTxClosed) {
 		return false
-	}
-	var ce *pgconn.ConnectError
-	if errors.As(err, &ce) {
-		return true
 	}
 	return pgconn.SafeToRetry(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, net.ErrClosed) || errors.Is(err, errAwayDial) || strings.Contains(err.Error(), "conn closed") || strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "broken pipe") || strings.Contains(err.Error(), "unexpected EOF")
 }

@@ -17,3 +17,9 @@ func (d *DB) MigrateTo(ctx context.Context, last int) (int, error) {
 	}
 	return d.migrate(ctx, upTo)
 }
+
+// Unreachable and Note are what a call's error is made of (note), for the
+// test of what a person is shown.
+func Unreachable(err error) bool { return unreachable(err) }
+
+func (d *DB) Note(err error) error { return d.note(err) }

@@ -50,14 +50,23 @@ const (
 	probeEvery = time.Second
 )
 
-// unavailable is what a call returns while the database cannot be
-// reached: ErrUnavailable, with why.
-func unavailable(cause error) error {
-	if cause == nil {
-		return ErrUnavailable
+// unavailableError is what a call returns while the database cannot be
+// reached. It reads as ErrUnavailable and nothing else: the driver's text
+// (the database's user, its name, its address) is for the log, never for
+// the sentence a person is shown or an audit record keeps. The cause can
+// still be asked about (errors.Is, for a time that ran out).
+type unavailableError struct{ cause error }
+
+func (e *unavailableError) Error() string { return ErrUnavailable.Error() }
+
+func (e *unavailableError) Unwrap() []error {
+	if e.cause == nil {
+		return []error{ErrUnavailable}
 	}
-	return fmt.Errorf("%w: %w", ErrUnavailable, cause)
+	return []error{ErrUnavailable, e.cause}
 }
+
+func unavailable(cause error) error { return &unavailableError{cause: cause} }
 
 // gate is asked before every call: while the database is away it returns
 // ErrUnavailable at once.
@@ -91,7 +100,8 @@ func (d *DB) doubtAfter(cause error, stands time.Duration) {
 	}
 	d.probing = true
 	d.mu.Unlock()
-	d.log.Debug("a call did not reach the database; asking whether it is there", "err", cause)
+	// The driver's own words, which no error's text carries, are here.
+	d.log.Info("a call did not reach the database; asking whether it is there", "err", cause)
 	go d.probeUntilAnswered()
 }
 
