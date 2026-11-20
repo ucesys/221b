@@ -339,8 +339,10 @@ spec:
             - name: DB_BACKUP
               value: {{ $b.backup.enabled | quote }}
             {{- if $b.backup.enabled }}
-            - name: DB_BACKUP_AT
-              value: {{ $b.backup.dailyAt | quote }}
+            # The base backup's schedule, a cron expression in UTC (DB-84):
+            # backup.schedule, or backup.dailyAt turned into one.
+            - name: DB_BACKUP_SCHEDULE
+              value: {{ include "b221.backupSchedule" . | quote }}
             - name: DB_BACKUP_RETAIN
               value: {{ $b.backup.retainBaseBackups | quote }}
             - name: WALG_LIBSODIUM_KEY
@@ -450,14 +452,14 @@ spec:
               mountPath: /backup
             {{- end }}
         {{- if $b.backup.enabled }}
-        # Takes the daily base backup when this member is the one to take
-        # it; the write-ahead log is archived by PostgreSQL itself.
+        # Takes the base backup on the schedule when this member is the one
+        # to take it; the write-ahead log is archived by PostgreSQL itself.
         - name: backup
           image: {{ include "b221.dbImage" . | quote }}
           {{- with $b.image.pullPolicy }}
           imagePullPolicy: {{ . }}
           {{- end }}
-          command: ["/usr/local/bin/backup.sh"]
+          command: ["/usr/local/bin/221b-backup"]
           env: *dbEnv
           securityContext: *dbSecurity
           resources:

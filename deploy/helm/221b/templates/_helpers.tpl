@@ -307,7 +307,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- if not (has $b.synchronous (list "quorum" "off")) -}}
 {{- fail (printf "database.bundled.synchronous must be quorum or off, not %q" (toString $b.synchronous)) -}}
 {{- end -}}
-{{- if not (regexMatch "^([01][0-9]|2[0-3]):[0-5][0-9]$" (toString $b.backup.dailyAt)) -}}
+{{- if $b.backup.schedule -}}
+{{- if not (regexMatch "^(@(hourly|daily|midnight|weekly|monthly|yearly|annually)|[0-9A-Za-z*,/-]+( +[0-9A-Za-z*,/-]+){4})$" (trim (toString $b.backup.schedule))) -}}
+{{- fail (printf "database.bundled.backup.schedule is a cron expression of five fields in UTC such as \"0 2 * * *\", not %q" (toString $b.backup.schedule)) -}}
+{{- end -}}
+{{- else if not (regexMatch "^([01][0-9]|2[0-3]):[0-5][0-9]$" (toString $b.backup.dailyAt)) -}}
 {{- fail (printf "database.bundled.backup.dailyAt is a time of day in UTC such as \"02:00\", not %q" (toString $b.backup.dailyAt)) -}}
 {{- end -}}
 {{- if and $b.restore.fromBackup (not $b.backup.enabled) -}}
@@ -342,5 +346,19 @@ external, unless a bundled database's Secret says one was there. */ -}}
 {{- end -}}
 {{- if and $was (ne $was "none") (ne $was $mode) (not .Values.database.allowModeChange) -}}
 {{- fail (printf "this release keeps its records in a %s database and database.mode is now %s. The records do not move by themselves: take a backup in Administration › Backup, install with the new mode, restore it there (docs/database.md), and set database.allowModeChange=true for the upgrade that switches" $was $mode) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The bundled database's base backup schedule, a cron expression in UTC
+(DB-84): backup.schedule, or backup.dailyAt ("HH:MM") as the same.
+*/}}
+{{- define "b221.backupSchedule" -}}
+{{- $bk := .Values.database.bundled.backup -}}
+{{- if $bk.schedule -}}
+{{- trim (toString $bk.schedule) -}}
+{{- else -}}
+{{- $p := splitList ":" (toString $bk.dailyAt) -}}
+{{- printf "%d %d * * *" (atoi (index $p 1)) (atoi (index $p 0)) -}}
 {{- end -}}
 {{- end -}}

@@ -608,10 +608,17 @@ database:
     podMonitor: false
     backup:
       # The write-ahead log is archived continuously and a base backup is
-      # taken every day, so the database can be restored to any moment
-      # since the oldest base backup kept.
+      # taken on the schedule, so the database can be restored to any
+      # moment since the oldest base backup kept.
       enabled: true
-      # UTC, HH:MM.
+      # When a base backup is taken: a cron expression of five fields in
+      # UTC (minute hour day-of-month month day-of-week), such as
+      # "0 2 * * *" (every day at 02:00), "0 */6 * * *" (every six hours)
+      # or "0 3 * * 0" (Sundays at 03:00); @daily, @weekly and the like
+      # too. Empty: every day at dailyAt.
+      schedule: ""
+      # UTC, HH:MM: the schedule of before 0.13, still taken when schedule
+      # is empty ("02:00" is "0 2 * * *").
       dailyAt: "02:00"
       retainBaseBackups: 7
       s3:

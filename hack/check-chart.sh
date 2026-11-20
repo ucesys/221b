@@ -200,6 +200,15 @@ database_modes() {
     refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
     ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
     refused --set database.mode=bundled --set database.bundled.backup.dailyAt=2am &&
+    # DB-84: the base backup's schedule is a cron expression; dailyAt is
+    # turned into the same, and the schedule wins when both are given.
+    statefulset "$d" | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"0 2 \* \* \*"' && ! statefulset "$d" | has 'DB_BACKUP_AT' &&
+    statefulset "$d" | has 'command: \["/usr/local/bin/221b-backup"\]' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.backup.dailyAt=03:45 | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"45 3 \* \* \*"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set 'database.bundled.backup.schedule=0 */6 * * *' --set database.bundled.backup.dailyAt=03:45 | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"0 \*/6 \* \* \*"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.backup.schedule=@weekly | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"@weekly"' &&
+    refused --set database.mode=bundled --set 'database.bundled.backup.schedule=every night' &&
+    refused --set database.mode=bundled --set 'database.bundled.backup.schedule=0 2 * *' &&
     refused --set database.mode=bundled --set database.bundled.backup.enabled=false --set database.bundled.restore.fromBackup=true &&
     # A restore's time goes to PostgreSQL with its offset in numbers, never
     # as Z, which it refuses there; a time without a zone is refused here.

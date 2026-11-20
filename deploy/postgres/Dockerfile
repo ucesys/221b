@@ -12,6 +12,18 @@
 # A tag here, for builds on a laptop; CI passes it pinned to a digest, from
 # hack/base-images.env, as it does for the console's image.
 ARG DB_BASE_IMAGE=debian:13-slim
+ARG GO_IMAGE=golang:1.26.9
+
+# The backup container's program (backup/, DB-84): Go's standard library
+# only, built for the image's platform, static and without the build's
+# paths, so the same source gives the same binary.
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS backup
+ARG TARGETARCH
+WORKDIR /src
+COPY backup/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} GOFLAGS=-buildvcs=false \
+    go build -trimpath -ldflags="-s -w" -o /out/221b-backup .
+
 FROM ${DB_BASE_IMAGE}
 
 # One PostgreSQL major version per 221B release line; a new one is a new
@@ -53,7 +65,8 @@ RUN set -eux; \
     apt-get purge -y --auto-remove gnupg; \
     rm -rf /var/lib/apt/lists/* /root/.cache
 
-COPY --chmod=0755 entrypoint.sh post-bootstrap.sh restore.sh backup.sh /usr/local/bin/
+COPY --chmod=0755 entrypoint.sh post-bootstrap.sh restore.sh /usr/local/bin/
+COPY --from=backup --chmod=0755 /out/221b-backup /usr/local/bin/221b-backup
 
 LABEL org.opencontainers.image.source="https://github.com/ucesys/221b" \
       org.opencontainers.image.description="PostgreSQL, Patroni and WAL-G for 221B's bundled database" \
