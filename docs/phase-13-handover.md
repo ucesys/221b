@@ -260,6 +260,8 @@ The Claude docs *221B storage deployment design* and *221B data model: domains a
 7. **An audit that cannot read the cluster should say so** (the sixth test's O1): a to-do, not part of the move.
 8. **The Inbox stays under AIOps**: the bell already opens it from every area, and a count in the top bar would be noise.
 
+9. **Confirmed by the owner on November 19, the six decisions made while Cases moved**: cases are 13 tables, with a case's links as four number columns and an RCA's cases and a known issue's services as arrays of ids; an RCA is a row keyed by its case; a case's row carries the object's version and two columns worked out at each save, and the list of cases has no table; the intake's API tokens from before 0.12.1 are not copied; a case's old outcome is stored as it reads; what a rolled-back console writes under a copied key is removed at the next start, not read.
+
 **Waiting for the owner:** the six decisions the session that moved Changes and Knowledge made for him to confirm (the decisions table: a change's plans and results as tables; one `chats` table for both chats; a message's parts as `json`; a fix's and an exception's row ids; a source's last read as its own table; a source's repository and credential as names, with `wiki_pages` left empty). The coordinating session recommended confirming all six, and deciding at the end of the move what becomes of the model's tables that stayed empty (`wiki_pages`, `schedule_claims`).
 
 ## What to do next, in order
