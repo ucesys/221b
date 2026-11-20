@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -26,7 +27,9 @@ const (
 
 // NewVariablesPG keeps the variables in d.
 func NewVariablesPG(d *db.DB) *db.Doc[variablesRecord] {
-	return &db.Doc[variablesRecord]{DB: d, Key: VariablesKey, Read: readVariables, Write: writeVariables}
+	return &db.Doc[variablesRecord]{DB: d, Key: VariablesKey, Read: readVariables, Write: func(ctx context.Context, tx pgx.Tx, old, next variablesRecord) error {
+		return writeVariables(ctx, tx, sensitiveFor(d), old, next)
+	}}
 }
 
 func readVariables(ctx context.Context, q db.Querier) (variablesRecord, bool, error) {
@@ -57,15 +60,20 @@ func readVariables(ctx context.Context, q db.Querier) (variablesRecord, bool, er
 	}); err != nil {
 		return rec, false, err
 	}
-	var value *string
+	// A sensitive value is not in its row: the row has its digest, which
+	// stands for it in the document (DB-71).
+	var value, digest *string
 	var sensitive bool
-	rows, err = q.Query(ctx, `SELECT coalesce(f.cluster_id, ''), f.fleet_key, v.name, v.value, v.is_sensitive
+	rows, err = q.Query(ctx, `SELECT coalesce(f.cluster_id, ''), f.fleet_key, v.name, v.value, v.value_digest, v.is_sensitive
 		FROM variables v JOIN fleets f ON f.fleet_id = v.fleet_id ORDER BY v.name`)
 	if err != nil {
 		return rec, false, err
 	}
-	if _, err := pgx.ForEachRow(rows, []any{&cluster, &key, &name, &value, &sensitive}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&cluster, &key, &name, &value, &digest, &sensitive}, func() error {
 		edit(cluster, key, func(fp *FleetVariables) {
+			if digest != nil {
+				value = digest
+			}
 			if value != nil {
 				if fp.Values == nil {
 					fp.Values = map[string]string{}
@@ -81,8 +89,8 @@ func readVariables(ctx context.Context, q db.Querier) (variablesRecord, bool, er
 		return rec, false, err
 	}
 	var node string
-	rows, err = q.Query(ctx, `SELECT coalesce(h.cluster_id, ''), h.name, v.name, v.value
-		FROM variables v JOIN hosts h ON h.host_id = v.host_id WHERE v.value IS NOT NULL`)
+	rows, err = q.Query(ctx, `SELECT coalesce(h.cluster_id, ''), h.name, v.name, coalesce(v.value_digest, v.value)
+		FROM variables v JOIN hosts h ON h.host_id = v.host_id WHERE v.value IS NOT NULL OR v.value_digest IS NOT NULL`)
 	if err != nil {
 		return rec, false, err
 	}
@@ -118,14 +126,40 @@ func readVariables(ctx context.Context, q db.Querier) (variablesRecord, bool, er
 	if len(rec.Clusters) == 0 {
 		return variablesRecord{}, false, nil
 	}
+	// A value under a sensitive name that is still in its row was not
+	// moved to the Secret yet (MoveSensitive): nothing reads it from here.
+	for _, fleets := range rec.Clusters {
+		names := sensitiveNames(fleets)
+		if len(names) == 0 {
+			continue
+		}
+		_ = eachValue(fleets, func(p place, v string) (string, error) {
+			if names[p.name] && !IsHidden(v) {
+				return Unmoved, nil
+			}
+			return v, nil
+		})
+	}
 	return rec, true, nil
 }
 
 // writeVariables writes the clusters whose variables changed. A document
 // copied from a ConfigMap may still keep a node's own values under its
 // fleets: they are the node's first.
-func writeVariables(ctx context.Context, tx pgx.Tx, old, next variablesRecord) error {
+//
+// The sensitive values are hidden first (sealVariables): the rows get
+// their digests, the Secret gets the values once the rows are written,
+// and the transaction commits after that. A name that becomes sensitive
+// with this save has its values hidden in the changes and the runs of the
+// past too.
+func writeVariables(ctx context.Context, tx pgx.Tx, sens SensitiveStore, old, next variablesRecord) error {
 	next.nodesOwn()
+	old.nodesOwn()
+	r := newRing(ctx, sens)
+	sealed, err := sealVariables(r, &old, &next)
+	if err != nil {
+		return err
+	}
 	if err := inventory.Lock(ctx, tx); err != nil {
 		return err
 	}
@@ -149,7 +183,16 @@ func writeVariables(ctx context.Context, tx pgx.Tx, old, next variablesRecord) e
 			return err
 		}
 	}
-	return inventory.Collect(ctx, tx)
+	if err := inventory.Collect(ctx, tx); err != nil {
+		return err
+	}
+	if len(sealed.became) > 0 {
+		if _, err := sealPastTables(ctx, tx, r, sealed, ""); err != nil {
+			return err
+		}
+	}
+	// The rows are written; the Secret now, and then the commit.
+	return sealed.put(ctx, sens)
 }
 
 func writeClusterVariables(ctx context.Context, tx pgx.Tx, cluster string, old, next map[string]FleetVariables) error {
@@ -187,7 +230,7 @@ func writeClusterVariables(ctx context.Context, tx pgx.Tx, cluster string, old, 
 		}
 		want := map[string]variableRow{}
 		for name, v := range fp.Values {
-			want[name] = variableRow{value: &v}
+			want[name] = rowOfValue(v)
 		}
 		for _, name := range fp.Sensitive {
 			r := want[name]
@@ -223,7 +266,7 @@ func writeClusterVariables(ctx context.Context, tx pgx.Tx, cluster string, old, 
 		}
 		want := map[string]variableRow{}
 		for name, v := range all.Nodes[node] {
-			want[name] = variableRow{value: &v}
+			want[name] = rowOfValue(v)
 		}
 		if err := syncVariables(ctx, tx, "host", id, want); err != nil {
 			return err
@@ -262,8 +305,25 @@ func fleetRow(ctx context.Context, tx pgx.Tx, cluster, key string, create bool) 
 }
 
 type variableRow struct {
-	value     *string
+	value *string
+	// digest stands for a sensitive value, which is in the Secret.
+	digest    *string
 	sensitive bool
+	// keep leaves the row's value as it is: a sensitive value the start
+	// has not moved to the Secret yet.
+	keep bool
+}
+
+// rowOfValue is a value of the document as its row keeps it: a digest in
+// the digest's column, any other in the value's.
+func rowOfValue(v string) variableRow {
+	switch {
+	case v == Unmoved:
+		return variableRow{keep: true}
+	case IsHidden(v):
+		return variableRow{digest: &v}
+	}
+	return variableRow{value: &v}
 }
 
 // syncVariables makes the variables of one fleet or host what want says,
@@ -272,20 +332,28 @@ type variableRow struct {
 func syncVariables(ctx context.Context, tx pgx.Tx, scope, id string, want map[string]variableRow) error {
 	column := scope + "_id"
 	have := map[string]variableRow{}
-	rows, err := tx.Query(ctx, "SELECT name, value, is_sensitive FROM variables WHERE "+column+" = $1", id)
+	rows, err := tx.Query(ctx, "SELECT name, value IS NOT NULL, value_digest, is_sensitive FROM variables WHERE "+column+" = $1", id)
 	if err != nil {
 		return err
 	}
 	var name string
 	var r variableRow
-	if _, err := pgx.ForEachRow(rows, []any{&name, &r.value, &r.sensitive}, func() error {
-		have[name] = r
+	var set bool
+	// The values that are not sensitive are compared by what the caller
+	// read, never read here: the caller writes a row whose value differs.
+	if _, err := pgx.ForEachRow(rows, []any{&name, &set, &r.digest, &r.sensitive}, func() error {
+		x := r
+		x.keep = set
+		have[name] = x
 		return nil
 	}); err != nil {
 		return err
 	}
-	same := func(a, b variableRow) bool {
-		return a.sensitive == b.sensitive && (a.value == nil) == (b.value == nil) && (a.value == nil || *a.value == *b.value)
+	text := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
 	}
 	names := make([]string, 0, len(want))
 	for n := range want {
@@ -296,14 +364,26 @@ func syncVariables(ctx context.Context, tx pgx.Tx, scope, id string, want map[st
 		w := want[n]
 		h, had := have[n]
 		switch {
-		case had && same(h, w):
+		case had && w.keep:
+			// Its value stays in the row until the start moves it.
+			if w.sensitive == h.sensitive {
+				continue
+			}
+			if w.sensitive {
+				return fmt.Errorf("%w: %s is sensitive and its value was not moved to the Secret yet: type its value", ErrInvalid, n)
+			}
+			if _, err := tx.Exec(ctx, "UPDATE variables SET is_sensitive = $3, updated_at = now() WHERE "+column+" = $1 AND name = $2", id, n, w.sensitive); err != nil {
+				return err
+			}
+		case had && w.value == nil && !h.keep && text(w.digest) == text(h.digest) && (w.digest == nil) == (h.digest == nil) && w.sensitive == h.sensitive:
 		case had:
-			if _, err := tx.Exec(ctx, "UPDATE variables SET value = $3, is_sensitive = $4, updated_at = now() WHERE "+column+" = $1 AND name = $2", id, n, w.value, w.sensitive); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE variables SET value = $3, value_digest = $4, is_sensitive = $5, updated_at = now() WHERE "+column+" = $1 AND name = $2 AND (value IS DISTINCT FROM $3 OR value_digest IS DISTINCT FROM $4 OR is_sensitive <> $5)",
+				id, n, w.value, w.digest, w.sensitive); err != nil {
 				return err
 			}
 		default:
-			if _, err := tx.Exec(ctx, "INSERT INTO variables (variable_id, scope, "+column+", name, value, is_sensitive, updated_at) VALUES ($1, $2, $3, $4, $5, $6, now())",
-				db.NewID(), scope, id, n, w.value, w.sensitive); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO variables (variable_id, scope, "+column+", name, value, value_digest, is_sensitive, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now())",
+				db.NewID(), scope, id, n, w.value, w.digest, w.sensitive); err != nil {
 				return err
 			}
 		}

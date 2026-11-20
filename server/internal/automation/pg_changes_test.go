@@ -176,10 +176,12 @@ func TestVariableChangesInTheDatabase(t *testing.T) {
 	}
 	// The approved change: MODE, the ceiling, the reboot time, n1's own MODE
 	// gone, n1's reboot time, n2's DISK. PORT and the mark did not change.
+	// The change marks MODE sensitive, so what it found of MODE and what it
+	// set are digests, never the values (DB-71).
 	if n := count("SELECT count(*) FROM variable_change_items i JOIN variable_changes c USING (variable_change_id) WHERE c.change_number = 3"); n != 6 {
 		t.Errorf("the approved change has %d items, want 6", n)
 	}
-	if n := count("SELECT count(*) FROM variable_change_items i JOIN variable_changes c USING (variable_change_id) WHERE c.change_number = 3 AND i.kind = 'node_value' AND i.node = 'n1' AND i.name = 'MODE' AND i.old_value = 'x' AND i.new_value IS NULL"); n != 1 {
+	if n := count("SELECT count(*) FROM variable_change_items i JOIN variable_changes c USING (variable_change_id) WHERE c.change_number = 3 AND i.kind = 'node_value' AND i.node = 'n1' AND i.name = 'MODE' AND i.old_value IS NULL AND i.old_digest LIKE 'hidden:%' AND i.new_value IS NULL AND i.new_digest IS NULL"); n != 1 {
 		t.Errorf("n1's own MODE, removed: %d rows", n)
 	}
 	if n := count("SELECT count(*) FROM variable_change_impacts i JOIN variable_changes c USING (variable_change_id) WHERE c.change_number = 3"); n != 2 {

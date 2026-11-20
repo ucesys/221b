@@ -109,9 +109,12 @@ func TestOnProductionValuesThatNeedApprovalWaitForASecondAdmin(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &ans); err != nil {
 		t.Fatal(err)
 	}
-	// It starts as the person who asked, with the values they gave.
+	// It starts as the person who asked, with the values they gave. MODE
+	// is sensitive: the request, the run and the node record its digest,
+	// the same one, never the value (DB-71).
 	if ans.Waiting.State != automation.ChangeApproved || ans.Waiting.Run != ans.Run.ID || ans.Run.By.Name != "Ops" || ans.Run.ValuesApproved == nil || ans.Run.ValuesApproved.By.Name != "Ops Two" ||
-		ans.Run.Overrides["MODE"] != "wipe" || ans.Run.Nodes[0].Values["MODE"] != "wipe" || !strings.Contains(ans.Run.Basis, "approved by Ops Two (run request 1)") {
+		!automation.IsHidden(ans.Run.Overrides["MODE"]) || ans.Run.Overrides["MODE"] != ans.Waiting.Params["MODE"] || ans.Run.Nodes[0].Values["MODE"] != ans.Run.Overrides["MODE"] ||
+		strings.Contains(body, "wipe") || !strings.Contains(ans.Run.Basis, "approved by Ops Two (run request 1)") {
 		t.Fatalf("%+v", ans)
 	}
 	if !strings.Contains(e.audit.String(), "run request 1 approved: run 1 started as Ops") {

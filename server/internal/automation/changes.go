@@ -242,7 +242,22 @@ func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChang
 		}
 		return nil
 	})
-	return c, err
+	if err != nil {
+		return c, err
+	}
+	// As it is kept: a sensitive value it sets is its digest from here on
+	// (DB-71), and what is answered never holds the value.
+	var rec changesRecord
+	if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
+		return VariableChange{ID: c.ID, Cluster: c.Cluster, Fleet: c.Fleet, State: c.State}, err
+	}
+	for _, x := range rec.Changes {
+		if x.ID == c.ID {
+			x.Overtaken = Overtaken(rec.Changes, x)
+			return x, nil
+		}
+	}
+	return VariableChange{ID: c.ID, Cluster: c.Cluster, Fleet: c.Fleet, State: c.State}, nil
 }
 
 // DecideChange approves or rejects a waiting change; whoever asked for it

@@ -617,6 +617,17 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 	changed := false
 	for _, raw := range lines {
 		line, err := ExpandKube(raw, env)
+		if err != nil {
+			// A secret or sensitive value is in memory for the script alone:
+			// a kubectl line is recorded whole, so it is given none.
+			a.mu.Lock()
+			for _, m := range kubeVarRE.FindAllStringSubmatch(raw, -1) {
+				if _, withheld := a.secrets[node][m[1]]; withheld {
+					err = fmt.Errorf("the line reads %s, a secret or sensitive value: such a value is never put into a kubectl line, which the output and the audit log keep whole", m[1])
+				}
+			}
+			a.mu.Unlock()
+		}
 		if err == nil {
 			var action KubeAction
 			if action, err = KubeActionOf(line); err == nil && !h.Allowed(action) {

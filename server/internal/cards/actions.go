@@ -616,6 +616,32 @@ func (in paramsArgs) next(cur automation.FleetVariables) automation.FleetVariabl
 	return out
 }
 
+// sensitive refuses a card that sets a value of a name that is sensitive
+// on the cluster (DB-71): a card's arguments are a record, its plan quotes
+// them and the audit log says what it set, and a sensitive value is in
+// none of those. Unsetting one names no value, and may be done.
+func (in paramsArgs) sensitive(all map[string]automation.FleetVariables) error {
+	names := automation.SensitiveNames(all)
+	var set []string
+	for k := range in.Values {
+		if slices.Contains(names, k) {
+			set = append(set, k)
+		}
+	}
+	for _, m := range in.Nodes {
+		for k := range m {
+			if slices.Contains(names, k) && !slices.Contains(set, k) {
+				set = append(set, k)
+			}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	sort.Strings(set)
+	return fmt.Errorf("%w: %s is sensitive: a card never sets a sensitive variable, since what a card says is recorded; set it on Automation's Variables page", ErrInvalid, strings.Join(set, ", "))
+}
+
 // nodes are the nodes the card names; never nil, which would mean every
 // node.
 func (in paramsArgs) nodes() []string {
@@ -683,6 +709,9 @@ func (p params) Describe(ctx context.Context, cluster string, a Action) (Plan, e
 	if err != nil {
 		return pl, err
 	}
+	if err := in.sensitive(all); err != nil {
+		return pl, err
+	}
 	cur := automation.View(all, in.Fleet, in.nodes())
 	next := in.next(cur)
 	pl.Fingerprint = digest(cur)
@@ -715,6 +744,9 @@ func (p params) Apply(ctx context.Context, c Card, i int, by Approver) (Result, 
 	}
 	all, err := p.c.Params.Variables(ctx, c.Cluster)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := in.sensitive(all); err != nil {
 		return Result{}, err
 	}
 	// A node's own values are the node's, kept once whatever fleets it is

@@ -922,8 +922,14 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request, in runRequest,
 				}
 			}
 			if err = automation.ValidateOverrides(in.Params); err == nil {
-				s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse, mode: mode})
-				return
+				// A value the run gives for a name that is sensitive on this
+				// cluster is recorded as its digest from here on (DB-71): the
+				// value itself goes to the run alone, in memory.
+				var typed map[string]string
+				if in.Params, typed, err = s.opts.AutomationStore.HideRunValues(ctx, list.Cluster, in.Params); err == nil {
+					s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse, mode: mode, typed: typed})
+					return
+				}
 			}
 		}
 	}
@@ -945,6 +951,9 @@ type launch struct {
 	retryOf       int
 	refuse        func(int, string)
 	mode          runMode
+	// typed are the sensitive values the run gave itself, by the digest
+	// that stands for each in in.Params: in memory, for this start alone.
+	typed map[string]string
 }
 
 func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
@@ -1060,10 +1069,30 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		answerJSON(w, r, runWeight{Changed: []string{}, Impact: []automation.ImpactItem{}})
 		return
 	}
-	secrets, err := readSecrets(ctx, l.cl, l.who.Person, v.Header, values)
+	// The sensitive values are read from their Secret now, for the run
+	// alone (DB-71): what is recorded of them stays their digests, and the
+	// run gets them as it gets a secret parameter's value, never on a
+	// command line and blanked in its output.
+	plain, sensitive, err := s.revealRunValues(ctx, list.Cluster, in.Params, values, l.typed)
 	if err != nil {
 		refuse(automationStatus(err), err.Error())
 		return
+	}
+	secrets, err := readSecrets(ctx, l.cl, l.who.Person, v.Header, plain)
+	if err != nil {
+		refuse(automationStatus(err), err.Error())
+		return
+	}
+	for node, m := range sensitive {
+		for name, val := range m {
+			if p, ok := v.Header.Param(name); ok && p.Secret {
+				continue
+			}
+			if secrets[node] == nil {
+				secrets[node] = map[string]string{}
+			}
+			secrets[node][name] = val
+		}
 	}
 	clusterName := list.ClusterName()
 	basis := "approved code, no per-run approval"
@@ -1195,4 +1224,76 @@ func (s *Server) postAutomationCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAutomation(r, audit.ActionAutomationRun, "", strconv.Itoa(id), audit.OutcomeStopped, fmt.Sprintf("run %d cancelled", id))
 	answerJSON(w, r, map[string]bool{"cancelled": true})
+}
+
+// revealRunValues reads the sensitive values a run is about to use: each
+// value of values that is a digest, from what the run was given just now
+// (typed) or from the cluster's Secret. plain is values with those in
+// place, for reading the Secrets a secret parameter names; sensitive are
+// the values read, by node and parameter. A value the Secret does not
+// keep stops the run, with a sentence that names the parameter and never
+// a value: a run never starts with a value missing.
+func (s *Server) revealRunValues(ctx context.Context, cluster string, own map[string]string, values map[string]map[string]string, typed map[string]string) (plain, sensitive map[string]map[string]string, err error) {
+	want := map[string]bool{}
+	for _, m := range values {
+		for _, v := range m {
+			if automation.IsHidden(v) {
+				if _, ok := typed[v]; !ok {
+					want[v] = true
+				}
+			}
+		}
+	}
+	if len(want) == 0 && len(typed) == 0 {
+		return values, map[string]map[string]string{}, nil
+	}
+	kept := map[string]string{}
+	if len(want) > 0 {
+		digests := make([]string, 0, len(want))
+		for d := range want {
+			digests = append(digests, d)
+		}
+		sort.Strings(digests)
+		if kept, err = s.opts.AutomationStore.Reveal(ctx, cluster, digests); err != nil {
+			return nil, nil, err
+		}
+	}
+	plain, sensitive = map[string]map[string]string{}, map[string]map[string]string{}
+	missing := map[string]bool{}
+	for node, m := range values {
+		plain[node] = map[string]string{}
+		for name, v := range m {
+			plain[node][name] = v
+			if !automation.IsHidden(v) {
+				continue
+			}
+			val, ok := typed[v]
+			if !ok {
+				val, ok = kept[v]
+			}
+			switch {
+			case ok:
+				plain[node][name] = val
+				if sensitive[node] == nil {
+					sensitive[node] = map[string]string{}
+				}
+				sensitive[node][name] = val
+			case v == automation.Unmoved || v == automation.UnmovedNew:
+				missing[name+": its sensitive value has not been moved out of the database yet (the console's log says why, and its next start tries again)"] = true
+			case own[name] == v:
+				missing[name+": the value the run gave for it is sensitive, and is not kept once a run has started or been decided; start the run again and give the value"] = true
+			default:
+				missing[name+" on "+node+": a sensitive variable whose value the console does not keep any more; set it again on the Variables page"] = true
+			}
+		}
+	}
+	if len(missing) > 0 {
+		list := make([]string, 0, len(missing))
+		for m := range missing {
+			list = append(list, m)
+		}
+		sort.Strings(list)
+		return nil, nil, fmt.Errorf("%w: sensitive values are missing: %s", automation.ErrInvalid, strings.Join(list, "; "))
+	}
+	return plain, sensitive, nil
 }

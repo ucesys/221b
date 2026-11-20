@@ -37,10 +37,18 @@ func NewRunsPG(d *db.DB) *db.Doc[runsRecord] {
 	// The jobs' runs are runs.json too, in another ConfigMap: each is copied
 	// under a name of its own (the fifth cluster test, F2). A database
 	// that copied these under the old name holds them, and is left alone.
-	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, ImportAs: "automation/" + RunsKey, Read: readRuns, Write: writeRuns}
+	return &db.Doc[runsRecord]{DB: d, Key: RunsKey, ImportAs: "automation/" + RunsKey,
+		Read: func(ctx context.Context, q db.Querier) (runsRecord, bool, error) { return readRuns(ctx, q, false) },
+		Write: func(ctx context.Context, tx pgx.Tx, old, next runsRecord) error {
+			return writeRuns(ctx, tx, sensitiveFor(d), old, next)
+		}}
 }
 
-func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
+// readRuns reads the runs. A sensitive value a run used is read as its
+// digest, which is what its row has (DB-71); one under a sensitive name
+// that is still in its row is not read, and Unmoved stands for it, unless
+// raw is set, which is for the move alone.
+func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, error) {
 	rec := runsRecord{Runs: []Run{}}
 	b, _, err := db.LoadScope(ctx, q, runsScope)
 	found := err == nil
@@ -176,13 +184,25 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 		return rec, false, err
 	}
 
-	rows, err = q.Query(ctx, `SELECT script_run_id::text, coalesce(script_run_host_id::text, ''), coalesce(script_run_fleet_id::text, ''), scope, name, value
+	var names func(cluster string) map[string]bool
+	if !raw {
+		if names, err = namesIn(ctx, q); err != nil {
+			return rec, false, err
+		}
+	}
+	rows, err = q.Query(ctx, `SELECT script_run_id::text, coalesce(script_run_host_id::text, ''), coalesce(script_run_fleet_id::text, ''), scope, name,
+			coalesce(value_digest, value)
 		FROM script_run_values WHERE scope IN ('run', 'host', 'fleet')`)
 	if err != nil {
 		return rec, false, err
 	}
 	var scope, name, value string
 	if _, err := pgx.ForEachRow(rows, []any{&id, &hid, &fid, &scope, &name, &value}, func() error {
+		if i, ok := at[id]; ok && !raw && !IsHidden(value) && names(rec.Runs[i].Cluster)[name] {
+			if _, bound := Bound(value); !bound || scope != "run" {
+				value = Unmoved
+			}
+		}
 		if scope == "fleet" {
 			if p, ok := fleets[fid]; ok {
 				fl := &rec.Runs[p.run].Fleets[p.fleet]
@@ -230,7 +250,21 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 	return rec, found || len(rec.Runs) > 0, nil
 }
 
-func writeRuns(ctx context.Context, tx pgx.Tx, old, next runsRecord) error {
+// writeRuns hides the sensitive values the runs recorded, should any
+// reach here in clear (sealRuns: only the digest is kept of them), and
+// writes the rows.
+func writeRuns(ctx context.Context, tx pgx.Tx, sens SensitiveStore, old, next runsRecord) error {
+	names, err := namesIn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := sealRuns(newRing(ctx, sens), &next, names, nil); err != nil {
+		return err
+	}
+	return writeRunsRows(ctx, tx, old, next)
+}
+
+func writeRunsRows(ctx context.Context, tx pgx.Tx, old, next runsRecord) error {
 	if next.Next != old.Next {
 		b, _ := json.Marshal(map[string]int{"next": next.Next})
 		if _, err := db.SaveScope(ctx, tx, runsScope, b, db.AnyVersion, ""); err != nil {
@@ -343,8 +377,9 @@ func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
 	}
 	values := func(scope string, host *string, m map[string]string) error {
 		for name, v := range m {
-			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, script_run_host_id, name, value) VALUES ($1, $2, $3, $4, $5, $6)",
-				db.NewID(), id, scope, host, name, v); err != nil {
+			value, digest := columnsOf(v)
+			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, script_run_host_id, name, value, value_digest) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+				db.NewID(), id, scope, host, name, value, digest); err != nil {
 				return err
 			}
 		}
@@ -374,8 +409,9 @@ func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
 			}
 			fleetRow[f.ID] = fid
 			for name, v := range f.Values {
-				if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, script_run_fleet_id, name, value) VALUES ($1, $2, 'fleet', $3, $4, $5)",
-					db.NewID(), id, fid, name, v); err != nil {
+				value, digest := columnsOf(v)
+				if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, script_run_fleet_id, name, value, value_digest) VALUES ($1, $2, 'fleet', $3, $4, $5, $6)",
+					db.NewID(), id, fid, name, value, digest); err != nil {
 					return err
 				}
 			}

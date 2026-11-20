@@ -116,6 +116,17 @@ func (d *Doc[T]) SaveKey(ctx context.Context, _ string, b []byte, version string
 	return out, err
 }
 
+// LockDoc makes tx take the turn of the writers of the document known by
+// key, for as long as tx lasts: what SaveKey takes before it reads. A
+// write that changes another document's rows takes that document's turn
+// first, so a save of it under way is not written over; turns are taken in
+// one order everywhere (DB-71: the variables, then their changes, then the
+// runs), so two never wait for each other.
+func LockDoc(ctx context.Context, tx pgx.Tx, key string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey("doc/"+key))
+	return err
+}
+
 // DeleteKey removes every row of the document.
 func (d *Doc[T]) DeleteKey(ctx context.Context, _ string) error {
 	return d.DB.Tx(ctx, func(tx pgx.Tx) error {

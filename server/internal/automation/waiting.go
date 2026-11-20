@@ -112,6 +112,17 @@ func (st *Store) NewWaitingRun(ctx context.Context, w WaitingRun) (WaitingRun, e
 		}
 		return nil
 	})
+	if err != nil {
+		return w, err
+	}
+	// As it is kept: a sensitive value among its own is its digest (DB-71).
+	list, err := st.WaitingRuns(ctx, w.Cluster)
+	for _, x := range list {
+		if x.ID == w.ID {
+			return x, err
+		}
+	}
+	w.Params = nil
 	return w, err
 }
 

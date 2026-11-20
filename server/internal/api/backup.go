@@ -563,6 +563,9 @@ func (s *Server) registerBackupParts() {
 			var err error
 			if a.Scripts, err = st.Scripts(ctx); err == nil {
 				if a.Variables, err = st.AllVariables(ctx); err == nil {
+					err = sealVariables(ctx, st, a.Variables, env)
+				}
+				if err == nil {
 					var profiles []automation.RunProfile
 					if profiles, err = st.Profiles(ctx); err == nil {
 						for _, p := range profiles {
@@ -584,7 +587,7 @@ func (s *Server) registerBackupParts() {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return skip(env, "Automation: %v", err)
 			}
-			return helper(env, "automation", func(rep *restoreReport) { s.restoreAutomation(requestOf(ctx), a, env.Taken, rep) })
+			return helper(env, "automation", func(rep *restoreReport) { s.restoreAutomation(requestOf(ctx), a, env, rep) })
 		}})
 }
 
@@ -1217,7 +1220,8 @@ func (s *Server) restorePairings(ctx context.Context, list map[string]nodessh.Pa
 // it is reviewed here again. Fleet parameters on a production cluster wait
 // for another SuperAdmin's approval, as a change made by hand does when it
 // matters; elsewhere they apply at once.
-func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken time.Time, rep *restoreReport) {
+func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, env *backup.Env, rep *restoreReport) {
+	taken := env.Taken
 	note := func(format string, args ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, args...)) }
 	st := s.opts.AutomationStore
 	if st == nil {
@@ -1309,7 +1313,12 @@ func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken ti
 				note("Automation parameters of cluster %q: %v", cluster, err)
 				break
 			}
-			next := a.Variables[cluster][fleet]
+			// A sensitive value is sealed in the file (DB-71): one this
+			// install's key opens is set, and goes to the Secret as any
+			// sensitive value set by hand; one it cannot open is left out
+			// and listed to set again. A file from before 0.13 has them in
+			// clear, and they are set as they are.
+			next := openVariables(a.Variables[cluster][fleet], env, s.fleetName(cluster, fleet), cluster)
 			nodes := automation.NamedNodes(next)
 			if fleet == automation.AllNodes {
 				nodes = nil
@@ -1362,4 +1371,96 @@ func (s *Server) fleetName(cluster, id string) string {
 		}
 	}
 	return id
+}
+
+// sealVariables writes the sensitive values of the variables into a
+// backup as secrets are written (X-01, DB-71): each is read from its
+// Secret and sealed with the install's key, or is the placeholder when
+// the install keeps no key or the Secret does not keep the value. What
+// stands for a sensitive value in the console, its digest, is never
+// written: it means nothing to another install.
+func sealVariables(ctx context.Context, st *automation.Store, all map[string]map[string]automation.FleetVariables, env *backup.Env) error {
+	for cluster, fleets := range all {
+		want := map[string]bool{}
+		each := func(f func(v string) string) {
+			for _, fp := range fleets {
+				for name, v := range fp.Values {
+					fp.Values[name] = f(v)
+				}
+				for _, m := range fp.Nodes {
+					for name, v := range m {
+						m[name] = f(v)
+					}
+				}
+			}
+		}
+		each(func(v string) string {
+			if automation.IsHidden(v) {
+				want[v] = true
+			}
+			return v
+		})
+		if len(want) == 0 {
+			continue
+		}
+		digests := make([]string, 0, len(want))
+		for d := range want {
+			digests = append(digests, d)
+		}
+		sort.Strings(digests)
+		kept, err := st.Reveal(ctx, cluster, digests)
+		if err != nil {
+			return fmt.Errorf("the sensitive values of cluster %s: %w", cluster, err)
+		}
+		each(func(v string) string {
+			if !automation.IsHidden(v) {
+				return v
+			}
+			if plain, ok := kept[v]; ok && plain != "" {
+				return env.Seal(plain)
+			} else if ok {
+				return ""
+			}
+			return backup.Placeholder
+		})
+	}
+	return nil
+}
+
+// openVariables is a fleet's variables from a backup with the sealed
+// values opened: one that cannot be opened is left out, and env lists it
+// to set again.
+func openVariables(fp automation.FleetVariables, env *backup.Env, fleet, cluster string) automation.FleetVariables {
+	open := func(m map[string]string, where string) map[string]string {
+		if m == nil {
+			return nil
+		}
+		out := map[string]string{}
+		for name, v := range m {
+			switch {
+			case v == backup.Placeholder || backup.SealedValue(v):
+				plain, err := env.Open(v, "the value of "+name+" on "+where+" of cluster "+cluster, "Automation › Variables")
+				if err != nil || plain == "" {
+					continue
+				}
+				out[name] = plain
+			case automation.IsHidden(v):
+				env.SetAgain("the value of "+name+" on "+where+" of cluster "+cluster, "Automation › Variables")
+			default:
+				out[name] = v
+			}
+		}
+		return out
+	}
+	out := fp
+	out.Values = open(fp.Values, "fleet "+fleet)
+	if fp.Nodes != nil {
+		out.Nodes = map[string]map[string]string{}
+		for node, m := range fp.Nodes {
+			if vals := open(m, "node "+node); len(vals) > 0 {
+				out.Nodes[node] = vals
+			}
+		}
+	}
+	return out
 }

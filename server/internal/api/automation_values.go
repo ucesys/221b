@@ -111,8 +111,15 @@ func (s *Server) waitForApproval(w http.ResponseWriter, r *http.Request, l launc
 	if sess, ok := auth.SessionFrom(r.Context()); ok {
 		wr.Method = sess.Method
 	}
+	// The sensitive values it would run with wait in the Secret, under
+	// their digests, until the request is decided or expires (DB-71).
+	if err := s.opts.AutomationStore.KeepValues(r.Context(), l.list.Cluster, l.typed); err != nil {
+		l.refuse(automationStatus(err), err.Error())
+		return
+	}
 	saved, err := s.opts.AutomationStore.NewWaitingRun(r.Context(), wr)
 	if err != nil {
+		s.opts.AutomationStore.ForgetValues(r.Context(), l.list.Cluster, l.typed)
 		l.refuse(automationStatus(err), err.Error())
 		return
 	}

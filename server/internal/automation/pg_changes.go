@@ -39,10 +39,28 @@ type changesRest struct {
 
 // NewChangesPG keeps the variable changes in d.
 func NewChangesPG(d *db.DB) *db.Doc[changesRecord] {
-	return &db.Doc[changesRecord]{DB: d, Key: ChangesKey, Read: readChanges, Write: writeChanges}
+	return &db.Doc[changesRecord]{DB: d, Key: ChangesKey,
+		Read: func(ctx context.Context, q db.Querier) (changesRecord, bool, error) {
+			return readChanges(ctx, q, false)
+		},
+		Write: func(ctx context.Context, tx pgx.Tx, old, next changesRecord) error {
+			return writeChanges(ctx, tx, sensitiveFor(d), old, next)
+		}}
 }
 
-func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error) {
+// UnmovedNew stands, in a change read from the tables, for a sensitive
+// value the change would set that is still in its row: it differs from
+// Unmoved, so the change still reads as one that alters the value, and
+// it stands for nothing the Secret keeps, so the change cannot be
+// approved until the start has moved its values.
+const UnmovedNew = hiddenPrefix + "000000000000000000000001"
+
+// readChanges reads the changes and the runs that wait. A sensitive value
+// is read as its digest, which is what its row has (DB-71). A value under
+// a sensitive name that is still in its row (the start could not move
+// it) is not read: Unmoved stands for it, unless raw is set, which is for
+// the move alone.
+func readChanges(ctx context.Context, q db.Querier, raw bool) (changesRecord, bool, error) {
 	var rec changesRecord
 	b, _, err := db.LoadScope(ctx, q, changesScope)
 	found := err == nil
@@ -56,7 +74,7 @@ func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error)
 		}
 		rec.Next, rec.NextRun, rec.Runs = rest.Next, rest.NextRun, rest.Runs
 	}
-	requests, err := readRequests(ctx, q)
+	requests, err := readRequests(ctx, q, raw)
 	if err != nil {
 		return rec, false, err
 	}
@@ -97,14 +115,29 @@ func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error)
 	}); err != nil {
 		return rec, false, err
 	}
+	var names func(cluster string) map[string]bool
+	if !raw {
+		if names, err = namesIn(ctx, q); err != nil {
+			return rec, false, err
+		}
+	}
 	items := map[string][]ChangeItem{}
-	rows, err = q.Query(ctx, "SELECT variable_change_id::text, kind, node, name, old_value, new_value FROM variable_change_items ORDER BY variable_change_id, position")
+	rows, err = q.Query(ctx, "SELECT variable_change_id::text, kind, node, name, coalesce(old_digest, old_value), coalesce(new_digest, new_value) FROM variable_change_items ORDER BY variable_change_id, position")
 	if err != nil {
 		return rec, false, err
 	}
 	var it ChangeItem
 	if _, err := pgx.ForEachRow(rows, []any{&id, &it.Kind, &it.Node, &it.Name, &it.Old, &it.New}, func() error {
-		items[id] = append(items[id], it)
+		x := it
+		if i, ok := at[id]; ok && !raw && (x.Kind == ItemValue || x.Kind == ItemNodeValue) && names(rec.Changes[i].Cluster)[x.Name] {
+			if x.Old != nil && !IsHidden(*x.Old) {
+				x.Old = text(Unmoved)
+			}
+			if x.New != nil && !IsHidden(*x.New) {
+				x.New = text(UnmovedNew)
+			}
+		}
+		items[id] = append(items[id], x)
 		return nil
 	}); err != nil {
 		return rec, false, err
@@ -132,7 +165,7 @@ func readChanges(ctx context.Context, q db.Querier) (changesRecord, bool, error)
 
 // readRequests reads the runs that wait for approval, or did: the rows of
 // script_runs that have a request's number, oldest first.
-func readRequests(ctx context.Context, q db.Querier) ([]WaitingRun, error) {
+func readRequests(ctx context.Context, q db.Querier, raw bool) ([]WaitingRun, error) {
 	var out []WaitingRun
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT script_run_id::text, request_number, cluster_id, cluster_name, script_name, version_number, fleet_key, fleet_name,
@@ -183,14 +216,24 @@ func readRequests(ctx context.Context, q db.Querier) ([]WaitingRun, error) {
 	if len(out) == 0 {
 		return nil, nil
 	}
-	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, value FROM script_run_values WHERE scope = 'request'")
+	var names func(cluster string) map[string]bool
+	if !raw {
+		if names, err = namesIn(ctx, q); err != nil {
+			return nil, err
+		}
+	}
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, coalesce(value_digest, value) FROM script_run_values WHERE scope = 'request'")
 	if err != nil {
 		return nil, err
 	}
 	var name, value string
 	if _, err := pgx.ForEachRow(rows, []any{&id, &name, &value}, func() error {
 		if i, ok := at[id]; ok {
-			out[i].Params[name] = value
+			v := value
+			if _, bound := Bound(v); !raw && !bound && !IsHidden(v) && names(out[i].Cluster)[name] {
+				v = Unmoved
+			}
+			out[i].Params[name] = v
 		}
 		return nil
 	}); err != nil {
@@ -312,7 +355,8 @@ func writeRequests(ctx context.Context, tx pgx.Tx, old, next []WaitingRun) error
 			return err
 		}
 		for name, v := range w.Params {
-			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, name, value) VALUES ($1, $2, 'request', $3, $4)", db.NewID(), id, name, v); err != nil {
+			value, digest := columnsOf(v)
+			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, name, value, value_digest) VALUES ($1, $2, 'request', $3, $4, $5)", db.NewID(), id, name, value, digest); err != nil {
 				return err
 			}
 		}
@@ -329,7 +373,35 @@ func writeRequests(ctx context.Context, tx pgx.Tx, old, next []WaitingRun) error
 	return nil
 }
 
-func writeChanges(ctx context.Context, tx pgx.Tx, old, next changesRecord) error {
+// columnsOf is a value of a run as its row keeps it: a digest in the
+// digest's column, with no value beside it.
+func columnsOf(v string) (value string, digest *string) {
+	if IsHidden(v) {
+		return "", &v
+	}
+	return v, nil
+}
+
+// writeChanges hides the sensitive values the changes and the waiting
+// runs hold (sealChanges), writes their rows, has the Secret keep what a
+// waiting one would use, and leaves the commit to the caller: a Secret
+// that cannot be written leaves the rows as they were.
+func writeChanges(ctx context.Context, tx pgx.Tx, sens SensitiveStore, old, next changesRecord) error {
+	names, err := namesIn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	sealed, err := sealChanges(newRing(ctx, sens), &next, names, nil)
+	if err != nil {
+		return err
+	}
+	if err := writeChangesRows(ctx, tx, old, next); err != nil {
+		return err
+	}
+	return sealed.put(ctx, sens)
+}
+
+func writeChangesRows(ctx context.Context, tx pgx.Tx, old, next changesRecord) error {
 	// The counters. The scope is written again, without the requests, when
 	// it still has them from a build that kept them there.
 	var inScope changesRest
@@ -394,8 +466,16 @@ func writeChanges(ctx context.Context, tx pgx.Tx, old, next changesRecord) error
 			}
 		}
 		for i, it := range Items(c.Before, c.After) {
-			if _, err := tx.Exec(ctx, `INSERT INTO variable_change_items (variable_change_id, position, kind, node, name, old_value, new_value)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, i, it.Kind, it.Node, it.Name, it.Old, it.New); err != nil {
+			// A digest goes into the digest's column, and no value beside it.
+			var oldDigest, newDigest *string
+			if it.Old != nil && IsHidden(*it.Old) {
+				it.Old, oldDigest = nil, it.Old
+			}
+			if it.New != nil && IsHidden(*it.New) {
+				it.New, newDigest = nil, it.New
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO variable_change_items (variable_change_id, position, kind, node, name, old_value, new_value, old_digest, new_digest)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, i, it.Kind, it.Node, it.Name, it.Old, it.New, oldDigest, newDigest); err != nil {
 				return err
 			}
 		}

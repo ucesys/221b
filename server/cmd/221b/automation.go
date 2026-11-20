@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -60,6 +63,14 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
 			outDir = w.toolboxCfg.TranscriptDir
 		}
+		// Where the sensitive values are kept is said before anything is
+		// copied into the tables: a ConfigMap's variables copied now hide
+		// their sensitive values in the same Secrets as every later save.
+		sens, err := w.sensitiveStore()
+		if err != nil {
+			return err
+		}
+		automation.UseSensitive(w.database, sens)
 		// What is known of each node is rows of host_facts, and the
 		// scripts with their versions, the script groups, the execution
 		// profiles, the variables, their changes and the runs rows of
@@ -71,6 +82,7 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 				automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
 		}), nil)
 		w.inDatabase = append(w.inDatabase, "automation")
+		w.sensitiveValues(ctx, autoStore, sens)
 		autoEngine = automation.NewEngine(automation.Options{
 			Node: func(cluster, node string) (automation.NodeState, bool) {
 				_, client, ok := w.manager.Lookup(cluster)
@@ -131,4 +143,57 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 	}
 	w.autoEngine, w.autoStore = autoEngine, autoStore
 	return nil
+}
+
+// sensitiveStore is where Automation keeps its sensitive values (DB-71):
+// the Secrets of the console's namespace, beside the connections' and the
+// applications', one a cluster; in memory when the connections are (the
+// simulator, a console run by hand), as the other record sets split
+// between a row and a Secret are.
+func (w *wiring) sensitiveStore() (automation.SensitiveStore, error) {
+	if w.cfg.ConnectionsSecrets == "" {
+		return automation.NewMemorySensitive(), nil
+	}
+	ns, prefix, ok := strings.Cut(w.cfg.ConnectionsSecrets, "/")
+	if !ok || ns == "" || prefix == "" {
+		return nil, fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", w.cfg.ConnectionsSecrets)
+	}
+	return automation.NewSecretSensitive(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+}
+
+// sensitiveValues has the store keep its sensitive values in sens. With a
+// database the documents hide the values themselves, in the transaction
+// that writes their rows, and the values that are still in the tables (a
+// database of before step 0038, or one restored to an earlier time) are
+// moved out now: a cluster whose Secret cannot be written keeps its values
+// where they were, named in the log by cluster and variable, and the next
+// start tries again.
+func (w *wiring) sensitiveValues(ctx context.Context, st *automation.Store, sens automation.SensitiveStore) {
+	log := w.dbLog()
+	w.claimImport(automation.SensitiveImportID)
+	autoLog := log
+	if w.log != nil {
+		autoLog = w.log.With("component", "automation")
+	}
+	st.SensitiveInTables(w.database, sens, autoLog)
+	mctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	moved, _, err := automation.MoveSensitive(mctx, w.database, sens, log)
+	if err == nil {
+		// The record that it was done, with how many records the first move
+		// changed; every start still looks, and finds nothing to move.
+		_, err = w.database.ImportOnce(mctx, automation.SensitiveImportID, "tables", func(context.Context, pgx.Tx) (int, error) { return moved, nil })
+	}
+	if err != nil {
+		log.Warn("moving Automation's sensitive values out of the database into their Secrets is not finished; the next start tries again", "err", err)
+	}
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	if noValue, noRow, err := automation.Unmatched(mctx, w.database, sens); err != nil {
+		log.Warn("Automation's sensitive variables in the database and their Secrets could not be compared", "err", err)
+	} else if len(noValue) > 0 || len(noRow) > 0 {
+		log.Warn("Automation's sensitive variables in the database and their Secrets do not match: a variable without its value reads as not set, and a run that needs it is refused until it is set again; a value no variable names is kept and never read",
+			"variables_without_value", noValue, "values_without_variable", noRow)
+	}
 }
