@@ -316,6 +316,14 @@ func (p *PGSessions) Put(ctx context.Context, key string, b []byte, replace func
 			if _, err := tx.Exec(ctx, sessionInsertSQL, db.Fields(&next)...); err != nil {
 				return err
 			}
+			if next.Method == endedMethod {
+				// The ending of a signed session that was never exchanged:
+				// the replicas that looked for it a moment ago and found
+				// nothing must not go on answering from that.
+				if err := p.d.Notify(ctx, tx, sessionsTopic); err != nil {
+					return err
+				}
+			}
 		case err != nil:
 			return err
 		default:

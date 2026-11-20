@@ -486,8 +486,16 @@ func TestASignedSessionCarriesWhoThePersonIsAndNothingTheyMayDo(t *testing.T) {
 	if !ok {
 		t.Fatal("another replica with the key refuses it")
 	}
-	if store.Calls() != calls {
-		t.Fatal("checking a signed session asked the store")
+	// The cookie is checked with the key and the clock; the store is asked
+	// one thing only, whether it holds the session's ending (DB-65, after
+	// the ninth cluster test's F1: until then this test asserted that the
+	// store was not asked at all), and a store found away is then left
+	// alone like any other.
+	if n := store.Calls() - calls; n != 1 || store.Gets() == 0 {
+		t.Fatalf("checking a signed session made %d calls to the store", n)
+	}
+	if _, ok := b.Get(sess.ID); !ok || store.Calls() != calls+1 {
+		t.Fatalf("checking it again, with the store known to be away, made %d calls more", store.Calls()-calls-1)
 	}
 	if !got.Signed || got.User.Subject != "ldap:priya" || got.User.Username != "priya" || got.User.Email != "priya@corp.example" || got.User.Name != "Priya" || strings.Join(got.User.Groups, ",") != "platform-admins,readers" || got.Method != "ldap" || got.Ref != "uid=priya" {
 		t.Fatalf("the other replica reads %+v", got)

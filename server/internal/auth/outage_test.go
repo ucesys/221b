@@ -561,24 +561,34 @@ func TestASignedSessionBecomesAStoredOneWhenTheStoreIsBack(t *testing.T) {
 		if rec.User.Subject != "local:root" || rec.User.Username != "root" || rec.User.KubeName != "221b-local:root" || !rec.Admin || rec.Method != "local" || strings.Join(rec.Roles, ",") != "superAdmin" {
 			t.Fatalf("the stored session: %s", b)
 		}
-		// Signed in when the person signed in, not at the exchange: the
-		// longest a session may live counts from there.
-		if !rec.Created.Equal(signedInAt) || !rec.Expires.Equal(signedInAt.Add(7*24*time.Hour)) {
+		// Signed in when the person signed in, not at the exchange, and
+		// ending when the signed session would have: the exchange gives no
+		// more than the signed session had (DB-65).
+		if !rec.Created.Equal(signedInAt) || !rec.Expires.Equal(signedInAt.Add(30*time.Minute)) {
 			t.Fatalf("created %s, expires %s; signed in at %s", rec.Created, rec.Expires, signedInAt)
 		}
 		if strings.Contains(string(b), signed) || strings.Contains(string(b), stored) {
 			t.Fatal("the stored session holds a cookie's value")
 		}
 	}
-	// Both replicas take the new cookie, long past the half hour.
-	*o.now = o.now.Add(2 * time.Hour)
+	// The exchange is in the audit log of the replica that made it, once,
+	// with who it was for. (That no cookie is in it is checked at the end.)
+	if n := strings.Count(b.audit.String(), `"action":"session.exchange"`); n != 1 || !strings.Contains(b.audit.String(), "local:root") {
+		t.Fatalf("%d audit records of the exchange: %s", n, b.audit.String())
+	}
+	if strings.Contains(a.audit.String(), `"action":"session.exchange"`) {
+		t.Fatal("the replica that did not exchange recorded an exchange")
+	}
+	// Both replicas take the new cookie, for as long as the signed session
+	// would have lasted: 25 minutes after the sign-in.
+	*o.now = signedInAt.Add(25 * time.Minute)
 	for _, e := range []*env{a, b} {
 		if w, code := e.whoami(root); code != http.StatusOK || !w.Admin {
-			t.Fatalf("two hours on: %+v %d", w, code)
+			t.Fatalf("25 minutes after the sign-in: %+v %d", w, code)
 		}
 		resp, _ := root.Get(e.app.URL + "/")
 		if body := readAll(t, resp); !strings.Contains(body, "the app") {
-			t.Fatalf("two hours on, a page shows %q", body)
+			t.Fatalf("25 minutes after the sign-in, a page shows %q", body)
 		}
 	}
 	if len(o.store.Records()) != 1 {
@@ -588,6 +598,18 @@ func TestASignedSessionBecomesAStoredOneWhenTheStoreIsBack(t *testing.T) {
 	resp, _ := root.Get(a.app.URL + "/signin")
 	if body := readAll(t, resp); !strings.Contains(body, "the app") {
 		t.Fatalf("the sign-in page for a stored session: %q", body)
+	}
+	// And no longer: used a minute ago or not, the stored session ends
+	// when the signed one would have, on every replica, and so does the
+	// signed cookie it came from. (This test asserted, until the ninth
+	// cluster test's F1, that the stored session lived on for days.)
+	*o.now = signedInAt.Add(30*time.Minute + time.Second)
+	for _, e := range []*env{a, b} {
+		for what, c := range map[string]*http.Client{"the stored cookie": o.holding(e, stored), "the signed cookie": o.holding(e, signed)} {
+			if _, code := e.whoami(c); code != http.StatusUnauthorized {
+				t.Fatalf("%s after the signed session's half hour: %d", what, code)
+			}
+		}
 	}
 }
 
@@ -633,15 +655,55 @@ func TestTheExchangeOfASignedSessionHappensOnce(t *testing.T) {
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, _ := late.Do(req)
 	resp.Body.Close()
-	if o.store.Len() != 0 {
-		t.Fatalf("after the sign-out the store holds %d", o.store.Len())
+	// What the store holds now is no session: the record that the session
+	// was ended, kept until the signed one would have expired, so no
+	// replica exchanges the signed cookie again.
+	if sessions, endings := o.kept(); sessions != 0 || endings != 1 {
+		t.Fatalf("after the sign-out the store holds %d sessions and %d endings", sessions, endings)
 	}
 	if _, code := a.whoami(o.holding(a, signed)); code != http.StatusUnauthorized {
 		t.Fatalf("the signed cookie after the sign-out of the session that replaced it: %d", code)
 	}
-	if o.store.Len() != 0 {
-		t.Fatal("the signed cookie started a stored session again")
+	if _, code := a.whoami(o.holding(a, stored)); code != http.StatusUnauthorized {
+		t.Fatalf("the stored cookie after its sign-out: %d", code)
 	}
+	if sessions, endings := o.kept(); sessions != 0 || endings != 1 {
+		t.Fatalf("the signed cookie started a stored session again: %d sessions and %d endings", sessions, endings)
+	}
+	// The ending is removed once the signed session would have expired.
+	*o.now = o.now.Add(31 * time.Minute)
+	a.svc.Sweep()
+	if o.store.Len() != 0 {
+		t.Fatalf("after the half hour the store still holds %d records", o.store.Len())
+	}
+}
+
+// kept counts what the store holds: the sessions, and the records of
+// sessions that were ended (kept until the signed session they stood for
+// would have expired). An ending names nobody's groups or roles.
+func (o *outage) kept() (sessions, endings int) {
+	o.t.Helper()
+	for _, b := range o.store.Records() {
+		var rec struct {
+			Method string
+			Admin  bool
+			Roles  []string
+			Super  []string
+			User   struct{ Groups, KubeGroups []string }
+		}
+		if err := json.Unmarshal(b, &rec); err != nil {
+			o.t.Fatal(err)
+		}
+		if rec.Method != "ended" {
+			sessions++
+			continue
+		}
+		endings++
+		if rec.Admin || len(rec.Roles)+len(rec.Super)+len(rec.User.Groups)+len(rec.User.KubeGroups) != 0 {
+			o.t.Fatalf("the record of an ended session carries what a session may do: %s", b)
+		}
+	}
+	return sessions, endings
 }
 
 // holdingQuietly is holding for use from several goroutines: the value is
@@ -666,8 +728,8 @@ func TestSigningOutWithTheRequestThatExchangesEndsBoth(t *testing.T) {
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, _ := root.Do(req)
 	resp.Body.Close()
-	if n := o.store.Len(); n != 0 {
-		t.Fatalf("the sign-out left %d stored sessions", n)
+	if sessions, endings := o.kept(); sessions != 0 || endings != 1 {
+		t.Fatalf("the sign-out left %d stored sessions and %d endings", sessions, endings)
 	}
 	if _, code := a.whoami(root); code != http.StatusUnauthorized {
 		t.Fatalf("the browser after the sign-out: %d", code)
@@ -692,8 +754,7 @@ func TestAStreamDoesNotExchangeASignedSession(t *testing.T) {
 	if o.store.Len() != 0 || o.cookie(a, root) != signed {
 		t.Fatal("a stream exchanged the session")
 	}
-	// What the page asks by itself does: a tab left open is not asked to
-	// sign in again when the half hour ends.
+	// What the page asks by itself does.
 	if code := a.ask(root, "/api/v1/snapshot", map[string]string{"X-221B-Background": "1"}); code != http.StatusOK {
 		t.Fatalf("%d", code)
 	}
@@ -704,11 +765,19 @@ func TestAStreamDoesNotExchangeASignedSession(t *testing.T) {
 	if _, ok := a.svc.Current(auth.Session{ID: signed}); !ok {
 		t.Fatal("what was opened with the signed session was closed by the exchange")
 	}
-	*o.now = o.now.Add(31 * time.Minute)
+	*o.now = o.now.Add(29 * time.Minute)
+	if _, code := a.whoami(root); code != http.StatusOK {
+		t.Fatalf("the stored session before the half hour ends: %d", code)
+	}
+	// The half hour ends for both: the stored session gives no more than
+	// the signed one had, and the person signs in again. (This test
+	// asserted that the stored session went on, until the ninth cluster
+	// test's F1.)
+	*o.now = o.now.Add(2 * time.Minute)
 	if _, ok := a.svc.Current(auth.Session{ID: signed}); ok {
 		t.Fatal("the signed session outlived its half hour")
 	}
-	if _, code := a.whoami(root); code != http.StatusOK {
+	if _, code := a.whoami(root); code != http.StatusUnauthorized {
 		t.Fatalf("the stored session after the half hour: %d", code)
 	}
 }

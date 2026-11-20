@@ -234,12 +234,62 @@ func (s *Sessions) sign(sess Session) (*Session, error) {
 	return signed, nil
 }
 
+// exchangeID is the ID of the stored session a signed session is exchanged
+// for: the key's MAC over the signed session's sid, so every replica that
+// has the key works out the same one, and nobody without the key can. One
+// sign-in therefore has one stored session, whichever replicas are shown
+// its signed cookie, and the record under that ID's key is where every
+// replica finds what became of the signed session: nothing yet, the stored
+// session, or its ending (endedRecord). The text the MAC is over cannot be
+// a signed session's, which begins with signedPrefix.
+func (s *Sessions) exchangeID(sid string) (string, bool) {
+	s.mu.Lock()
+	keys := s.key
+	s.mu.Unlock()
+	key := keys.current()
+	if len(key) == 0 || sid == "" {
+		return "", false
+	}
+	return base64.RawURLEncoding.EncodeToString(macOf(key, "221b exchange\x00"+sid)), true
+}
+
+// endedInStore says whether the shared store holds the ending of a signed
+// session (endedRecord). A store that is away, or cannot say, says nothing:
+// the signed session then stands until it expires, which is what bounds a
+// signed session that could not be ended everywhere (DB-65).
+func (s *Sessions) endedInStore(sid string) bool {
+	id, ok := s.exchangeID(sid)
+	if !ok {
+		return false
+	}
+	key := keyOf(id)
+	s.mu.Lock()
+	_, here := s.ended[key]
+	shared := s.shared
+	s.mu.Unlock()
+	if here {
+		return true
+	}
+	if shared == nil || s.away() {
+		return false
+	}
+	var b []byte
+	var found bool
+	err := s.reach(func(ctx context.Context, shared SharedStore) error {
+		var err error
+		b, found, err = shared.Get(ctx, key)
+		return err
+	})
+	return err == nil && found && isEnded(b)
+}
+
 // findSigned checks a signed session's cookie: its shape, its MAC, its
-// times, and whether this replica ended it. It reads no store. A value
-// this console could not have written costs nothing; one whose MAC does
-// not verify costs at most a read of the key's Secret, and that at most
-// once every keyReread, so a key put back by hand reaches every replica
-// and a stranger's guesses reach nothing.
+// times, whether this replica ended it, and, when the shared store
+// answers, whether the store holds its ending. A value this console could
+// not have written costs nothing; one whose MAC does not verify costs at
+// most a read of the key's Secret, and that at most once every keyReread,
+// so a key put back by hand reaches every replica and a stranger's guesses
+// reach nothing.
 func (s *Sessions) findSigned(id string) (string, *Session, int) {
 	key := keyOf(id)
 	signedText, payload, mac, ok := splitSigned(id)
@@ -293,21 +343,48 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 			s.forget(key, true)
 			return key, nil, gone
 		}
+	} else if s.endedInStore(sid) {
+		// Ended on another replica, or on this one before it was started
+		// again. The store has the ending already.
+		s.forget(key, false)
+		return key, nil, gone
 	}
 	return key, sess, here
+}
+
+// Revoked says whether a signed session was ended, as far as this replica
+// knows.
+func (s *Sessions) Revoked(sess Session) bool {
+	if !sess.Signed || sess.sid == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ended := s.revoked[sess.sid]
+	return ended
 }
 
 // Exchange starts a stored session in place of a signed one, once the
 // shared store can be written again: for the same person, signed in the
 // same way at the same time. cur is the signed session as it stands now,
 // with what the person may do worked out. It returns the stored session,
-// whose ID goes in the cookie; false leaves the signed session standing
-// until it expires, and the exchange is tried again later. The signed
-// session is not ended by it: no other replica could be told, and what
-// was opened with it (a stream, a terminal) goes on until it expires.
-func (s *Sessions) Exchange(cur Session) (*Session, bool) {
+// whose ID goes in the cookie, and whether this call started it (made);
+// false leaves the signed session standing until it expires, and the
+// exchange is tried again later.
+//
+// The exchange never gives more than the signed session had (DB-65): the
+// stored session expires when the signed one would have, and nothing
+// moves that later. Its ID is worked out from the signed session
+// (exchangeID), so a signed cookie shown to several replicas, or shown
+// again after its exchange, comes to the one stored session and never to
+// a second; and a signed session whose ending the store holds is not
+// exchanged at all: it is refused here from then on (Revoked).
+//
+// The signed session is not ended by the exchange: what was opened with it
+// (a stream, a terminal) goes on until it expires.
+func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 	if !cur.Signed || cur.sid == "" {
-		return nil, false
+		return nil, false, false
 	}
 	s.exMu.Lock()
 	defer s.exMu.Unlock()
@@ -318,7 +395,7 @@ func (s *Sessions) Exchange(cur Session) (*Session, bool) {
 	wait := s.tryAfter[cur.sid]
 	s.mu.Unlock()
 	if shared == nil {
-		return nil, false
+		return nil, false, false
 	}
 	if done {
 		// Another request of the same browser got there first, or the
@@ -327,36 +404,77 @@ func (s *Sessions) Exchange(cur Session) (*Session, bool) {
 			s.mu.Lock()
 			cp := *st
 			s.mu.Unlock()
-			return &cp, true
+			return &cp, false, true
 		}
-		return nil, false
+		return nil, false, false
 	}
-	if now.Before(wait) || s.away() {
-		return nil, false
+	if now.Before(wait) || s.away() || !now.Before(cur.Expires) {
+		return nil, false, false
 	}
-	st := Session{
-		ID: randomID(), User: cur.User, Admin: cur.Admin, Roles: cur.Roles, Super: cur.Super, Method: cur.Method, Ref: cur.Ref,
-		GroupsAt: cur.GroupsAt, Created: cur.Created, LastSeen: cur.LastSeen, Expires: cur.Created.Add(s.max),
+	id, ok := s.exchangeID(cur.sid)
+	if !ok {
+		return nil, false, false
 	}
-	key := keyOf(st.ID)
-	written, err := s.store(key, st, true)
-	if err != nil || !written {
+	stored := Session{
+		ID: id, User: cur.User, Admin: cur.Admin, Roles: cur.Roles, Super: cur.Super, Method: cur.Method, Ref: cur.Ref,
+		GroupsAt: cur.GroupsAt, Created: cur.Created, LastSeen: cur.LastSeen, Expires: cur.Expires,
+	}
+	key := keyOf(id)
+	b, err := encodeSession(stored, nil)
+	if err != nil {
+		s.log.Warn("a session was not stored", "err", err)
+		return nil, false, false
+	}
+	// Only a key with no record is written: a record that is there is the
+	// stored session another replica started for this sign-in, or the
+	// ending of one.
+	var written, ended bool
+	err = s.reach(func(ctx context.Context, shared SharedStore) error {
+		var err error
+		ended = false
+		written, err = shared.Put(ctx, key, b, func(current []byte) bool {
+			ended = isEnded(current)
+			return current == nil
+		})
+		return err
+	})
+	switch {
+	case err != nil:
 		// A store that is away is left alone for a while as it is (reach);
 		// one that refuses is not asked on every request.
 		if !StoreAway(err) {
+			s.log.Warn("a session made while the session store was away could not be stored; it stands as it is until it expires", "err", err)
 			s.mu.Lock()
 			s.tryAfter[cur.sid] = now.Add(exchangeEvery)
 			s.mu.Unlock()
 		}
-		return nil, false
+		return nil, false, false
+	case ended:
+		// The signed session, or the stored one it had become, was ended
+		// where this replica did not see it.
+		s.forget(keyOf(cur.ID), false)
+		s.log.Info("a session made while the session store was away had been ended, and is refused", "user", cur.User.Username, "method", cur.Method)
+		return nil, false, false
+	case !written:
+		// Another replica started the stored session of this sign-in.
+		_, held, ok := s.lookup(id)
+		if !ok {
+			return nil, false, false
+		}
+		s.mu.Lock()
+		cp := *held
+		s.exchanged[cur.sid] = exchange{id: id, expires: cur.Expires}
+		s.mu.Unlock()
+		return &cp, false, true
 	}
 	s.mu.Lock()
-	s.byID[key] = &st
-	s.exchanged[cur.sid] = exchange{id: st.ID, expires: cur.Expires}
+	s.byID[key] = &stored
+	s.written[key] = stored.LastSeen
+	s.exchanged[cur.sid] = exchange{id: id, expires: cur.Expires}
 	s.mu.Unlock()
-	s.log.Info("a session made while the session store was away is now a stored one", "user", st.User.Username, "method", st.Method)
-	cp := st
-	return &cp, true
+	s.log.Info("a session made while the session store was away is now a stored one, which ends when the first would have", "user", stored.User.Username, "method", stored.Method, "expires", stored.Expires.UTC().Format(time.RFC3339))
+	cp := stored
+	return &cp, true, true
 }
 
 // KeyStore is where the session key is kept: one key of a Secret, written

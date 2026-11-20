@@ -347,16 +347,32 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 		// A session made while the session store was away becomes a stored
 		// one at its first request after the store is back (DB-65). Not on
 		// a stream: its answer may carry no cookie, and it stays open.
+		// The stored session ends when the signed one would have: the
+		// exchange gives no more than the signed session had.
+		ended := false
 		if sess.Signed && !streams(r) {
-			if stored, ok := s.sessions.Exchange(sess); ok {
+			if stored, made, ok := s.sessions.Exchange(sess); ok {
 				s.setSession(w, r, stored)
 				// What handles the request from here on, the leader it may
 				// be forwarded to as well, finds the stored session.
 				carry(r, stored.ID)
+				if made {
+					s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
+						"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+				}
 				sess = *stored
+			} else if s.sessions.Revoked(sess) {
+				// The store holds the ending of this session: it was signed
+				// out, or ended by an administrator, where this replica did
+				// not see it.
+				ended = true
 			}
 		}
-		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
+		if !ended {
+			return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
+		}
+		// An open path's handler looks for the session itself, and finds
+		// none.
 	}
 	if openPath(r.URL.Path) {
 		return r
@@ -431,12 +447,14 @@ func secure(r *http.Request) bool {
 }
 
 // setSession sets the session's cookie: its ID, or for a session made
-// while the session store was away the signed session itself, which the
-// browser keeps no longer than the session lasts.
+// while the session store was away the signed session itself. The browser
+// keeps it no longer than the session lasts.
 func (s *Service) setSession(w http.ResponseWriter, r *http.Request, sess *Session) {
 	maxAge := int(s.cfg.SessionMax / time.Second)
-	if sess.Signed {
-		maxAge = max(int(sess.Expires.Sub(s.now())/time.Second), 1)
+	// A signed session, and the stored one it is exchanged for, end when
+	// the signed one expires: the browser keeps neither any longer.
+	if left := int(sess.Expires.Sub(s.now()) / time.Second); sess.Signed || left < maxAge {
+		maxAge = max(left, 1)
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieSession, Value: sess.ID, Path: "/", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
@@ -606,7 +624,7 @@ func spoken(d time.Duration) string {
 // store was away (DB-65).
 func (s *Service) temporaryText(sess Session) string {
 	return "You are signed in. The session store was unavailable when you signed in, so this session lasts " + spoken(s.cfg.OutageSession) +
-		" and cannot be extended: at " + sess.Expires.UTC().Format("15:04 UTC") + " you will be asked to sign in again, unless the store is back before then."
+		" and cannot be extended: at " + sess.Expires.UTC().Format("15:04 UTC") + " you will be asked to sign in again."
 }
 
 // renderTemporary shows the sign-in page to someone signed in with a

@@ -158,10 +158,11 @@ type Sessions struct {
 	// then it is not asked. probing says one call is trying it again.
 	awayUntil time.Time
 	probing   bool
-	// ended are the keys of stored sessions ended here (a sign-out, an
+	// ended are the keys of the sessions ended here (a sign-out, an
 	// account disabled) while the store could not be told: refused on this
-	// replica, and deleted from the store when it can be.
-	ended map[string]bool
+	// replica, and removed from the store, or marked ended there (ending),
+	// when it can be.
+	ended map[string]ending
 	// revoked are the signed sessions ended here, by sid, with when each
 	// would have expired: this replica refuses them until then.
 	revoked map[string]time.Time
@@ -182,13 +183,63 @@ type exchange struct {
 	expires time.Time
 }
 
+// ending is what the shared store is still to be told of a session ended
+// here: marker is the record that says so in the session's place
+// (endedRecord), and nil has the record removed.
+type ending struct{ marker []byte }
+
+// endedMethod is the way of signing in an ended session's record names: no
+// sign-in is made that way, so the record is told from a session's by it.
+const endedMethod = "ended"
+
+// endedRecord is what the shared store keeps in place of a session that
+// was ended before its time and whose cookie, or the signed cookie it was
+// exchanged for, may still be shown to a replica that does not remember
+// the ending (DB-65): whose it was, when it was signed in and until when
+// the ending is kept, which is when the signed session would have expired.
+// It is a session's record that no console takes for a live one: its way
+// of signing in is none, it carries no group and no role, and its last
+// activity is the beginning of time, so a console that does not know the
+// mark takes it for a session that ran out long ago.
+func endedRecord(u User, created, expires time.Time) []byte {
+	b, _ := encodeSession(Session{
+		User:   User{Subject: u.Subject, Username: u.Username, Email: u.Email, Name: u.Name},
+		Method: endedMethod, GroupsAt: created, Created: created, LastSeen: time.Unix(0, 0).UTC(), Expires: expires,
+	}, nil)
+	return b
+}
+
+// isEnded says whether a stored record is an ended session's.
+func isEnded(b []byte) bool {
+	if b == nil {
+		return false
+	}
+	sess, _, _, err := decodeSession(b)
+	return err == nil && sess.Method == endedMethod
+}
+
+// longestOutage is the longest a signed session may be set to last
+// (auth.outageSession, -session-outage).
+const longestOutage = 24 * time.Hour
+
+// stoodFor says whether a stored session may be the one a signed session
+// was exchanged for: its whole life is no longer than a signed session's
+// can be, whatever the setting is now or was when it was signed. (A
+// session a sign-in stores lives for the maximum lifetime, days by
+// default.) The ending of such a session is kept in the store, so the
+// signed cookie it came from is not exchanged again; for a session that
+// stood for none, the record is of no use and does no harm.
+func (s *Sessions) stoodFor(sess *Session) bool {
+	return sess != nil && !sess.Signed && !sess.Created.IsZero() && !sess.Expires.After(sess.Created.Add(longestOutage))
+}
+
 // NewSessions makes a store with the idle and maximum lifetimes, in memory.
 func NewSessions(idle, max time.Duration, now func() time.Time) *Sessions {
 	if now == nil {
 		now = time.Now
 	}
 	return &Sessions{idle: idle, max: max, now: now, byID: map[string]*Session{}, written: map[string]time.Time{}, extra: map[string]map[string]json.RawMessage{}, newer: map[string]bool{}, log: slog.Default(),
-		key: NewSessionKey(nil, now), outage: defaultOutage, ended: map[string]bool{}, revoked: map[string]time.Time{}, exchanged: map[string]exchange{}, tryAfter: map[string]time.Time{}}
+		key: NewSessionKey(nil, now), outage: defaultOutage, ended: map[string]ending{}, revoked: map[string]time.Time{}, exchanged: map[string]exchange{}, tryAfter: map[string]time.Time{}}
 }
 
 // Outage sets the key that signs the sessions made while the shared store
@@ -426,7 +477,13 @@ func (s *Sessions) store(key string, sess Session, create bool) (bool, error) {
 			if current == nil {
 				return create
 			}
-			_, _, version, err := decodeSession(current)
+			cur, _, version, err := decodeSession(current)
+			if err == nil && cur.Method == endedMethod {
+				// The session was ended, and the record says so until the
+				// signed session it stood for would have expired: activity
+				// noted on a replica that has not heard does not undo it.
+				return false
+			}
 			if err != nil || version <= sessionVersion {
 				return true
 			}
@@ -456,11 +513,25 @@ func (s *Sessions) store(key string, sess Session, create bool) (bool, error) {
 // forget drops a session here and from the shared store. ended says a
 // person or an administrator ended it, rather than its time running out:
 // then a store that cannot be told is told later, and this replica refuses
-// the session meanwhile. A signed session is in no store: this replica
-// refuses it until it would have expired.
-func (s *Sessions) forget(key string, ended bool) {
+// the session meanwhile.
+//
+// A signed session is in no store: this replica refuses it until it would
+// have expired. When it was ended, the ending is also kept in the shared
+// store until then (endedRecord), under the key of the stored session the
+// signed one is exchanged for (exchangeID): a replica that does not
+// remember the ending finds it there, and neither takes the signed cookie
+// nor exchanges it (DB-65). The same record takes the place of a stored
+// session that was ended and may have stood for a signed one (stoodFor).
+func (s *Sessions) forget(key string, ended bool) { s.forgetOf(key, ended, nil) }
+
+// forgetOf is forget for a session this replica may not hold: known is the
+// session as the caller read it, used when it is not held here.
+func (s *Sessions) forgetOf(key string, ended bool, known *Session) {
 	s.mu.Lock()
 	sess := s.byID[key]
+	if sess == nil {
+		sess = known
+	}
 	delete(s.byID, key)
 	delete(s.written, key)
 	delete(s.extra, key)
@@ -468,33 +539,63 @@ func (s *Sessions) forget(key string, ended bool) {
 	shared := s.shared
 	if sess != nil && sess.Signed {
 		s.revoked[sess.sid] = sess.Expires
+		cp := *sess
 		s.mu.Unlock()
+		if ended && shared != nil {
+			if id, ok := s.exchangeID(cp.sid); ok {
+				s.end(keyOf(id), endedRecord(cp.User, cp.Created, cp.Expires))
+			}
+		}
 		return
+	}
+	var marker []byte
+	if ended && s.stoodFor(sess) {
+		marker = endedRecord(sess.User, sess.Created, sess.Expires)
 	}
 	s.mu.Unlock()
 	if shared == nil {
 		return
 	}
-	err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) })
-	if err == nil {
-		return
-	}
 	if !ended {
-		if !StoreAway(err) {
+		err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) })
+		if err != nil && !StoreAway(err) {
 			s.log.Warn("a session that ended was not removed from the shared store", "err", err)
 		}
+		return
+	}
+	s.end(key, marker)
+}
+
+// tell tells the shared store of a session's ending: its record is
+// removed, or replaced by the one that says it was ended.
+func (s *Sessions) tell(key string, marker []byte) error {
+	return s.reach(func(ctx context.Context, shared SharedStore) error {
+		if marker == nil {
+			return shared.Delete(ctx, key)
+		}
+		_, err := shared.Put(ctx, key, marker, func([]byte) bool { return true })
+		return err
+	})
+}
+
+// end tells the shared store of a session ended by a person or an
+// administrator. A store that cannot be told is told later (tellEnded),
+// and this replica refuses the session meanwhile.
+func (s *Sessions) end(key string, marker []byte) {
+	err := s.tell(key, marker)
+	if err == nil {
 		return
 	}
 	s.mu.Lock()
 	kept := len(s.ended) < maxEnded
 	if kept {
-		s.ended[key] = true
+		s.ended[key] = ending{marker: marker}
 	}
 	s.mu.Unlock()
 	if kept {
-		s.log.Warn("a session that was ended could not be removed from the shared store; this replica refuses it and removes it when the store can be reached", "err", err)
+		s.log.Warn("the shared store could not be told that a session was ended; this replica refuses it and tells the store when it can be reached", "err", err)
 	} else {
-		s.log.Warn("a session that was ended could not be removed from the shared store", "err", err)
+		s.log.Warn("the shared store could not be told that a session was ended", "err", err)
 	}
 }
 
@@ -531,7 +632,7 @@ func (s *Sessions) find(id string) (string, *Session, int) {
 	s.mu.Lock()
 	shared := s.shared
 	local := s.byID[key]
-	ended := s.ended[key]
+	_, ended := s.ended[key]
 	s.mu.Unlock()
 	if shared == nil {
 		if local == nil {
@@ -574,6 +675,14 @@ func (s *Sessions) find(id string) (string, *Session, int) {
 		s.log.Warn("a stored session cannot be read", "err", err)
 		return key, nil, gone
 	}
+	if sess.Method == endedMethod {
+		// The record of a session that was ended (endedRecord).
+		delete(s.byID, key)
+		delete(s.written, key)
+		delete(s.extra, key)
+		delete(s.newer, key)
+		return key, nil, gone
+	}
 	sess.ID = id
 	s.newer[key] = version > sessionVersion
 	if s.written[key].Before(sess.LastSeen) {
@@ -607,6 +716,14 @@ func (s *Sessions) Update(id string, fn func(*Session)) bool {
 // store's list cannot be had it returns the error with what this replica
 // holds, all of it: a list that failed says of no session that it ended.
 func (s *Sessions) all() (map[string]Session, error) {
+	out, _, err := s.allAndEnded()
+	return out, err
+}
+
+// allAndEnded is all with the records the store keeps of sessions that
+// were ended (endedRecord), by key, each with when it may be removed. They
+// are no sessions: nothing lists them, counts them or ends them.
+func (s *Sessions) allAndEnded() (map[string]Session, map[string]time.Time, error) {
 	s.mu.Lock()
 	shared := s.shared
 	out := map[string]Session{}
@@ -619,12 +736,13 @@ func (s *Sessions) all() (map[string]Session, error) {
 	}
 	s.mu.Unlock()
 	if shared == nil {
-		return out, nil
+		return out, nil, nil
 	}
 	stored, err := s.list()
 	if err != nil {
-		return out, err
+		return out, nil, err
 	}
+	markers := map[string]time.Time{}
 	for k, v := range out {
 		if _, ok := stored[k]; !ok && !v.Signed {
 			delete(out, k)
@@ -640,13 +758,18 @@ func (s *Sessions) all() (map[string]Session, error) {
 		if err != nil {
 			continue
 		}
+		if sess.Method == endedMethod {
+			delete(out, k)
+			markers[k] = sess.Expires
+			continue
+		}
 		if cur, ok := out[k]; ok && cur.LastSeen.After(sess.LastSeen) {
 			sess.LastSeen = cur.LastSeen
 		}
 		sess.ID = out[k].ID
 		out[k] = sess
 	}
-	return out, nil
+	return out, markers, nil
 }
 
 // Live returns copies of the sessions that have not expired. A session
@@ -668,13 +791,15 @@ func (s *Sessions) Live() []Session {
 // says how many. While the shared store's list cannot be had it ends the
 // ones this replica holds, and no other: those it refuses from then on and
 // removes from the store when the store can be reached. A signed session
-// is ended on this replica only (DB-65).
+// this replica holds is ended here, and its ending kept in the store for
+// the replicas that do not remember it; one this replica has never seen
+// cannot be found, and lasts until it expires (DB-65).
 func (s *Sessions) DeleteWhere(match func(Session) bool) int {
 	n := 0
 	all, _ := s.all()
 	for key, sess := range all {
 		if match(sess) {
-			s.forget(key, true)
+			s.forgetOf(key, true, &sess)
 			n++
 		}
 	}
@@ -748,8 +873,9 @@ func (s *Sessions) peekAt(key string, sess *Session, ok bool) (Session, bool) {
 }
 
 // Delete ends a session, on every replica. A signed session is ended on
-// this replica, which refuses it from then on; no other replica can be
-// told (DB-65).
+// this replica, which refuses it from then on, and its ending is kept in
+// the shared store for the others; while the store is away no other
+// replica can be told (DB-65).
 func (s *Sessions) Delete(id string) {
 	if signedShape(id) {
 		// Checking it puts it in this replica's memory, where forget finds
@@ -803,12 +929,20 @@ func (s *Sessions) Sweep() {
 	if shared != nil && s.away() {
 		return
 	}
-	all, err := s.all()
+	all, markers, err := s.allAndEnded()
 	if err != nil {
 		if !StoreAway(err) {
 			s.log.Warn("the shared sessions cannot be listed; nothing is dropped", "err", err)
 		}
 		return
+	}
+	// An ending is kept until the signed session would have expired.
+	for key, until := range markers {
+		if now.After(until) {
+			if err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) }); err != nil && !StoreAway(err) {
+				s.log.Warn("the record of a session's ending was not removed from the shared store", "err", err)
+			}
+		}
 	}
 	for key, sess := range all {
 		if sess.Signed {
@@ -846,11 +980,17 @@ func (s *Sessions) Sweep() {
 	s.mu.Unlock()
 }
 
-// tellEnded removes from the shared store the sessions ended here while
-// it could not be told, and says whether the store could be asked.
+// tellEnded tells the shared store of the sessions ended here while it
+// could not be told, and says whether the store could be asked.
 func (s *Sessions) tellEnded(ended []string) bool {
 	for _, key := range ended {
-		err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) })
+		s.mu.Lock()
+		e, waits := s.ended[key]
+		s.mu.Unlock()
+		if !waits {
+			continue
+		}
+		err := s.tell(key, e.marker)
 		if err != nil {
 			if StoreAway(err) {
 				return false
@@ -867,7 +1007,7 @@ func (s *Sessions) tellEnded(ended []string) bool {
 // StoreIsBack is told when the shared store answers again after being
 // away (the database's health says so, db.OnAvailable): the store is not
 // left alone any longer, and the sessions ended here meanwhile are
-// removed from it now, not at the next sweep, so the other replicas stop
+// told to it now, not at the next sweep, so the other replicas stop
 // taking them. A store that is not back after all is found away again by
 // the first call.
 func (s *Sessions) StoreIsBack() {

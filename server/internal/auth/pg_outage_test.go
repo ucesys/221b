@@ -153,7 +153,7 @@ func TestSessionsThroughAnOutageOfTheDatabase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			o := newDatabaseOutage(t)
 			a, b := o.envs[0], o.envs[1]
-			for _, name := range []string{"ann", "bob", "dan"} {
+			for _, name := range []string{"ann", "bob", "dan", "eve"} {
 				o.create(a, name, "web-readers")
 			}
 			reread(t, b)
@@ -202,8 +202,25 @@ func TestSessionsThroughAnOutageOfTheDatabase(t *testing.T) {
 			// A local SuperAdmin signs in, through the form, on the replica
 			// that has not seen them: a signed session, taken by both.
 			var root *http.Client
+			rootSignedIn := *o.now
 			o.timed("a sign-in", func() { root = o.signInAway(b, "root", goodPassword) })
 			signed := o.cookie(b, root)
+			// eve signs in during the outage too, on b, is seen by a, and
+			// signs out on a: a refuses the cookie, and b cannot be told.
+			var eve *http.Client
+			eveSignedIn := *o.now
+			o.timed("a sign-in", func() { eve = o.signInAway(b, "eve", goodPassword) })
+			eveSigned := o.cookie(b, eve)
+			if w, code := o.who(a, eve, "a request of a signed session"); code != http.StatusOK || w.User != "eve" {
+				t.Fatalf("eve, signed in during the outage, on the other replica: %+v %d", w, code)
+			}
+			o.signOut(a, eve)
+			if _, code := o.who(a, o.holding(a, eveSigned), "a request with a signed-out signed cookie"); code != http.StatusUnauthorized {
+				t.Fatalf("a signed session signed out during the outage, where it was signed out: %d", code)
+			}
+			if _, code := o.who(b, o.holding(b, eveSigned), "a request with a signed-out signed cookie"); code != http.StatusOK {
+				t.Fatalf("the replica that cannot be told answered %d: it takes the signed cookie until the store is back or the session expires", code)
+			}
 			for _, e := range []*env{a, b} {
 				if w, code := o.who(e, root, "a request of a signed session"); code != http.StatusOK || w.User != "root" || !w.Admin {
 					t.Fatalf("the SuperAdmin signed in during the outage: %+v %d", w, code)
@@ -297,15 +314,43 @@ func TestSessionsThroughAnOutageOfTheDatabase(t *testing.T) {
 			if n := o.rows("username = 'root' AND subject = 'local:root' AND method = 'local' AND is_admin"); n != 1 {
 				t.Fatalf("the signed session has %d rows after the database is back", n)
 			}
-			*o.now = o.now.Add(2 * time.Hour)
-			for _, e := range []*env{a, b} {
-				if w, code := e.whoami(root); code != http.StatusOK || !w.Admin {
-					t.Fatalf("two hours on, long past the signed session's half hour: %+v %d", w, code)
+			// The row ends when the signed session would have, half an hour
+			// after the sign-in, and no later (DB-65).
+			if n := o.rows("username = 'root' AND expires_at = $1", rootSignedIn.Add(30*time.Minute)); n != 1 {
+				t.Fatalf("%d rows of the exchanged session expire when the signed session would have", n)
+			}
+			// eve's signed session was signed out during the outage on a: its
+			// ending is a row now, and the other replica, which was never
+			// told, refuses the signed cookie and makes no session of it.
+			if n := o.rows("username = 'eve' AND method = 'ended' AND NOT is_admin AND roles = '{}' AND groups = '{}' AND expires_at = $1", eveSignedIn.Add(30*time.Minute)); n != 1 {
+				t.Fatalf("%d rows say eve's signed session was ended", n)
+			}
+			for _, e := range []*env{b, a} {
+				if _, code := e.whoami(o.holding(e, eveSigned)); code != http.StatusUnauthorized {
+					t.Fatalf("a signed session signed out during the outage, after it: %d", code)
 				}
 			}
-			// ann, dan and root: three rows, and bob's gone.
-			if n := o.rows("true"); n != 3 {
-				t.Fatalf("%d rows at the end", n)
+			if n := o.rows("username = 'eve' AND method <> 'ended'"); n != 0 {
+				t.Fatalf("a signed-out signed session became %d rows", n)
+			}
+			// Used on both replicas for as long as the signed session would
+			// have lasted, and not a second longer.
+			*o.now = rootSignedIn.Add(29 * time.Minute)
+			for _, e := range []*env{a, b} {
+				if w, code := e.whoami(root); code != http.StatusOK || !w.Admin {
+					t.Fatalf("29 minutes after the sign-in: %+v %d", w, code)
+				}
+			}
+			if n := o.rows("username = 'root' AND expires_at > $1", rootSignedIn.Add(30*time.Minute)); n != 0 {
+				t.Fatal("activity moved the exchanged session's end later")
+			}
+			*o.now = rootSignedIn.Add(30*time.Minute + time.Second)
+			for _, e := range []*env{a, b} {
+				for what, c := range map[string]*http.Client{"the stored cookie": o.holding(e, stored), "the signed cookie": o.holding(e, signed)} {
+					if _, code := e.whoami(c); code != http.StatusUnauthorized {
+						t.Fatalf("%s after the signed session's half hour: %d", what, code)
+					}
+				}
 			}
 
 			// No cookie's value, and no part of a signed one, is in any row.
@@ -321,8 +366,15 @@ func TestSessionsThroughAnOutageOfTheDatabase(t *testing.T) {
 					}
 				}
 			}
-			if in := dbtest.Holding(t, o.dbs[0], "local:root"); in["auth_sessions"] != 1 {
+			if in := dbtest.Holding(t, o.dbs[0], "local:ann"); in["auth_sessions"] != 1 {
 				t.Fatalf("the search that found no cookie does not find the session's row either: %v", in)
+			}
+			// The sweep removes what has ended, the ending's row with it;
+			// ann and dan stay.
+			*o.now = o.now.Add(time.Minute)
+			a.svc.Sweep()
+			if n := o.rows("true"); n != 2 {
+				t.Fatalf("%d rows at the end", n)
 			}
 		})
 	}
