@@ -458,8 +458,8 @@ One session, unattended, with the owner's list of six items. This section is kep
 | Item | State |
 | --- | --- |
 | 0. What was left of the seventh test (F1's words, N2, N4, N5) | Done, `cbf5a95d`, pushed. |
-| 1. A conversation joined to its change or case by a key; the hand-overs kept | Done: DB-56 to DB-58, step `0033`. |
-| 2. The Inbox row for what a person submitted | Done: IN-11. |
+| 1. A conversation joined to its change or case by a key; the hand-overs kept | Done, `011fa4fb`, pushed: DB-56 to DB-58, step `0033`. |
+| 2. The Inbox row for what a person submitted | Done, `9275c29a`, pushed: IN-11. |
 | 3. Cluster test of 0 to 2 (the eighth) | Next. Both images are rebuilt; the release is at schema 31 and gets steps `0032` and `0033`. |
 | 4. Iteration B: what is kept in Secrets | Not started. A survey of the code and a design are on the build machine (`~/p13-8/iterB-plan.md`, not in the repository). |
 | 5. Cluster test of iteration B | Not started. |
