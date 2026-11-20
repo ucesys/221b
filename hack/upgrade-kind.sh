@@ -8,13 +8,12 @@
 # This build keeps its records in the bundled database (DB-69), which a
 # release before 0.13 does not have: the upgrade adds it, and the first
 # start copies the records from the ConfigMaps and Secrets into it and
-# removes them there (DB-17, DB-55, DB-61, DB-64). So after the upgrade the
-# records are checked in the database, and the ConfigMap's key is checked
-# gone. Today (DB-55) the console removes the copied keys and leaves the
-# ConfigMap the chart makes; once the console deletes the ConfigMaps after
-# the copy (item A.2 of the handover, decided on November 20), the check
-# after the upgrade is that the ConfigMap is gone, and the rollback finds
-# none until the earlier chart's revision makes it again. The rollback to
+# removes them there (DB-17, DB-61, DB-64, DB-72). So after the upgrade the
+# records are checked in the database, and the ConfigMaps of before are
+# checked gone: the chart renders them only while they are there, with
+# helm.sh/resource-policy: keep, so Helm does not delete one before the
+# console has copied it, and the console deletes each once its record sets
+# are copied (DB-72, ADR-167). The rollback to
 # the release before is the one docs/upgrading.md describes: it starts with
 # the accounts and Sherlock's key, which stay in their Secrets, and with
 # none of the settings, fleets, acknowledgements or connections, which are
@@ -282,22 +281,31 @@ in_database() {
   [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from fleets where fleet_key = 'upgrade'")" = 1 ] || { echo "the fleet is not a row"; exit 1; }
   [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from alert_acks where alert_key = '$key'")" = 1 ] || { echo "the acknowledgement is not a row"; exit 1; }
   [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from clusters where cluster_id = 'kept' and is_kept")" = 1 ] || { echo "the connection is not a row"; exit 1; }
-  # The copied keys are removed (DB-55): the settings ConfigMap is still
-  # there, made by the chart, without settings.json. (Once the console
-  # deletes the ConfigMaps after the copy, A.2, this is: the ConfigMap is
-  # gone.)
-  kubectl -n "$NS" get configmap "$FULLNAME" -o json | python3 -c '
-import json, sys
-d = json.load(sys.stdin).get("data") or {}
-assert "settings.json" not in d, "settings.json is still in the ConfigMap: " + d["settings.json"][:200]
-print("the settings ConfigMap holds", sorted(d) or "nothing")'
+  # The ConfigMaps of before are deleted once their record sets are copied
+  # (DB-72); the configuration ConfigMaps stay. The deletion follows the
+  # copy, which the console does once it is ready, so wait a little.
+  for _ in $(seq 30); do
+    kubectl -n "$NS" get configmap "$FULLNAME" > /dev/null 2>&1 || break
+    sleep 2
+  done
+  if kubectl -n "$NS" get configmap "$FULLNAME" > /dev/null 2>&1; then
+    echo "the settings ConfigMap of before is still there"; exit 1
+  fi
+  left=$(kubectl -n "$NS" get configmap -o name | sed 's|configmap/||' | grep "^$FULLNAME" || true)
+  echo "ConfigMaps of the release left: $(echo "$left" | tr '\n' ' ')"
+  for cm in $left; do
+    case "$cm" in
+      "$FULLNAME"-agents | "$FULLNAME"-auth-config | "$FULLNAME"-toolbox | "$FULLNAME"-wiki | "$DBNAME"-*) ;;
+      *) echo "a ConfigMap of before is still there: $cm"; exit 1 ;;
+    esac
+  done
   # The connection's Secret keeps its credential and not its record (DB-64).
   kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert "spec.json" not in d and "token" in d, sorted(d)
 print("the connection Secret holds", sorted(d))'
-  echo "the records are in the database, and gone from the ConfigMap and the Secret"
+  echo "the records are in the database, the ConfigMaps of before are gone, and the record is gone from the Secret"
 }
 
 step "helm upgrade from $FROM_TAG to this build"
@@ -312,8 +320,9 @@ step "Saved again, the settings are a row of the database, and the accounts carr
 change -X PUT -d '{"refreshSeconds":13,"timeFormat":{"date":"eu","clock":"24h"}}' "$URL/api/v1/settings" > /dev/null
 [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from settings where value::text ~ '\"clock\": ?\"24h\"'")" -ge 1 ] ||
   { echo "the time format saved is not in the database"; exit 1; }
-# Nothing is saved in the ConfigMap any more (DB-69).
-[ -z "$(kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}')" ]
+# Nothing is saved in a ConfigMap any more (DB-69), and the settings
+# ConfigMap of before is not made again (DB-72).
+! kubectl -n "$NS" get configmap "$FULLNAME" > /dev/null 2>&1 || { echo "the settings ConfigMap is back"; exit 1; }
 change -X PATCH -d '{"name":"Una Upgraded"}' "$URL/api/v1/admin/users/$USER2" > /dev/null
 v=$(kubectl -n "$NS" get secret "$FULLNAME-users" -o jsonpath='{.data.users\.json}' | base64 -d | stored_version)
 echo "users.json: version $v"
