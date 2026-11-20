@@ -511,3 +511,34 @@ func TestAReplyMovesTheCaseCF67(t *testing.T) {
 		t.Errorf("the agent's draft sent: %+v %+v %v", v.Brief, v.History, err)
 	}
 }
+
+// A case whose analysis was skipped because the job was busy is told so
+// with no other case's run: the day's skips are one run, named after the
+// first case skipped, which only that case lists (CW-06; the seventh
+// cluster test's N5).
+func TestASkippedAnalysisNamesNoOtherCasesRun(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	for _, title := range []string{"The shop is slow", "The cart is slow"} {
+		if _, err := w.svc.Create(ctx, NewCase{Title: title, Cluster: "prod", Priority: pr(2)}, olivia); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skipped := jobs.Run{ID: "run-7", Job: jobs.KindCase, Status: jobs.StatusSkipped, Ref: "case:C-1", Note: "skipped: the job had too many events waiting for its runs"}
+	w.svc.finish(1, skipped, jobs.Outcome{}, jobs.ErrRunning)
+	w.svc.finish(2, skipped, jobs.Outcome{}, jobs.ErrRunning)
+	first, second := w.get(t, "C-1"), w.get(t, "C-2")
+	if len(first.Runs) != 1 || first.Runs[0] != "run-7" {
+		t.Errorf("the first case skipped lists the run: %v", first.Runs)
+	}
+	if len(second.Runs) != 0 {
+		t.Errorf("the second case lists another case's run: %v", second.Runs)
+	}
+	last := second.History[len(second.History)-1].What
+	if strings.Contains(last, "run-7") || last != "The analysis was skipped: the case analysis job was busy with other cases" {
+		t.Errorf("the second case's history: %q", last)
+	}
+	if second.Analysis == nil || second.Analysis.Run != "" {
+		t.Errorf("the second case's analysis: %+v", second.Analysis)
+	}
+}
