@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -21,7 +22,8 @@ Write your report for an operator who reads it later: what you checked, what you
 ` + "```json" + `
 {"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "confidence": "confirmed|likely", "expected": false, "expectedWhy": "", "checkWhy": ""}],
  "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom, how to undo it, and the read that shows it worked", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/Kind/name"}]}],
- "rechecked": [{"check": "the rule id of a fix to re-check", "resource": "its object", "still": true, "evidence": "what you read"}]}
+ "rechecked": [{"check": "the rule id of a fix to re-check", "resource": "its object", "still": true, "evidence": "what you read"}],
+ "covered": ["EX-4"]}
 ` + "```" + `
 
 Use empty lists when there is nothing.
@@ -32,6 +34,7 @@ Use empty lists when there is nothing.
 - With a rule id other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
 - Set "expected" true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false.
 - When fixes to re-check are listed above, give an entry in "rechecked" for every one. "still" is false only when you read the object in this run and the problem is gone, with what you read; true when it is still there; null when you could not read it (not allowed, a tool failed, the object is gone), with why. A fix you could not read is not verified. A problem still there is also a finding, with the same rule id and resource. Leave "rechecked" empty when none are listed.
+- A problem an exception in the keys in use covers is not reported as a finding: put the exception's id in "covered" instead, once. Leave "covered" empty when none did.
 - Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. "fixes" names what a proposal fixes: positions in your findings list (1 is the first) and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed.`
 
 // Quote puts text the agent must treat as data, never as instructions,
@@ -52,8 +55,59 @@ type Parsed struct {
 	// Rechecked are what the agent says of the fixes it was given to
 	// re-check (W-1), as it wrote them.
 	Rechecked []Recheck
+	// Covered are the exceptions the agent says covered a problem it
+	// therefore did not report, by id ("EX-4").
+	Covered []string
 	// Raw is the block, for a kind that asked for more fields.
 	Raw json.RawMessage
+}
+
+// coveredIDs reads "covered" leniently: a list of exception ids, written
+// as "EX-4", "ex-4" or 4, or as objects with an "exception"; anything
+// else is nothing, so one odd entry never makes the block unreadable.
+type coveredIDs []string
+
+func (c *coveredIDs) UnmarshalJSON(b []byte) error {
+	*c = nil
+	var raw []json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	for _, r := range raw {
+		var s string
+		var n int
+		var o struct {
+			Exception json.RawMessage `json:"exception"`
+		}
+		switch {
+		case json.Unmarshal(r, &s) == nil:
+		case json.Unmarshal(r, &n) == nil && n > 0:
+			s = strconv.Itoa(n)
+		case json.Unmarshal(r, &o) == nil && len(o.Exception) > 0:
+			if json.Unmarshal(o.Exception, &s) != nil && json.Unmarshal(o.Exception, &n) == nil && n > 0 {
+				s = strconv.Itoa(n)
+			}
+		}
+		if id := ExceptionID(s); id != "" && !slices.Contains(*c, id) && len(*c) < maxCovered {
+			*c = append(*c, id)
+		}
+	}
+	return nil
+}
+
+// maxCovered is how many exception ids one answer names.
+const maxCovered = 100
+
+var exceptionID = regexp.MustCompile(`^(?i:ex-?)?([1-9][0-9]{0,8})$`)
+
+// ExceptionID is an exception's id as the console writes it ("EX-4"),
+// or "" when the text names none.
+func ExceptionID(s string) string {
+	m := exceptionID.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return ""
+	}
+	return "EX-" + m[1]
 }
 
 // Proposed is a change as an agent writes it.
@@ -126,13 +180,14 @@ func Parse(text string) Parsed {
 			Findings  []Finding  `json:"findings"`
 			Proposals []Proposed `json:"proposals"`
 			Rechecked []Recheck  `json:"rechecked"`
+			Covered   coveredIDs `json:"covered"`
 		}
 		if json.Unmarshal([]byte(body), &b) != nil {
 			continue
 		}
 		out.Report = strings.TrimSpace(text[:m[i][0]] + text[m[i][1]:])
 		out.Findings, out.Proposals, out.Raw = b.Findings, b.Proposals, json.RawMessage(body)
-		out.Rechecked = b.Rechecked
+		out.Rechecked, out.Covered = b.Rechecked, b.Covered
 		return out
 	}
 	return out

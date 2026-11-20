@@ -440,3 +440,45 @@ func TestOldOutcomesReadAsNoActionCF90(t *testing.T) {
 		t.Fatalf("the record was rewritten: %s", keys[issues.CaseKey])
 	}
 }
+
+// An exception the agent says covered a problem it left out is matched
+// as when the console drops a finding it covers (FX-04; the seventh
+// cluster test's N3): once a run, only an active one of the cluster the
+// agent was asked about, and not twice with a finding it dropped.
+func TestAnExceptionTheAgentSaysCoveredIsMatchedFX04(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	w.now = time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)
+	res := w.route(t, "nightly-audit", true, finding("pod.privileged", "batch/Pod/runner", "Privileged runner"))
+	if _, err := w.svc.Exception(ctx, res.Findings[0].Case, ExceptionInput{Reason: "The CI runner needs it."}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	routeCovered := func(covered []jobs.Covered, fs ...jobs.Finding) jobs.RouteResult {
+		t.Helper()
+		w.runs++
+		run := fmt.Sprintf("run-%d", w.runs)
+		for i := range fs {
+			fs[i].ID = fmt.Sprintf("%s.%d", run, i+1)
+		}
+		return w.svc.Route(ctx, jobs.RouteInput{Run: run, Job: "nightly-audit", Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"prod"}, OK: true, Findings: fs,
+			Scope: &jobs.Scope{Clusters: []string{"prod"}}, Covered: covered})
+	}
+	matches := func() int {
+		e, _ := w.lessons.Exception(ctx, "EX-1")
+		return e.Matches
+	}
+	w.now = w.now.Add(24 * time.Hour)
+	res = routeCovered([]jobs.Covered{{Cluster: "prod", Exception: "EX-1"}, {Cluster: "prod", Exception: "EX-9"}, {Cluster: "local", Exception: "EX-1"}})
+	if matches() != 1 || fmt.Sprint(res.Covered) != "[EX-1]" {
+		t.Fatalf("covered and left out: %d matches, %v", matches(), res.Covered)
+	}
+	if e, _ := w.lessons.Exception(ctx, "EX-1"); !e.LastMatched.Equal(w.now) {
+		t.Fatalf("last matched: %+v", e)
+	}
+	// Reported and said covered too: one match.
+	w.now = w.now.Add(24 * time.Hour)
+	res = routeCovered([]jobs.Covered{{Cluster: "prod", Exception: "EX-1"}}, finding("pod.privileged", "batch/Pod/runner", "Privileged runner"))
+	if matches() != 2 || len(res.Covered) != 0 || res.Routed.Excepted != 1 {
+		t.Fatalf("reported and covered: %d matches, %+v", matches(), res)
+	}
+}

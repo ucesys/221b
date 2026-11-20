@@ -85,6 +85,16 @@ func covering(list []lessons.Exception, k issues.Key, now time.Time, canon func(
 	return nil
 }
 
+// exceptionByID is an exception of the list by its id.
+func exceptionByID(list []lessons.Exception, id string) *lessons.Exception {
+	for i := range list {
+		if strings.EqualFold(list[i].ID, id) {
+			return &list[i]
+		}
+	}
+	return nil
+}
+
 // Route routes a run's findings into cases (CF-01). A finding whose key
 // is not valid stays invalid. When the exceptions cannot be read, or the
 // cases cannot be saved, nothing is routed: the findings stay as they
@@ -311,6 +321,18 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 		return jobs.RouteResult{Findings: in.Findings, NotRouted: "the cases could not be saved: " + clip(err.Error(), 300)}
 	}
 	out.NotRechecked = notRechecked
+	// An exception the agent said covered a problem it did not report is
+	// matched as when it drops a finding (FX-04): once a run, an active
+	// one of the cluster the agent was asked about, unless a finding of
+	// the run counted it already.
+	for _, c := range in.Covered {
+		e := exceptionByID(exceptions, c.Exception)
+		if e == nil || !e.Active(now) || e.Cluster != c.Cluster || hits[e.ID] > 0 {
+			continue
+		}
+		hits[e.ID]++
+		out.Covered = append(out.Covered, e.ID)
+	}
 	if err := s.o.Lessons.Match(ctx, in.Run, hits, now); err != nil {
 		s.o.Logger.Warn("the exceptions' matches could not be counted", "run", in.Run, "err", err)
 	}

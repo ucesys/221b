@@ -384,3 +384,33 @@ func TestAnAuditThatCannotReadSaysSoJB23(t *testing.T) {
 		t.Fatalf("the audit: %s", w.audit.String())
 	}
 }
+
+// The output's "covered" names the exceptions that covered a problem the
+// agent did not report, read leniently, and reaches the router with the
+// cluster the agent was asked about (FX-04; the seventh cluster test's
+// N3).
+func TestWhatAnExceptionCoveredReachesTheRouterFX04(t *testing.T) {
+	p := Parse("Read it.\n\n```json\n" + `{"findings": [], "covered": ["ex-4", 5, {"exception": "EX-6"}, "EX-4", "nonsense", null]}` + "\n```")
+	if fmt.Sprint(p.Covered) != "[EX-4 EX-5 EX-6]" || len(p.Raw) == 0 {
+		t.Fatalf("covered: %v", p.Covered)
+	}
+	if p := Parse("```json\n" + `{"findings": [], "covered": "EX-4"}` + "\n```"); len(p.Raw) == 0 || len(p.Covered) != 0 {
+		t.Fatalf("an odd covered: %+v", p)
+	}
+	w := setup(t)
+	w.s.RegisterBuiltins()
+	router := &recheckRouter{}
+	w.s.SetRouter(router)
+	w.s.SetAgents(&clusterAgents{text: map[string]string{"prod": "Read it.\n\n```json\n" + `{"findings": [], "covered": ["EX-4"]}` + "\n```"}})
+	on(t, w.s, KindAudit, Change{Clusters: &[]string{"prod"}})
+	if _, err := w.s.RunNow(context.Background(), KindAudit, Person{Email: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	if in := router.last(t); fmt.Sprint(in.Covered) != "[{prod EX-4}]" {
+		t.Fatalf("the router was given %v", in.Covered)
+	}
+	if !strings.Contains(OutputFormat, `"covered": ["EX-4"]`) {
+		t.Fatal("the output format does not ask for it")
+	}
+}

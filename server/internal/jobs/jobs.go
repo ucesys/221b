@@ -542,6 +542,17 @@ type Outcome struct {
 	Scope     *Scope
 	Rechecked []Recheck
 	Failed    []string
+	// Covered are the exceptions the agent said covered a problem it did
+	// not report, each with the cluster it was asked about.
+	Covered []Covered
+}
+
+// Covered is an exception the agent said covered a problem on a cluster,
+// which it did not report as a finding: it counts as the exception's
+// match as a finding the exception drops does.
+type Covered struct {
+	Cluster   string
+	Exception string
 }
 
 // External is a job that runs elsewhere, on its own schedule, and is only

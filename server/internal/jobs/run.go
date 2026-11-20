@@ -448,10 +448,13 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	r.Routed = Routed{}
 	if s.o.Router != nil && len(k.Checks) > 0 && r.Status != StatusNoAccess {
 		res := s.o.Router.Route(sctx, RouteInput{Run: r.ID, Job: j.ID, Kind: k.ID, Label: r.Label, Clusters: r.Clusters, OK: r.Status == StatusOK, Findings: r.Findings,
-			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys})
+			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys, Covered: out.Covered})
 		r.Findings, r.Routed, r.VerifiedCases, r.NewChecks, r.NotRechecked = res.Findings, res.Routed, res.Verified, res.NewChecks, res.NotRechecked
 		if res.NotRechecked > 0 {
 			notes = append(notes, notRecheckedNote(res.NotRechecked))
+		}
+		if len(res.Covered) > 0 {
+			notes = append(notes, fmt.Sprintf("the agent left out what %s covered, counted as %s", strings.Join(res.Covered, ", "), plural(len(res.Covered), "its match", "their matches")))
 		}
 		// Not routed, it is kept so and routed on a later look (W-8).
 		if res.NotRouted != "" {
