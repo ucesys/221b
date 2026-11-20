@@ -16,10 +16,10 @@ import (
 )
 
 // The credentials' list in the database (Phase 13, DB-60): each credential
-// a row of credentials, every field a column, through db.Doc, an interim
-// step until the service has a repository of its own. The secret part of
-// each stays in the Secret under secret-<id>, read and written as before:
-// nothing in this file is given a Secret, and no column holds one.
+// a row of credentials, every field a column, read and written one row at
+// a time by PGRepo (repo.go, DB-75). The secret part of each stays in the
+// Secret under secret-<id>, read and written as before: nothing in this
+// file is given a Secret, and no column holds one.
 //
 // The table also holds rows made with only their id, for a repository, an
 // application or a source that names a credential whose own record is not
@@ -40,11 +40,6 @@ const migrationScope = "credentials-migration"
 // pointAtCredentials are the tables with a key to credentials: a row one
 // of them points at is kept when its credential is removed.
 var pointAtCredentials = []string{"applications", "knowledge_sources", "repositories"}
-
-// NewPG keeps the credentials' list in d.
-func NewPG(d *db.DB) *db.Doc[index] {
-	return &db.Doc[index]{DB: d, Key: "credentials", ImportAs: ListImportID, Read: readList, Write: writeList}
-}
 
 // credRow is a row of credentials.
 type credRow struct {
@@ -206,68 +201,6 @@ var upsertSQL, idOnlySQL = func() (string, string) {
 		"UPDATE credentials SET " + strings.Join(back, ", ") + " WHERE credential_id = $1"
 }()
 
-func readList(ctx context.Context, q db.Querier) (index, bool, error) {
-	var ix index
-	b, _, err := db.LoadScope(ctx, q, migrationScope)
-	found := err == nil
-	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return ix, false, err
-	}
-	if found {
-		_ = json.Unmarshal(b, &ix.Migration)
-	}
-	// In the order they were made, as the Secret's list was.
-	rows, err := q.Query(ctx, db.SelectSQL("credentials", &credRow{}, "WHERE is_kept ORDER BY created_at NULLS FIRST, credential_id"))
-	if err != nil {
-		return ix, false, err
-	}
-	var r credRow
-	if _, err := pgx.ForEachRow(rows, db.Fields(&r), func() error {
-		ix.Credentials = append(ix.Credentials, credentialOf(r))
-		return nil
-	}); err != nil {
-		return ix, false, err
-	}
-	return ix, found || len(ix.Credentials) > 0, nil
-}
-
-func writeList(ctx context.Context, tx pgx.Tx, old, next index) error {
-	a, _ := json.Marshal(old.Migration)
-	b, _ := json.Marshal(next.Migration)
-	if string(a) != string(b) {
-		if _, err := db.SaveScope(ctx, tx, migrationScope, b, db.AnyVersion, ""); err != nil {
-			return err
-		}
-	}
-	// The removed ones first, so a name one of them had is free for another.
-	kept := map[string]bool{}
-	for _, c := range next.Credentials {
-		kept[c.ID] = true
-	}
-	for _, c := range old.Credentials {
-		if !kept[c.ID] {
-			if err := removeRow(ctx, tx, c.ID); err != nil {
-				return err
-			}
-		}
-	}
-	put := func(c Credential) error {
-		if c.ID == "" {
-			return errors.New("a credential without an id cannot be kept")
-		}
-		r := rowOf(c)
-		if _, err := tx.Exec(ctx, upsertSQL, db.Fields(&r)...); err != nil {
-			if db.IsUnique(err) {
-				return fmt.Errorf("there is a credential named %s already", c.Name)
-			}
-			return err
-		}
-		return nil
-	}
-	return db.Diff(old.Credentials, next.Credentials, func(c Credential) string { return c.ID }, put,
-		func(_, c Credential) error { return put(c) }, func(Credential) error { return nil })
-}
-
 // removeRow takes a credential out of the list: its row is deleted when
 // nothing points at it, and set back to one with only its id otherwise,
 // so what names it still does (it then reads as a credential that is not
@@ -291,9 +224,10 @@ func removeRow(ctx context.Context, tx pgx.Tx, id string) error {
 // database, once, and says how many credentials it copied. A row with
 // only its id is filled; a credential the database already keeps under
 // the same id stays as the database has it, which is the newer; one whose
-// name a credential of the database has is copied under a name of its
-// own. A list that cannot be read is an error: nothing is recorded, the
-// key stays, and the next start tries again. The secrets are not read.
+// name a credential of the database has is copied as "NAME (copied at
+// upgrade)". A list that cannot be read is an error: nothing is recorded,
+// the key stays, and the next start tries again. The secrets are not
+// read.
 func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 	n := 0
 	_, err := d.ImportOnce(ctx, ListImportID, "secret", func(ctx context.Context, tx pgx.Tx) (int, error) {
@@ -310,27 +244,32 @@ func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 			// The text of the error may quote the list: it is not passed on.
 			return 0, errors.New("the credentials' list in the Secret cannot be read: it is left there")
 		}
-		have, _, err := readList(ctx, tx)
-		if err != nil {
-			return 0, err
-		}
-		next := index{Credentials: slices.Clone(have.Credentials), Migration: have.Migration}
 		if _, _, err := db.LoadScope(ctx, tx, migrationScope); errors.Is(err, db.ErrNotFound) {
-			next.Migration = ix.Migration
+			m, _ := json.Marshal(ix.Migration)
+			if _, err := db.SaveScope(ctx, tx, migrationScope, m, db.AnyVersion, ""); err != nil {
+				return 0, err
+			}
 		} else if err != nil {
 			return 0, err
 		}
+		have, err := listRows(ctx, tx)
+		if err != nil {
+			return 0, err
+		}
 		for _, c := range ix.Credentials {
-			if c.ID == "" || slices.ContainsFunc(next.Credentials, func(o Credential) bool { return o.ID == c.ID }) {
+			if c.ID == "" || slices.ContainsFunc(have, func(o Credential) bool { return o.ID == c.ID }) {
 				continue
 			}
-			if taken(next.Credentials, c.Name) {
-				c.Name = restoredName(next.Credentials, c.Name)
+			if taken(have, c.Name) {
+				c.Name = suffixedName(have, c.Name, copiedSuffix)
 			}
-			next.Credentials = append(next.Credentials, c)
+			if err := putRow(ctx, tx, c); err != nil {
+				return 0, err
+			}
+			have = append(have, c)
 			n++
 		}
-		return n, writeList(ctx, tx, have, next)
+		return n, nil
 	})
 	if err != nil {
 		n = 0
@@ -344,18 +283,15 @@ func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 // Neither is changed: a secret without its credential is never used, and
 // a credential without its secret says so where it is used. A store that
 // cannot list its keys is not compared.
-func Unmatched(ctx context.Context, list *db.Doc[index], secrets SecretStore) (noCredential, noSecret []string, err error) {
+func Unmatched(ctx context.Context, list Repo, secrets SecretStore) (noCredential, noSecret []string, err error) {
 	all, ok := secrets.(interface {
 		Keys(ctx context.Context) ([]string, error)
 	})
 	if !ok {
 		return nil, nil, nil
 	}
-	var ix index
-	if err := list.DB.Snapshot(ctx, func(q db.Querier) (err error) {
-		ix, _, err = readList(ctx, q)
-		return err
-	}); err != nil {
+	creds, err := list.List(ctx)
+	if err != nil {
 		return nil, nil, err
 	}
 	keys, err := all.Keys(ctx)
@@ -363,7 +299,7 @@ func Unmatched(ctx context.Context, list *db.Doc[index], secrets SecretStore) (n
 		return nil, nil, err
 	}
 	listed := map[string]bool{}
-	for _, c := range ix.Credentials {
+	for _, c := range creds {
 		listed[c.ID] = true
 		if len(c.Set) > 0 && !slices.Contains(keys, secretKey(c.ID)) {
 			noSecret = append(noSecret, c.ID)

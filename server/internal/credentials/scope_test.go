@@ -209,7 +209,7 @@ func TestARestoredCredentialKeepsItsIDUnderAnotherName(t *testing.T) {
 		t.Fatalf("%q", notes)
 	}
 	long := strings.Repeat("é", 50)
-	if name := restoredName(nil, long); len(name) > 100 || !utf8.ValidString(name) || !strings.HasSuffix(name, " (restored)") {
+	if name := suffixedName(nil, long, restoredSuffix); len(name) > 100 || !utf8.ValidString(name) || !strings.HasSuffix(name, " (restored)") {
 		t.Fatalf("%q", name)
 	}
 }

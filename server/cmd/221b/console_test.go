@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -208,6 +209,19 @@ func (c *simCluster) beforeTheMove(t *testing.T) {
 		if _, err := creds.Create(ctx, credentials.Credential{Name: name, Kind: credentials.KindToken, Endpoint: "https://github.com/ucesys"}, credentials.Secret{Token: secretCred + name}, "ann"); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// The list as a release before 0.13 kept it: under "index".
+	list, err := creds.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]any{"credentials": list})
+	_, version, _, err := sk.LoadKey(ctx, "index")
+	if err == nil {
+		err = sk.SaveKeyIf(ctx, "index", b, version)
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

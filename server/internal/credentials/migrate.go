@@ -149,8 +149,7 @@ func (s *Service) Migrate(ctx context.Context, consumers []Consumer, by string) 
 			return nil, nil
 		}
 	}
-	err = s.update(ctx, func(ix *index) error {
-		m := &ix.Migration
+	err = s.o.Repo.UpdateMigration(ctx, func(m *Migration) error {
 		m.At = s.o.Now().UTC()
 		m.Created = append(m.Created, created...)
 		for _, n := range notes {

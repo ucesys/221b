@@ -30,6 +30,8 @@ const (
 	// A certificate trusted, or let go (CR-16, CR-19).
 	ActionCredentialTrust  = "credential.trust"
 	ActionCredentialForget = "credential.forget"
+	// A secret no credential names, taken out of the Secret (DB-75).
+	ActionCredentialSecretRemove = "credential.secret.remove"
 )
 
 func (s *Server) credentialsRoutes() {
@@ -42,6 +44,41 @@ func (s *Server) credentialsRoutes() {
 	s.handle("POST /api/v1/credentials/{id}/test", "credential-test", s.postCredentialTest)
 	s.handle("POST /api/v1/credentials/{id}/trust", "credential-trust", s.postCredentialTrust)
 	s.handle("DELETE /api/v1/credentials/{id}/trust", "credential-forget", s.deleteCredentialTrust)
+	s.handle("GET /api/v1/credential-secrets", "credential-unnamed-secrets", s.getUnnamedSecrets)
+	s.handle("DELETE /api/v1/credential-secrets/{id}", "credential-secret-remove", s.deleteUnnamedSecret)
+}
+
+// getUnnamedSecrets lists, for a SuperAdmin, the ids of the secrets the
+// credentials' Secret keeps that no credential names (DB-75): never used,
+// and named in the log at each start. Never a value.
+func (s *Server) getUnnamedSecrets(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	ids, err := s.opts.Credentials.UnnamedSecrets(r.Context())
+	if err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	b, _ := json.Marshal(struct {
+		Secrets []string `json:"secrets"`
+	}{ids})
+	writeJSON(w, r, b)
+}
+
+// deleteUnnamedSecret takes a secret no credential names out of the
+// credentials' Secret (DB-75); one a credential names is refused (409).
+func (s *Server) deleteUnnamedSecret(w http.ResponseWriter, r *http.Request) {
+	if !s.mayEditCredentials(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.opts.Credentials.RemoveUnnamedSecret(r.Context(), id); err != nil {
+		credentialFailed(w, err)
+		return
+	}
+	s.record(r, ActionCredentialSecretRemove, id, "the secret of this id, which no credential names, removed from the credentials' Secret")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // credentialView is a credential as the page sees it: everything but the

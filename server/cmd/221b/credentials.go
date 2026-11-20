@@ -14,7 +14,6 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
-	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
@@ -36,7 +35,7 @@ func (w *wiring) wireCredentials(ctx context.Context) error {
 		}
 		secrets = sk
 	}
-	w.creds = credentials.New(credentials.Options{Secrets: secrets, List: w.credentialsList(ctx, secrets, inSecret), Logger: w.log.With("component", "credentials")})
+	w.creds = credentials.New(credentials.Options{Secrets: secrets, Repo: w.credentialsList(ctx, secrets, inSecret), Logger: w.log.With("component", "credentials")})
 	return nil
 }
 
@@ -49,7 +48,7 @@ func (w *wiring) wireCredentials(ctx context.Context) error {
 // hand, connections.store: memory) the list stays in memory too, and nil
 // is returned: a list that outlived the secrets it names would show, after
 // a restart, credentials that no use could send.
-func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore, inSecret bool) kv.Backend {
+func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore, inSecret bool) credentials.Repo {
 	if !inSecret {
 		w.claimImport(credentials.ListImportID)
 		return nil
@@ -63,7 +62,7 @@ func (w *wiring) credentialsList(ctx context.Context, secrets credentials.Secret
 			}
 			return 0, err
 		})
-	list := credentials.NewPG(w.database)
+	list := credentials.NewPGRepo(w.database)
 	// The two halves that do not go together, said once at the start: a
 	// database restored to an earlier time, or a write cut short. Nothing
 	// is removed on that guess.
@@ -72,7 +71,7 @@ func (w *wiring) credentialsList(ctx context.Context, secrets credentials.Secret
 	if noRow, noSecret, err := credentials.Unmatched(cctx, list, secrets); err != nil {
 		w.dbLog().Warn("the credentials' list and their secrets could not be compared", "err", err)
 	} else if len(noRow) > 0 || len(noSecret) > 0 {
-		w.dbLog().Warn("the credentials' list in the database and the secrets in their Secret do not match: a secret without a credential is kept and never used, and a credential without its secret cannot be used until it is given again in Administration › Credentials",
+		w.dbLog().Warn("the credentials' list in the database and the secrets in their Secret do not match: a secret without a credential is kept and never used (a SuperAdmin removes it with DELETE /api/v1/credential-secrets/{id}), and a credential without its secret cannot be used until it is given again in Administration › Credentials",
 			"secrets_without_credential", noRow, "credentials_without_secret", noSecret)
 	}
 	return list

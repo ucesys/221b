@@ -67,7 +67,7 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 		if taken(have, c.Name) {
 			// Restored under its own id, which what the backup restores
 			// with it names, and a name of its own.
-			c.Name = restoredName(have, c.Name)
+			c.Name = suffixedName(have, c.Name, restoredSuffix)
 			note("credential %s: one of that name is here already; the backup's is restored as %s", e.Name, c.Name)
 		}
 		var sec Secret
@@ -96,13 +96,22 @@ func taken(have []Credential, name string) bool {
 	return slices.ContainsFunc(have, func(c Credential) bool { return strings.EqualFold(c.Name, name) })
 }
 
-// restoredName is a name no credential has: "GitHub (restored)",
-// "GitHub (restored 2)", within the 100 characters a name may have.
-func restoredName(have []Credential, name string) string {
+// What a name taken by another credential becomes, by what brought the
+// credential in: a backup's restore, or the copy of the list out of its
+// Secret at the first start with a database (DB-61).
+const (
+	restoredSuffix = "restored"
+	copiedSuffix   = "copied at upgrade"
+)
+
+// suffixedName is a name no credential has, saying what brought it in:
+// "GitHub (restored)", "GitHub (restored 2)", "GitHub (copied at
+// upgrade)", within the 100 characters a name may have.
+func suffixedName(have []Credential, name, why string) string {
 	for n := 1; ; n++ {
-		suffix := " (restored)"
+		suffix := " (" + why + ")"
 		if n > 1 {
-			suffix = fmt.Sprintf(" (restored %d)", n)
+			suffix = fmt.Sprintf(" (%s %d)", why, n)
 		}
 		base := name
 		for len(base)+len(suffix) > 100 {

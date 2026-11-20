@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -66,8 +67,22 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 		}
 		return c
 	}
+	// A console before 0.13 kept its list in the Secret, under "index".
+	asBefore := func(s *credentials.Service) {
+		t.Helper()
+		list, err := s.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(map[string]any{"credentials": list})
+		_, version, _, _ := mem.LoadKey(ctx, "index")
+		if err := mem.SaveKeyIf(ctx, "index", b, version); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before := credentials.New(credentials.Options{Secrets: mem})
 	a, b := token(before, "GitHub"), token(before, "Mirror")
+	asBefore(before)
 	withList := slices.Sorted(slices.Values([]string{"index", "secret-" + a.ID, "secret-" + b.ID}))
 	if got := keys(); !slices.Equal(got, withList) {
 		t.Fatalf("the Secret before: %v", got)
@@ -90,7 +105,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 
 	// The next start copies, and the list leaves the Secret alone.
 	w := &wiring{database: d}
-	creds := credentials.New(credentials.Options{Secrets: mem, List: w.credentialsList(ctx, mem, true)})
+	creds := credentials.New(credentials.Options{Secrets: mem, Repo: w.credentialsList(ctx, mem, true)})
 	if !w.importIDs[credentials.ListImportID] || len(w.importClash) != 0 {
 		t.Fatalf("the copy's name is not claimed: %v %v", w.importIDs, w.importClash)
 	}
@@ -107,9 +122,11 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 
 	// A console from before the move writes a list of its own; the next
 	// start removes it and does not read it.
-	late := token(credentials.New(credentials.Options{Secrets: mem}), "Late")
+	older := credentials.New(credentials.Options{Secrets: mem})
+	late := token(older, "Late")
+	asBefore(older)
 	again := &wiring{database: d}
-	creds = credentials.New(credentials.Options{Secrets: mem, List: again.credentialsList(ctx, mem, true)})
+	creds = credentials.New(credentials.Options{Secrets: mem, Repo: again.credentialsList(ctx, mem, true)})
 	if got := names(creds); !slices.Equal(got, []string{"GitHub", "Mirror"}) {
 		t.Fatalf("a list written since was read: %v", got)
 	}
@@ -118,7 +135,9 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 	}
 
 	// A database that cannot say whether the copy was made removes nothing.
-	token(credentials.New(credentials.Options{Secrets: mem}), "Later still")
+	older = credentials.New(credentials.Options{Secrets: mem})
+	token(older, "Later still")
+	asBefore(older)
 	gone := dbtest.Open(t)
 	gone.Close()
 	removed := false
@@ -141,7 +160,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 	if list != nil || !w2.importIDs[credentials.ListImportID] {
 		t.Fatalf("with the secrets in memory the list is %v", list)
 	}
-	mine := credentials.New(credentials.Options{Secrets: inMemory, List: list})
+	mine := credentials.New(credentials.Options{Secrets: inMemory, Repo: list})
 	c := token(mine, "In memory")
 	if u, err := mine.Resolve(ctx, c.ID, credentials.UseGit, "https://github.com/ucesys/221b"); err != nil || u.Token != "tok-In memory" {
 		t.Fatalf("a credential kept in memory: %v", err)

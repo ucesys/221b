@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -20,10 +19,11 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
-// SecretStore keeps the credentials: one key each of the Secret
+// SecretStore keeps the credentials' secrets: one key each of the Secret
 // <release>-credentials, read and written with its version
-// (kube.SecretKey). The key "index" holds the list without secrets, and
-// "secret-<id>" each credential's secret part.
+// (kube.SecretKey), "secret-<id>" each credential's secret part. The key
+// "index" held the list without secrets before 0.13: it is read only by
+// the one-time copy into the database (CopyList, DB-61).
 type SecretStore interface {
 	LoadKey(ctx context.Context, key string) (b []byte, version string, found bool, err error)
 	SaveKeyIf(ctx context.Context, key string, b []byte, version string) error
@@ -181,10 +181,10 @@ type index struct {
 type Options struct {
 	// Secrets keeps the credentials; nil is memory.
 	Secrets SecretStore
-	// List keeps the list without secrets when it is not the "index" key
-	// of Secrets: the database's rows (NewPG, DB-60). The secret parts
-	// stay in Secrets either way. Nil is the "index" key.
-	List kv.Backend
+	// Repo keeps the list without secrets: the database's rows
+	// (NewPGRepo, DB-60, DB-75), or memory (nil, NewMemoryRepo). The
+	// secret parts stay in Secrets either way.
+	Repo Repo
 	// HTTP fetches OAuth2 and GitHub App tokens and runs the tests; nil is
 	// one that refuses the console's own pod and node and the clouds'
 	// metadata services. Tests give their own.
@@ -219,6 +219,9 @@ func New(o Options) *Service {
 	if o.Secrets == nil {
 		o.Secrets = &MemorySecret{}
 	}
+	if o.Repo == nil {
+		o.Repo = NewMemoryRepo()
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -240,64 +243,6 @@ func (s *Service) Register(f UsersFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users = append(s.users, f)
-}
-
-func (s *Service) load(ctx context.Context) (index, string, error) {
-	var ix index
-	if s.o.List != nil {
-		b, version, err := s.o.List.LoadKey(ctx, indexKey)
-		if errors.Is(err, kv.ErrNotFound) {
-			return ix, version, nil
-		}
-		if err != nil {
-			return ix, "", fmt.Errorf("reading the credentials: %w", err)
-		}
-		if err := json.Unmarshal(b, &ix); err != nil {
-			return ix, "", fmt.Errorf("the credentials' list cannot be read: %w", err)
-		}
-		return ix, version, nil
-	}
-	b, version, found, err := s.o.Secrets.LoadKey(ctx, indexKey)
-	if err != nil {
-		return ix, "", fmt.Errorf("reading the credentials: %w", err)
-	}
-	if found && len(b) > 0 {
-		if err := json.Unmarshal(b, &ix); err != nil {
-			return ix, "", fmt.Errorf("the credentials' list cannot be read: %w", err)
-		}
-	}
-	return ix, version, nil
-}
-
-// update changes the list over the version read, with the secrets to
-// write in the same go (one key per write: each its own try).
-func (s *Service) update(ctx context.Context, f func(*index) error) error {
-	for range 10 {
-		ix, version, err := s.load(ctx)
-		if err != nil {
-			return err
-		}
-		if err := f(&ix); err != nil {
-			return err
-		}
-		b, _ := json.Marshal(ix)
-		if s.o.List != nil {
-			// The list is not in the Secret, and does not count against it.
-			_, err = s.o.List.SaveKey(ctx, indexKey, b, version)
-		} else if err = s.fits(ctx, indexKey, len(indexKey)+len(b)); err == nil {
-			err = s.o.Secrets.SaveKeyIf(ctx, indexKey, b, version)
-		} else {
-			return err
-		}
-		if err != nil {
-			if conflict(err) {
-				continue
-			}
-			return fmt.Errorf("saving the credentials: %w", err)
-		}
-		return nil
-	}
-	return errors.New("the credentials kept changing: try again")
 }
 
 // conflict says a write lost to another writer and is to be tried again
@@ -355,11 +300,13 @@ func (s *Service) List(ctx context.Context) ([]Credential, error) {
 	if s == nil {
 		return []Credential{}, nil
 	}
-	ix, _, err := s.load(ctx)
+	out, err := s.o.Repo.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := append([]Credential{}, ix.Credentials...)
+	if out == nil {
+		out = []Credential{}
+	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out, nil
 }
@@ -369,16 +316,7 @@ func (s *Service) Get(ctx context.Context, id string) (Credential, error) {
 	if s == nil {
 		return Credential{}, fmt.Errorf("%w %q: this console keeps no credentials", ErrNotFound, id)
 	}
-	ix, _, err := s.load(ctx)
-	if err != nil {
-		return Credential{}, err
-	}
-	for _, c := range ix.Credentials {
-		if c.ID == id {
-			return c, nil
-		}
-	}
-	return Credential{}, fmt.Errorf("%w %q: Administration › Credentials lists them", ErrNotFound, id)
+	return s.o.Repo.Get(ctx, id)
 }
 
 // ByName is one credential by its name, any case.
@@ -397,13 +335,12 @@ func (s *Service) ByName(ctx context.Context, name string) (Credential, error) {
 
 // Migration is what the upgrade made, for the page.
 func (s *Service) Migration(ctx context.Context) (Migration, error) {
-	ix, _, err := s.load(ctx)
-	return ix.Migration, err
+	return s.o.Repo.Migration(ctx)
 }
 
 // DismissMigration hides the list of what the upgrade made.
 func (s *Service) DismissMigration(ctx context.Context) error {
-	return s.update(ctx, func(ix *index) error { ix.Migration.Dismissed = true; return nil })
+	return s.o.Repo.UpdateMigration(ctx, func(m *Migration) error { m.Dismissed = true; return nil })
 }
 
 func newID() string {
@@ -425,24 +362,12 @@ func (s *Service) Create(ctx context.Context, c Credential, sec Secret, by strin
 }
 
 func (s *Service) add(ctx context.Context, c Credential, sec Secret) error {
-	if err := s.update(ctx, func(ix *index) error {
-		if len(ix.Credentials) >= MaxCredentials {
-			return invalid("at most %d credentials; remove one first", MaxCredentials)
-		}
-		if slices.ContainsFunc(ix.Credentials, func(o Credential) bool { return strings.EqualFold(o.Name, c.Name) }) {
-			return invalid("there is a credential named %s already", c.Name)
-		}
-		ix.Credentials = append(ix.Credentials, c)
-		return nil
-	}); err != nil {
+	if err := s.o.Repo.Add(ctx, c, MaxCredentials); err != nil {
 		return err
 	}
 	if err := s.saveSecret(ctx, c.ID, sec); err != nil {
 		// The list does not name a credential whose secret is not kept.
-		_ = s.update(ctx, func(ix *index) error {
-			ix.Credentials = slices.DeleteFunc(ix.Credentials, func(o Credential) bool { return o.ID == c.ID })
-			return nil
-		})
+		_, _ = s.o.Repo.Remove(ctx, c.ID)
 		return err
 	}
 	return nil
@@ -477,35 +402,32 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 	}
 	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
 	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
-	c.LastTest = old.LastTest
-	if sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM {
-		c.LastTest = nil
-	}
+	resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM
 	if next != have {
 		if err := s.saveSecret(ctx, id, next); err != nil {
 			return Credential{}, err
 		}
 	}
-	err = s.update(ctx, func(ix *index) error {
-		i := slices.IndexFunc(ix.Credentials, func(o Credential) bool { return o.ID == id })
-		if i < 0 {
-			return fmt.Errorf("%w %q", ErrNotFound, id)
-		}
-		if slices.ContainsFunc(ix.Credentials, func(o Credential) bool { return o.ID != id && strings.EqualFold(o.Name, c.Name) }) {
-			return invalid("there is a credential named %s already", c.Name)
-		}
+	saved, err := s.o.Repo.Update(ctx, id, func(cur *Credential) error {
 		// A pinned certificate is set by Trust alone, and kept while the
-		// endpoint's host is the same (CR-16): the one kept now, not the
-		// one read before, which a Trust or a Forget may have changed.
-		c.PinnedCert = nil
-		if hostOf(c.Endpoint) == hostOf(ix.Credentials[i].Endpoint) {
-			c.PinnedCert = ix.Credentials[i].PinnedCert
+		// endpoint's host is the same (CR-16), and the last test while
+		// nothing it went by changed: the ones kept now, not the ones read
+		// before, which a Trust, a Forget or a Test may have changed.
+		c.PinnedCert, c.LastTest = nil, nil
+		if hostOf(c.Endpoint) == hostOf(cur.Endpoint) {
+			c.PinnedCert = cur.PinnedCert
 		}
-		ix.Credentials[i] = c
+		if !resetTest {
+			c.LastTest = cur.LastTest
+		}
+		*cur = c
 		return nil
 	})
 	s.forget(id)
-	return c, err
+	if err != nil {
+		return Credential{}, err
+	}
+	return saved, nil
 }
 
 // UsedBy is each credential's uses, by id.
@@ -545,10 +467,7 @@ func (s *Service) Delete(ctx context.Context, id string) (Credential, error) {
 		}
 		return Credential{}, fmt.Errorf("%w: %s is used by %s; choose another credential there first", ErrInUse, old.Name, strings.Join(names, ", "))
 	}
-	if err := s.update(ctx, func(ix *index) error {
-		ix.Credentials = slices.DeleteFunc(ix.Credentials, func(o Credential) bool { return o.ID == id })
-		return nil
-	}); err != nil {
+	if _, err := s.o.Repo.Remove(ctx, id); err != nil {
 		return Credential{}, err
 	}
 	if err := s.saveSecret(ctx, id, Secret{}); err != nil {
@@ -560,14 +479,12 @@ func (s *Service) Delete(ctx context.Context, id string) (Credential, error) {
 
 // NoteTest keeps a credential's last test.
 func (s *Service) NoteTest(ctx context.Context, id string, t Test) error {
-	return s.update(ctx, func(ix *index) error {
-		for i := range ix.Credentials {
-			if ix.Credentials[i].ID == id {
-				ix.Credentials[i].LastTest = &t
-			}
-		}
+	_, err := s.o.Repo.Update(ctx, id, func(c *Credential) error { c.LastTest = &t; return nil })
+	if errors.Is(err, ErrNotFound) {
+		// Removed while it was tested: nothing to keep.
 		return nil
-	})
+	}
+	return err
 }
 
 // Matching are the credentials that serve a use at an address: the ones a
@@ -632,4 +549,38 @@ func (s *Service) SecretValues(ctx context.Context, id string) []string {
 	}
 	s.mu.Unlock()
 	return out
+}
+
+// UnnamedSecrets are the ids of the secrets the Secret keeps that no
+// credential of the list names (a database restored to an earlier time,
+// a write cut short, a credential an older console made after the move):
+// never used, and named in the log at each start. A store that cannot
+// list its keys has none.
+func (s *Service) UnnamedSecrets(ctx context.Context) ([]string, error) {
+	ids, _, err := Unmatched(ctx, s.o.Repo, s.o.Secrets)
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, err
+}
+
+// RemoveUnnamedSecret takes the secret kept under secret-<id> out of the
+// Secret, when no credential of the list names it (DB-75): refused
+// (ErrInUse) when one does, and ErrNotFound when there is no such secret.
+// The secret is not read.
+func (s *Service) RemoveUnnamedSecret(ctx context.Context, id string) error {
+	if id == "" || strings.ContainsAny(id, "/ ") {
+		return fmt.Errorf("%w: no secret %q", ErrNotFound, id)
+	}
+	if c, err := s.o.Repo.Get(ctx, id); err == nil {
+		return fmt.Errorf("%w: the credential %s names this secret; remove the credential in Administration › Credentials instead", ErrInUse, c.Name)
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if _, _, found, err := s.o.Secrets.LoadKey(ctx, secretKey(id)); err != nil {
+		return fmt.Errorf("reading the credentials' Secret: %w", err)
+	} else if !found {
+		return fmt.Errorf("%w: no secret %q in the credentials' Secret", ErrNotFound, id)
+	}
+	return s.saveSecret(ctx, id, Secret{})
 }

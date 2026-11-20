@@ -28,8 +28,8 @@ import (
 // "index" key of the secrets' store otherwise.
 func open(t testing.TB, o Options) *Service {
 	t.Helper()
-	if os.Getenv("TEST_STORE") == "database" && o.List == nil {
-		o.List = NewPG(dbtest.Open(t))
+	if os.Getenv("TEST_STORE") == "database" && o.Repo == nil {
+		o.Repo = NewPGRepo(dbtest.Open(t))
 	}
 	return New(o)
 }
@@ -63,7 +63,7 @@ func TestCredentialsInTheDatabase(t *testing.T) {
 	ca := certpintest.New(t, certpintest.Options{CN: "private-ca.test", IsCA: true}).PEM
 	hc, dial := pinService(t).o.HTTP, pinService(t).o.Dial
 	overSecret := New(Options{HTTP: hc, Dial: dial, Now: now})
-	open := func() *Service { return New(Options{List: NewPG(d), HTTP: hc, Dial: dial, Now: now}) }
+	open := func() *Service { return New(Options{Repo: NewPGRepo(d), HTTP: hc, Dial: dial, Now: now}) }
 
 	// steps returns the ids it made, in order: each service gives its own.
 	steps := func(s *Service) []string {
@@ -168,27 +168,83 @@ func TestCredentialsInTheDatabase(t *testing.T) {
 	// each one set, the kinds' own parts among them, comes back whole.
 	var full index
 	dbtest.Fill(&full)
-	doc := NewPG(dbtest.Open(t))
+	repo := NewPGRepo(dbtest.Open(t))
+	for _, c := range full.Credentials {
+		if err := repo.Add(ctx, c, MaxCredentials); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.UpdateMigration(ctx, func(m *Migration) error { *m = full.Migration; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := repo.Migration(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b, _ := json.Marshal(full)
-	if _, err := doc.SaveKey(ctx, indexKey, b, ""); err != nil {
-		t.Fatal(err)
+	back, _ := json.Marshal(index{Credentials: list, Migration: m})
+	if string(back) != string(b) {
+		t.Fatalf("a list with every field set came back changed\nkept:  %s\nsaved: %s", back, b)
 	}
-	back, version, err := doc.LoadKey(ctx, indexKey)
-	if err != nil || string(back) != string(b) {
-		t.Fatalf("a list with every field set came back changed: %v\nkept:  %s\nsaved: %s", err, back, b)
-	}
-	// Saved again as it is, nothing changes; over a version gone by, it is
-	// a conflict the service tries again on.
-	if next, err := doc.SaveKey(ctx, indexKey, b, version); err != nil || next != version {
-		t.Fatalf("saved again: %s then %s: %v", version, next, err)
-	}
-	full.Credentials[0].Description = "changed"
-	b, _ = json.Marshal(full)
-	if _, err := doc.SaveKey(ctx, indexKey, b, version); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := doc.SaveKey(ctx, indexKey, b, version); !conflict(err) {
-		t.Fatalf("a save over a version gone by: %v", err)
+}
+
+// DB-75: the repository changes one credential at a time. A change is made
+// over the credential as it is kept when the change is made: writers of
+// one credential take turns and none loses another's change; one of a
+// name another has is refused with why, and changes nothing; the count is
+// held to its bound; an id kept already is refused.
+func TestTheRepositoryChangesOneCredentialAtATime(t *testing.T) {
+	for name, repo := range map[string]Repo{"memory": NewMemoryRepo(), "database": NewPGRepo(dbtest.Open(t))} {
+		t.Run(name, func(t *testing.T) {
+			for i, n := range []string{"one", "two"} {
+				if err := repo.Add(ctx, Credential{ID: fmt.Sprint("cr-", i), Name: n, Kind: KindToken, Endpoint: "https://example.com"}, 2); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := repo.Add(ctx, Credential{ID: "cr-9", Name: "three", Kind: KindToken, Endpoint: "https://example.com"}, 2); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("a third of two: %v", err)
+			}
+			if err := repo.Add(ctx, Credential{ID: "cr-0", Name: "again", Kind: KindToken, Endpoint: "https://example.com"}, 9); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("an id kept already: %v", err)
+			}
+			var wg sync.WaitGroup
+			for i := range 20 {
+				wg.Go(func() {
+					if _, err := repo.Update(ctx, "cr-0", func(c *Credential) error {
+						c.Description += fmt.Sprint(i % 10)
+						return nil
+					}); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			wg.Wait()
+			if c, err := repo.Get(ctx, "cr-0"); err != nil || len(c.Description) != 20 {
+				t.Fatalf("20 changes at once kept %d: %v", len(c.Description), err)
+			}
+			if _, err := repo.Update(ctx, "cr-1", func(c *Credential) error { c.Name = "ONE"; return nil }); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "named ONE already") {
+				t.Fatalf("a name another has: %v", err)
+			}
+			if c, _ := repo.Get(ctx, "cr-1"); c.Name != "two" {
+				t.Fatalf("a refused change changed %q", c.Name)
+			}
+			if _, err := repo.Update(ctx, "cr-x", func(*Credential) error { return nil }); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("a change of none: %v", err)
+			}
+			if gone, err := repo.Remove(ctx, "cr-1"); err != nil || !gone {
+				t.Fatalf("removing: %v %v", gone, err)
+			}
+			if gone, err := repo.Remove(ctx, "cr-1"); err != nil || gone {
+				t.Fatalf("removing again: %v %v", gone, err)
+			}
+			if list, err := repo.List(ctx); err != nil || len(list) != 1 || list[0].ID != "cr-0" {
+				t.Fatalf("the list: %+v %v", list, err)
+			}
+		})
 	}
 }
 
@@ -200,7 +256,7 @@ func TestCredentialsInTheDatabase(t *testing.T) {
 func TestACredentialKeepsItsRowWhileSomethingPointsAtIt(t *testing.T) {
 	d := dbtest.Open(t)
 	now, _ := ticking()
-	s := New(Options{List: NewPG(d), Now: now})
+	s := New(Options{Repo: NewPGRepo(d), Now: now})
 	c := token(t, s, "GitHub", "https://github.com/ucesys", SendAs{}, "tok-1")
 	repo := db.NewID()
 	exec(t, d, "INSERT INTO repositories (repository_id, credential_id, name) VALUES ($1, $2, 'charts')", repo, c.ID)
@@ -293,7 +349,7 @@ func TestWritersOfTheListTakeTurns(t *testing.T) {
 	mem := &MemorySecret{}
 	var wg sync.WaitGroup
 	for i := range 8 {
-		s := New(Options{Secrets: mem, List: NewPG(d)})
+		s := New(Options{Secrets: mem, Repo: NewPGRepo(d)})
 		wg.Go(func() {
 			if _, err := s.Create(ctx, Credential{Name: fmt.Sprint("replica ", i), Kind: KindToken, Endpoint: "https://example.com"}, Secret{Token: fmt.Sprint("tok-", i)}, "ann"); err != nil {
 				t.Errorf("replica %d: %v", i, err)
@@ -301,14 +357,14 @@ func TestWritersOfTheListTakeTurns(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	list, err := New(Options{Secrets: mem, List: NewPG(d)}).List(ctx)
+	list, err := New(Options{Secrets: mem, Repo: NewPGRepo(d)}).List(ctx)
 	if err != nil || len(list) != 8 {
 		t.Fatalf("%d of 8 credentials kept: %v", len(list), err)
 	}
 	// Two of one name, made at once: one is kept, the other refused with why.
 	errs := make([]error, 2)
 	for i := range errs {
-		s := New(Options{Secrets: mem, List: NewPG(d)})
+		s := New(Options{Secrets: mem, Repo: NewPGRepo(d)})
 		wg.Go(func() {
 			_, errs[i] = s.Create(ctx, Credential{Name: "Twin", Kind: KindToken, Endpoint: "https://example.com"}, Secret{Token: "tok"}, "ann")
 		})
@@ -316,6 +372,25 @@ func TestWritersOfTheListTakeTurns(t *testing.T) {
 	wg.Wait()
 	if (errs[0] == nil) == (errs[1] == nil) || !errors.Is(errors.Join(errs...), ErrInvalid) {
 		t.Fatalf("two of one name at once: %v, %v", errs[0], errs[1])
+	}
+}
+
+// asBefore writes the list a service keeps into the Secret's "index" key,
+// as a console before 0.13 kept it there: what the copy reads (DB-61).
+func asBefore(t testing.TB, s *Service, into *MemorySecret) {
+	t.Helper()
+	list, err := s.o.Repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.o.Repo.Migration(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(index{Credentials: list, Migration: m})
+	_, version, _, _ := into.LoadKey(ctx, indexKey)
+	if err := into.SaveKeyIf(ctx, indexKey, b, version); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -360,6 +435,7 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 		return string(out)
 	}
 	want := read(before)
+	asBefore(t, before, mem)
 	// A repository of the database already names the first: a row with
 	// only its id, as apps/pg.go makes it.
 	repo := db.NewID()
@@ -405,7 +481,7 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	if n, err := CopyList(ctx, d, mem); err != nil || n != 2 || !copied() {
 		t.Fatalf("copied %d, recorded %v: %v", n, copied(), err)
 	}
-	after := New(Options{Secrets: mem, List: NewPG(d), Now: now})
+	after := New(Options{Secrets: mem, Repo: NewPGRepo(d), Now: now})
 	if got := read(after); got != want {
 		t.Fatalf("the list copied differs.\nthe database:\n%s\nthe Secret:\n%s", got, want)
 	}
@@ -428,7 +504,7 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	if u, err := after.Resolve(ctx, a.ID, UseGit, "https://github.com/ucesys/221b"); err != nil || u.Token != "tok-a" || u.Username != "x-access-token" {
 		t.Fatalf("the copied credential resolves as %+v: %v", u, err)
 	}
-	if noCredential, noSecret, err := Unmatched(ctx, NewPG(d), mem); err != nil || len(noCredential) != 0 || len(noSecret) != 0 {
+	if noCredential, noSecret, err := Unmatched(ctx, NewPGRepo(d), mem); err != nil || len(noCredential) != 0 || len(noSecret) != 0 {
 		t.Fatalf("the halves after the copy: %v %v %v", noCredential, noSecret, err)
 	}
 
@@ -436,7 +512,9 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	// no list and writes one of its own. It is not copied: the database's
 	// list is the one that counts. It is removed, and the secret it wrote
 	// stays, named by nothing.
-	late := token(t, New(Options{Secrets: mem, Now: now}), "Written by an older console", "https://old.example.com", SendAs{}, "tok-late")
+	older := New(Options{Secrets: mem, Now: now})
+	late := token(t, older, "Written by an older console", "https://old.example.com", SendAs{}, "tok-late")
+	asBefore(t, older, mem)
 	if n, err := CopyList(ctx, d, mem); err != nil || n != 0 {
 		t.Fatalf("a second copy: %d %v", n, err)
 	}
@@ -449,14 +527,14 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	if got := keys(); len(got) != 3 || got[secretKey(late.ID)] == "" || got[indexKey] != "" {
 		t.Fatalf("the Secret then holds %d keys", len(got))
 	}
-	if noCredential, noSecret, err := Unmatched(ctx, NewPG(d), mem); err != nil || !slices.Equal(noCredential, []string{late.ID}) || len(noSecret) != 0 {
+	if noCredential, noSecret, err := Unmatched(ctx, NewPGRepo(d), mem); err != nil || !slices.Equal(noCredential, []string{late.ID}) || len(noSecret) != 0 {
 		t.Fatalf("the halves then: %v %v %v", noCredential, noSecret, err)
 	}
 	// And a credential whose secret is gone is said so, and removed by nothing.
 	if err := mem.DeleteKeyIf(ctx, secretKey(b.ID), fmt.Sprint(mem.version)); err != nil {
 		t.Fatal(err)
 	}
-	if _, noSecret, err := Unmatched(ctx, NewPG(d), mem); err != nil || !slices.Equal(noSecret, []string{b.ID}) {
+	if _, noSecret, err := Unmatched(ctx, NewPGRepo(d), mem); err != nil || !slices.Equal(noSecret, []string{b.ID}) {
 		t.Fatalf("a credential without its secret: %v %v", noSecret, err)
 	}
 
@@ -469,7 +547,8 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	old := New(Options{Secrets: mem2, Now: now})
 	same := token(t, old, "Registry", "https://registry.example.com", SendAs{}, "tok-r")
 	clash := token(t, old, "github", "https://github.com/elsewhere", SendAs{}, "tok-g")
-	here := New(Options{Secrets: mem2, List: NewPG(d2), Now: now})
+	asBefore(t, old, mem2)
+	here := New(Options{Secrets: mem2, Repo: NewPGRepo(d2), Now: now})
 	newer := same
 	newer.Name, newer.Description = "Registry (edited)", "the database's"
 	if err := here.add(ctx, newer, Secret{Token: "tok-r"}); err != nil {
@@ -486,7 +565,7 @@ func TestTheListIsCopiedOutOfTheSecretOnce(t *testing.T) {
 	if got, _ := here.Get(ctx, same.ID); got.Name != "Registry (edited)" || got.Description != "the database's" {
 		t.Fatalf("the database's credential was written over: %+v", got)
 	}
-	if got, _ := here.Get(ctx, clash.ID); got.Name != "github (restored)" || got.Endpoint != "https://github.com/elsewhere" {
+	if got, _ := here.Get(ctx, clash.ID); got.Name != "github (copied at upgrade)" || got.Endpoint != "https://github.com/elsewhere" {
 		t.Fatalf("the one whose name was taken: %+v", got)
 	}
 }
@@ -509,7 +588,7 @@ func TestNoSecretIsEverInTheDatabase(t *testing.T) {
 	var logs bytes.Buffer
 	mem := &MemorySecret{}
 	now, _ := ticking()
-	s := New(Options{Secrets: mem, List: NewPG(d), HTTP: srv.Client(), Dial: pinService(t).o.Dial, Now: now, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	s := New(Options{Secrets: mem, Repo: NewPGRepo(d), HTTP: srv.Client(), Dial: pinService(t).o.Dial, Now: now, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	every := Secret{Token: marker + "-token", Password: marker + "-password", AccessKeyID: marker + "-akid", SecretAccessKey: marker + "-sak", SessionToken: marker + "-session",
 		PrivateKey: marker + "-key", Passphrase: marker + "-passphrase", ClientSecret: marker + "-client", KeyPEM: marker + "-pem"}
 	must := func(err error) {
