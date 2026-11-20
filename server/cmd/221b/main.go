@@ -415,6 +415,12 @@ func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logge
 				case n > 0:
 					logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
 				}
+				// What was copied leaves the ConfigMap (DB-55): a console
+				// rolled back writes there again, and that is copied and
+				// removed at the next start with the database.
+				if err == nil {
+					w.removeCopied(ctx, b, audit.StoreKey, audit.StoreKey)
+				}
 			}
 			// Retention, once a day on whichever replica gets the lock.
 			t := time.NewTicker(24 * time.Hour)

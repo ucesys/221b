@@ -29,13 +29,15 @@ import (
 
 type cardsOptions struct {
 	// wrap routes the keys the database keeps to it.
-	wrap     func(kv.Backend) kv.Backend
-	auditLog *audit.Log
-	manager  *clusters.Manager
-	shared   *settings.Service
-	agents   *ai.Service
-	leads    func() bool
-	log      *slog.Logger
+	wrap func(kv.Backend) kv.Backend
+	// inDatabase says the cards were copied into the database.
+	inDatabase func() bool
+	auditLog   *audit.Log
+	manager    *clusters.Manager
+	shared     *settings.Service
+	agents     *ai.Service
+	leads      func() bool
+	log        *slog.Logger
 }
 
 // cardLimits are what the cards fit their records to: the limits of the
@@ -57,7 +59,11 @@ func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o c
 		if err != nil {
 			return nil, nil, fmt.Errorf("the proposed changes' ConfigMap: %w", err)
 		}
-		copyProposalsOfBefore(ctx, restCfg, cm, o.log)
+		// Not once the cards are in the database: they left this ConfigMap
+		// then (DB-55), and must not come back from the one of before.
+		if o.inDatabase == nil || !o.inDatabase() {
+			copyProposalsOfBefore(ctx, restCfg, cm, o.log)
+		}
 		stored = limited(cm, objProposals, o.log.With("component", "storage"))
 		backend = stored
 	} else {
@@ -244,6 +250,12 @@ func (w *wiring) wireCards(ctx context.Context) error {
 				cards.CardsKey: cards.NewCardsPG(d), cards.ChatsKey: cards.NewChatsPG(d)}
 		})
 		return w.cardsBackend
+	}, inDatabase: func() bool {
+		if w.database == nil {
+			return false
+		}
+		copied, _ := w.database.Imported(ctx, cards.CardsKey)
+		return copied
 	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
 	if err != nil {
 		return err

@@ -30,6 +30,9 @@ func (w *wiring) wireSessions(ctx context.Context) {
 			case n > 0:
 				log.Info("copied the Toolbox's session records from their ConfigMap into the database", "records", n)
 			}
+			if err == nil {
+				w.removeCopied(ctx, w.spendBackend, sessions.HistoryKey, sessions.HistoryKey)
+			}
 		}
 		history = pg
 	}

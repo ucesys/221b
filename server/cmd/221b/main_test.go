@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -127,6 +128,16 @@ func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// What was copied leaves the ConfigMap (DB-55).
+	for {
+		if _, _, err := cm.LoadKey(ctx, audit.StoreKey); errors.Is(err, kv.ErrNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the audit log is still in the ConfigMap after its copy")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if err := st.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +165,9 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	if _, err := b.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup","sso"]}`), version); err != nil {
 		t.Fatal(err)
 	}
-	if old, _, _ := cm.LoadKey(ctx, "setup.json"); string(old) != `{"dismissed":["backup"]}` {
-		t.Fatalf("the ConfigMap's copy changed to %s", old)
+	// Once copied, the settings are gone from the ConfigMap (DB-55).
+	if old, _, err := cm.LoadKey(ctx, "setup.json"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("the ConfigMap still holds %s: %v", old, err)
 	}
 	if _, err := b.SaveKey(ctx, "other.json", []byte(`1`), ""); err != nil {
 		t.Fatal(err)

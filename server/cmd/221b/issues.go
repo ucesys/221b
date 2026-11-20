@@ -141,7 +141,31 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 		log := w.log.With("component", "database")
 		cases := issues.NewCasesPG(w.database, casework.CaseParts())
 		w.claimImport(cases.ImportID())
-		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory {
+		set := issues.NewSetPG(w.database)
+		w.claimImport(set.ImportID())
+		// The three documents first, then the cases: the index's lines are
+		// read from the cases' rows, so an index copied after them would
+		// look kept already, and its counter would not be copied. The cases
+		// wait for the documents' copy for the same reason.
+		setCopied := true
+		if _, inMemory := b.(*kv.Memory); !inMemory {
+			ictx, cancel := context.WithTimeout(ctx, time.Minute)
+			copied, err := set.Import(ictx, b, "configmap")
+			cancel()
+			if err != nil {
+				setCopied = false
+				log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "keys", "the issue service's", "err", err)
+			}
+			for _, key := range copied {
+				log.Info("copied records from their ConfigMap into the database", "key", key)
+			}
+			if err == nil {
+				for key := range set.Members {
+					w.removeCopied(ctx, b, set.ImportID(), key)
+				}
+			}
+		}
+		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory && setCopied {
 			// One read of the cluster for each case: allow for many.
 			ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			n, err := cases.Import(ictx, objs, "configmap")
@@ -151,18 +175,8 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 			} else if n > 0 {
 				log.Info("copied the cases from their ConfigMaps into the database", "cases", n)
 			}
-		}
-		set := issues.NewSetPG(w.database)
-		w.claimImport(set.ImportID())
-		if _, inMemory := b.(*kv.Memory); !inMemory {
-			ictx, cancel := context.WithTimeout(ctx, time.Minute)
-			copied, err := set.Import(ictx, b, "configmap")
-			cancel()
-			if err != nil {
-				log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "keys", "the issue service's", "err", err)
-			}
-			for _, key := range copied {
-				log.Info("copied records from their ConfigMap into the database", "key", key)
+			if err == nil {
+				w.removeCopiedObjects(ctx, objs, cases.ImportID())
 			}
 		}
 		keys := map[string]kv.Backend{}

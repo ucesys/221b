@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
@@ -136,6 +139,11 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 		} else if len(copied) > 0 {
 			log.Info("copied settings from their ConfigMap into the database", "keys", copied)
 		}
+		if err == nil {
+			for _, key := range s.ImportIDs() {
+				w.removeCopied(ctx, b, key, key)
+			}
+		}
 	}
 	keys := map[string]kv.Backend{}
 	for key := range scopes {
@@ -197,6 +205,103 @@ func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB)
 		} else if copied {
 			log.Info("copied records from their ConfigMap into the database", "key", key)
 		}
+		if err == nil {
+			w.removeCopied(ctx, b, doc.ImportID(), key)
+		}
 	}
 	return &kv.Keyed{Keys: keys, Rest: b}
+}
+
+// --- A record set leaves its ConfigMap once it is copied (DB-55) ---
+//
+// Decided by the owner on November 19, 2026, after the sixth cluster test
+// (F1): a ConfigMap kept as it was at the copy let a console from before
+// the move show changes that had since been approved and run as waiting
+// again, and run them a second time. So once a record set's one-time copy
+// is recorded in the database, the console removes it from where it was
+// kept: at the start that copies it, and at any later start that still
+// finds it there (what an earlier build left, or a removal that failed).
+// A record set with no record of a copy is left as it is.
+
+// emptied says what a key holds is nothing: what is left of a record set
+// in a store that cannot delete a key.
+func emptied(b []byte) bool {
+	switch strings.TrimSpace(string(b)) {
+	case "", "{}", "null":
+		return true
+	}
+	return false
+}
+
+// removeCopied removes keys from the store a record set was kept in, when
+// the copy recorded under importID is in the database. A store that cannot
+// delete a key has it emptied. A failure is logged and does not stop the
+// start: the next one tries again.
+func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID string, keys ...string) {
+	if w.database == nil || from == nil {
+		return
+	}
+	log := w.dbLog()
+	rctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if copied, err := w.database.Imported(rctx, importID); err != nil || !copied {
+		return
+	}
+	for _, key := range keys {
+		b, _, err := from.LoadKey(rctx, key)
+		if errors.Is(err, kv.ErrNotFound) || (err == nil && emptied(b)) {
+			continue
+		}
+		if err == nil {
+			if d, ok := from.(kv.Deleter); ok {
+				err = d.DeleteKey(rctx, key)
+			} else {
+				_, err = from.SaveKey(rctx, key, []byte("{}"), "")
+			}
+		}
+		if err != nil {
+			log.Warn("removing a record set from its ConfigMap after its copy failed; the next start tries again", "key", key, "err", err)
+			continue
+		}
+		log.Info("removed a record set from its ConfigMap: the database keeps it", "key", key)
+	}
+}
+
+// removeCopiedObjects deletes the objects a record set was kept in, each
+// whole (a case's own ConfigMap), when the copy recorded under importID is
+// in the database.
+func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, importID string) {
+	if w.database == nil || from == nil {
+		return
+	}
+	log := w.dbLog()
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if copied, err := w.database.Imported(rctx, importID); err != nil || !copied {
+		return
+	}
+	names, err := from.List(rctx)
+	if err != nil {
+		log.Warn("listing the cases' ConfigMaps to remove them after their copy failed; the next start tries again", "err", err)
+		return
+	}
+	gone := 0
+	for _, name := range names {
+		if err := from.Delete(rctx, name); err != nil {
+			log.Warn("removing a case's ConfigMap after its copy failed; the next start tries again", "case", name, "err", err)
+			continue
+		}
+		gone++
+	}
+	if gone > 0 {
+		log.Info("removed the cases' ConfigMaps: the database keeps the cases", "cases", gone)
+	}
+}
+
+// dbLog is where what the wiring does with the database is logged.
+func (w *wiring) dbLog() *slog.Logger {
+	if w.log == nil {
+		return slog.Default().With("component", "database")
+	}
+	return w.log.With("component", "database")
 }

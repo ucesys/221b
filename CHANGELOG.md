@@ -4,10 +4,11 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-54). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-55). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
+- **With a database, a record set is removed from its ConfigMap once it is copied** (DB-55). The ConfigMaps were kept as they were at the copy, as a way back; a console from before the move then showed changes approved and run since as waiting again, and could run them a second time. Now the copied keys are deleted (the ConfigMaps the chart makes stay) and each case's ConfigMap is deleted, also what an earlier build of this release copied and left. **Going back to a console without the database means a restore**: save the ConfigMaps before the upgrade (`kubectl get configmap -n <namespace> -o yaml > before-0.13.yaml`), or take a backup. Without a database nothing changes.
 - **Approving a variable change sets what it alters** (DB-34), not the fleet's variables whole as they were when it was asked for. A value of the fleet that the change does not name, and that someone set meanwhile, no longer holds the approval and is no longer overwritten; a value it does name, changed meanwhile, still holds it.
 - **A node's own variables are the node's** (AU-23). The Variables page has always kept a node's own values and reboot time under All nodes. A card or an API request could also put one under another fleet, so a node in two fleets could have two different values, which was a conflict that stopped its runs. Now a node has one, whichever fleet's request sets it, kept and shown under All nodes. What was kept under other fleets is read as the node's own; where two fleets kept different values for one node, the first by fleet id is used. The API's shape is the same and the app is unchanged.
 - **Hosts outside Kubernetes carry no labels.** A host is in a fleet by being listed. The hosts API no longer takes or returns `labels`, an agent can no longer propose `host.label`, and labels kept from before are ignored. The app's label fields for a host have no effect and go in a later change.
@@ -43,6 +44,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- A clean start now also drops what the runs found under each check, with the runs counted: the runs' ids start again at `run-1` after it, and a run still listed as counted made a new run of that id count nothing. Its log has a line for the agents' proposed changes also when there is none to delete.
 - With a database, a clean start (`cases.cleanStart.token`) left the jobs' runs where they were: it emptied the runs' key of the ConfigMap, which the console no longer read. It empties the runs, and the agents' proposed changes for cases and runs, where the console keeps them.
 - With a database, a page could for a moment show a record with parts of two saves: a job's run with the findings of the save before, a script without its newest version's parameters. A service's records are read in several statements, and a save that landed between two of them showed in the later ones. They are read on one snapshot now. Nothing kept was wrong, and a save made over such a read was already refused.
 - The bundled database with three members (`database.bundled.ha: true`) could not start its standbys: Patroni looked for its members by a label no pod carried. The chart names the label now.

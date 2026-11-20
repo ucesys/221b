@@ -349,6 +349,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 			if copied {
 				log.Info("copied the backups' settings and runs from their ConfigMap into the database")
 			}
+			w.removeCopied(ctx, w.spendBackend, backup.SettingsKey, backup.SettingsKey, backup.StatusKey)
 		}
 		backupRepo = pg
 		w.inDatabase = append(w.inDatabase, "backups")

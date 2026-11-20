@@ -149,6 +149,10 @@ func CleanStart(ctx context.Context, st CleanStores, token string, dryRun bool, 
 	c.drop(st.Casework, "casework", cleanRCAsKey, "RCAs", countOf("items"))
 	c.drop(st.Casework, "casework", cleanFixesKey, "fixes", countOf("items"))
 	c.drop(st.Casework, "casework", ChecksKey, "clusters' check ids seen", countOf("clusters"))
+	// What the runs found under each check, with the runs already counted:
+	// the runs go below and their ids start again at run-1, so a run kept
+	// as counted would make a new run of that id count nothing.
+	c.drop(st.Casework, "casework", FoundKey, "what the runs found under each check", countOf("ids"))
 	c.keepSettings(st.Casework)
 	// The runs and their findings; the jobs stay.
 	c.drop(st.Runs, "runs", cleanRunsKey, "runs (and their findings)", countOf("runs"))
@@ -361,11 +365,9 @@ func (c *cleaner) filterCards(b kv.Backend) {
 		kept = append(kept, card)
 	}
 	gone := len(list) - len(kept)
-	if gone == 0 {
-		return
-	}
+	// A line also when there is none to delete, as for the other kinds.
 	c.item(CleanItem{Object: "cases", Key: cleanCardsKey, What: "proposed changes agents made for cases or runs", Count: gone})
-	if c.dry {
+	if c.dry || gone == 0 {
 		return
 	}
 	if kept == nil {
