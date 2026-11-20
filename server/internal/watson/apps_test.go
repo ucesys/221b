@@ -159,6 +159,18 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	if _, code := run("helm uninstall hello -n web"); code == 0 {
 		t.Error("uninstalling twice succeeded")
 	}
+	// An application never installed (its install failed before a
+	// release was made) is removed by forgetting its record (the ninth
+	// cluster test).
+	if err := store.Save(context.Background(), apps.Record{Cluster: "local", Namespace: "web", Name: "never", Source: src}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run("helm uninstall never -n web"); code != 0 || !strings.Contains(out, "the application's record was removed") {
+		t.Errorf("removing an application never installed: exit %d\n%s", code, out)
+	}
+	if _, _, err := store.Get(context.Background(), "local", "web", "never"); err == nil {
+		t.Error("the record of an application never installed stays")
+	}
 
 	// Without a record, --app says so; without --git, the source is missing.
 	if out, code := run("helm install other --path charts/web --ref main -n web --app"); code == 0 || !strings.Contains(out, "no application web/other") {

@@ -459,6 +459,17 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		u.KeepHistory, u.DryRun, u.Timeout, u.WaitStrategy = c.Has("keep-history"), dry, timeout, wait
 		u.DisableHooks = c.Has("no-hooks")
 		res, err := u.Run(name)
+		// An application whose install never made a release, or whose
+		// release is gone, is removed by forgetting its record (HA-08).
+		if errors.Is(err, driver.ErrReleaseNotFound) && !dry && t.Apps != nil {
+			if _, _, gerr := t.Apps.Get(ctx, t.Cluster, ns, name); gerr == nil {
+				if derr := t.Apps.Delete(ctx, t.Cluster, ns, name); derr != nil {
+					return fmt.Errorf("there is no release %q, and the application's record was not removed: %w", name, derr)
+				}
+				fmt.Fprintf(out, "there is no release %q: the application's record was removed\n", name)
+				return nil
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -634,6 +645,11 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 			return targets, guards, impact
 		}
 		if cur == nil {
+			if t.Apps != nil {
+				if _, _, err := t.Apps.Get(ctx, t.Cluster, ns, name); err == nil {
+					return targets, guards, []string{fmt.Sprintf("There is no release %s in %s: the console forgets the application.", name, ns)}
+				}
+			}
 			return targets, guards, []string{fmt.Sprintf("There is no release %s in %s: helm will refuse.", name, ns)}
 		}
 		objs := objectNames(cur.Manifest)
