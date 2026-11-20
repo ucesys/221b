@@ -101,6 +101,19 @@ func ReadChangeChats(ctx context.Context, q db.Querier) (map[string]KeptChat, er
 	return readChats(ctx, q, "g.change_key", "JOIN changes g USING (change_id)")
 }
 
+// ReadChangeChat returns the conversation kept for the change with the
+// id changeKey ("PC-12"), nil when none is.
+func ReadChangeChat(ctx context.Context, q db.Querier, changeKey string) (*KeptChat, error) {
+	kept, err := readChats(ctx, q, "g.change_key", "JOIN changes g USING (change_id) WHERE g.change_key = $1", changeKey)
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := kept[changeKey]; ok {
+		return &c, nil
+	}
+	return nil, nil
+}
+
 // ReadCaseChat returns the conversation kept for the case whose row has
 // the key caseID, nil when none is.
 func ReadCaseChat(ctx context.Context, q db.Querier, caseID string) (*KeptChat, error) {

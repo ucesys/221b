@@ -127,6 +127,24 @@ func LockDoc(ctx context.Context, tx pgx.Tx, key string) error {
 	return err
 }
 
+// ShareDoc makes tx take a shared turn of the document known by key, for
+// as long as tx lasts: what a repository takes to write one record of a
+// document that is also saved whole (SaveKey, LockDoc, the one-time copy
+// and a clean start do). Shared turns do not wait for each other, and a
+// whole save waits for them all and they for it; two writes of one record
+// take turns by the lock of its row (SELECT … FOR UPDATE) or by LockName.
+func ShareDoc(ctx context.Context, tx pgx.Tx, key string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared($1)", lockKey("doc/"+key))
+	return err
+}
+
+// LockName makes tx take the turn of the writers of name, for as long as
+// tx lasts: for a record that may have no row yet to lock.
+func LockName(ctx context.Context, tx pgx.Tx, name string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey(name))
+	return err
+}
+
 // DeleteKey removes every row of the document.
 func (d *Doc[T]) DeleteKey(ctx context.Context, _ string) error {
 	return d.DB.Tx(ctx, func(tx pgx.Tx) error {

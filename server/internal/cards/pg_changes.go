@@ -87,34 +87,66 @@ func argsOf(b []byte) (map[string]any, error) {
 	return m, json.Unmarshal(b, &m)
 }
 
-// NewCardsPG keeps the proposed changes in d.
-func NewCardsPG(d *db.DB) *db.Doc[record] {
-	return &db.Doc[record]{DB: d, Key: CardsKey, Read: readCards, Write: writeCards}
-}
-
-func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
-	var rec record
+// readNext reads the number the last change was given, and whether it
+// is kept.
+func readNext(ctx context.Context, q db.Querier) (int, bool, error) {
 	var n struct {
 		Next int `json:"next"`
 	}
 	b, _, err := db.LoadScope(ctx, q, changesScope)
-	found := err == nil
 	switch {
 	case errors.Is(err, db.ErrNotFound):
+		return 0, false, nil
 	case err != nil:
-		return rec, false, err
-	default:
-		if err := json.Unmarshal(b, &n); err != nil {
-			return rec, false, err
-		}
+		return 0, false, err
 	}
-	rec.Next = n.Next
+	if err := json.Unmarshal(b, &n); err != nil {
+		return 0, false, err
+	}
+	return n.Next, true, nil
+}
+
+func saveNext(ctx context.Context, tx pgx.Tx, next int) error {
+	v, _ := json.Marshal(struct {
+		Next int `json:"next"`
+	}{next})
+	_, err := db.SaveScope(ctx, tx, changesScope, v, db.AnyVersion, "")
+	return err
+}
+
+func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
+	var rec record
+	next, found, err := readNext(ctx, q)
+	if err != nil {
+		return rec, false, err
+	}
+	rec.Next = next
+	rec.Cards, _, err = readChanges(ctx, q, "")
+	return rec, found || len(rec.Cards) > 0, err
+}
+
+// keptChange is a change as read, with its row's key and place.
+type keptChange struct {
+	id       string
+	position int64
+}
+
+// readChanges reads the changes whose rows of changes where selects ("" is
+// every change), in order, each with its row's key and place. Only those
+// changes' rows are read, of every table.
+func readChanges(ctx context.Context, q db.Querier, where string, args ...any) ([]Card, []keptChange, error) {
+	var out []Card
+	var kept []keptChange
+	of := ""
+	if where != "" {
+		of = " WHERE change_id IN (SELECT change_id FROM changes " + where + ")"
+	}
 	var id string
 
 	evidence := map[string][]Evidence{}
-	rows, err := q.Query(ctx, "SELECT change_id::text, kind, body, ref, at FROM change_evidence ORDER BY change_id, position")
+	rows, err := q.Query(ctx, "SELECT change_id::text, kind, body, ref, at FROM change_evidence"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var e Evidence
 	var when *time.Time
@@ -124,13 +156,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		evidence[id] = append(evidence[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	actions := map[string][]Action{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, kind, args, impact, risk FROM change_actions ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, kind, args, impact, risk FROM change_actions"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var a Action
 	var raw []byte
@@ -143,13 +175,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		actions[id] = append(actions[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	plans := map[string][]Plan{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, summary, targets, impact, fingerprint, unread, warning FROM change_plans ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, summary, targets, impact, fingerprint, unread, warning FROM change_plans"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var p Plan
 	var targets, impact []string
@@ -159,13 +191,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		plans[id] = append(plans[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	results := map[string][]Result{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, action_number, is_ok, summary, detail, ref, at FROM change_results ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, action_number, is_ok, summary, detail, ref, at FROM change_results"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var r Result
 	var stamp time.Time
@@ -175,13 +207,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		results[id] = append(results[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	approvals, rejections := map[string][]Decision{}, map[string]Decision{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, verdict, by_key, by_name, by_kind, at, comment, approval_policy_id FROM change_decisions ORDER BY change_id, verdict, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, verdict, by_key, by_name, by_kind, at, comment, approval_policy_id FROM change_decisions"+of+" ORDER BY change_id, verdict, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var d Decision
 	var verdict string
@@ -195,13 +227,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	history := map[string][]Event{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, at, what, by_name, actor_name, actor_kind FROM change_events ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, at, what, by_name, actor_name, actor_kind FROM change_events"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var ev Event
 	var actor *string
@@ -215,13 +247,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		history[id] = append(history[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	commands := map[string][]Command{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, watson_item, line, by_name, at, is_change, status, exit_code, approved_by, finished_at FROM change_commands ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, watson_item, line, by_name, at, is_change, status, exit_code, approved_by, finished_at FROM change_commands"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var cmd Command
 	var exit *int
@@ -236,13 +268,13 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		commands[id] = append(commands[id], x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	resolves, resolvesBy := map[string][]string{}, map[string]map[string]string{}
-	rows, err = q.Query(ctx, "SELECT change_id::text, resolved_key, is_listed, linked_by FROM change_resolves ORDER BY change_id, position")
+	rows, err = q.Query(ctx, "SELECT change_id::text, resolved_key, is_listed, linked_by FROM change_resolves"+of+" ORDER BY change_id, position", args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var key string
 	var listed bool
@@ -259,16 +291,16 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 
 	rows, err = q.Query(ctx, `SELECT change_id::text, change_key, coalesce(agent_id, ''), model, source_kind, source_key, source_label, source_set_by, source_job, cluster_id, title,
 			reasoning, condition_kind, condition_args, dedup_key, expires_at, state, created_at, updated_at, requester_key, requester_name, requester_kind, is_production,
 			needed_count, rechecked_at, recheck_is_ok, recheck_why, recheck_checked, recheck_warnings, reason, replaced_by_change_key, replaces_change_key,
-			approval_policy_id, watson_item, proposed_by_name, proposed_by_kind, last_by_name, last_by_kind, last_at
-		FROM changes ORDER BY position`)
+			approval_policy_id, watson_item, proposed_by_name, proposed_by_kind, last_by_name, last_by_kind, last_at, position
+		FROM changes `+where+` ORDER BY position`, args...)
 	if err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
 	var c Card
 	var created, updated time.Time
@@ -277,10 +309,11 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 	var requesterName, requesterKind, proposedKind, lastKind string
 	var rc Recheck
 	var checked, warnings []string
+	var position int64
 	if _, err := pgx.ForEachRow(rows, []any{&id, &c.ID, &c.Agent, &c.Model, &c.Source.Kind, &c.Source.ID, &c.Source.Label, &c.Source.SetBy, &c.Source.Job, &c.Cluster, &c.Title,
 		&c.Reasoning, &c.Condition.Kind, &raw, &c.DedupKey, &expires, &c.State, &created, &updated, &requester, &requesterName, &requesterKind, &c.Production,
 		&c.Needed, &rechecked, &rc.OK, &rc.Why, &checked, &warnings, &c.Reason, &c.ReplacedBy, &c.Replaces,
-		&c.Standing, &c.WatsonItem, &proposedBy, &proposedKind, &lastBy, &lastKind, &lastAt}, func() error {
+		&c.Standing, &c.WatsonItem, &proposedBy, &proposedKind, &lastBy, &lastKind, &lastAt, &position}, func() error {
 		x := c
 		var err error
 		if x.Condition.Args, err = argsOf(raw); err != nil {
@@ -307,12 +340,14 @@ func readCards(ctx context.Context, q db.Querier) (record, bool, error) {
 		}
 		x.Evidence, x.Actions, x.Plans, x.Results, x.Approvals, x.History, x.Commands = evidence[id], actions[id], plans[id], results[id], approvals[id], history[id], commands[id]
 		x.Resolves, x.ResolvesBy = resolves[id], resolvesBy[id]
-		rec.Cards = append(rec.Cards, x)
+		x.canon()
+		out = append(out, x)
+		kept = append(kept, keptChange{id: id, position: position})
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, nil, err
 	}
-	return rec, found || len(rec.Cards) > 0, nil
+	return out, kept, nil
 }
 
 // The two verdicts of change_decisions.
@@ -389,43 +424,108 @@ func changeRow(c Card, position int64) []any {
 // (DB-56): a card that is there already (isNew false) has its row changed
 // in place under the key id, and what hangs from it written again.
 func queueCard(b *pgx.Batch, c Card, position int64, id string, isNew bool) {
+	if isNew {
+		queueAgent(b, c)
+		b.Queue(insertChange, append([]any{id, c.ID}, changeRow(c, position)...)...)
+		queueHanging(b, id, Card{}, c)
+		return
+	}
+	queueCardChange(b, id, nil, c, -1, position)
+}
+
+// queueAgent makes sure the agent a change points at has a row.
+func queueAgent(b *pgx.Batch, c Card) {
 	if c.Agent != "" {
-		// A change points at its agent's row.
 		b.Queue("INSERT INTO agents (agent_id) VALUES ($1) ON CONFLICT (agent_id) DO NOTHING", c.Agent)
 	}
-	if isNew {
-		b.Queue(insertChange, append([]any{id, c.ID}, changeRow(c, position)...)...)
-	} else {
+}
+
+// queueCardChange queues what changes a kept change from was at wasAt
+// (nil: not known, so everything) to c at position, under its row's key
+// id (DB-79): its row
+// updated in place when a column changed, and of each list that hangs
+// from it only what changed: an entry added at the end is one insert
+// (an approval, a line of history, a logged command), and a list that
+// changed otherwise is written again. Nothing of another change is
+// written.
+func queueCardChange(b *pgx.Batch, id string, was *Card, c Card, wasAt, position int64) {
+	if was == nil || wasAt != position || !sameJSON(changeRow(*was, position), changeRow(c, position)) {
+		if was == nil || was.Agent != c.Agent {
+			queueAgent(b, c)
+		}
 		b.Queue(updateChange, append([]any{id}, changeRow(c, position)...)...)
+	}
+	if was == nil {
 		for _, t := range changeTables {
 			b.Queue("DELETE FROM "+t+" WHERE change_id = $1", id)
 		}
+		queueHanging(b, id, Card{}, c)
+		return
 	}
-	for i, e := range c.Evidence {
+	queueHanging(b, id, *was, c)
+}
+
+// grown says how a list changed from was to now: not at all, by entries
+// added at its end (from is where they start), or otherwise (from -1).
+func grown[T any](was, now []T) (same bool, from int) {
+	if sameJSON(was, now) {
+		return true, 0
+	}
+	if len(was) < len(now) && sameJSON(was, now[:len(was)]) {
+		return false, len(was)
+	}
+	return false, -1
+}
+
+// queueList queues what changes one list hanging from the change id: the
+// entries from where it grew, or the list written again (del deletes it).
+func queueList[T any](b *pgx.Batch, id string, was, now []T, del string, put func(i int, v T)) {
+	same, from := grown(was, now)
+	if same {
+		return
+	}
+	if from < 0 {
+		b.Queue(del, id)
+		from = 0
+	}
+	for i := from; i < len(now); i++ {
+		put(i, now[i])
+	}
+}
+
+// queueHanging queues what changes the lists hanging from the change id,
+// from was's to c's: from none for a new change.
+func queueHanging(b *pgx.Batch, id string, was, c Card) {
+	queueList(b, id, was.Evidence, c.Evidence, "DELETE FROM change_evidence WHERE change_id = $1", func(i int, e Evidence) {
 		var when *time.Time
 		if !e.At.IsZero() {
 			when = at(e.At)
 		}
 		b.Queue("INSERT INTO change_evidence (change_id, position, kind, body, ref, at) VALUES ($1, $2, $3, $4, $5, $6)", id, i, e.Kind, e.Text, e.Ref, when)
-	}
-	for i, a := range c.Actions {
+	})
+	queueList(b, id, was.Actions, c.Actions, "DELETE FROM change_actions WHERE change_id = $1", func(i int, a Action) {
 		b.Queue("INSERT INTO change_actions (change_id, position, kind, args, impact, risk) VALUES ($1, $2, $3, $4, $5, $6)", id, i, a.Kind, argsJSON(a.Args, true), a.Impact, a.Risk)
-	}
-	for i, p := range c.Plans {
+	})
+	queueList(b, id, was.Plans, c.Plans, "DELETE FROM change_plans WHERE change_id = $1", func(i int, p Plan) {
 		b.Queue("INSERT INTO change_plans (change_id, position, summary, targets, impact, fingerprint, unread, warning) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 			id, i, p.Summary, list(p.Targets), list(p.Impact), p.Fingerprint, p.Unread, p.Warning)
-	}
-	for i, r := range c.Results {
+	})
+	queueList(b, id, was.Results, c.Results, "DELETE FROM change_results WHERE change_id = $1", func(i int, r Result) {
 		b.Queue("INSERT INTO change_results (change_id, position, action_number, is_ok, summary, detail, ref, at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 			id, i, r.Action, r.OK, r.Summary, r.Detail, r.Ref, at(r.At))
-	}
-	for i, d := range c.Approvals {
+	})
+	queueList(b, id, was.Approvals, c.Approvals, "DELETE FROM change_decisions WHERE change_id = $1 AND verdict = '"+verdictApproved+"'", func(i int, d Decision) {
 		queueDecision(b, id, verdictApproved, i, d)
+	})
+	if !sameJSON(was.Rejection, c.Rejection) {
+		if was.Rejection != nil {
+			b.Queue("DELETE FROM change_decisions WHERE change_id = $1 AND verdict = '"+verdictRejected+"'", id)
+		}
+		if c.Rejection != nil {
+			queueDecision(b, id, verdictRejected, 0, *c.Rejection)
+		}
 	}
-	if c.Rejection != nil {
-		queueDecision(b, id, verdictRejected, 0, *c.Rejection)
-	}
-	for i, e := range c.History {
+	queueList(b, id, was.History, c.History, "DELETE FROM change_events WHERE change_id = $1", func(i int, e Event) {
 		var name *string
 		var a Actor
 		if e.Actor != nil {
@@ -433,10 +533,16 @@ func queueCard(b *pgx.Batch, c Card, position int64, id string, isNew bool) {
 			name = &a.Name
 		}
 		b.Queue("INSERT INTO change_events (change_id, position, at, what, by_name, actor_name, actor_kind) VALUES ($1, $2, $3, $4, $5, $6, $7)", id, i, at(e.At), e.What, e.By, name, a.Kind)
-	}
-	for i, x := range c.Commands {
+	})
+	queueList(b, id, was.Commands, c.Commands, "DELETE FROM change_commands WHERE change_id = $1", func(i int, x Command) {
 		b.Queue(`INSERT INTO change_commands (change_id, position, watson_item, line, by_name, at, is_change, status, exit_code, approved_by, finished_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, id, i, x.ID, x.Line, x.By, at(x.At), x.Change, x.Status, x.Exit, x.Approver, timePtr(x.Finished))
+	})
+	if sameJSON(was.Resolves, c.Resolves) && sameJSON(was.ResolvesBy, c.ResolvesBy) {
+		return
+	}
+	if len(was.Resolves)+len(was.ResolvesBy) > 0 {
+		b.Queue("DELETE FROM change_resolves WHERE change_id = $1", id)
 	}
 	// The cases and known issues it lists, in order, each with who linked
 	// it; then whoever is named for one it does not list.
@@ -464,13 +570,15 @@ func queueCard(b *pgx.Batch, c Card, position int64, id string, isNew bool) {
 	}
 }
 
+// writeCards changes the rows from old to next: the copy from the
+// ConfigMap of before, a whole document saved (the clean start), and
+// Change. Each change is written as queueCardChange writes it, its id the
+// one way (CF-56).
 func writeCards(ctx context.Context, tx pgx.Tx, old, next record) error {
+	next.canon()
 	b := &pgx.Batch{}
 	if old.Next != next.Next {
-		v, _ := json.Marshal(struct {
-			Next int `json:"next"`
-		}{next.Next})
-		if _, err := db.SaveScope(ctx, tx, changesScope, v, db.AnyVersion, ""); err != nil {
+		if err := saveNext(ctx, tx, next.Next); err != nil {
 			return err
 		}
 	}
@@ -510,19 +618,19 @@ func writeCards(ctx context.Context, tx pgx.Tx, old, next record) error {
 			continue
 		}
 		if !had {
-			id = db.NewID()
+			queueCard(b, c, places[i], db.NewID(), true)
+			continue
 		}
-		queueCard(b, c, places[i], id, !had)
+		var w *Card
+		if was, ok := before[c.ID]; ok {
+			w = &was
+		}
+		queueCardChange(b, id, w, c, placed[c.ID], places[i])
 	}
 	// A change no longer in the document loses its row, and with the row
 	// goes what hangs from it and its conversation with Sherlock.
 	b.Queue("DELETE FROM changes WHERE NOT (change_key = ANY($1))", kept)
 	return tx.SendBatch(ctx, b).Close()
-}
-
-// NewChatsPG keeps the waiting changes' conversations with Sherlock in d.
-func NewChatsPG(d *db.DB) *db.Doc[chatsRecord] {
-	return &db.Doc[chatsRecord]{DB: d, Key: ChatsKey, Read: readChats, Write: writeChats}
 }
 
 func readChats(ctx context.Context, q db.Querier) (chatsRecord, bool, error) {

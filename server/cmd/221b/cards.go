@@ -43,7 +43,7 @@ type cardsOptions struct {
 // proposals ConfigMap's keys.
 func cardLimits() cards.Limits {
 	l := layout[objProposals]
-	return cards.Limits{CardsBytes: l[cards.CardsKey].Bytes, StandingBytes: l[cards.StandingKey].Bytes, NotifyBytes: l[cards.NotifyKey].Bytes, ChatsBytes: l[cards.ChatsKey].Bytes}
+	return cards.Limits{StandingBytes: l[cards.StandingKey].Bytes, NotifyBytes: l[cards.NotifyKey].Bytes}
 }
 
 // openCards opens the cards: their records where o.wrap keeps them, the

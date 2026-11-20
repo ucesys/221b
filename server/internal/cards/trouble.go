@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cardid"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -21,7 +23,7 @@ import (
 // case's has (CF-46 to CF-49). A proposal may resolve several cases, so it
 // has its own conversation with Sherlock: one, shared by everyone who may
 // approve proposals or works the cases, each question asked as its asker
-// and naming them, kept in ChatsKey while the proposal waits, bounded, and
+// and naming them, kept while the proposal waits, bounded, and
 // deleted when it is decided, whatever decides it (applied or failed,
 // rejected, expired, replaced). Each command run from the drawer goes
 // through Watson with from = "proposal:PC-12", the proposal's own actions
@@ -33,8 +35,11 @@ import (
 // conversations with Sherlock, one per proposal.
 const ChatsKey = "cards-chat.json"
 
-// DefaultChatsBytes is the most ChatsKey holds; MaxChatBytes the most one
-// proposal's conversation does.
+// MaxChatBytes is the most one proposal's conversation holds: what is
+// sent back to Sherlock with each question, and shown in the drawer. The
+// bound of all the conversations together was the ConfigMap's, and went
+// with it (DB-79); DefaultChatsBytes is the ConfigMap of before's, for
+// what reports on that ConfigMap until it is copied.
 const (
 	DefaultChatsBytes = 192 << 10
 	MaxChatBytes      = 48 << 10
@@ -122,16 +127,82 @@ type chatsRecord struct {
 	Chats map[string]chatRecord `json:"chats,omitempty"`
 }
 
-// changeChats edits ChatsKey over the version read.
-func (s *Store) changeChats(ctx context.Context, edit func(*chatsRecord) error) error {
-	s.chatMu.Lock()
-	defer s.chatMu.Unlock()
-	return changeJSON(ctx, s.opts.Backend, ChatsKey, func(rec *chatsRecord) error {
+// Conversations is where the store keeps the waiting proposals'
+// conversations (DB-79): one conversation read and written at a time.
+// ChatsPG keeps them in the database; kvChats as one JSON document of a
+// kv.Backend, in memory for the tests.
+type Conversations interface {
+	// Chat returns a proposal's conversation, empty when none is kept.
+	Chat(ctx context.Context, id string) (chatRecord, error)
+	// SaveChat keeps a proposal's conversation as c; nothing is kept of
+	// a proposal that has no record.
+	SaveChat(ctx context.Context, id string, c chatRecord) error
+	// DropChats deletes the conversations of the proposals gone names,
+	// and says how many messages it deleted.
+	DropChats(ctx context.Context, gone func(id string) bool) (int, error)
+}
+
+// conversationsIn finds where a store's backend keeps the conversations:
+// the database's repository when the key of the conversations is one.
+func conversationsIn(b kv.Backend) Conversations {
+	if k, ok := b.(*kv.Keyed); ok {
+		if c, ok := k.Keys[ChatsKey].(Conversations); ok {
+			return c
+		}
+	}
+	return &kvChats{b: b}
+}
+
+// kvChats keeps the conversations as one JSON document under ChatsKey.
+type kvChats struct {
+	b  kv.Backend
+	mu sync.Mutex
+}
+
+func (k *kvChats) change(ctx context.Context, edit func(*chatsRecord) error) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return changeJSON(ctx, k.b, ChatsKey, func(rec *chatsRecord) error {
 		if rec.Chats == nil {
 			rec.Chats = map[string]chatRecord{}
 		}
 		return edit(rec)
 	})
+}
+
+func (k *kvChats) Chat(ctx context.Context, id string) (chatRecord, error) {
+	rec, _, err := loadJSON[chatsRecord](ctx, k.b, ChatsKey)
+	return rec.Chats[id], err
+}
+
+func (k *kvChats) SaveChat(ctx context.Context, id string, c chatRecord) error {
+	return k.change(ctx, func(rec *chatsRecord) error {
+		rec.Chats[id] = c
+		return nil
+	})
+}
+
+func (k *kvChats) DropChats(ctx context.Context, gone func(id string) bool) (int, error) {
+	messages := 0
+	err := k.change(ctx, func(rec *chatsRecord) error {
+		messages = 0
+		dropped := 0
+		for id, r := range rec.Chats {
+			if gone(id) {
+				messages += len(r.Messages)
+				delete(rec.Chats, id)
+				dropped++
+			}
+		}
+		if dropped == 0 {
+			return errUnchanged
+		}
+		return nil
+	})
+	if errors.Is(err, errUnchanged) {
+		return 0, nil
+	}
+	return messages, err
 }
 
 // Chats is the keeper of the proposals' conversations, for Sherlock.
@@ -152,11 +223,11 @@ func (c chats) Load(ctx context.Context, k sherlock.Key) ([]sherlock.Msg, error)
 	if !ok {
 		return nil, nil
 	}
-	rec, _, err := loadJSON[chatsRecord](ctx, c.s.opts.Backend, ChatsKey)
+	rec, err := c.s.convs.Chat(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return rec.Chats[id].Messages, nil
+	return rec.Messages, nil
 }
 
 // errDecidedChat refuses to keep the conversation of a decided proposal.
@@ -171,18 +242,9 @@ func startsWithQuestion(msgs []sherlock.Msg) []sherlock.Msg {
 	return msgs
 }
 
-// dropQuestion drops a conversation's first question with its answer.
-func dropQuestion(msgs []sherlock.Msg) []sherlock.Msg {
-	if len(msgs) == 0 {
-		return msgs
-	}
-	return startsWithQuestion(msgs[1:])
-}
-
 // Save keeps a proposal's conversation while the proposal waits, within
-// MaxChatBytes, the oldest messages going first; and all of them within
-// the key's limit: past it, the conversation spoken in longest ago loses
-// its oldest question first.
+// MaxChatBytes, the oldest messages going first. Each conversation is
+// bounded on its own: one no longer gives way to another (DB-79).
 func (c chats) Save(ctx context.Context, k sherlock.Key, msgs []sherlock.Msg) error {
 	id, ok := ProposalFrom(k.Session)
 	if !ok {
@@ -205,39 +267,7 @@ func (c chats) Save(ctx context.Context, k sherlock.Key, msgs []sherlock.Msg) er
 	if len(b) > MaxChatBytes {
 		return fmt.Errorf("%w: the conversation of %s would pass its %d KiB", ErrFull, id, MaxChatBytes>>10)
 	}
-	limit := s.opts.Limits.ChatsBytes
-	limit -= limit / 16
-	return s.changeChats(ctx, func(rec *chatsRecord) error {
-		rec.Chats[id] = one
-		for {
-			if b, _ := json.Marshal(rec); len(b) <= limit {
-				return nil
-			}
-			// The conversation spoken in longest ago, this one last.
-			oldest := ""
-			for x, r := range rec.Chats {
-				if x == id {
-					continue
-				}
-				if oldest == "" || r.Updated.Before(rec.Chats[oldest].Updated) {
-					oldest = x
-				}
-			}
-			if oldest == "" {
-				oldest = id
-			}
-			r := rec.Chats[oldest]
-			r.Messages = dropQuestion(r.Messages)
-			if len(r.Messages) == 0 {
-				delete(rec.Chats, oldest)
-				if oldest == id {
-					return fmt.Errorf("%w: the proposed changes' conversations have no room left", ErrFull)
-				}
-				continue
-			}
-			rec.Chats[oldest] = r
-		}
-	})
+	return s.convs.SaveChat(ctx, id, one)
 }
 
 // TroubleText is a proposal as the data its conversation starts from
@@ -415,7 +445,7 @@ func (s *Store) CommandEnded(ctx context.Context, id string, cmd Command) error 
 // ---------- once decided ----------
 
 // endTrouble ends a proposal's troubleshooting once it is decided (CF-61):
-// its conversation is deleted, in ChatsKey and in Sherlock's memory, and
+// its conversation is deleted, where it is kept and in Sherlock's memory, and
 // its log keeps only the changes that finished done. A proposal still
 // waiting or approved, or one already settled, changes nothing.
 func (s *Store) endTrouble(c Card) {
@@ -465,26 +495,7 @@ func (s *Store) endTrouble(c Card) {
 // dropChats deletes the conversations of the proposals gone says, and
 // says how many messages it deleted.
 func (s *Store) dropChats(ctx context.Context, gone func(id string) bool) (int, error) {
-	messages := 0
-	err := s.changeChats(ctx, func(rec *chatsRecord) error {
-		messages = 0
-		dropped := 0
-		for id, r := range rec.Chats {
-			if gone(id) {
-				messages += len(r.Messages)
-				delete(rec.Chats, id)
-				dropped++
-			}
-		}
-		if dropped == 0 {
-			return errUnchanged
-		}
-		return nil
-	})
-	if errors.Is(err, errUnchanged) {
-		return 0, nil
-	}
-	return messages, err
+	return s.convs.DropChats(ctx, gone)
 }
 
 // sweepChats deletes the conversations of proposals no longer waiting,

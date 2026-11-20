@@ -107,13 +107,13 @@ func TestAProposalsConversationIsKeptUntilItIsDecidedCF61(t *testing.T) {
 	}
 }
 
-// A conversation is bounded: one proposal's within MaxChatBytes, all of
-// them within their key, the conversation spoken in longest ago losing its
-// oldest question first; each still starts with a question.
+// A conversation is bounded: one proposal's within MaxChatBytes, its
+// oldest questions going first, and it still starts with a question. Each
+// is bounded on its own (DB-79): the bound of all of them together was the
+// ConfigMap's, so a conversation no longer gives way to another's.
 func TestAProposalsConversationIsBoundedCF61(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	w.st.opts.Limits.ChatsBytes = 120 << 10
 	keeper := w.st.Chats()
 	long := func(n int) []sherlock.Msg {
 		var out []sherlock.Msg
@@ -134,26 +134,22 @@ func TestAProposalsConversationIsBoundedCF61(t *testing.T) {
 		}
 		w.clock.add(time.Minute)
 	}
-	raw, _, _ := w.backend.LoadKey(ctx, ChatsKey)
-	if len(raw) > 120<<10 {
-		t.Fatalf("the key holds %d bytes", len(raw))
-	}
-	var rec chatsRecord
-	_ = json.Unmarshal(raw, &rec)
-	for i, id := range ids {
-		r := rec.Chats[id]
-		if b, _ := json.Marshal(r); len(b) > MaxChatBytes {
+	var counts []int
+	for _, id := range ids {
+		got, err := keeper.Load(ctx, keyOf(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := json.Marshal(chatRecord{Cluster: "dev-1", Messages: got}); len(b) > MaxChatBytes {
 			t.Errorf("%s holds %d bytes", id, len(b))
 		}
-		if len(r.Messages) > 0 && r.Messages[0].Role != "user" {
-			t.Errorf("%s starts with %s", id, r.Messages[0].Role)
+		if len(got) == 0 || got[0].Role != "user" {
+			t.Errorf("%s keeps %d messages and starts with %v", id, len(got), got)
 		}
-		if i == 2 && len(r.Messages) == 0 {
-			t.Error("the newest conversation lost everything")
-		}
+		counts = append(counts, len(got))
 	}
-	if len(rec.Chats[ids[0]].Messages) >= len(rec.Chats[ids[2]].Messages) {
-		t.Errorf("the oldest conversation did not give way first: %d, %d", len(rec.Chats[ids[0]].Messages), len(rec.Chats[ids[2]].Messages))
+	if counts[0] != counts[2] || counts[0] >= 40 {
+		t.Errorf("the conversations keep %v messages: each is bounded alone, and none gives way to another", counts)
 	}
 }
 
