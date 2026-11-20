@@ -192,7 +192,7 @@ func TestTheDatabaseIsOpenedBeforeTheStoresAreMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, body, ok := strings.Cut(string(src), "\nfunc run(")
+	_, body, ok := strings.Cut(string(src), "\nfunc serve(")
 	if !ok {
 		t.Fatal("main.go has no run")
 	}

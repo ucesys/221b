@@ -20,7 +20,7 @@ func (w *wiring) wireSessions(ctx context.Context) {
 	var history sessions.Archive = kept
 	if w.database != nil {
 		pg := &sessions.PGHistory{DB: w.database, Keep: w.toolboxCfg.History.Keep, Logger: log.With("component", "sessions")}
-		if _, inMemory := w.spendBackend.(*kv.Memory); !inMemory {
+		if _, inMemory := w.spendBackend.(*kv.Memory); !inMemory && w.keepsRecords() {
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			n, err := pg.Import(ictx, kept, "configmap key "+sessions.HistoryKey)
 			cancel()

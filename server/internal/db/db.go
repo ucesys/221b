@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -45,6 +46,11 @@ var ErrConflict = errors.New("changed since it was read")
 // ErrUnavailable wraps what a call returns while the database cannot be
 // reached, so a page can say so rather than show an error of the driver's.
 var ErrUnavailable = errors.New("the database is unavailable")
+
+// ErrStartedWithout is why a console that was started without its database
+// (DB-67) is refused it: every call on its handle returns this, wrapped in
+// ErrUnavailable, whether or not the database has come back since.
+var ErrStartedWithout = errors.New("this console was started without its database, and stops and starts again as soon as the database answers")
 
 // Config is where the database is and how to sign in to it.
 type Config struct {
@@ -140,6 +146,11 @@ type DB struct {
 	// listener's and the advisory locks'.
 	direct *pgxpool.Pool
 
+	// without is set on the handle of a console that was started without
+	// its database (OpenWithout): nothing is asked of the database through
+	// it, ever.
+	without bool
+
 	mu     sync.Mutex
 	health Health
 	onUp   []func()
@@ -156,9 +167,9 @@ type Health struct {
 }
 
 // Open connects to the database and checks its version. It does not
-// migrate; Migrate does. A database that does not answer is an error here:
-// a console that has never seen its database does not start (DB-02), while
-// one that loses it later goes on serving what does not need it (DB-14).
+// migrate; Migrate does. A database that does not answer is an error here;
+// what the console does then is the caller's to decide (DB-02, DB-67):
+// start without it (OpenWithout), or not start.
 func Open(ctx context.Context, cfg Config, log *slog.Logger) (*DB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -200,10 +211,62 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*DB, error) {
 	return d, nil
 }
 
+// OpenWithout is the handle of a console that starts without its database
+// (DB-67): the database did not answer, and the console serves what does
+// not need it until it does, then stops and is started again. Everything
+// that would be given the database is given this handle instead, and
+// through it nothing reaches the database, also once the database is back:
+// every call returns ErrUnavailable (wrapping ErrStartedWithout) at once,
+// the health says the database is away, OnAvailable never calls, and the
+// pools behind it cannot make a connection. So a console started without
+// its database reads nothing from it and writes nothing to it, by
+// construction; the schema's steps and the one-time copies run at the
+// start that follows, on the path every start takes. Whether the database
+// answers again is asked through a handle of its own (Open).
+func OpenWithout(cfg Config, log *slog.Logger) (*DB, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if cfg.Poll <= 0 {
+		cfg.Poll = DefaultPoll
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	d := &DB{cfg: cfg, log: log, subs: map[string][]func(){}, without: true}
+	d.health = Health{Since: time.Now(), Error: ErrStartedWithout.Error()}
+	// No connection is made before the first query, so the pools can be
+	// made while the database is away.
+	ctx := context.Background()
+	var err error
+	if d.pool, err = d.open(ctx, cfg.Host, int32(cfg.MaxConns)); err != nil {
+		return nil, err
+	}
+	if d.direct, err = d.open(ctx, cfg.Host, 4); err != nil {
+		d.pool.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// StartedWithout says whether this is the handle of a console that was
+// started without its database (OpenWithout).
+func (d *DB) StartedWithout() bool { return d != nil && d.without }
+
+// refused is what every call on such a handle returns.
+func refused() error { return fmt.Errorf("%w: %w", ErrUnavailable, ErrStartedWithout) }
+
 func (d *DB) open(ctx context.Context, host string, max int32) (*pgxpool.Pool, error) {
 	pc, err := pgxpool.ParseConfig(d.cfg.dsn(host))
 	if err != nil {
 		return nil, fmt.Errorf("the database settings: %w", err)
+	}
+	if d.without {
+		// The pools of a console started without its database connect to
+		// nothing: whatever asks them, whichever way, is refused before a
+		// byte is sent.
+		pc.ConnConfig.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		pc.ConnConfig.DialFunc = func(context.Context, string, string) (net.Conn, error) { return nil, ErrStartedWithout }
 	}
 	pc.MaxConns = max
 	pc.MaxConnIdleTime = 5 * time.Minute
@@ -249,6 +312,9 @@ type Querier interface {
 // changed the same rows first is run again, a few times, so fn must read
 // what it writes from inside it.
 func (d *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	if d.without {
+		return refused()
+	}
 	var err error
 	for try := 0; try < 4; try++ {
 		err = pgx.BeginFunc(ctx, d.pool, fn)
@@ -264,6 +330,9 @@ func (d *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 // Do runs one read or write that needs no transaction, and notes whether
 // the database answered.
 func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
+	if d.without {
+		return refused()
+	}
 	return d.note(fn(d.pool))
 }
 
@@ -274,6 +343,9 @@ func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
 // children's can return the children of one write beside the parent of
 // the next.
 func (d *DB) Snapshot(ctx context.Context, fn func(q Querier) error) error {
+	if d.without {
+		return refused()
+	}
 	return d.note(pgx.BeginTxFunc(ctx, d.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		return fn(tx)
 	}))
@@ -283,6 +355,9 @@ func (d *DB) Snapshot(ctx context.Context, fn func(q Querier) error) error {
 // failure to reach the database in ErrUnavailable.
 func (d *DB) note(err error) error {
 	switch {
+	case d.without:
+		// Whatever was met, the answer of this handle is one.
+		return refused()
 	case err == nil:
 		d.set(true, "")
 		return nil
@@ -309,6 +384,10 @@ func (d *DB) OnAvailable(fn func()) {
 }
 
 func (d *DB) set(ok bool, why string) {
+	if d.without {
+		// Away, whatever is met, until the console starts again.
+		return
+	}
 	d.mu.Lock()
 	changed := d.health.Available != ok
 	if changed {
@@ -334,6 +413,9 @@ func (d *DB) set(ok bool, why string) {
 // Watch asks the database whether it is there every interval until ctx
 // ends, so the health is right also while nobody uses the console.
 func (d *DB) Watch(ctx context.Context, every time.Duration) {
+	if d.without {
+		return
+	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {

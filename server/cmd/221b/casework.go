@@ -232,14 +232,20 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 		if w.knowledgeStored != nil {
 			st.Knowledge = w.knowledgeBackend
 		}
-		go func() {
-			runCleanStart(ctx, cfg, st, w.knowledgeSvc, w.elector.IsLeader, w.auditLog, log)
-			// The fixes of the cases closed as Fixed before (CF-54), once,
-			// after any clean start.
-			runFixesImport(ctx, caseSvc, w.elector.IsLeader, log)
-		}()
+		// Neither on a console started without its database (DB-67): a
+		// clean start deletes records, and the fixes' import writes them.
+		if w.keepsRecords() {
+			go func() {
+				runCleanStart(ctx, cfg, st, w.knowledgeSvc, w.elector.IsLeader, w.auditLog, log)
+				// The fixes of the cases closed as Fixed before (CF-54), once,
+				// after any clean start.
+				runFixesImport(ctx, caseSvc, w.elector.IsLeader, log)
+			}()
+		}
 	}
-	go caseSvc.Run(ctx)
+	if w.keepsRecords() {
+		go caseSvc.Run(ctx)
+	}
 	w.caseStored, w.caseSvc, w.lessonsSvc = caseStored, caseSvc, lessonsSvc
 	return nil
 }

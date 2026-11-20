@@ -178,6 +178,12 @@ database_modes() {
     grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
     grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
     netpol "$ext" | has 'port: 6432$' &&
+    # A start without the database (DB-67): on unless the values turn it
+    # off, for both kinds of database, and not rendered without one.
+    grep -A1 'name: DB_START_WITHOUT' "$d" | has '"true"' && grep -A1 'name: DB_START_WITHOUT' "$ext" | has '"true"' &&
+    ! has 'name: DB_START_WITHOUT' < "$out" &&
+    render k8s-console --set clusterName=ci --set database.mode=bundled --set database.startWithoutIt=false | grep -A1 'name: DB_START_WITHOUT' | has '"false"' &&
+    grep -q '^  startWithoutIt: true$' "$CHART/values.yaml" &&
     refused --set database.mode=mongo && refused --set database.mode=external &&
     refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
     ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
@@ -746,7 +752,7 @@ check "node shells run in a namespace of their own at Pod Security privileged, c
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
-check "the database: none by default; bundled as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it; what cannot work is refused" database_modes
+check "the database: none by default; bundled as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it, and goes on without it unless the values say not to; what cannot work is refused" database_modes
 check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
 check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress

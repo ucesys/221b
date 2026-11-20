@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -113,6 +114,19 @@ type wiring struct {
 	database      *db.DB
 	schemaVersion int
 	inDatabase    []string
+	// without is set when the console was started without its database
+	// (DB-67, without.go): database is then a handle that refuses every
+	// call, restCfg refuses the console's own writes of ConfigMaps and
+	// Secrets, signInCfg is the configuration as it was, for the accounts'
+	// Secret and the session key's, and restart is closed when the
+	// database answers. databaseWait and withoutProbe are how long a start
+	// waits for the database and how often it is asked for afterwards; 0
+	// is the default (a test sets them).
+	without      bool
+	signInCfg    *rest.Config
+	restart      chan struct{}
+	databaseWait time.Duration
+	withoutProbe time.Duration
 	// importIDs are the names record sets are copied under, each once;
 	// importClash those named twice (claimImport).
 	importIDs   map[string]bool
@@ -183,13 +197,44 @@ type wiring struct {
 	handler *api.Server
 }
 
-func run(args []string) error {
+func run(args []string) error { return serve(context.Background(), args, nil) }
+
+// processLogs sets the loggers the process has one of (serve).
+var processLogs sync.Once
+
+// hooks are what a test of the whole start gives serve: where the logs
+// and the audit log go, what to set on the wiring before anything is
+// wired, and what to call once the console listens.
+type hooks struct {
+	logs, audit io.Writer
+	wiring      func(w *wiring)
+	serving     func(w *wiring, addr string)
+}
+
+// serve wires the console and serves it until ctx ends, a signal asks it
+// to stop, or it stops itself.
+func serve(parent context.Context, args []string, h *hooks) error {
 	parsed, err := config.Parse(args)
 	if err != nil {
 		return err
 	}
-	log := newLogger(parsed)
-	slog.SetDefault(log)
+	if h == nil {
+		h = &hooks{}
+	}
+	if h.logs == nil {
+		h.logs = os.Stderr
+	}
+	if h.audit == nil {
+		h.audit = os.Stdout
+	}
+	log := newLogger(parsed, h.logs)
+	// The process's own loggers are set once: a process is one console,
+	// and a test that starts a second leaves the first one's in place.
+	processLogs.Do(func() {
+		slog.SetDefault(log)
+		// client-go logs through klog; send it to the same structured log.
+		klog.SetSlogLogger(log.With("component", "client-go"))
+	})
 	// The hosts applications' charts are fetched from (apps.allowedHosts).
 	if err := apps.SetAllowedHosts(parsed.AppsAllowedHosts); err != nil {
 		return fmt.Errorf("apps.allowedHosts: %w", err)
@@ -197,27 +242,30 @@ func run(args []string) error {
 
 	// The audit log (P3-10) owns standard output; the ordinary logs go to
 	// standard error.
-	w := &wiring{cfg: parsed, log: log, auditLog: audit.New(audit.Options{Out: os.Stdout, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
+	w := &wiring{cfg: parsed, log: log, restart: make(chan struct{}), auditLog: audit.New(audit.Options{Out: h.audit, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
+	if h.wiring != nil {
+		h.wiring(w)
+	}
 	if err := w.wireAuthConfig(); err != nil {
 		return err
 	}
 	// From here on, the configuration as sign-in left it.
 	cfg := w.cfg
-	// client-go logs through klog; send it to the same structured log.
-	klog.SetSlogLogger(log.With("component", "client-go"))
 	setMemoryLimit(log)
 
 	if w.restCfg, w.mode, err = kube.RestConfig(kube.ConnectOptions{Kubeconfig: cfg.Kubeconfig, Context: cfg.Context, APIServer: cfg.APIServer}); err != nil {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	// The database is opened before anything that keeps records is made
 	// (DB-59), so each store made below can be given it: the sign-in's, the
 	// connections', the applications', the credentials'. It uses nothing
 	// but the configuration and the log, and nothing listens until it and
-	// the rest are done, so the start's order is all that changes.
+	// the rest are done, so the start's order is all that changes. A
+	// database that does not answer within the wait leaves a handle that
+	// refuses every call, and a console that keeps no records (DB-67).
 	if err := w.wireDatabase(ctx); err != nil {
 		return err
 	}
@@ -301,13 +349,19 @@ func run(args []string) error {
 		return err
 	}
 	// Administration › Credentials (0.12.1, CR-12): the secrets kept with what
-	// used them move to credentials, on the leader.
-	go w.migrateCredentials(ctx)
+	// used them move to credentials, on the leader. Not on a console
+	// started without its database, which keeps no records (DB-67): the
+	// move, like the jobs below, waits for the start that follows.
+	if w.keepsRecords() {
+		go w.migrateCredentials(ctx)
+	}
 	// Jobs (Phase 12): the agents read through the handler's tools as
 	// the reader identity; the schedules and alerts are looked at on the
 	// leader.
 	w.jobsW.svc.SetAgents(agentRunner{ai: w.aiSvc.Service, engine: w.sherlockSvc, handler: w.handler, auth: w.authSvc})
-	go w.jobsW.svc.Run(ctx)
+	if w.keepsRecords() {
+		go w.jobsW.svc.Run(ctx)
+	}
 	// The deployed roles are compared with the shipped ones every five
 	// minutes, for the Permissions page, the audit log and rbac.enforce;
 	// on the leader only, and at once when a replica becomes it.
@@ -336,11 +390,18 @@ func run(args []string) error {
 		// deadline instead. Requests share ctx, so streams end on shutdown.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return err
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(w.mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
-		errCh <- srv.ListenAndServe()
+		log.Info("serving", "addr", ln.Addr().String(), "cluster", cfg.ClusterName, "mode", string(w.mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
+		errCh <- srv.Serve(ln)
 	}()
+	if h.serving != nil {
+		h.serving(w, ln.Addr().String())
+	}
 	lostLease := false
 	select {
 	case err := <-errCh:
@@ -349,6 +410,12 @@ func run(args []string) error {
 		}
 		return err
 	case <-ctx.Done():
+	case <-w.restart:
+		// The database answers, and this console was started without it
+		// (DB-67): it stops as it does when asked to, and the kubelet
+		// starts it again, to migrate, copy and serve as every start does.
+		log.Warn("stopping, to be started again with the database")
+		stop()
 	case <-w.lost:
 		lostLease = true
 		log.Error("the Lease was lost; a cold standby cannot watch again, so this replica exits and starts afresh (replicas.warmStandby=false)")
@@ -411,6 +478,16 @@ func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logge
 } {
 	l := w.auditLog
 	_, inMemory := b.(*kv.Memory)
+	if w.database != nil && !w.keepsRecords() {
+		// Started without the database (DB-67): the events go to the
+		// stream and the webhook as always, and the page shows them from
+		// memory until the console starts again. Nothing is queued for a
+		// database this console never writes to, and nothing is copied,
+		// removed or trimmed.
+		w.inDatabase = append(w.inDatabase, "activity")
+		l.KeepInMemory(audit.DefaultKeep)
+		return nil
+	}
 	if w.database != nil {
 		st := audit.NewPGStore(w.database, logger)
 		l.SetStore(st)
@@ -470,12 +547,12 @@ func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logge
 	return st
 }
 
-func newLogger(cfg config.Config) *slog.Logger {
+func newLogger(cfg config.Config, out io.Writer) *slog.Logger {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	opts := &slog.HandlerOptions{Level: level}
 	if cfg.LogFormat == "text" {
-		return slog.New(slog.NewTextHandler(os.Stderr, opts))
+		return slog.New(slog.NewTextHandler(out, opts))
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	return slog.New(slog.NewJSONHandler(out, opts))
 }

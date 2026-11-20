@@ -47,6 +47,9 @@ type Lock struct {
 // TryLock takes the lock of that name if no session holds it, and says
 // whether it did. It never waits.
 func (d *DB) TryLock(ctx context.Context, name string) (*Lock, bool, error) {
+	if d.without {
+		return nil, false, refused()
+	}
 	conn, err := d.direct.Acquire(ctx)
 	if err != nil {
 		return nil, false, d.note(err)
@@ -145,6 +148,9 @@ func (d *DB) call(topic string) {
 // Listen hears the notices until ctx ends, on one direct connection it
 // opens again whenever it drops.
 func (d *DB) Listen(ctx context.Context) {
+	if d.without {
+		return
+	}
 	wait := time.Second
 	for ctx.Err() == nil {
 		err := d.listen(ctx)

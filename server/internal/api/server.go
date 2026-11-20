@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -38,6 +39,7 @@ import (
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/imagecheck"
@@ -862,14 +864,32 @@ func (s *Server) hostAllowed(hostport string) bool {
 	return s.allowedHosts[host]
 }
 
+// statusWriter notes the status a handler answers with. An error's status
+// is held until its text is written: whatever status a handler, the
+// console's or a service's own, gave a failure, one whose text says the
+// database is unavailable is answered 503 (DB-15), so every page that
+// needs the database says so the same way, and a browser can tell it from
+// a fault of the request.
 type statusWriter struct {
 	http.ResponseWriter
 	code int
+	// held is an error's status not yet sent; asIs sends every status as
+	// it is given (what the leader answered, which it has looked at).
+	held, asIs bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
-	if w.code == 0 {
-		w.code = code
+	if w.code != 0 {
+		// A second header, as the server would log it.
+		if !w.held {
+			w.ResponseWriter.WriteHeader(code)
+		}
+		return
+	}
+	w.code = code
+	if code >= http.StatusBadRequest && code != http.StatusServiceUnavailable && !w.asIs {
+		w.held = true
+		return
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
@@ -878,7 +898,21 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.code == 0 {
 		w.code = http.StatusOK
 	}
+	if w.held {
+		if bytes.Contains(b, []byte(db.ErrUnavailable.Error())) {
+			w.code = http.StatusServiceUnavailable
+		}
+		w.sendHeld()
+	}
 	return w.ResponseWriter.Write(b)
+}
+
+// sendHeld sends an error's status that was held for its text.
+func (w *statusWriter) sendHeld() {
+	if w.held {
+		w.held = false
+		w.ResponseWriter.WriteHeader(w.code)
+	}
 }
 
 // Unwrap lets http.ResponseController reach Flush and deadlines.
@@ -889,6 +923,7 @@ func (s *Server) observe(route string, h http.HandlerFunc) http.Handler {
 		sw := &statusWriter{ResponseWriter: w}
 		start := time.Now()
 		h(sw, r)
+		sw.sendHeld()
 		code := sw.code
 		if code == 0 {
 			code = http.StatusOK

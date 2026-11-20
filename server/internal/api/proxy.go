@@ -99,7 +99,7 @@ func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request, forward
 		return true
 	}
 	// Logged here, since the leader answers it: which leader, and how.
-	sw := &statusWriter{ResponseWriter: w}
+	sw := &statusWriter{ResponseWriter: w, asIs: true}
 	w = sw
 	start := time.Now()
 	defer func() {

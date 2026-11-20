@@ -41,6 +41,9 @@ type Config struct {
 	// 13, DB-01): the chart's bundled one or one the operator runs. With no
 	// host, every record stays in the ConfigMaps below.
 	Database db.Config
+	// DatabaseStartWithout lets a console whose database does not answer
+	// at start start without it (DB-67); false keeps it from starting.
+	DatabaseStartWithout bool
 	// Automation turns Automation on (Phase 11 part 2, ADR-73); it runs
 	// only where SSH is on too. AutomationConfigMap is the "namespace/name"
 	// of its own ConfigMap; empty keeps its records in memory.
@@ -270,6 +273,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.Database.ClientKeyFile, "db-client-key-file", env("DB_CLIENT_KEY_FILE", ""), "the client certificate's key")
 	fs.IntVar(&c.Database.MaxConns, "db-max-connections", envInt("DB_MAX_CONNECTIONS", 10), "most connections this replica opens to the database")
 	fs.StringVar(&c.Database.ListenerHost, "db-listener-host", env("DB_LISTENER_HOST", ""), "direct address of the database for the listener and the locks, when -db-host is a pooler in transaction mode (empty: -db-host)")
+	fs.BoolVar(&c.DatabaseStartWithout, "db-start-without", envBool("DB_START_WITHOUT", true), "when the database does not answer at start, start without it after two minutes of trying: sign-in and the local cluster's live pages work, nothing is copied, removed or migrated, and the console stops and is started again when the database answers (false: the console does not start until the database answers)")
 	fs.DurationVar(&c.Database.Poll, "db-poll-interval", envDuration("DB_POLL_INTERVAL", db.DefaultPoll), "how often a replica looks for changes other replicas made, besides being told")
 	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
 	fs.BoolVar(&c.Automation, "automation", envBool("AUTOMATION", true), "offer Automation: scripts run on paired nodes over SSH (needs the toolbox's SSH on)")
