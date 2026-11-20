@@ -223,6 +223,11 @@ type consoleOptions struct {
 	// database, and the five seconds between asking for it afterwards.
 	wait, probe time.Duration
 	args        []string
+	// asShipped leaves -db-start-without out, as the chart does unless
+	// database.startWithoutIt is set: the console then does not start
+	// without its database. Every other test here asks for the start
+	// without it, which is what this file is about.
+	asShipped bool
 }
 
 // localUsers writes the chart's local accounts: one SuperAdmin.
@@ -255,6 +260,9 @@ func (c *simCluster) start(t *testing.T, o consoleOptions) *console {
 		args = append(args, "-db-host", d.Host, "-db-port", strconv.Itoa(d.Port), "-db-name", d.Name, "-db-user", d.User, "-db-sslmode", d.SSLMode, "-db-poll-interval", "200ms")
 		if d.PasswordFile != "" {
 			args = append(args, "-db-password-file", d.PasswordFile)
+		}
+		if !o.asShipped {
+			args = append(args, "-db-start-without")
 		}
 	}
 	args = append(args, o.args...)
@@ -1044,17 +1052,18 @@ func TestAReplicaStartedWithItsDatabaseIsUnaffected(t *testing.T) {
 	}
 }
 
-// -db-start-without=false is the start of before (DB-02): the console
-// waits for its database, and does not start without it.
-func TestTheStartWithoutTheDatabaseCanBeTurnedOff(t *testing.T) {
+// A console does not start without its database unless it is told to
+// (DB-02, and DB-67 as the owner decided it on November 20, 2026): with
+// no -db-start-without it waits for its database and stops.
+func TestAConsoleDoesNotStartWithoutItsDatabaseUnlessTold(t *testing.T) {
 	cfg, _, _ := awayDatabase(t, false)
 	c := newSimCluster(t, nil)
 	c.beforeTheMove(t)
 	before := c.records(t)
 	began := time.Now()
-	con := c.start(t, consoleOptions{database: &cfg, wait: 2 * time.Second, args: []string{"-db-start-without=false"}})
+	con := c.start(t, consoleOptions{database: &cfg, wait: 2 * time.Second, asShipped: true})
 	if con.url != "" {
-		t.Fatal("the console listened without its database, with -db-start-without=false")
+		t.Fatal("the console listened without its database, and was not told to with -db-start-without")
 	}
 	err := con.stopped(time.Second)
 	if err == nil || !strings.Contains(err.Error(), "did not answer in 2s of trying") || !strings.Contains(err.Error(), "-db-start-without is off") {

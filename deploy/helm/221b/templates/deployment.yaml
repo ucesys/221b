@@ -142,7 +142,7 @@ spec:
             - name: DB_POLL_INTERVAL
               value: {{ .Values.database.pollInterval | quote }}
             - name: DB_START_WITHOUT
-              value: {{ ne (toString .Values.database.startWithoutIt) "false" | quote }}
+              value: {{ eq (toString .Values.database.startWithoutIt) "true" | quote }}
             {{- else if eq $dbMode "external" }}
             {{- $e := .Values.database.external }}
             # The database (Phase 13): one the operator runs.
@@ -180,7 +180,7 @@ spec:
             - name: DB_POLL_INTERVAL
               value: {{ .Values.database.pollInterval | quote }}
             - name: DB_START_WITHOUT
-              value: {{ ne (toString .Values.database.startWithoutIt) "false" | quote }}
+              value: {{ eq (toString .Values.database.startWithoutIt) "true" | quote }}
             {{- end }}
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
@@ -483,10 +483,10 @@ spec:
           # With a database the console does not listen until it has
           # reached it (two minutes of trying) and brought its schema up to
           # date (five at most), so the liveness probe waits for the start.
-          # A console that starts without its database (DB-67,
-          # database.startWithoutIt) listens after the two minutes, well
-          # inside this; the start that follows, when the database answers,
-          # is an ordinary one and has the whole of it.
+          # A console told to start without its database (DB-67,
+          # database.startWithoutIt, off by default) listens after the two
+          # minutes, well inside this; the start that follows, when the
+          # database answers, is an ordinary one and has the whole of it.
           startupProbe:
             httpGet:
               path: /healthz

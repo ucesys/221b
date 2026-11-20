@@ -545,19 +545,19 @@ database:
   # How often a replica looks for changes the others made, besides being
   # told through LISTEN/NOTIFY.
   pollInterval: 30s
-  # A console whose database does not answer when it starts tries for two
-  # minutes and then starts without it (DB-67), so that people can sign in
-  # and look at the cluster, the database's pods among it: local accounts
-  # and the directory sign in, the local cluster's pages are read live,
-  # and everything kept in the database says it is unavailable. Such a
-  # console keeps no records at all (it migrates, copies and removes
-  # nothing, and writes no ConfigMap and no Secret but the accounts' and
-  # the session key's), shows the local cluster alone, and stops itself
-  # as soon as the database answers; the kubelet starts it again, and
-  # that start is an ordinary one. false: the console does not start
-  # until its database answers (the pod restarts every two minutes and
-  # nothing listens meanwhile).
-  startWithoutIt: true
+  # A console does not start without its database: when the database does
+  # not answer at the start, the console tries for two minutes and stops,
+  # the kubelet starts it again, and nothing listens meanwhile (DB-02).
+  # true lets it start without the database after the two minutes
+  # (DB-67), so that people can sign in and look at the cluster, the
+  # database's pods among it: local accounts and the directory sign in,
+  # the local cluster's pages are read live, and everything kept in the
+  # database says it is unavailable. Such a console keeps no records at
+  # all (it migrates, copies and removes nothing, and writes no ConfigMap
+  # and no Secret but the accounts' and the session key's), shows the
+  # local cluster alone, and stops itself as soon as the database answers;
+  # the kubelet starts it again, and that start is an ordinary one.
+  startWithoutIt: false
 
   bundled:
     # One member, or three with a commit waiting for one of the two
