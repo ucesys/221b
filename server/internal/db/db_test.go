@@ -612,3 +612,79 @@ func TestPlaces(t *testing.T) {
 		}
 	}
 }
+
+// A set of documents is at one version: a read of any key gives the set's
+// version, kept or not; a save of one moves it for all, so a save over
+// what was read of another before it is refused; the documents another
+// backend kept are copied once, together.
+func TestDocSet(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := ctxT(t)
+	type doc struct {
+		N int `json:"n"`
+	}
+	member := func(scope string) db.SetMember {
+		return db.Member(func(ctx context.Context, q db.Querier) (v doc, found bool, err error) {
+			b, _, err := db.LoadScope(ctx, q, scope)
+			if errors.Is(err, db.ErrNotFound) {
+				return v, false, nil
+			}
+			if err != nil {
+				return v, false, err
+			}
+			_, err = fmt.Sscanf(string(b), `{"n": %d}`, &v.N)
+			return v, v.N != 0, err
+		}, func(ctx context.Context, tx pgx.Tx, _, next doc) error {
+			_, err := db.SaveScope(ctx, tx, scope, []byte(fmt.Sprintf(`{"n": %d}`, next.N)), db.AnyVersion, "")
+			return err
+		})
+	}
+	set := &db.DocSet{DB: d, Name: "pair", Members: map[string]db.SetMember{"a.json": member("set-a"), "b.json": member("set-b")}}
+	_, v0, err := set.LoadKey(ctx, "a.json")
+	if !errors.Is(err, kv.ErrNotFound) || v0 != "0" {
+		t.Fatalf("a set never saved: version %q, %v", v0, err)
+	}
+	v1, err := set.SaveKey(ctx, "a.json", []byte(`{"n":1}`), v0)
+	if err != nil || v1 == v0 {
+		t.Fatalf("first save: version %q, %v", v1, err)
+	}
+	// The other key, of which nothing is kept, is at the set's version too.
+	if _, v, err := set.LoadKey(ctx, "b.json"); !errors.Is(err, kv.ErrNotFound) || v != v1 {
+		t.Fatalf("the other key: version %q, want %q: %v", v, v1, err)
+	}
+	if _, err := set.SaveKey(ctx, "b.json", []byte(`{"n":2}`), v0); !errors.Is(err, kv.ErrConflict) {
+		t.Fatalf("a save over what was read before another key's save: %v", err)
+	}
+	v2, err := set.SaveKey(ctx, "b.json", []byte(`{"n":2}`), v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"a.json", "b.json"} {
+		if _, v, err := set.LoadKey(ctx, key); err != nil || v != v2 {
+			t.Fatalf("%s: version %q, want %q: %v", key, v, v2, err)
+		}
+	}
+	if _, err := set.SaveKey(ctx, "c.json", []byte(`{}`), ""); err == nil {
+		t.Fatal("a key the set does not have was saved")
+	}
+	if err := set.DeleteKey(ctx, "a.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, v, err := set.LoadKey(ctx, "a.json"); !errors.Is(err, kv.ErrNotFound) || v == v2 {
+		t.Fatalf("after a key is removed: version %q, %v", v, err)
+	}
+	// What a ConfigMap held is copied once, every key in one transaction.
+	cm := &kv.Memory{}
+	_, _ = cm.SaveKey(ctx, "a.json", []byte(`{"n":7}`), "")
+	_, _ = cm.SaveKey(ctx, "b.json", []byte(`{"n":8}`), "")
+	fresh := &db.DocSet{DB: dbtest.Open(t), Name: "pair", Members: set.Members}
+	if copied, err := fresh.Import(ctx, cm, "test"); err != nil || fmt.Sprint(copied) != "[a.json b.json]" {
+		t.Fatalf("copy: %v %v", copied, err)
+	}
+	if copied, err := fresh.Import(ctx, cm, "test"); err != nil || len(copied) != 0 {
+		t.Fatalf("second copy: %v %v", copied, err)
+	}
+	if b, v, err := fresh.LoadKey(ctx, "b.json"); err != nil || string(b) != `{"n":8}` || v == "0" {
+		t.Fatalf("copied: %s at %q, %v", b, v, err)
+	}
+}
