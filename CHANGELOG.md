@@ -47,6 +47,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- **A data race in the list of approvals**: it read the status of Watson's commands while they ran.
 - **A variable change is no longer held by a newer change of something else.** Every newer change on a fleet stopped an older one from being approved, with the reason that a change carried all the fleet's values; since a change is what it alters (DB-34), only a newer change that alters the same value, mark, ceiling or reboot time holds it.
 - **The clean start's log with a database** names the cases as rows, not as ConfigMaps, and counts the RCAs that went with their cases (an RCA is kept with its case's work and had no line).
 - A clean start now also drops what the runs found under each check, with the runs counted: the runs' ids start again at `run-1` after it, and a run still listed as counted made a new run of that id count nothing. Its log has a line for the agents' proposed changes also when there is none to delete.

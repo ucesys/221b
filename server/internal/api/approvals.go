@@ -271,7 +271,9 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Watson != nil {
 		who := s.watsonWho(r)
 		for _, c := range wc {
-			for _, it := range s.opts.Watson.Items(c, who) {
+			listed := s.opts.Watson.Listed(c, who)
+			for i := range listed {
+				it := &listed[i]
 				if !it.Change {
 					continue
 				}

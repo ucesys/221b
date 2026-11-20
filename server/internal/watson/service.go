@@ -1142,6 +1142,22 @@ func (s *Service) Items(cl Cluster, who Who) []*Item {
 	return out
 }
 
+// Listed is Items as copies made under the lock, for a reader outside
+// the service: a queue's worker changes an item's status while it runs,
+// and a reader of the items themselves would race with it.
+func (s *Service) Listed(cl Cluster, who Who) []Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Item
+	for _, it := range s.items {
+		if it.Cluster == cl.ID && s.Visible(it, who, cl) {
+			out = append(out, *it)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	return out
+}
+
 // Get returns one item, or nil when it is gone.
 func (s *Service) Get(id string) *Item {
 	s.mu.Lock()
