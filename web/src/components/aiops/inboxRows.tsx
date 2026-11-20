@@ -73,7 +73,7 @@ export interface InboxRow {
   pending: boolean
   /** Waits for this person to decide: an approval they did not ask for, a card they may approve. */
   forMe?: boolean
-  /** The person's own, which someone else decides: who, in words ("another SuperAdmin"). Listed while it waits, and not counted as waiting for them (IN-11). */
+  /** The person's own, which someone else decides: who, in words ("another SuperAdmin"). Listed while it waits, and counted like every pending row (IN-11). */
   waitingFor?: string
   /** Since when it has waited; once done, when it was done. */
   since: string

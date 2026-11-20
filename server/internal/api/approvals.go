@@ -43,7 +43,8 @@ type approvalRow struct {
 	Own bool `json:"own,omitempty"`
 	// WaitingFor says, on a row of the person's own that they can neither
 	// approve nor reject, who decides it: "another SuperAdmin", "a second
-	// person". Such a row is there to be read; it is no work of theirs.
+	// person". Such a row is there to be read, and counts among what is
+	// pending in their Inbox like any other row (IN-11).
 	WaitingFor string `json:"waitingFor,omitempty"`
 	// Overtaken says why a waiting change can only be rejected now.
 	Overtaken string `json:"overtaken,omitempty"`

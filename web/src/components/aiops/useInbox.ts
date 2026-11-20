@@ -169,7 +169,7 @@ export function useInbox(access: CasesAccess, all = false, fresh = false): Inbox
 }
 
 export interface InboxCounts {
-  /** Every pending row but the person's own that wait for someone else (IN-11): the Inbox tab's count, and what the bell stands for (CF-80). */
+  /** Every pending row, the person's own that wait for someone else among them (IN-11): the Inbox tab's count, and what the bell stands for (CF-80). */
   total: number
   byKind: Record<InboxKind, number>
   /** The pending cases at P0 and at P1: the bell is red while any waits (CF-80). */
@@ -179,11 +179,12 @@ export interface InboxCounts {
 
 /**
  * What is pending for this person, counted from the Inbox's rows (IN-07,
- * CF-80). What they asked for themselves and someone else decides is
- * listed and not counted (IN-11): it is nothing for them to do.
+ * CF-80): everything pending in it. What they asked for themselves and
+ * someone else decides is counted too (IN-11, the owner on November 20,
+ * 2026), as their own run requests and console changes are.
  */
 export function inboxCounts(rows: InboxRow[]): InboxCounts {
-  const byKind = pendingByKind(rows.filter((r) => !r.waitingFor))
+  const byKind = pendingByKind(rows)
   const total = Object.values(byKind).reduce((n, v) => n + v, 0)
   const at = (p: number) => rows.filter((r) => r.pending && r.kind === 'case' && r.priority === p).length
   return { total, byKind, p0: at(0), p1: at(1) }

@@ -62,7 +62,7 @@ Proposed changes:
 - Once a change is applied its cases say "Fix applied by change …" and go In progress. An agent-found one closes as Fixed by itself when a run of its job re-checks it and finds it gone (at P0 and P1 it is marked verified and waits for its RCA), or says the fix did not hold.
 - A case closed otherwise rejects the waiting changes that resolve only it; a Duplicate's go to its original.
 
-Approvals: script versions, variable changes, Watson commands and console changes waiting for a second person. Review opens where it is decided; whoever asked may only withdraw it. What a person submitted and cannot decide (a script version they wrote or submitted, a variable change they asked for, a Watson command of theirs that takes a second person) is a row of their own Inbox, Waiting for another SuperAdmin (or a second person), with nothing to approve or reject, and is not counted by the bell.
+Approvals: script versions, variable changes, Watson commands and console changes waiting for a second person. Review opens where it is decided; whoever asked may only withdraw it. What a person submitted and cannot decide (a script version they wrote or submitted, a variable change they asked for, a Watson command of theirs that takes a second person) is a row of their own Inbox, Waiting for another SuperAdmin (or a second person), with nothing to approve or reject; the Inbox tab's count and the bell count it, as they count everything pending in the person's Inbox.
 
 Jobs:
 - Jobs › Schedule (#/aiops/jobs) lists the agents' jobs with their triggers and budgets, among them a Wiki sync per Mycroft source. A job's drawer has Run now (and Rebuild now for a Wiki sync: every item again), Pause and its settings.

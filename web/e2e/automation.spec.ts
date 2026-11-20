@@ -539,6 +539,11 @@ test('Approvals lists what waits on top, then what was decided, each opening wit
   // as waiting for another SuperAdmin, with nothing to decide (IN-11).
   const own = page.locator(`[data-inbox-row="approval:script-${name}-v1"]`)
   await expect(own.getByTestId('inbox-row-status')).toHaveText('Waiting for another SuperAdmin')
+  // It is counted, as everything pending in the Inbox is: with this row
+  // waiting, the bell and the Inbox tab's count cannot say nothing waits.
+  await expect(page.getByTestId('inbox-bell')).toHaveAttribute('data-state', /^(p01|waiting)$/)
+  await expect(page.getByTestId('inbox-bell')).toHaveAttribute('title', /^[1-9]\d* waiting for you(, .+)?: open AIOps › Inbox$/)
+  await expect(page.locator('[data-cases-tab=inbox] .rk-count')).toHaveText(/^[1-9]\d*$/)
   await own.locator('[role=rowheader]').click()
   const ownDrawer = page.getByTestId('approval-drawer')
   await expect(ownDrawer.getByTestId('approval-state')).toHaveText('Waiting for another SuperAdmin')
