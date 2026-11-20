@@ -207,6 +207,9 @@ type Config struct {
 	// SessionIdle and SessionMax bound a session's life.
 	SessionIdle time.Duration
 	SessionMax  time.Duration
+	// SessionOutage is how long a session made while the session store is
+	// away lasts (DB-65).
+	SessionOutage time.Duration
 	// AuditWebhookURL receives every audit record; AuditWebhookToken is
 	// sent with it as a bearer token (P3-10).
 	AuditWebhookURL   string
@@ -333,6 +336,7 @@ func Parse(args []string) (Config, error) {
 	proxies := fs.String("trusted-proxies", env("TRUSTED_PROXIES", ""), "comma-separated CIDRs of the proxies whose X-Forwarded-For is believed; empty believes none")
 	fs.DurationVar(&c.SessionIdle, "session-idle", envDuration("SESSION_IDLE", 8*time.Hour), "sign a session out after this long without a request")
 	fs.DurationVar(&c.SessionMax, "session-max", envDuration("SESSION_MAX", 7*24*time.Hour), "sign a session out this long after sign-in whatever happens")
+	fs.DurationVar(&c.SessionOutage, "session-outage", envDuration("SESSION_OUTAGE", 30*time.Minute), "how long a session made while the session store is away lasts; it is kept in its cookie, cannot be ended early everywhere, and is not renewed")
 	fs.StringVar(&c.AuditWebhookURL, "audit-webhook", "", "POST every audit record to this URL as JSON (or AUDIT_WEBHOOK_URL; a webhook's URL can be its secret)")
 	fs.StringVar(&c.AuditWebhookToken, "audit-webhook-token", "", "bearer token sent with audit webhook requests (better set through the environment, AUDIT_WEBHOOK_TOKEN)")
 	fs.StringVar(&c.ImpersonateUserPrefix, "impersonate-user-prefix", env("IMPERSONATE_USER_PREFIX", ""), "put before user names when reading as a person: the API servers' --oidc-username-prefix")
@@ -448,6 +452,9 @@ func (c Config) validate() error {
 	}
 	if c.SessionIdle < time.Minute || c.SessionMax < time.Minute {
 		errs = append(errs, errors.New("session lifetimes must be at least 1m"))
+	}
+	if c.SessionOutage < time.Minute || c.SessionOutage > 24*time.Hour {
+		errs = append(errs, errors.New("-session-outage must be between 1m and 24h"))
 	}
 	if c.Refresh < time.Second || c.Refresh > 10*time.Minute {
 		errs = append(errs, errors.New("refresh must be between 1s and 10m"))

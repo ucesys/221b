@@ -39,6 +39,7 @@ CI upgrades from each of the **two releases before** the one being built (P7-03)
 | The settings ConfigMap, keys `backup-s3.json` and `backup-s3-status.json` (from 0.12.0) | The scheduled backups to S3 and their newest runs | New in 0.12.0 |
 | `<release>-backup` (from 0.12.0) | The S3 access key and the passphrase of backups encrypted on the console | New in 0.12.0 |
 | `<release>-backup-key` (from 0.12.0) | The key every backup's secrets are sealed with (ADR-137); made at the first start, kept by `helm uninstall` | New in 0.12.0 |
+| `<release>-session-key` (from 0.13.0) | The key that signs a session made while the session store is away (DB-65); made at the first start, in no backup. Deleting it ends those sessions, and the console makes another at its next start | New in 0.13.0 |
 | `<release>-casework` (from 0.12.0) | The cases of AIOps › Cases, with their history, analyses and RCAs | New in 0.12.0 |
 | The settings ConfigMap, key `helm-repositories.json`, and the Secret `<release>-helm-repositories` (from 0.12.0) | The Helm repositories and OCI registries charts are installed from, and their passwords and tokens | New in 0.12.0 |
 
@@ -52,7 +53,7 @@ helm rollback k8s-console -n 221b    # to the previous revision
 
 The earlier release reads what the newer one saved: it ignores fields it does not know. A console that finds a document saved in a **newer format than it knows** keeps reading it but refuses to save it, so it cannot destroy what the newer release wrote: the Settings page and the Users page say so until you upgrade again. CI checks a rollback from this release to each of the two before it.
 
-The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, and from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
+The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories, and from 0.13.0 the session key) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
 ## 0.13.0 (unreleased; Phase 13)
 

@@ -502,6 +502,17 @@ backup_key() {
     ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | has 'backup-key' &&
     grep -q 'backup-key' "$CHART/templates/NOTES.txt"
 }
+# A session made while the session store is away (DB-65): how long it
+# lasts is a value the server is told. The key that signs it is in a
+# Secret the console makes itself, as it makes the backups' key: no
+# template renders it, and the Role's create on Secrets covers it.
+outage_session() {
+  grep -A1 'name: SESSION_OUTAGE' "$out" | has '"30m"' &&
+    render k8s-console --set clusterName=ci --set auth.outageSession=10m | grep -A1 'name: SESSION_OUTAGE' | has '"10m"' &&
+    settings_role | grep -A1 'resources: \["secrets"\]' | has '"create"' &&
+    grep -q 'outageSession: 30m' "$CHART/values.yaml" &&
+    ! grep -rq 'session-key' "$CHART/templates"
+}
 no_kubelet_stats() {
   grep -q 'nodes/proxy' "$out" && ! grep -q 'nodes/proxy' "$WORK/chart-nostats.yaml" &&
     grep -A1 'name: KUBELET_STATS' "$WORK/chart-nostats.yaml" | has '"false"'
@@ -693,6 +704,7 @@ check "secrets.read=false grants nothing on Secrets and tells the server" secret
 check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "the backups' key Secret is named in the Role and only read" backup_key
+check "a session made while the session store is away lasts auth.outageSession; its key's Secret is the console's to make" outage_session
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
 check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs

@@ -245,6 +245,18 @@ auth:
   # sign-in whatever happens.
   sessionIdle: 8h
   sessionMax: 168h
+  # How long a session lasts that was made while the session store could
+  # not be written (DB-65): the Kubernetes API server away, or, once the
+  # sessions are kept there, the database. Such a session is kept in its
+  # cookie, signed with a key the console makes at its first start in the
+  # Secret <release>-session-key, so every replica can check it without the
+  # store. It counts from sign-in, is not renewed by use, and becomes an
+  # ordinary session at the first request after the store is back. Until
+  # then it cannot be ended everywhere at once: a sign-out ends it on the
+  # replica that served it, and a password reset on the replicas that hold
+  # it; a local account disabled or deleted loses it at once everywhere.
+  # Keep it short. Between 1m and 24h.
+  outageSession: 30m
   # What each person sees is what Kubernetes lets them see (P3-02): the
   # console reads logs and YAML as them, by impersonation, and asks
   # Kubernetes, per namespace, whether they may list what each tab shows.

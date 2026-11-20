@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -106,6 +107,42 @@ func (s *SessionStore) Synced(ctx context.Context) bool {
 
 func (s *SessionStore) name(key string) string { return s.prefix + "-session-" + key }
 
+// awayError marks an error of the API server that means it could not be
+// asked, which is what makes a sign-in's session a signed one
+// (auth.StoreAway, DB-65).
+type awayError struct{ error }
+
+func (e awayError) Unwrap() error { return e.error }
+
+// StoreAway says the store could not be asked.
+func (awayError) StoreAway() bool { return true }
+
+// away marks err when the API server did not answer, or answered that it
+// cannot serve just now, and leaves a refusal as it is. Not answering is
+// every error that is not an answer of the API server's: the connection
+// refused, reset or timed out, a name that does not resolve, a certificate
+// that does not verify, the time given to the call run out. "Not now" is
+// 429 (too many requests) and every 5xx: an internal error (which is how
+// etcd being away reads), the server unavailable, a timeout. Everything
+// else the API server says is a refusal: forbidden, unauthorized, a
+// conflict, already exists, not found, invalid, too large.
+func away(err error) error {
+	if err == nil {
+		return nil
+	}
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return awayError{err}
+	}
+	if code := status.Status().Code; code == 429 || code >= 500 {
+		return awayError{err}
+	}
+	return err
+}
+
 // Get returns a session record by key: from the cache, or from the API
 // server when the cache has not seen it. ok is false when there is none.
 func (s *SessionStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
@@ -135,7 +172,7 @@ func (s *SessionStore) Get(ctx context.Context, key string) ([]byte, bool, error
 		s.mu.Unlock()
 		return nil, false, nil
 	case err != nil:
-		return nil, false, fmt.Errorf("reading the session Secret: %w", err)
+		return nil, false, away(fmt.Errorf("reading the session Secret: %w", err))
 	}
 	b, ok := sec.Data[sessionKey]
 	return b, ok, nil
@@ -161,12 +198,12 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 				continue
 			}
 			if err != nil {
-				return false, fmt.Errorf("creating the session Secret: %w", err)
+				return false, away(fmt.Errorf("creating the session Secret: %w", err))
 			}
 			return true, nil
 		}
 		if err != nil {
-			return false, fmt.Errorf("reading the session Secret: %w", err)
+			return false, away(fmt.Errorf("reading the session Secret: %w", err))
 		}
 		if replace != nil && !replace(cur.Data[sessionKey]) {
 			return false, nil
@@ -183,7 +220,7 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("saving the session Secret: %w", err)
+			return false, away(fmt.Errorf("saving the session Secret: %w", err))
 		}
 		return true, nil
 	}
@@ -194,17 +231,22 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 func (s *SessionStore) Delete(ctx context.Context, key string) error {
 	err := s.secrets.Delete(ctx, s.name(key), metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting the session Secret: %w", err)
+		return away(fmt.Errorf("deleting the session Secret: %w", err))
 	}
 	return nil
 }
 
-// List returns the records in the cache, by key.
-func (s *SessionStore) List() map[string][]byte {
+// List returns the records in the cache, by key. A cache that has not
+// been filled yet holds nothing, which is not the same as no sessions: it
+// is an error, so nothing is taken to have ended.
+func (s *SessionStore) List(context.Context) (map[string][]byte, error) {
+	if !s.informer.HasSynced() {
+		return nil, errors.New("the session Secrets have not been listed yet")
+	}
 	out := map[string][]byte{}
 	list, err := s.lister.List(labels.Everything())
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("listing the session Secrets: %w", err)
 	}
 	head := s.prefix + "-session-"
 	for _, sec := range list {
@@ -216,5 +258,5 @@ func (s *SessionStore) List() map[string][]byte {
 			out[key] = b
 		}
 	}
-	return out
+	return out, nil
 }

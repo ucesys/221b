@@ -85,7 +85,9 @@ func (w *wiring) wireAuthConfig() error {
 		AdminGroups: cfg.AdminGroups,
 		SessionIdle: cfg.SessionIdle,
 		SessionMax:  cfg.SessionMax,
-		Title:       "221B · " + cfg.ClusterName,
+		// A session made while the session store is away (DB-65).
+		OutageSession: cfg.SessionOutage,
+		Title:         "221B · " + cfg.ClusterName,
 	}
 	if cfg.LocalUsersFile != "" {
 		users, err := auth.ReadLocalUsers(cfg.LocalUsersFile)
@@ -162,6 +164,26 @@ func (w *wiring) wireAuth() error {
 			return err
 		}
 		w.authCfg.SessionStore = sessionStore
+		// The key that signs a session made while the session store is
+		// away (DB-65): the Secret <release>-session-key, made here at
+		// start when there is none, as the backups' key is, and read again
+		// when a signature does not verify, so a key put back by hand
+		// reaches every replica. Never logged. Without Secrets the key is
+		// this process's own.
+		name := prefix + auth.SessionKeySecretSuffix
+		ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the session key's Secret: %w", err)
+		}
+		key := auth.NewSessionKey(ks, nil)
+		kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := key.Ensure(kctx); err != nil {
+			log.Warn("the session key is not ready: until it is, a sign-in made while the session store is away is known to this replica only", "secret", ns+"/"+name, "err", err)
+		} else {
+			log.Info("session key ready", "secret", ns+"/"+name)
+		}
+		cancel()
+		w.authCfg.SessionKey = key
 	}
 	// What waits for a second SuperAdmin (review item 14), kept beside the
 	// settings once their storage is open.

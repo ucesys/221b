@@ -172,3 +172,24 @@ func TestTrustedProxiesAreCIDRs(t *testing.T) {
 		t.Fatal("a name was taken for a CIDR")
 	}
 }
+
+// How long a session made while the session store is away lasts (DB-65).
+func TestSessionOutage(t *testing.T) {
+	t.Setenv("CLUSTER_NAME", "prod")
+	c, err := Parse(nil)
+	if err != nil || c.SessionOutage != 30*time.Minute {
+		t.Fatalf("default %s, %v", c.SessionOutage, err)
+	}
+	t.Setenv("SESSION_OUTAGE", "10m")
+	if c, err = Parse(nil); err != nil || c.SessionOutage != 10*time.Minute {
+		t.Fatalf("from the environment %s, %v", c.SessionOutage, err)
+	}
+	if c, err = Parse([]string{"-session-outage", "45m"}); err != nil || c.SessionOutage != 45*time.Minute {
+		t.Fatalf("from the flag %s, %v", c.SessionOutage, err)
+	}
+	for _, bad := range []string{"0", "30s", "-5m", "25h"} {
+		if _, err := Parse([]string{"-session-outage", bad}); err == nil || !strings.Contains(err.Error(), "-session-outage") {
+			t.Errorf("-session-outage %s: %v", bad, err)
+		}
+	}
+}

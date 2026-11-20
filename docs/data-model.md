@@ -12,7 +12,7 @@ Each table's columns are listed with their marks: **PK** is the key, **FK** a ke
 - **Names say what a column holds.** Flags start with `is_`, times end in `_at`, people in `_by`, money in `_usd`, lists of ids in `_ids`.
 - **History outlives what it points to.** A run, result or record that outlives its target holds a key that is emptied when the target is deleted, beside the target's name as text (`host_name`, `fleet_name`, `case_number`).
 - **A cluster is `cluster_id` everywhere.** Only Platform and Inventory hold a real key to `clusters`. Inventory's is emptied when a cluster's row is deleted, so list fleets and hosts outside Kubernetes outlive it (removing a connection does not delete its row yet: it keeps the row with only its id, DB-64); the other domains keep the id as a plain column, so history survives a removed connection.
-- **Sign-in never depends on the database.** Local accounts stay in a Kubernetes Secret, and during a database outage a local user gets a short-lived signed session.
+- **Sign-in never depends on the database.** Local accounts stay in a Kubernetes Secret, and while the session store is away whoever signs in (a local account, a directory person, a person of the OIDC provider) gets a short-lived signed session (DB-65).
 - **Kubernetes state is never stored.** A node's row holds its identity only (cluster, name, uid); labels, taints, status and topology are read live.
 - **Observed host state is a fact, not a column.** What the facts run reports, network details included, is JSON in `host_facts`; the tables hold only what people set, such as a host's data center and rack.
 - **A record is one row for its whole life.** Approval changes its state; there are no draft tables.
@@ -84,7 +84,7 @@ Sessions live in the database; local accounts stay in a Secret. Schema: `0002_id
 | --- | --- | --- |
 | `auth_sessions` | Signed-in browser sessions, shared by all replicas, keyed by a hash of the session id | `auth_session_id` PK, `subject`, `username`, `method`, `directory_ref`, `roles`, `super_roles`, `groups_read_at`, `created_at`, `last_seen_at`, `expires_at` |
 
-Local users, local groups and memberships stay in a Kubernetes Secret, so a database outage never blocks them. During an outage a local user gets a short-lived signed session that any replica checks without the database. Sessions have no key to users: directory users from LDAP or OIDC are never stored.
+Local users, local groups and memberships stay in a Kubernetes Secret, so a database outage never blocks them. While the session store cannot be written, a sign-in of any kind gets a session kept in its cookie and signed with a key from the Secret `<release>-session-key`, which any replica checks without the store (DB-65, ADR-165): it lasts `auth.outageSession` (30 minutes) from sign-in, carries who the person is and nothing of what they may do, is refused at once for a local account disabled or deleted, and becomes a row at its first request after the store is back. Neither the key nor a cookie's value is ever in the database. Sessions have no key to users: directory users from LDAP or OIDC are never stored.
 
 ### Approvals
 
@@ -283,6 +283,6 @@ A duplicate fix or exception names the one it repeats, by its id. fix_cases keep
 | Do validation rules belong in Jobs or Cases? | Jobs: they are offered to job kinds and shown under the Jobs tab. |
 | Do variables belong in Automation or Inventory? | Automation: only script runs read them, although they key to fleets and hosts. |
 | Does `clusters` hold connection metadata, or does everything stay in Secrets? | A table for the metadata, the credentials in Secrets. |
-| Do local users and sign-in sessions move to the database? | Local accounts stay in a Secret, so a database outage never blocks them. Sessions move; during an outage a local user gets a short-lived signed session. |
+| Do local users and sign-in sessions move to the database? | Local accounts stay in a Secret, so a database outage never blocks them. Sessions move; during an outage a sign-in of any kind gets a short-lived signed session (DB-65). |
 | Does one rejection close an approval request for good? | Yes, as the code does today; a new request is needed to try again. |
 | Will any request need more than two approvers? | No flow needs it today; the required count allows any number. |

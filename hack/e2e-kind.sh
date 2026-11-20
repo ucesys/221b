@@ -373,9 +373,11 @@ kubectl -n "$NS" delete secret -l app.kubernetes.io/component=session --ignore-n
 # and the backup key (kept on purpose, BK-15) and the credentials of the
 # knowledge sources and Helm repositories, and Administration › Credentials
 # (<release>-credentials, 0.12.1), are Secrets it makes: records
-# of its own, which outlive the release like its connections.
+# of its own, which outlive the release like its connections. So is the
+# key that signs a session made while the session store is away
+# (<release>-session-key, DB-65).
 kubectl -n "$NS" delete configmap -l 221b.io/case --ignore-not-found
-kubectl -n "$NS" delete secret "$FULLNAME-backup-key" "$FULLNAME-knowledge" "$FULLNAME-helm-repositories" "$FULLNAME-credentials" --ignore-not-found
+kubectl -n "$NS" delete secret "$FULLNAME-backup-key" "$FULLNAME-session-key" "$FULLNAME-knowledge" "$FULLNAME-helm-repositories" "$FULLNAME-credentials" --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.

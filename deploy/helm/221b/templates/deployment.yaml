@@ -402,6 +402,9 @@ spec:
               value: {{ .Values.auth.sessionIdle | quote }}
             - name: SESSION_MAX
               value: {{ .Values.auth.sessionMax | quote }}
+            # A session made while the session store is away (DB-65).
+            - name: SESSION_OUTAGE
+              value: {{ .Values.auth.outageSession | default "30m" | quote }}
             {{- if .Values.audit.webhook.url }}
             # The audit webhook (P3-10).
             - name: AUDIT_WEBHOOK_URL
