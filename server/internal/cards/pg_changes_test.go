@@ -79,8 +79,9 @@ func plainCard(n int) Card {
 
 // Every field of a proposed change is a column and comes back as a
 // ConfigMap gives it; a card that did not change is not written again,
-// whether cards come in, go, or change order; a save over a stale version
-// is refused; what hangs from a card goes with it.
+// whether cards come in, go, or change order; one that changed keeps its
+// row and its key (DB-56); a save over a stale version is refused; what
+// hangs from a card goes with it.
 func TestCardsInTheDatabase(t *testing.T) {
 	d := dbtest.Open(t)
 	b := NewCardsPG(d)
@@ -109,8 +110,18 @@ func TestCardsInTheDatabase(t *testing.T) {
 	if rowOf("PC-2") != untouched || rowsOf(t, d, "changes") != 3 {
 		t.Fatal("a card that did not change was written again")
 	}
-	if rowOf("PC-3") == other {
-		t.Fatal("a card that changed kept its row")
+	if rowOf("PC-3") != other {
+		t.Fatal("a card that changed did not keep its row")
+	}
+	// Changed in every list that hangs from it, it still does.
+	whole := fullCard()
+	whole.ID, whole.Created = "PC-3", day(3)
+	rec.Cards[1] = whole
+	kept(t, b, CardsKey, rec)
+	rec.Cards[1] = changed
+	kept(t, b, CardsKey, rec)
+	if rowOf("PC-3") != other || rowOf("PC-2") != untouched {
+		t.Fatal("a card that gained and lost what hangs from it did not keep its row")
 	}
 	// Any other order is kept too, as a backup put back gives it.
 	rec.Cards = []Card{plainCard(4), plainCard(5), fullCard(), changed}
@@ -176,14 +187,18 @@ func fullMsgs() []sherlock.Msg {
 	}
 }
 
-// A waiting change's conversation is rows of chats and chat_messages:
-// what is asked of a message is a column, its parts one JSON value that
-// reads back as it was written; a message that did not change is not
-// written again; a conversation that is dropped takes its messages.
+// A waiting change's conversation is rows of chats and chat_messages,
+// joined to the change by its key (DB-57): what is asked of a message is
+// a column, its parts one JSON value that reads back as it was written; a
+// message that did not change is not written again; a conversation that
+// is dropped takes its messages; a change that changes keeps its
+// conversation, and one that goes takes it.
 func TestCardChatsInTheDatabase(t *testing.T) {
 	d := dbtest.Open(t)
-	b := NewChatsPG(d)
+	b, cardsDoc := NewChatsPG(d), NewCardsPG(d)
 	ctx := context.Background()
+	cardsRec := record{Next: 5, Cards: []Card{plainCard(2), plainCard(3), plainCard(4)}}
+	kept(t, cardsDoc, CardsKey, cardsRec)
 	rec := chatsRecord{Chats: map[string]chatRecord{
 		"PC-2": {Cluster: "prod-1", Messages: fullMsgs(), Updated: day(2)},
 		"PC-3": {Cluster: "dev-1", Messages: fullMsgs()[:1], Updated: day(1)},
@@ -196,10 +211,12 @@ func TestCardChatsInTheDatabase(t *testing.T) {
 	if got := rowsOf(t, d, "chat_messages"); got != 4 {
 		t.Fatalf("chat_messages has %d rows", got)
 	}
-	var session, parts string
+	// The conversation's row has the key of its change's row, and no case's.
+	var chatID, changeID, parts string
 	var tokens int
-	if err := d.Pool().QueryRow(ctx, `SELECT c.session, m.parts::text, m.tokens_in FROM chat_messages m JOIN chats c USING (chat_id) WHERE c.session = 'proposal:PC-2' AND m.position = 1`).
-		Scan(&session, &parts, &tokens); err != nil {
+	if err := d.Pool().QueryRow(ctx, `SELECT c.chat_id::text, g.change_id::text, m.parts::text, m.tokens_in
+		FROM chat_messages m JOIN chats c USING (chat_id) JOIN changes g USING (change_id) WHERE g.change_key = 'PC-2' AND c.case_id IS NULL AND m.position = 1`).
+		Scan(&chatID, &changeID, &parts, &tokens); err != nil {
 		t.Fatal(err)
 	}
 	if tokens != 1200 || !json.Valid([]byte(parts)) {
@@ -209,7 +226,7 @@ func TestCardChatsInTheDatabase(t *testing.T) {
 	written := func() map[int]string {
 		t.Helper()
 		out := map[int]string{}
-		rows, err := d.Pool().Query(ctx, "SELECT m.position, m.xmin::text FROM chat_messages m JOIN chats c USING (chat_id) WHERE c.session = 'proposal:PC-2'")
+		rows, err := d.Pool().Query(ctx, "SELECT m.position, m.xmin::text FROM chat_messages m JOIN chats c USING (chat_id) JOIN changes g USING (change_id) WHERE g.change_key = 'PC-2'")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,6 +254,19 @@ func TestCardChatsInTheDatabase(t *testing.T) {
 	if len(after) != 4 || after[0] != before[0] || after[1] != before[1] || after[2] == before[2] {
 		t.Fatalf("written before %v, after %v", before, after)
 	}
+	// The change changes, as when it is rechecked or a case is linked to
+	// it: its row keeps its key, and the conversation is the row it was.
+	cardsRec.Cards[0].Title, cardsRec.Cards[0].Updated = "Another title", day(9)
+	cardsRec.Cards[0].History = []Event{{At: day(9), What: "edited", By: "Pat"}}
+	kept(t, cardsDoc, CardsKey, cardsRec)
+	var chatNow, changeNow string
+	if err := d.Pool().QueryRow(ctx, "SELECT c.chat_id::text, g.change_id::text FROM chats c JOIN changes g USING (change_id) WHERE g.change_key = 'PC-2'").Scan(&chatNow, &changeNow); err != nil {
+		t.Fatal(err)
+	}
+	if chatNow != chatID || changeNow != changeID || len(written()) != 4 {
+		t.Fatalf("after the change changed: conversation %s of change %s, was %s of %s", chatNow, changeNow, chatID, changeID)
+	}
+	kept(t, b, ChatsKey, rec)
 	// The oldest question goes, and a conversation is dropped.
 	one.Messages = one.Messages[2:]
 	rec.Chats["PC-2"] = one
@@ -245,9 +275,21 @@ func TestCardChatsInTheDatabase(t *testing.T) {
 	if got := rowsOf(t, d, "chat_messages"); got != 2 {
 		t.Fatalf("chat_messages has %d rows", got)
 	}
+	// A change that is no longer kept takes its conversation with it.
+	cardsRec.Cards = cardsRec.Cards[1:]
+	kept(t, cardsDoc, CardsKey, cardsRec)
+	delete(rec.Chats, "PC-2")
+	raw, version, err := b.LoadKey(ctx, ChatsKey)
+	var left chatsRecord
+	_ = json.Unmarshal(raw, &left)
+	if err != nil || len(left.Chats) != 1 || rowsOf(t, d, "chats") != 1 || rowsOf(t, d, "chat_messages") != 0 {
+		t.Fatalf("after its change went: %s (%v), %d conversations with %d messages", raw, err, rowsOf(t, d, "chats"), rowsOf(t, d, "chat_messages"))
+	}
+	if _, has := left.Chats["PC-4"]; !has {
+		t.Fatalf("the conversation left is not PC-4's: %s", raw)
+	}
 	rec.Chats = nil
-	raw, _ := json.Marshal(rec)
-	_, version, _ := b.LoadKey(ctx, ChatsKey)
+	raw, _ = json.Marshal(rec)
 	if _, err := b.SaveKey(ctx, ChatsKey, raw, version); err != nil {
 		t.Fatal(err)
 	}
@@ -258,12 +300,183 @@ func TestCardChatsInTheDatabase(t *testing.T) {
 		t.Fatalf("reading no conversations: %v", err)
 	}
 	// A case's conversation is not a change's.
+	caseID := db.NewID()
+	if _, err := d.Pool().Exec(ctx, "INSERT INTO cases (case_id, object_name, case_number) VALUES ($1, '12', 12)", caseID); err != nil {
+		t.Fatal(err)
+	}
 	batch := &pgx.Batch{}
-	sherlock.QueueChat(batch, "case:C-12", nil, &sherlock.KeptChat{Cluster: "prod-1", Messages: fullMsgs()[:1]})
+	sherlock.QueueCaseChat(batch, caseID, nil, &sherlock.KeptChat{Cluster: "prod-1", Messages: fullMsgs()[:1]})
 	if err := d.Pool().SendBatch(ctx, batch).Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.LoadKey(ctx, ChatsKey); !errors.Is(err, kv.ErrNotFound) {
+	if _, _, err := b.LoadKey(ctx, ChatsKey); !errors.Is(err, kv.ErrNotFound) || rowsOf(t, d, "chats") != 1 {
 		t.Fatalf("a case's conversation read as a change's: %v", err)
 	}
+}
+
+// A conversation is of its change's row: one written for a change that
+// has no row is not kept, without an error, and reads back as none, while
+// the others saved with it are kept; once the change has its row, the
+// conversation is kept as any other. The cards are therefore copied into
+// the database before their conversations (DB-57).
+func TestAConversationOfAChangeWithNoRowIsNotKept(t *testing.T) {
+	d := dbtest.Open(t)
+	b, cardsDoc := NewChatsPG(d), NewCardsPG(d)
+	ctx := context.Background()
+	kept(t, cardsDoc, CardsKey, record{Next: 3, Cards: []Card{plainCard(2)}})
+	rec := chatsRecord{Chats: map[string]chatRecord{
+		"PC-2": {Cluster: "prod-1", Messages: fullMsgs(), Updated: day(2)},
+		"PC-9": {Cluster: "dev-1", Messages: fullMsgs(), Updated: day(3)},
+	}}
+	save := func() chatsRecord {
+		t.Helper()
+		raw, _ := json.Marshal(rec)
+		_, version, _ := b.LoadKey(ctx, ChatsKey)
+		if _, err := b.SaveKey(ctx, ChatsKey, raw, version); err != nil {
+			t.Fatalf("saving a conversation of a change with no row: %v", err)
+		}
+		got, _, err := b.LoadKey(ctx, ChatsKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back chatsRecord
+		_ = json.Unmarshal(got, &back)
+		return back
+	}
+	back := save()
+	if _, has := back.Chats["PC-9"]; has || len(back.Chats) != 1 || len(back.Chats["PC-2"].Messages) != 3 || rowsOf(t, d, "chats") != 1 || rowsOf(t, d, "chat_messages") != 3 {
+		t.Fatalf("read back %d conversations, %d rows of chats, %d of chat_messages", len(back.Chats), rowsOf(t, d, "chats"), rowsOf(t, d, "chat_messages"))
+	}
+	// Saved again as the service has it, it is still not there, and nothing fails.
+	if back = save(); len(back.Chats) != 1 {
+		t.Fatalf("read back %d conversations", len(back.Chats))
+	}
+	// The change gets its row: the next save keeps its conversation.
+	kept(t, cardsDoc, CardsKey, record{Next: 10, Cards: []Card{plainCard(2), plainCard(9)}})
+	if back = save(); len(back.Chats) != 2 || len(back.Chats["PC-9"].Messages) != 3 || len(back.Chats["PC-9"].Messages[1].Hands) != 1 {
+		t.Fatalf("once the change has a row: %+v", back.Chats["PC-9"])
+	}
+	// What a ConfigMap held is copied whole when the cards are copied first.
+	cm := &kv.Memory{}
+	rawCards, _ := json.Marshal(record{Next: 10, Cards: []Card{plainCard(2), plainCard(9)}})
+	rawChats, _ := json.Marshal(rec)
+	_, _ = cm.SaveKey(ctx, CardsKey, rawCards, "")
+	_, _ = cm.SaveKey(ctx, ChatsKey, rawChats, "")
+	fresh := dbtest.Open(t)
+	if copied, err := NewCardsPG(fresh).Import(ctx, cm, "test"); err != nil || !copied {
+		t.Fatalf("copying the cards: %v %v", copied, err)
+	}
+	if copied, err := NewChatsPG(fresh).Import(ctx, cm, "test"); err != nil || !copied {
+		t.Fatalf("copying the conversations: %v %v", copied, err)
+	}
+	if rowsOf(t, fresh, "chats") != 2 || rowsOf(t, fresh, "chat_messages") != 6 {
+		t.Fatalf("copied %d conversations with %d messages", rowsOf(t, fresh, "chats"), rowsOf(t, fresh, "chat_messages"))
+	}
+}
+
+// worldOn is a test's world with its cards kept in the database d,
+// whatever TEST_STORE says.
+func worldOn(t *testing.T, d *db.DB) *world {
+	t.Helper()
+	w := &world{exec: &fakeExec{print: "v1"}, clock: &clock{t: time.Date(2026, 11, 5, 3, 12, 0, 0, time.UTC)}, audit: &syncBuffer{}, firing: map[string]bool{}, prod: map[string]bool{"prod-1": true},
+		backend: &kv.Keyed{Keys: map[string]kv.Backend{CardsKey: NewCardsPG(d), ChatsKey: NewChatsPG(d), StandingKey: NewStandingPG(d), NotifyKey: NewNotifyPG(d)}, Rest: &kv.Memory{}}}
+	w.st = w.open()
+	return w
+}
+
+// A change keeps its row, and the row its key, through everything the
+// service does to it (DB-56): a case linked, a command logged, a recheck,
+// an approval, its actions applied. Its conversation hangs from that row
+// the whole time, and is deleted when the change is decided; the change's
+// row is then still the same one.
+func TestAChangeKeepsItsRowThroughItsLife(t *testing.T) {
+	d := dbtest.Open(t)
+	w := worldOn(t, d)
+	ctx := context.Background()
+	w.fire("pod:shop/web-7f9", true)
+	id, err := w.st.Propose(ctx, restart("dev-1", "restart:dev-1/shop/web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := w.st.Propose(ctx, restart("dev-1", "restart:dev-1/shop/api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowOf := func(key string) (row string) {
+		t.Helper()
+		if err := d.Pool().QueryRow(ctx, "SELECT change_id::text FROM changes WHERE change_key = $1", key).Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	chatOf := func(key string) (chat string, messages int) {
+		t.Helper()
+		if err := d.Pool().QueryRow(ctx, `SELECT coalesce(max(c.chat_id::text), ''), count(m.chat_id) FROM changes g LEFT JOIN chats c USING (change_id) LEFT JOIN chat_messages m USING (chat_id)
+			WHERE g.change_key = $1`, key).Scan(&chat, &messages); err != nil {
+			t.Fatal(err)
+		}
+		return chat, messages
+	}
+	row, otherRow := rowOf(id), rowOf(other)
+	keeper := w.st.Chats()
+	if err := keeper.Save(ctx, keyOf(id), exchange("Why restart?")); err != nil {
+		t.Fatal(err)
+	}
+	chat, n := chatOf(id)
+	if chat == "" || n != 2 {
+		t.Fatalf("the conversation: %q with %d messages", chat, n)
+	}
+	pat := Person{Key: "pat", Name: "Pat"}
+	same := func(after string) {
+		t.Helper()
+		if got := rowOf(id); got != row {
+			t.Fatalf("after %s the change's row is %s, was %s", after, got, row)
+		}
+		if got := rowOf(other); got != otherRow {
+			t.Fatalf("after %s the other change's row is %s, was %s", after, got, otherRow)
+		}
+	}
+	talks := func(after string) {
+		t.Helper()
+		same(after)
+		if got, n := chatOf(id); got != chat || n != 2 {
+			t.Fatalf("after %s the conversation is %q with %d messages, was %q with 2", after, got, n, chat)
+		}
+		if msgs, err := keeper.Load(ctx, keyOf(id)); err != nil || len(msgs) != 2 || msgs[0].Text != "Why restart?" {
+			t.Fatalf("after %s the conversation reads %+v %v", after, msgs, err)
+		}
+	}
+	if _, err := w.st.Link(ctx, id, "C-14", pat); err != nil {
+		t.Fatal(err)
+	}
+	talks("a case was linked")
+	at := w.clock.Now()
+	if err := w.st.LogCommands(ctx, id, []Command{{ID: "w1", Line: "kubectl get pods -n shop", By: "Pat", At: at, Status: "running"}}, pat); err != nil {
+		t.Fatal(err)
+	}
+	talks("a command was logged")
+	if c, err := w.st.Recheck(ctx, id, pat); err != nil || c.Recheck == nil {
+		t.Fatalf("recheck: %+v %v", c, err)
+	}
+	talks("a recheck")
+	// A new store on the same rows: the console restarted.
+	w.st = w.open()
+	keeper = w.st.Chats()
+	talks("a restart")
+	if _, err := w.st.Approve(ctx, id, person("sam"), "go"); err != nil {
+		t.Fatal(err)
+	}
+	c := waitState(t, w.st, id, Applied)
+	same("it was approved and applied")
+	if len(c.Approvals) != 1 || len(c.Results) != 1 || len(c.Resolves) != 1 {
+		t.Fatalf("applied: %+v", c)
+	}
+	// Decided, it keeps no conversation; its row is the one it had.
+	if got, n := chatOf(id); got != "" || n != 0 {
+		t.Fatalf("a decided change still has the conversation %q with %d messages", got, n)
+	}
+	if _, err := w.st.Reject(ctx, other, pat, "Not now."); err != nil {
+		t.Fatal(err)
+	}
+	same("the other was rejected")
 }

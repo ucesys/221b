@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,9 +23,11 @@ import (
 // action's and a condition's arguments are whatever the kind takes, and
 // stay one JSON value each (decided with the owner). The store is
 // unchanged and reaches the rows through db.Doc; the counter the ids come
-// from, which is of no row, is a settings scope. The waiting changes'
-// conversations with Sherlock are rows of chats and chat_messages
-// (sherlock.ReadChats, DB-46).
+// from, which is of no row, is a settings scope. A change's row is changed
+// in place and keeps its key while the change is kept (DB-56). The waiting
+// changes' conversations with Sherlock are rows of chats and
+// chat_messages, joined to the change by that key
+// (sherlock.ReadChangeChats, DB-46, DB-57).
 
 // changesScope is the settings row with the next card's number.
 const changesScope = "changes"
@@ -323,13 +326,32 @@ func queueDecision(b *pgx.Batch, id, verdict string, position int, d Decision) {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, verdict, position, d.By.Key, d.By.Name, d.By.Kind, at(d.At), d.Comment, d.Standing)
 }
 
-// queueCard queues a card whole: its row and everything that hangs from it.
-func queueCard(b *pgx.Batch, c Card, position int64) {
-	id := db.NewID()
+// changeColumns are the columns of a change's row after its two keys, in
+// the order changeRow gives their values.
+var changeColumns = []string{"position", "agent_id", "model", "source_kind", "source_key", "source_label", "source_set_by", "source_job", "cluster_id", "title",
+	"reasoning", "condition_kind", "condition_args", "dedup_key", "expires_at", "state", "created_at", "updated_at", "requester_key", "requester_name", "requester_kind", "is_production",
+	"needed_count", "rechecked_at", "recheck_is_ok", "recheck_why", "recheck_checked", "recheck_warnings", "reason", "replaced_by_change_key", "replaces_change_key",
+	"approval_policy_id", "watson_item", "proposed_by_name", "proposed_by_kind", "last_by_name", "last_by_kind", "last_at"}
+
+// The tables that hang from a change's row, each keyed by it.
+var changeTables = []string{"change_evidence", "change_actions", "change_plans", "change_results", "change_decisions", "change_events", "change_commands", "change_resolves"}
+
+// insertChange makes a change's row ($1 its key, $2 the console's id);
+// updateChange changes the row with the key $1 in place.
+var insertChange, updateChange = func() (string, string) {
+	holders, sets := make([]string, len(changeColumns)), make([]string, len(changeColumns))
+	for i, c := range changeColumns {
+		holders[i] = "$" + strconv.Itoa(i+3)
+		sets[i] = c + " = $" + strconv.Itoa(i+2)
+	}
+	return "INSERT INTO changes (change_id, change_key, " + strings.Join(changeColumns, ", ") + ") VALUES ($1, $2, " + strings.Join(holders, ", ") + ")",
+		"UPDATE changes SET " + strings.Join(sets, ", ") + " WHERE change_id = $1"
+}()
+
+// changeRow is a card as the columns of its row, in changeColumns' order.
+func changeRow(c Card, position int64) []any {
 	var agent *string
 	if c.Agent != "" {
-		// A change points at its agent's row.
-		b.Queue("INSERT INTO agents (agent_id) VALUES ($1) ON CONFLICT (agent_id) DO NOTHING", c.Agent)
 		agent = &c.Agent
 	}
 	var expires, rechecked *time.Time
@@ -356,16 +378,29 @@ func queueCard(b *pgx.Batch, c Card, position int64) {
 		last = *c.LastBy
 		lastBy = &last.Name
 	}
-	b.Queue(`INSERT INTO changes (change_id, change_key, position, agent_id, model, source_kind, source_key, source_label, source_set_by, source_job, cluster_id, title,
-			reasoning, condition_kind, condition_args, dedup_key, expires_at, state, created_at, updated_at, requester_key, requester_name, requester_kind, is_production,
-			needed_count, rechecked_at, recheck_is_ok, recheck_why, recheck_checked, recheck_warnings, reason, replaced_by_change_key, replaces_change_key,
-			approval_policy_id, watson_item, proposed_by_name, proposed_by_kind, last_by_name, last_by_kind, last_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
-			$34, $35, $36, $37, $38, $39, $40)`,
-		id, c.ID, position, agent, c.Model, c.Source.Kind, c.Source.ID, c.Source.Label, c.Source.SetBy, c.Source.Job, c.Cluster, c.Title,
+	return []any{position, agent, c.Model, c.Source.Kind, c.Source.ID, c.Source.Label, c.Source.SetBy, c.Source.Job, c.Cluster, c.Title,
 		c.Reasoning, c.Condition.Kind, argsJSON(c.Condition.Args, false), c.DedupKey, expires, c.State, at(c.Created), at(c.Updated), requester, who.Name, who.Kind, c.Production,
 		c.Needed, rechecked, rc.OK, rc.Why, list(rc.Checked), list(rc.Warnings), c.Reason, c.ReplacedBy, c.Replaces,
-		c.Standing, c.WatsonItem, proposedBy, proposed.Kind, lastBy, last.Kind, timePtr(c.LastAt))
+		c.Standing, c.WatsonItem, proposedBy, proposed.Kind, lastBy, last.Kind, timePtr(c.LastAt)}
+}
+
+// queueCard queues a card whole: its row, and everything that hangs from
+// it. A change keeps its row, and so its key, for as long as it is kept
+// (DB-56): a card that is there already (isNew false) has its row changed
+// in place under the key id, and what hangs from it written again.
+func queueCard(b *pgx.Batch, c Card, position int64, id string, isNew bool) {
+	if c.Agent != "" {
+		// A change points at its agent's row.
+		b.Queue("INSERT INTO agents (agent_id) VALUES ($1) ON CONFLICT (agent_id) DO NOTHING", c.Agent)
+	}
+	if isNew {
+		b.Queue(insertChange, append([]any{id, c.ID}, changeRow(c, position)...)...)
+	} else {
+		b.Queue(updateChange, append([]any{id}, changeRow(c, position)...)...)
+		for _, t := range changeTables {
+			b.Queue("DELETE FROM "+t+" WHERE change_id = $1", id)
+		}
+	}
 	for i, e := range c.Evidence {
 		var when *time.Time
 		if !e.At.IsZero() {
@@ -443,6 +478,16 @@ func writeCards(ctx context.Context, tx pgx.Tx, old, next record) error {
 	if err != nil {
 		return err
 	}
+	// The rows there are, by the console's id: a change keeps its own.
+	rowOf := map[string]string{}
+	rows, err := tx.Query(ctx, "SELECT change_key, change_id::text FROM changes")
+	if err != nil {
+		return err
+	}
+	var key, id string
+	if _, err := pgx.ForEachRow(rows, []any{&key, &id}, func() error { rowOf[key] = id; return nil }); err != nil {
+		return err
+	}
 	before := map[string]Card{}
 	keys := make([]string, len(next.Cards))
 	for _, c := range old.Cards {
@@ -457,17 +502,20 @@ func writeCards(ctx context.Context, tx pgx.Tx, old, next record) error {
 	kept := make([]string, 0, len(next.Cards))
 	for i, c := range next.Cards {
 		kept = append(kept, c.ID)
-		p, had := placed[c.ID]
+		id, had := rowOf[c.ID]
 		if was, ok := before[c.ID]; had && ok && sameJSON(was, c) {
-			if p != places[i] {
-				b.Queue("UPDATE changes SET position = $2 WHERE change_key = $1", c.ID, places[i])
+			if placed[c.ID] != places[i] {
+				b.Queue("UPDATE changes SET position = $2 WHERE change_id = $1", id, places[i])
 			}
 			continue
 		}
-		// Whole: what hangs from it goes with the row.
-		b.Queue("DELETE FROM changes WHERE change_key = $1", c.ID)
-		queueCard(b, c, places[i])
+		if !had {
+			id = db.NewID()
+		}
+		queueCard(b, c, places[i], id, !had)
 	}
+	// A change no longer in the document loses its row, and with the row
+	// goes what hangs from it and its conversation with Sherlock.
 	b.Queue("DELETE FROM changes WHERE NOT (change_key = ANY($1))", kept)
 	return tx.SendBatch(ctx, b).Close()
 }
@@ -478,17 +526,20 @@ func NewChatsPG(d *db.DB) *db.Doc[chatsRecord] {
 }
 
 func readChats(ctx context.Context, q db.Querier) (chatsRecord, bool, error) {
-	kept, err := sherlock.ReadChats(ctx, q, FromPrefix)
+	kept, err := sherlock.ReadChangeChats(ctx, q)
 	if err != nil || len(kept) == 0 {
 		return chatsRecord{}, false, err
 	}
 	rec := chatsRecord{Chats: map[string]chatRecord{}}
-	for session, c := range kept {
-		rec.Chats[strings.TrimPrefix(session, FromPrefix)] = chatRecord{Cluster: c.Cluster, Messages: c.Messages, Updated: c.Updated}
+	for id, c := range kept {
+		rec.Chats[id] = chatRecord{Cluster: c.Cluster, Messages: c.Messages, Updated: c.Updated}
 	}
 	return rec, true, nil
 }
 
+// writeChats changes the conversations' rows from old to next. A
+// conversation is joined to its change's row (DB-57): one whose change
+// has no row is not written, and reads back as none.
 func writeChats(ctx context.Context, tx pgx.Tx, old, next chatsRecord) error {
 	ids := map[string]bool{}
 	for id := range old.Chats {
@@ -511,7 +562,7 @@ func writeChats(ctx context.Context, tx pgx.Tx, old, next chatsRecord) error {
 		return &sherlock.KeptChat{Cluster: c.Cluster, Messages: c.Messages, Updated: c.Updated}
 	}
 	for _, id := range order {
-		sherlock.QueueChat(b, FromPrefix+id, kept(old, id), kept(next, id))
+		sherlock.QueueChangeChat(b, id, kept(old, id), kept(next, id))
 	}
 	if b.Len() == 0 {
 		return nil

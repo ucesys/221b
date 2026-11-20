@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -359,16 +358,13 @@ func (workPart) Write(ctx context.Context, tx pgx.Tx, id, _ string, doc []byte) 
 }
 
 // chatPart keeps a case's conversation with Sherlock in the message
-// tables, under the case's session, read by its exact name.
+// tables, joined to the case by its row's key (DB-57): it is read and
+// written by that key, never by the session's name, and goes with the
+// case's row.
 type chatPart struct{}
 
-func chatSessionOf(name string) string {
-	n, _ := strconv.Atoi(name)
-	return ChatSession(n)
-}
-
-func (chatPart) Read(ctx context.Context, q db.Querier, _, name string) ([]byte, bool, error) {
-	c, err := sherlock.ReadChat(ctx, q, chatSessionOf(name))
+func (chatPart) Read(ctx context.Context, q db.Querier, id, _ string) ([]byte, bool, error) {
+	c, err := sherlock.ReadCaseChat(ctx, q, id)
 	if err != nil || c == nil {
 		return nil, false, err
 	}
@@ -376,13 +372,12 @@ func (chatPart) Read(ctx context.Context, q db.Querier, _, name string) ([]byte,
 	return b, true, err
 }
 
-func (chatPart) Write(ctx context.Context, tx pgx.Tx, _, name string, doc []byte) error {
+func (chatPart) Write(ctx context.Context, tx pgx.Tx, id, _ string, doc []byte) error {
 	var rec chatRecord
 	if err := json.Unmarshal(doc, &rec); err != nil {
 		return err
 	}
-	session := chatSessionOf(name)
-	old, err := sherlock.ReadChat(ctx, tx, session)
+	old, err := sherlock.ReadCaseChat(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -392,14 +387,12 @@ func (chatPart) Write(ctx context.Context, tx pgx.Tx, _, name string, doc []byte
 		next = &sherlock.KeptChat{Cluster: rec.Cluster, Messages: rec.Messages, Updated: rec.Updated}
 	}
 	b := &pgx.Batch{}
-	sherlock.QueueChat(b, session, old, next)
+	sherlock.QueueCaseChat(b, id, old, next)
 	if b.Len() == 0 {
 		return nil
 	}
 	return tx.SendBatch(ctx, b).Close()
 }
 
-func (chatPart) Drop(ctx context.Context, tx pgx.Tx, _, name string) error {
-	_, err := tx.Exec(ctx, "DELETE FROM chats WHERE session = $1", chatSessionOf(name))
-	return err
-}
+// The conversation goes with the case's row.
+func (chatPart) Drop(context.Context, pgx.Tx, string, string) error { return nil }

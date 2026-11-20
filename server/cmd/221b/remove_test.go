@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
@@ -110,6 +112,76 @@ func TestACopiedRecordSetLeavesItsConfigMap(t *testing.T) {
 	}
 	if _, _, err := left.LoadKey(ctx, fixes.Key); !errors.Is(err, kv.ErrNotFound) {
 		t.Fatalf("what the earlier build left is still there: %v", err)
+	}
+}
+
+const (
+	oneCard = `{"next":2,"cards":[{"id":"PC-1","agent":"troubleshooter","source":{"kind":"alert"},"cluster":"dev-1","title":"Restart shop/web","actions":[{"kind":"kubectl","args":{"command":"kubectl get ns"}}],"condition":{"kind":"none"},"state":"queued","created":"2026-11-05T03:12:00Z","updated":"2026-11-05T03:12:00Z","needed":1,"plans":[{"summary":"kubectl get ns"}]}]}`
+	oneChat = `{"chats":{"PC-1":{"cluster":"dev-1","messages":[{"id":1,"role":"user","text":"Why restart?","at":"2026-11-05T03:13:00Z"},{"id":2,"role":"sherlock","text":"It cannot sign in.","status":"done","at":"2026-11-05T03:13:01Z"}],"updated":"2026-11-05T03:13:01Z"}}}`
+)
+
+// uncopied is a document whose copy fails.
+type uncopied struct{ movedDoc }
+
+func (uncopied) Import(context.Context, kv.Backend, string) (bool, error) {
+	return false, errors.New("the rows cannot be written")
+}
+
+// The proposed changes are copied into the database before their
+// conversations with Sherlock, whose rows hang from the changes' (DB-57):
+// both are then kept and both leave the ConfigMap. When the changes' copy
+// fails, the conversations are not copied to rows that would not be kept:
+// they stay in the ConfigMap for the next start.
+func TestTheChangesAreCopiedBeforeTheirConversations(t *testing.T) {
+	ctx := t.Context()
+	rows := func(d *db.DB) (chats, messages int) {
+		t.Helper()
+		if err := d.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM chats c JOIN changes g USING (change_id) WHERE g.change_key = 'PC-1'), (SELECT count(*) FROM chat_messages)`).
+			Scan(&chats, &messages); err != nil {
+			t.Fatal(err)
+		}
+		return chats, messages
+	}
+	cardsIn := func(d *db.DB) map[string]movedDoc {
+		return map[string]movedDoc{cards.ChatsKey: cards.NewChatsPG(d), cards.CardsKey: cards.NewCardsPG(d), cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d)}
+	}
+	if order := copyOrder(cardsIn(nil)); slices.Index(order, cards.CardsKey) > slices.Index(order, cards.ChatsKey) || len(order) != 4 {
+		t.Fatalf("copied in the order %v", order)
+	}
+	d := dbtest.Open(t)
+	cm := &persistent{}
+	_, _ = cm.SaveKey(ctx, cards.CardsKey, []byte(oneCard), "")
+	_, _ = cm.SaveKey(ctx, cards.ChatsKey, []byte(oneChat), "")
+	(&wiring{log: slog.Default(), database: d}).inTables(ctx, cm, cardsIn)
+	if chats, messages := rows(d); chats != 1 || messages != 2 {
+		t.Fatalf("copied %d conversations of PC-1 with %d messages", chats, messages)
+	}
+	for _, key := range []string{cards.CardsKey, cards.ChatsKey} {
+		if _, _, err := cm.LoadKey(ctx, key); !errors.Is(err, kv.ErrNotFound) {
+			t.Errorf("%s is still in the ConfigMap: %v", key, err)
+		}
+	}
+	// The changes' copy fails: their conversations wait in the ConfigMap.
+	d2 := dbtest.Open(t)
+	cm2 := &persistent{}
+	_, _ = cm2.SaveKey(ctx, cards.CardsKey, []byte(oneCard), "")
+	_, _ = cm2.SaveKey(ctx, cards.ChatsKey, []byte(oneChat), "")
+	w2 := &wiring{log: slog.Default(), database: d2}
+	w2.inTables(ctx, cm2, func(d *db.DB) map[string]movedDoc {
+		docs := cardsIn(d)
+		docs[cards.CardsKey] = uncopied{docs[cards.CardsKey]}
+		return docs
+	})
+	if got, _, err := cm2.LoadKey(ctx, cards.ChatsKey); err != nil || string(got) != oneChat {
+		t.Fatalf("after the changes' copy failed the conversations' key holds %s: %v", got, err)
+	}
+	if copied, _ := d2.Imported(ctx, cards.ChatsKey); copied {
+		t.Fatal("the conversations' copy was recorded without the changes'")
+	}
+	// The next start copies both.
+	(&wiring{log: slog.Default(), database: d2}).inTables(ctx, cm2, cardsIn)
+	if chats, messages := rows(d2); chats != 1 || messages != 2 {
+		t.Fatalf("at the next start: %d conversations of PC-1 with %d messages", chats, messages)
 	}
 }
 

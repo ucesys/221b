@@ -113,6 +113,66 @@ func TestTheConversationIsKeptWithTheCaseCF47(t *testing.T) {
 	}
 }
 
+// A case's conversation keeps the hand-overs of its answers, the ones
+// inside them too, and another service over the same objects reads them
+// back, as after a restart (DB-58); past ChatBytes it loses its oldest
+// questions as before, hand-overs and all.
+func TestTheConversationKeepsItsHandOversCF47(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	c, err := w.svc.Create(ctx, NewCase{Title: "The shop is slow", Cluster: "prod", Resource: "shop/Deployment/web"}, olivia)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hands := func(text string) []*sherlock.Hand {
+		return []*sherlock.Hand{{ID: 1, From: "sherlock", FromName: "Sherlock", To: "troubleshooter", ToName: "Troubleshooter", Task: "Find why web is slow", Status: "done", Text: text,
+			Steps: []sherlock.Step{{Label: "Reading the events of shop", Tool: "events", Status: "done"}}, Model: "claude-sonnet-5-5", Usage: &sherlock.Usage{InputTokens: 900, OutputTokens: 120}, CostUSD: 0.004,
+			Hands: []*sherlock.Hand{{ID: 2, From: "troubleshooter", FromName: "Troubleshooter", To: "auditor", ToName: "Auditor", Task: "Who changed the limits?", Status: "failed", Error: "the stream ended",
+				Hands: []*sherlock.Hand{{ID: 3, From: "auditor", FromName: "Auditor", To: "mycroft", ToName: "Mycroft", Task: "Find the runbook", Status: "refused", Error: "not allowed"}}}}}}
+	}
+	msgs := chat(2, "Olivia")
+	msgs[1].Hands, msgs[3].Hands = hands("Its limits are low."), hands("They were halved on Friday.")
+	kp := w.svc.Chats()
+	if err := kp.Save(ctx, chatKey(c.ID), msgs); err != nil {
+		t.Fatal(err)
+	}
+	other := New(Options{Issues: w.iss})
+	got, err := other.Chats().Load(ctx, chatKey(c.ID))
+	if err != nil || len(got) != 4 {
+		t.Fatalf("read back %+v %v", got, err)
+	}
+	for _, i := range []int{1, 3} {
+		want, _ := json.Marshal(msgs[i].Hands)
+		back, _ := json.Marshal(got[i].Hands)
+		if string(back) != string(want) || len(got[i].Hands) != 1 || len(got[i].Hands[0].Hands) != 1 || len(got[i].Hands[0].Hands[0].Hands) != 1 || got[i].Hands[0].Usage == nil {
+			t.Fatalf("message %d: the hand-overs read back\n%s\nwere saved as\n%s", i, back, want)
+		}
+	}
+	if len(got[0].Hands) != 0 {
+		t.Errorf("a question has hand-overs: %+v", got[0].Hands)
+	}
+	// Bounded as before: the oldest questions go, the newest answer stays
+	// with its hand-overs.
+	w.svc.o.ChatBytes = 16 << 10
+	long := chat(12, "Olivia")
+	for i := range long {
+		if long[i].Role == "sherlock" {
+			long[i].Hands = hands(strings.Repeat("a", 3000))
+		}
+	}
+	if err := kp.Save(ctx, chatKey(c.ID), long); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = kp.Load(ctx, chatKey(c.ID))
+	keys, _, _ := w.objects.Load(ctx, "1")
+	if len(got) == 0 || len(got) >= len(long) || got[0].Role != "user" || len(keys[ChatKey]) > 16<<10 {
+		t.Fatalf("bounded: %d messages, %d bytes", len(got), len(keys[ChatKey]))
+	}
+	if last := got[len(got)-1]; last.ID != 24 || len(last.Hands) != 1 || len(last.Hands[0].Text) != 3000 || len(last.Hands[0].Hands) != 1 {
+		t.Fatalf("the newest answer: %d with %d hand-overs", last.ID, len(last.Hands))
+	}
+}
+
 // What the conversation starts from: the case as data (id, title,
 // priority, type, cluster, object), its latest analysis and the records
 // like it, quoted (CF-47).

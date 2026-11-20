@@ -162,7 +162,8 @@ func TestACaseConversationIsSharedAttributedAndKeptCF47(t *testing.T) {
 
 // What is kept of a case's conversation is bounded: its last
 // KeptMessages, each text clipped and scrubbed of what looks like a
-// secret, without the asking window's parts (CF-47, X-01).
+// secret, without the asking window's parts (CF-47, X-01) and with its
+// hand-overs (DB-58).
 func TestAKeptConversationIsBoundedCF47(t *testing.T) {
 	var in []*Msg
 	for i := 0; i < KeptMessages+6; i++ {
@@ -173,7 +174,7 @@ func TestAKeptConversationIsBoundedCF47(t *testing.T) {
 		t.Fatalf("%d kept, the first %d", len(out), out[0].ID)
 	}
 	for _, m := range out {
-		if len(m.Text) > KeptText+len("…") || strings.Contains(m.Text, "LogPlantedKey-77QzXwv4") || m.Note != "" || m.View != nil || m.Hands != nil {
+		if len(m.Text) > KeptText+len("…") || strings.Contains(m.Text, "LogPlantedKey-77QzXwv4") || m.Note != "" || m.View != nil || len(m.Hands) != 1 || m.Hands[0].ID != 1 {
 			t.Fatalf("kept %d bytes: %.40q…", len(m.Text), m.Text)
 		}
 	}

@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -176,11 +179,35 @@ func (w *wiring) claimImport(id string) {
 	w.importIDs[id] = true
 }
 
+// copiedAfter names, for a key whose rows hang from another key's rows,
+// that other key: a waiting change's conversation is joined to the
+// change's row (DB-57), and is not kept without it, so the changes are
+// copied first and the conversations only once the changes are.
+var copiedAfter = map[string]string{cards.ChatsKey: cards.CardsKey}
+
+// copyOrder is the order a store's documents are copied in: by key, with
+// a key that is copied after another put behind it.
+func copyOrder(docs map[string]movedDoc) []string {
+	keys := make([]string, 0, len(docs))
+	for key := range docs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for key, first := range copiedAfter {
+		i, j := slices.Index(keys, key), slices.Index(keys, first)
+		if i < 0 || j < 0 || i > j {
+			continue
+		}
+		keys = slices.Insert(slices.Delete(keys, i, i+1), j, key)
+	}
+	return keys
+}
+
 // inTables keeps the documents under the keys named in the database, each
 // through its own mapping to tables, and every other key in b as before;
 // without a database it is b. make is given the database and returns the
 // mappings, so nothing is made without one. What b held under those keys
-// is copied once.
+// is copied once, in copyOrder.
 func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB) map[string]movedDoc) kv.Backend {
 	if w.database == nil {
 		return b
@@ -191,16 +218,26 @@ func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB)
 	log := w.log.With("component", "database")
 	_, inMemory := b.(*kv.Memory)
 	keys := map[string]kv.Backend{}
-	for key, doc := range make(w.database) {
+	docs := make(w.database)
+	notCopied := map[string]bool{}
+	for _, key := range copyOrder(docs) {
+		doc := docs[key]
 		keys[key] = doc
 		w.claimImport(doc.ImportID())
 		if inMemory {
+			continue
+		}
+		if first, ok := copiedAfter[key]; ok && notCopied[first] {
+			// Its rows would have nothing to hang from, and would not be kept.
+			notCopied[key] = true
+			log.Warn("records are not copied from their ConfigMap before the records they belong to; the next start tries again", "key", key, "after", first)
 			continue
 		}
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
 		copied, err := doc.Import(ictx, b, "configmap")
 		cancel()
 		if err != nil {
+			notCopied[key] = true
 			log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "key", key, "err", err)
 		} else if copied {
 			log.Info("copied records from their ConfigMap into the database", "key", key)
