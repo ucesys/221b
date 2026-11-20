@@ -224,3 +224,41 @@ func (s *PGStore) Import(ctx context.Context, from Store, source string) (int, e
 		return len(events), newest, insertEvents(ctx, tx, events)
 	})
 }
+
+// Rewrite writes again the events whose action starts with prefix and
+// whose detail fix changes, in tx: each is added anew with the detail
+// fixed, under a new key and with everything else as it was, and the
+// event as it was is deleted. The ledger refuses a change of a row, and
+// this is not one: what a release wrote before it hid a value is made to
+// read as that release writes it now (DB-71, DB-74). like narrows the
+// rows read to those whose detail is LIKE one of its patterns. It says
+// how many it wrote again; the texts are compared here, so no statement
+// carries a value.
+func Rewrite(ctx context.Context, tx pgx.Tx, prefix string, like []string, fix func(detail string) string) (int, error) {
+	rows, err := tx.Query(ctx, "SELECT audit_event_id::text, detail FROM audit_events WHERE starts_with(action, $1) AND detail LIKE ANY($2)", prefix, like)
+	if err != nil {
+		return 0, err
+	}
+	type change struct{ id, detail string }
+	var changes []change
+	var id, detail string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &detail}, func() error {
+		if d := fix(detail); d != detail {
+			changes = append(changes, change{id, d})
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	for _, c := range changes {
+		if _, err := tx.Exec(ctx, `INSERT INTO audit_events (audit_event_id, at, actor, actor_subject, actor_email, action, cluster_id, target, outcome, detail, source_ip, restored_at)
+			SELECT $2, at, actor, actor_subject, actor_email, action, cluster_id, target, outcome, $3, source_ip, restored_at FROM audit_events WHERE audit_event_id = $1`,
+			c.id, db.NewID(), c.detail); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM audit_events WHERE audit_event_id = $1", c.id); err != nil {
+			return 0, err
+		}
+	}
+	return len(changes), nil
+}

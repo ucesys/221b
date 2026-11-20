@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
@@ -480,6 +481,7 @@ func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Lo
 	l := w.auditLog
 	st := audit.NewPGStore(w.database, logger)
 	l.SetStore(st)
+	w.claimImport(watson.MaskedImportID)
 	w.inDatabase = append(w.inDatabase, "activity")
 	// What a release before Phase 13 kept in the ConfigMap, once, beside
 	// the rest of the start; the ConfigMap is deleted once it is copied.
@@ -498,9 +500,13 @@ func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Lo
 				logger.Warn("copying the audit log from its ConfigMap failed; the next start tries again", "err", err)
 			case n > 0:
 				logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
+				// What a console from before wrote, after a rollback, names
+				// a command's parameters with their values.
+				w.hideCommandParameters(ctx, logger, true)
 			}
 			w.copying.Done()
 		}
+		w.hideCommandParameters(ctx, logger, false)
 		// Retention, once a day on whichever replica gets the lock.
 		t := time.NewTicker(24 * time.Hour)
 		defer t.Stop()
@@ -520,6 +526,36 @@ func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Lo
 		}
 	}()
 	return st
+}
+
+// hideCommandParameters hides the values of the commands' parameters in
+// the Watson events of the audit log recorded before DB-74, as they are
+// recorded since: once, under watson.MaskedImportID, and again after a
+// copy from the ConfigMap (again). The stream and the webhook had them as
+// they were; they are not reached.
+func (w *wiring) hideCommandParameters(ctx context.Context, logger *slog.Logger, again bool) {
+	hctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	rewrite := func(ctx context.Context, tx pgx.Tx) (int, error) {
+		return audit.Rewrite(ctx, tx, "watson.", watson.MaskedLike, watson.MaskDetail)
+	}
+	n := 0
+	var err error
+	if again {
+		err = w.database.Tx(hctx, func(tx pgx.Tx) (err error) { n, err = rewrite(hctx, tx); return err })
+	} else {
+		_, err = w.database.ImportOnce(hctx, watson.MaskedImportID, "audit_events", func(ctx context.Context, tx pgx.Tx) (int, error) {
+			var err error
+			n, err = rewrite(ctx, tx)
+			return n, err
+		})
+	}
+	switch {
+	case err != nil:
+		logger.Warn("hiding the commands' parameters in the audit log's Watson events failed; the next start tries again", "err", err)
+	case n > 0:
+		logger.Info("hid the values of the commands' parameters in the audit log's Watson events recorded before", "events", n)
+	}
 }
 
 func newLogger(cfg config.Config, out io.Writer) *slog.Logger {

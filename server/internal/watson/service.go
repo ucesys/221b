@@ -369,7 +369,9 @@ func (s *Service) record(action string, it *Item, who Who, outcome, detail strin
 	if s.opts.Audit == nil {
 		return
 	}
-	d := "command=" + quote(it.Line)
+	// The values of the command's parameters are hidden, their names kept
+	// (DB-74): the record says which command ran with which parameters.
+	d := "command=" + quote(MaskLine(it.Line))
 	if detail != "" {
 		d += " " + detail
 	}

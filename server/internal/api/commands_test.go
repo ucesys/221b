@@ -12,6 +12,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/apps/appstest"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/sim"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -78,6 +79,50 @@ func TestAnApplicationsCommandsAreSavedAndRun(t *testing.T) {
 	v := signIn(t, srv, "viewer@corp.example")
 	if resp, _ := send(t, v, http.MethodPut, base+"x", `{"params":["a=b"]}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a viewer saved a command: %s", resp.Status)
+	}
+}
+
+// DB-74: a saved command run is recorded, in the audit log and the
+// console's log, with the values of its parameters hidden and their names
+// kept; the card itself still shows the line whole to who approves it.
+func TestASavedCommandsParametersAreNotRecorded(t *testing.T) {
+	store, events := appstest.Store(t), &audit.MemoryStore{}
+	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
+	t.Cleanup(simSrv.Close)
+	srv, c, m, logs, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Apps = store
+		o.Audit.SetStore(events)
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog(), CheckEvery: 50 * time.Millisecond})
+	})
+	ctx := context.Background()
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(ctx, clusters.Spec{Name: "Here", Env: clusters.EnvOther, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, liveStore); err != nil {
+		t.Fatal(err)
+	}
+	rec := apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://git.invalid/example/shop", Ref: "main", RefKind: apps.RefBranch},
+		Commands: []apps.Command{{Name: "rotate", Params: []string{"db.password=MARKPW74", "replicas=3"}}}}
+	if err := store.Save(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := send(t, c, http.MethodPost, srv.URL+"/api/v1/apps/web/shop/commands/rotate/run", "")
+	if resp.StatusCode != http.StatusAccepted || !strings.Contains(body, "--set 'db.password=MARKPW74'") {
+		t.Fatalf("running the command: %s %s", resp.Status, body)
+	}
+	list, _ := events.List(ctx)
+	var recorded []string
+	for _, e := range list {
+		if strings.HasPrefix(e.Action, "watson.") {
+			recorded = append(recorded, e.Detail)
+		}
+	}
+	// The names stay; after db.password= the audit log's own scrubbing
+	// may cut further (it redacts what follows password=).
+	all := strings.Join(recorded, "\n")
+	if len(recorded) == 0 || !strings.Contains(all, `--set 'db.password=`) || !strings.Contains(all, `--set 'replicas=***'`) {
+		t.Fatalf("the audit events of the run:\n%s", all)
+	}
+	if strings.Contains(all, "MARKPW74") || strings.Contains(logs.String(), "MARKPW74") {
+		t.Fatalf("a parameter's value is recorded:\n%s\n%s", all, logs.String())
 	}
 }
 
