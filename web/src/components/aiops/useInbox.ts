@@ -13,6 +13,7 @@ import { fetchCases, type CasesView } from '../../api/casework'
 import { fetchDrafts, fetchPageRequests, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fetchSuggestions, type Suggestion } from '../../api/rules'
 import { INBOX_KINDS, knownPending, useIssueMe, useShared, type CasesAccess, type InboxKind } from '../../lib/cases'
+import { isAway, useDatabase } from '../../lib/database'
 import { useAllKnown } from './count'
 import { approvalRow, caseRow, draftRunRow, knownRow, pageRequestRow, pendingByKind, proposalRow, suggestionRow, type InboxCase, type InboxRow, type RowContext } from './inboxRows'
 
@@ -44,14 +45,25 @@ export function kindsFor(a: CasesAccess): InboxKind[] {
   })
 }
 
-/** A source the person may not see, or that is off, answers 4xx (or 503 when off): nothing to list. */
+/**
+ * A source the person may not see, or that is off, answers 4xx (or 503
+ * when off): nothing to list. A source that could not be read because the
+ * database is away (DB-15) is not that: what it holds is not known, and
+ * the Inbox says so in place of "nothing is pending".
+ */
 function quiet<T>(empty: T): (e: unknown) => T {
   return (e) => {
+    if (e instanceof CallError && e.databaseAway) throw e
     if (e instanceof CallError && e.status >= 400 && e.status < 500) return empty
     if (e instanceof CallError && e.status === 503) return empty
     throw e
   }
 }
+
+/** What the Inbox says in place of its rows, or above the last it read, while the database is away (DB-15). */
+export const INBOX_AWAY = 'The Inbox cannot be read while the database is unavailable: what waits for you is not known.'
+/** The same for the mark on the Inbox tab and the bell, which show no number then. */
+export const COUNT_UNKNOWN = 'What waits for you is not known: the database is unavailable'
 
 export const INBOX_CASES = 'cases.inbox.cases'
 const loadCases = (background: boolean) => fetchCases({}, background).catch(quiet<CasesView>({ cases: [], clusters: [], mayChange: false, me: '' }))
@@ -76,8 +88,14 @@ export interface Inbox {
   rows: InboxRow[]
   /** Whether every source the person may see has answered once. */
   loaded: boolean
-  /** What a source could not read, by kind. */
+  /** What a source could not read, by kind; not the sources the database's absence keeps from being read (away). */
   errors: string[]
+  /**
+   * Some of what the person may see could not be read because the
+   * console's database is unavailable (DB-15): what waits is not known.
+   * The rows, if any, are what was last read.
+   */
+  away: boolean
   /** The cases' view: the clusters, and whether the person works the cases. */
   cases: CasesView | null
   proposals: Proposals | null
@@ -125,7 +143,7 @@ export function useInbox(access: CasesAccess, all = false, fresh = false): Inbox
     return out.filter((r) => !seen.has(r.key) && !!seen.add(r.key))
   }, [cv, proposals.value, approvals.value, known.value, knowledge.value, rules.value, im])
 
-  const parts: [InboxKind, boolean, { value: unknown; error: string }][] = [
+  const parts: [InboxKind, boolean, { value: unknown; error: string; away: boolean }][] = [
     ['case', on('case'), cases],
     ['proposal', on('proposal'), proposals],
     ['approval', on('approval'), approvals],
@@ -135,7 +153,8 @@ export function useInbox(access: CasesAccess, all = false, fresh = false): Inbox
   ]
   const live = parts.filter((p) => p[1])
   const loaded = live.every((p) => p[2].value !== null || p[2].error !== '')
-  const errors = live.filter((p) => p[2].error).map((p) => `${INBOX_KINDS.find((k) => k.id === p[0])?.plural}: ${p[2].error}`)
+  const away = live.some((p) => p[2].away)
+  const errors = live.filter((p) => p[2].error && !p[2].away).map((p) => `${INBOX_KINDS.find((k) => k.id === p[0])?.plural}: ${p[2].error}`)
   const reload = (kind?: InboxKind) => {
     if (!kind || kind === 'case') {
       cases.reload()
@@ -155,10 +174,19 @@ export function useInbox(access: CasesAccess, all = false, fresh = false): Inbox
   useEffect(() => {
     if (fresh) reloadRef.current()
   }, [fresh])
+  // Back from an outage (DB-15): every list is read again as soon as the
+  // database's state says it answers, not at the lists' next half minute.
+  const databaseAway = isAway(useDatabase())
+  const wasAway = useRef(false)
+  useEffect(() => {
+    if (wasAway.current && !databaseAway) reloadRef.current()
+    wasAway.current = databaseAway
+  }, [databaseAway])
   return {
     rows,
     loaded,
     errors,
+    away,
     cases: cv,
     proposals: proposals.value,
     approvals: approvals.value,
@@ -175,6 +203,13 @@ export interface InboxCounts {
   /** The pending cases at P0 and at P1: the bell is red while any waits (CF-80). */
   p0: number
   p1: number
+  /**
+   * The count is not known: the Inbox's lists could not be read because
+   * the database is unavailable (DB-15). The numbers are then of what
+   * was last read, and nothing shows them: the tab and the bell show a
+   * mark that the count is unknown, never 0 and never an old number.
+   */
+  unknown?: boolean
 }
 
 /**
@@ -183,15 +218,15 @@ export interface InboxCounts {
  * someone else decides is counted too (IN-11, the owner on November 20,
  * 2026), as their own run requests and console changes are.
  */
-export function inboxCounts(rows: InboxRow[]): InboxCounts {
+export function inboxCounts(rows: InboxRow[], unknown = false): InboxCounts {
   const byKind = pendingByKind(rows)
   const total = Object.values(byKind).reduce((n, v) => n + v, 0)
   const at = (p: number) => rows.filter((r) => r.pending && r.kind === 'case' && r.priority === p).length
-  return { total, byKind, p0: at(0), p1: at(1) }
+  return { total, byKind, p0: at(0), p1: at(1), ...(unknown ? { unknown } : {}) }
 }
 
 /** What is pending for this person, for the top bar: the Cases count and the bell. */
 export function useInboxCounts(access: CasesAccess): InboxCounts {
-  const { rows } = useInbox(access)
-  return useMemo(() => inboxCounts(rows), [rows])
+  const { rows, away } = useInbox(access)
+  return useMemo(() => inboxCounts(rows, away), [rows, away])
 }

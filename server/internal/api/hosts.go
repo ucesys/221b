@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/nodessh"
 )
 
@@ -117,6 +118,10 @@ func hostStatus(err error) int {
 // hostError answers a failure in the words it has: the service's errors
 // say what to do and hold no credential.
 func hostError(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	msg := err.Error()
 	for _, p := range []error{nodessh.ErrInvalid, nodessh.ErrConflict, nodessh.ErrNoHost} {
 		msg = strings.TrimPrefix(msg, p.Error()+": ")
@@ -278,6 +283,9 @@ func (s *Server) postHostPair(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !errors.Is(err, nodessh.ErrInvalid) && !errors.Is(err, nodessh.ErrNoHost) {
 			s.recordHost(r, audit.ActionHostPair, cluster, name, audit.OutcomeFailed, fmt.Sprintf("pairing host %s with the account %s failed: %v", name, user, err))
+		}
+		if db.Refuse(w, err) {
+			return
 		}
 		code := hostStatus(err)
 		msg := err.Error()

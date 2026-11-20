@@ -31,7 +31,7 @@ import { NewReport } from './NewReport'
 import { isPriority, PRIORITIES, PRIORITY } from './parts'
 import { ProposalDrawer } from './ProposalDrawer'
 import { InboxSuggestionDrawer } from './RulesView'
-import { kindsFor, useInbox } from './useInbox'
+import { COUNT_UNKNOWN, INBOX_AWAY, kindsFor, useInbox } from './useInbox'
 
 export { kindsFor }
 
@@ -149,11 +149,14 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
   // Out of what Pending or All lists, before the other filters.
   const listed = f.show === 'all' ? rows.length : total
   const shownText = !inbox.loaded ? 'Loading…' : table.shown.length < listed ? `Showing ${table.shown.length} of ${listed}` : ''
+  // The database away (DB-15): what waits is not known, so the table never says that nothing does.
   const empty = !inbox.loaded
     ? 'Loading the Inbox…'
-    : f.show === 'pending' && !f.type && !f.status && f.who === 'all' && f.priority === null && !f.cluster && !f.source && !f.from && !table.query
-      ? 'Nothing is pending for you.'
-      : 'Nothing matches these filters.'
+    : inbox.away
+      ? INBOX_AWAY
+      : f.show === 'pending' && !f.type && !f.status && f.who === 'all' && f.priority === null && !f.cluster && !f.source && !f.from && !table.query
+        ? 'Nothing is pending for you.'
+        : 'Nothing matches these filters.'
 
   // Picked cases (CF-38), for those who work the cases: those the cases' list still has, in the order picked.
   const [picks, setPicks] = useState<string[]>([])
@@ -203,7 +206,15 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
                 title={s === 'pending' ? 'What waits for a person' : 'What waits, then what was closed, completed or decided, newest first'}
               >
                 {s === 'pending' ? 'Pending' : 'All'}
-                {s === 'pending' && <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{total}</span>}
+                {/* Not known while a list cannot be read (DB-15): a mark, never 0. */}
+                {s === 'pending' &&
+                  (inbox.away ? (
+                    <span style={{ color: 'var(--fg3)', fontWeight: 400 }} role="img" aria-label={COUNT_UNKNOWN} title={COUNT_UNKNOWN} data-testid="inbox-pending-unknown">
+                      ?
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{total}</span>
+                  ))}
               </button>
             ))}
           </div>
@@ -262,6 +273,12 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
             />
           )}
         </div>
+        {inbox.away && (
+          <p className="tb-err" role="alert" style={{ margin: 0 }} data-testid="inbox-away">
+            {INBOX_AWAY}
+            {rows.length > 0 ? ' The rows below are what was last read; they may have changed since.' : ''}
+          </p>
+        )}
         {inbox.errors.map((e) => (
           <p key={e} className="tb-err" role="alert" style={{ margin: 0 }}>
             {e}

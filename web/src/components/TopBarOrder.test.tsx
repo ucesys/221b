@@ -179,6 +179,36 @@ describe('the bell is the Inbox’s (CF-80)', () => {
     expect(inboxCounts([approvalRow({ ...version, state: 'approved', own: true, waitingFor: 'another SuperAdmin' })]).total).toBe(0)
   })
 
+  it('shows a mark that the count is not known, on the tab and on the bell, while the Inbox cannot be read (DB-15)', () => {
+    // The numbers are of what was last read: nothing shows them.
+    counts = { total: 3, byKind: { case: 2, proposal: 1, approval: 0, known: 0, knowledge: 0, rule: 0 }, p0: 1, p1: 0, unknown: true }
+    expect(bellOf(counts)).toEqual({ state: 'unknown', text: 'What waits for you is not known: the database is unavailable. Open AIOps › Inbox' })
+    // Nothing read at all: still unknown, never "Nothing waiting for you".
+    expect(bellOf({ ...none, unknown: true }).state).toBe('unknown')
+    bar()
+    const tab = document.querySelector('[data-cases-tab=inbox]') as HTMLElement
+    const mark = screen.getByTestId('inbox-count-unknown')
+    expect(tab.contains(mark)).toBe(true)
+    expect(mark.textContent).toBe('?')
+    expect(mark.getAttribute('aria-label')).toBe('What waits for you is not known: the database is unavailable')
+    expect(tab.textContent).toBe('Inbox?')
+    const bell = screen.getByTestId('inbox-bell')
+    expect(bell.getAttribute('data-state')).toBe('unknown')
+    expect(bell.getAttribute('aria-label')).toBe('What waits for you is not known: the database is unavailable. Open AIOps › Inbox')
+    // Not red for the P0 it last knew of, and a question mark that a screen reader skips for the name.
+    expect(bell.style.color).toBe('')
+    expect(screen.getByTestId('inbox-bell-unknown').textContent).toBe('?')
+    expect(screen.getByTestId('inbox-bell-unknown').getAttribute('aria-hidden')).toBe('true')
+    cleanup()
+    // Known again: the number, and no mark.
+    counts = { ...counts, unknown: false }
+    bar()
+    expect(screen.queryByTestId('inbox-count-unknown')).toBeNull()
+    expect(screen.queryByTestId('inbox-bell-unknown')).toBeNull()
+    expect((document.querySelector('[data-cases-tab=inbox]') as HTMLElement).textContent).toBe('Inbox3')
+    expect(screen.getByTestId('inbox-bell').getAttribute('data-state')).toBe('p01')
+  })
+
   it('counts a suggested validation rule, which makes the bell yellow (CF-87)', () => {
     const c = inboxCounts([suggestionRow({ id: 'node.etcd-slow', says: 'etcd is slow', type: 'other', jobs: ['nightly-audit'], from: ['other.etcd-slow'], runs: 3, clusters: 1, created: '2026-11-09T03:30:00Z' })])
     expect(c).toMatchObject({ total: 1, p0: 0, p1: 0 })

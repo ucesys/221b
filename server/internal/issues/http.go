@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -97,8 +98,14 @@ func fail(w http.ResponseWriter, code int, msg string) {
 }
 
 // failErr answers an error with its status and its words, without the
-// marker of its kind.
+// marker of its kind. A database that is away is answered first, by the
+// error and in the console's own words (DB-15): a 503, as on every other
+// route, where the sentence with a capital and a full stop was a 500
+// (the tenth cluster test's N1).
 func failErr(w http.ResponseWriter, err error) {
+	if db.Refuse(w, err) {
+		return
+	}
 	code := http.StatusInternalServerError
 	msg := err.Error()
 	for _, k := range []struct {

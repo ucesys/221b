@@ -15,7 +15,7 @@ import { casesAccess, useIssueMe } from '../lib/cases'
 import { ReportPageLink } from './aiops/ReportPageLink'
 // --- end Cases ---
 // --- Top bar: the bell (Phase 12, wave 5; CF-80) ---
-import { useInboxCounts, type InboxCounts } from './aiops/useInbox'
+import { COUNT_UNKNOWN, useInboxCounts, type InboxCounts } from './aiops/useInbox'
 // --- end top bar ---
 import { BellIcon, Chevron, GearIcon, Logo, MoonIcon, SunIcon } from './Icons'
 
@@ -133,9 +133,12 @@ function RingArc({ every, elapsed }: { every: number; elapsed: number }) {
  * nothing does; never a number.
  */
 export function bellOf(c: InboxCounts): {
-  state: 'p01' | 'waiting' | 'none'
+  state: 'p01' | 'waiting' | 'none' | 'unknown'
   text: string
 } {
+  // The Inbox could not be read (the database is away, DB-15): the bell
+  // says so, with a mark, where the plain bell would say nothing waits.
+  if (c.unknown) return { state: 'unknown', text: `${COUNT_UNKNOWN}. Open AIOps › Inbox` }
   if (c.total === 0) return { state: 'none', text: 'Nothing waiting for you in AIOps › Inbox' }
   const urgent = [c.p0 > 0 && `${c.p0} P0`, c.p1 > 0 && `${c.p1} P1`].filter(Boolean).join(' and ')
   return {
@@ -483,11 +486,19 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
             {AIOPS_TABS.filter((t) => cases.tabs.includes(t.id)).map((t) => (
               <a key={t.id} className="rk-tab" href={aiopsHref(t.id)} aria-current={route.path[0] === t.id ? 'page' : undefined} title={t.tip} data-cases-tab={t.id}>
                 {t.label}
-                {t.id === 'inbox' && casesCount.total > 0 && (
-                  <span className="rk-count" data-tone="info">
-                    {casesCount.total}
-                  </span>
-                )}
+                {/* The count, or a mark that it is not known while the Inbox cannot be read (DB-15): never 0, never the last number. */}
+                {t.id === 'inbox' &&
+                  (casesCount.unknown ? (
+                    <span className="rk-count" role="img" aria-label={COUNT_UNKNOWN} title={COUNT_UNKNOWN} data-testid="inbox-count-unknown">
+                      ?
+                    </span>
+                  ) : (
+                    casesCount.total > 0 && (
+                      <span className="rk-count" data-tone="info">
+                        {casesCount.total}
+                      </span>
+                    )
+                  ))}
               </a>
             ))}
           </div>
@@ -604,9 +615,16 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
             data-state={bell.state}
             style={{
               color: bell.state === 'p01' ? 'var(--err)' : bell.state === 'waiting' ? 'var(--warn)' : undefined,
+              position: 'relative',
             }}
           >
             <BellIcon />
+            {/* Not known (DB-15): a question mark on the bell, which its name spells out. */}
+            {bell.state === 'unknown' && (
+              <span aria-hidden="true" data-testid="inbox-bell-unknown" style={{ position: 'absolute', top: 1, right: 3, fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
+                ?
+              </span>
+            )}
           </a>
         )}
         {/* --- end top bar --- */}

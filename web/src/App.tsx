@@ -11,6 +11,7 @@ import { PoliciesTab } from './components/PoliciesTab'
 import { StorageTab } from './components/StorageTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
+import { DatabaseBanner } from './components/DatabaseBanner'
 import { ClusterEditor } from './components/ClusterEditor'
 import { ClusterPage } from './components/ClusterPage'
 import { AutomationTab } from './components/AutomationTab'
@@ -539,6 +540,8 @@ function Shell() {
               route={route}
               onEditCluster={(id) => setEditing(id)}
             />
+            {/* On every page while the console's database is away (DB-15). */}
+            <DatabaseBanner />
             {view !== 'home' && view !== 'admin' && view !== 'aiops' && (
               <Banners
                 cluster={live.cluster}

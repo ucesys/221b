@@ -618,6 +618,11 @@ func New(o Options) *Server {
 	return s
 }
 
+// Patterns are the routes registered, as the mux was given them ("GET
+// /api/v1/home"; a service's own are one pattern each, its prefix): for
+// the tests that ask every route something.
+func (s *Server) Patterns() []string { return slices.Clone(s.patterns) }
+
 func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
 	s.patterns = append(s.patterns, pattern)
 	s.mux.Handle(pattern, s.observe(route, h))
@@ -864,12 +869,17 @@ func (s *Server) hostAllowed(hostport string) bool {
 	return s.allowedHosts[host]
 }
 
-// statusWriter notes the status a handler answers with. An error's status
-// is held until its text is written: whatever status a handler, the
-// console's or a service's own, gave a failure, one whose text says the
-// database is unavailable is answered 503 (DB-15), so every page that
-// needs the database says so the same way, and a browser can tell it from
-// a fault of the request.
+// statusWriter notes the status a handler answers with. Whatever status a
+// handler, the console's or a service's own, gave a failure, an answer
+// that says the database is unavailable is a 503 (DB-15), so every page
+// that needs the database says so the same way, and a browser can tell it
+// from a fault of the request. Such an answer is known by its mark
+// (db.MarkUnavailable), which an error writer that has the error sets
+// (db.Refuse): the services' own do. A handler that passes only an
+// error's text (jsonError) is still known by db.ErrUnavailable's own
+// sentence in what it writes, for which an error's status is held until
+// its text is written; the answer is then marked too, so that the
+// browser app goes by the mark alone.
 type statusWriter struct {
 	http.ResponseWriter
 	code int
@@ -887,7 +897,13 @@ func (w *statusWriter) WriteHeader(code int) {
 		return
 	}
 	w.code = code
-	if code >= http.StatusBadRequest && code != http.StatusServiceUnavailable && !w.asIs {
+	if code >= http.StatusBadRequest && !w.asIs {
+		if db.MarkedUnavailable(w.Header()) {
+			// Marked by whoever had the error: a 503, whatever it was given.
+			w.code = http.StatusServiceUnavailable
+			w.ResponseWriter.WriteHeader(w.code)
+			return
+		}
 		w.held = true
 		return
 	}
@@ -901,6 +917,7 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.held {
 		if bytes.Contains(b, []byte(db.ErrUnavailable.Error())) {
 			w.code = http.StatusServiceUnavailable
+			db.MarkUnavailable(w.Header())
 		}
 		w.sendHeld()
 	}

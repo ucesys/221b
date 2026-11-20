@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/jobs"
 )
 
@@ -68,6 +69,10 @@ func fail(w http.ResponseWriter, code int, msg string) {
 }
 
 func failErr(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	code := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, ErrNotFound):

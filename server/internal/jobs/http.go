@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
 
@@ -84,6 +85,10 @@ func fail(w http.ResponseWriter, code int, msg string) {
 
 // failErr answers an error of the service.
 func failErr(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	code := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, ErrNotFound):

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -126,6 +127,10 @@ func fail(w http.ResponseWriter, code int, msg string) {
 // draft saved over a newer one 409 with the draft as it is (CF-59), and
 // an edit in place over a newer value 409 with that value (CF-60).
 func failErr(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	var d *DuplicateError
 	if errors.As(err, &d) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "Not a duplicate: " + d.Check.Reason + ".", "check": d.Check})
