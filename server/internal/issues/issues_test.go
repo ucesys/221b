@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -50,6 +52,16 @@ func newFixture(t *testing.T, o Options) *fixture {
 	o.Now = f.clock.now
 	o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	o.Audit = func(a AuditRecord) { f.mu.Lock(); f.audits = append(f.audits, a); f.mu.Unlock() }
+	// TEST_STORE=database keeps a fixture's records in the database's
+	// tables, where the test did not give it a store of its own: the
+	// index, the known issues and the settings as one set, the cases as
+	// rows (Phase 13).
+	if os.Getenv("TEST_STORE") == "database" && o.Backend == nil && o.Cases == nil {
+		d := dbtest.Open(t)
+		set := NewSetPG(d)
+		o.Backend = &kv.Keyed{Keys: map[string]kv.Backend{IndexKey: set, KnownKey: set, ConfigKey: set}, Rest: &kv.Memory{}}
+		o.Cases = NewCasesPG(d, nil)
+	}
 	f.s = New(o)
 	f.s.OnChange(func(e Event) { f.mu.Lock(); f.events = append(f.events, e); f.mu.Unlock() })
 	return f

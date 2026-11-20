@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -389,7 +390,7 @@ func TestOldOutcomesReadAsNoActionCF90(t *testing.T) {
 	// As a release before CF-90 wrote them: the index and each case's
 	// object.
 	old := map[string]string{ag: "noFixNeeded", h.ID: "notAProblem"}
-	b, version, err := ib.LoadKey(ctx, issues.IndexKey)
+	b, version, err := w.issueStore.LoadKey(ctx, issues.IndexKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +401,7 @@ func TestOldOutcomesReadAsNoActionCF90(t *testing.T) {
 		line["outcome"] = old[fmt.Sprintf("C-%v", line["number"])]
 	}
 	b, _ = json.Marshal(idx)
-	if _, err := ib.SaveKey(ctx, issues.IndexKey, b, version); err != nil {
+	if _, err := w.issueStore.SaveKey(ctx, issues.IndexKey, b, version); err != nil {
 		t.Fatal(err)
 	}
 	for id, was := range old {
@@ -432,9 +433,10 @@ func TestOldOutcomesReadAsNoActionCF90(t *testing.T) {
 	if c := w.get(t, f.Case); c.Previous == nil || c.Previous.Case != ag || c.Previous.Outcome != issues.OutcomeNoAction || c.Previous.Explanation != "It cleared by itself." {
 		t.Fatalf("previous: %+v", c.Previous)
 	}
-	// The stored record is kept as it was.
+	// The stored record is kept as it was, in a ConfigMap: a row holds the
+	// outcome as it reads.
 	keys, _, _ := w.objects.Load(ctx, strings.TrimPrefix(h.ID, "C-"))
-	if !strings.Contains(string(keys[issues.CaseKey]), `"outcome":"notAProblem"`) {
+	if !strings.Contains(string(keys[issues.CaseKey]), `"outcome":"notAProblem"`) && os.Getenv("TEST_STORE") != "database" {
 		t.Fatalf("the record was rewritten: %s", keys[issues.CaseKey])
 	}
 }

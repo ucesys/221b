@@ -4,7 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.13.0 (unreleased)
 
-Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-50). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
+Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at a time ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-54). Nothing changes for an installation that sets nothing: `database.mode` is `none`.
 
 ### Changed
 
@@ -24,8 +24,9 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 - **The proposed changes in the database**: with a database, a change the agents propose is a row of `changes`, with its evidence, actions, plans, results, approvals, history, commands and the cases it resolves as rows of their own tables, no longer bounded by a ConfigMap's size; a waiting change's conversation with Sherlock is a row of `chats` with a row of `chat_messages` a message. Copied once from the proposed changes' ConfigMap.
 - **The fixes and the accepted exceptions in the database**: with a database, a fix is a row of `fixes` with the cases it was seen in as rows of `fix_cases`, and an accepted exception a row of `exceptions`, no longer bounded by a ConfigMap's size; copied once from the case work's ConfigMap.
 - **Mycroft's sources, syncs and page changes in the database**: with a database, a source is a row of `knowledge_sources` with its live addresses and exclusions, each source's last read and the last syncs are rows of `knowledge_source_reads` and `knowledge_syncs`, and a run of page changes that waits for review is a row of `wiki_runs` with its page changes, their approvals and its decisions, no longer bounded by a ConfigMap's size; copied once from the knowledge ConfigMap. The wiki's pages stay where they are kept.
+- **The cases, the known issues and the services in the database**: with a database, a case is a row of `cases` with its messages, the work on it (the analysis, the RCA, the history, the proposals, the drafts, the commands) and its conversation with Sherlock as rows of their own tables, no longer one ConfigMap a case; the known issues and the service catalogue are rows of `known_issues` and `services`. Copied once from the cases' ConfigMaps and the issue service's. The list of cases is read from the cases' rows.
 - `GET /api/v1/database` names every domain moved, not only the activity log and the backups.
-- For developers: `make test-go-store` runs the agents', the jobs', the case work's, the cards', the fixes', the lessons' and Mycroft's own tests with their records in the database.
+- For developers: `make test-go-store` runs the tests of the eight packages whose records have moved (the agents, the jobs, the case work, the cards, the fixes, the lessons, Mycroft and the issue service) with their records in the database.
 - **Inventory in the database**: with a database, hosts outside Kubernetes, paired nodes, fleets with the members of listed fleets, and each node's facts are rows of `hosts`, `host_logins`, `host_pairings`, `fleets`, `fleet_hosts` and `host_facts`.
 - **The shared settings, acknowledged alerts and repositories in the database**: rows of `settings`, `alert_acks` and `repositories`.
 - **Approvals in the database**: with a database, the requests that wait for a second person, their decisions, the standing approvals and the notification channels are rows of `approval_requests`, `approval_decisions`, `approval_policies` and `notification_channels`; copied once from their ConfigMaps.

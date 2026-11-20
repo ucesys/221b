@@ -166,8 +166,10 @@ type wiring struct {
 	cardsBackend kv.Backend
 	// knowledgeBackend is the same for Mycroft's knowledge.
 	knowledgeBackend kv.Backend
-	mailSvc          *mail.Service
-	lessonsSvc       *lessons.Service
+	// issueBackend is the same for the issue service.
+	issueBackend kv.Backend
+	mailSvc      *mail.Service
+	lessonsSvc   *lessons.Service
 
 	// The backups and the HTTP API.
 	backups *backup.Scheduler

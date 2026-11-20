@@ -105,9 +105,11 @@ type world struct {
 	// store is where the service keeps its keys: backend, or the database's
 	// tables over it.
 	store   kv.Backend
-	objects *kv.MemoryObjects
-	now     time.Time
-	runs    int
+	objects kv.Objects
+	// issueStore is what the issue service reads and writes through.
+	issueStore kv.Backend
+	now        time.Time
+	runs       int
 }
 
 var (
@@ -140,10 +142,16 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 	// TEST_STORE=database runs every test of this package with
 	// the checks, the rules and what the runs found in the database's
 	// tables (Phase 13).
-	var store kv.Backend = backend
+	// So are the cases: each an object of rows with the work on it and its
+	// conversation, and the issue service's index, known issues and
+	// settings as one set.
+	var store, issueStore kv.Backend = backend, issueBackend
 	if os.Getenv("TEST_STORE") == "database" {
 		d := dbtest.Open(t)
 		store = &kv.Keyed{Keys: map[string]kv.Backend{ChecksKey: NewChecksPG(d), RulesKey: NewRulesPG(d), FoundKey: NewFoundPG(d)}, Rest: backend}
+		set := issues.NewSetPG(d)
+		issueStore = &kv.Keyed{Keys: map[string]kv.Backend{issues.IndexKey: set, issues.KnownKey: set, issues.ConfigKey: set}, Rest: issueBackend}
+		w.objects = issues.NewCasesPG(d, CaseParts())
 	}
 	w.store = store
 	kinds := jobs.NewRegistry()
@@ -153,7 +161,8 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 	w.jobs = jobs.New(jobs.Options{Kinds: kinds, Agents: w.agents, Proposer: w.props, Audit: log, Logger: logger, Clusters: clusters, CommandOK: func(string) error { return nil }})
 	t.Cleanup(w.jobs.Stop)
 	clock := func() time.Time { return w.now }
-	w.iss = issues.New(issues.Options{Backend: issueBackend, Cases: w.objects, Logger: logger, Now: clock})
+	w.issueStore = issueStore
+	w.iss = issues.New(issues.Options{Backend: issueStore, Cases: w.objects, Logger: logger, Now: clock})
 	w.lessons = lessons.New(lessons.Options{Audit: log, Logger: logger, Now: clock})
 	w.fixes = fixes.New(fixes.Options{Audit: log, Logger: logger, Now: clock})
 	w.svc = New(Options{Backend: store, Issues: w.iss, Jobs: w.jobs, Lessons: w.lessons, Fixes: w.fixes, Clusters: clusters, Audit: log, Logger: logger, Now: clock,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/issues"
@@ -34,7 +35,10 @@ func issueLimits() issues.Limits {
 // investigator (the report triage job, Phase 12); nil finds nothing. The
 // manager's clusters are the ones a reporter may say a report is about
 // (CF-64).
-func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, inv issues.Investigator, log *slog.Logger) (*issues.Service, *kv.Limited, error) {
+//
+// moved keeps the records in the database when there is one (Phase 13);
+// nil leaves them where they are.
+func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, inv issues.Investigator, moved func(kv.Backend, kv.Objects) (kv.Backend, kv.Objects), log *slog.Logger) (*issues.Service, *kv.Limited, error) {
 	var backend kv.Backend = &kv.Memory{}
 	var cases kv.Objects = &kv.MemoryObjects{}
 	var stored *kv.Limited
@@ -54,6 +58,9 @@ func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, ma
 		backend = stored
 	} else {
 		log.Warn("the issue service's reports are kept in memory and lost on restart (set -issues-configmap to keep them)")
+	}
+	if moved != nil {
+		backend, cases = moved(backend, cases)
 	}
 	svc := issues.New(issues.Options{
 		Backend: backend,
@@ -98,7 +105,7 @@ func (w *wiring) wireIssues(ctx context.Context) error {
 	// which offers the report page and the issue API, issueAPI below).
 	var issueSvc, issueAPI *issues.Service
 	var issueStored *kv.Limited
-	svc, l, err := openIssues(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.jobsW.investigator(), log)
+	svc, l, err := openIssues(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.jobsW.investigator(), w.casesInDatabase(ctx), log)
 	if err != nil {
 		return err
 	}
@@ -115,4 +122,54 @@ func (w *wiring) wireIssues(ctx context.Context) error {
 	}
 	w.issueSvc, w.issueAPI, w.issueStored = issueSvc, issueAPI, issueStored
 	return nil
+}
+
+// casesInDatabase keeps the issue service's records in the database when
+// there is one (Phase 13, DB-52 to DB-54): the index, the known issues and
+// the settings as one set of documents at one version, and each case as a
+// row of cases with the work on it and its conversation with Sherlock,
+// which the case work keeps in the same object. What the ConfigMaps held
+// is copied once: the case objects under one name, the three documents
+// under another.
+func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Objects) (kv.Backend, kv.Objects) {
+	return func(b kv.Backend, objs kv.Objects) (kv.Backend, kv.Objects) {
+		w.issueBackend = b
+		if w.database == nil {
+			return b, objs
+		}
+		w.inDatabase = append(w.inDatabase, "cases")
+		log := w.log.With("component", "database")
+		cases := issues.NewCasesPG(w.database, casework.CaseParts())
+		w.claimImport(cases.ImportID())
+		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory {
+			// One read of the cluster for each case: allow for many.
+			ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			n, err := cases.Import(ictx, objs, "configmap")
+			cancel()
+			if err != nil {
+				log.Warn("copying the cases from their ConfigMaps into the database failed; the next start tries again", "err", err)
+			} else if n > 0 {
+				log.Info("copied the cases from their ConfigMaps into the database", "cases", n)
+			}
+		}
+		set := issues.NewSetPG(w.database)
+		w.claimImport(set.ImportID())
+		if _, inMemory := b.(*kv.Memory); !inMemory {
+			ictx, cancel := context.WithTimeout(ctx, time.Minute)
+			copied, err := set.Import(ictx, b, "configmap")
+			cancel()
+			if err != nil {
+				log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "keys", "the issue service's", "err", err)
+			}
+			for _, key := range copied {
+				log.Info("copied records from their ConfigMap into the database", "key", key)
+			}
+		}
+		keys := map[string]kv.Backend{}
+		for key := range set.Members {
+			keys[key] = set
+		}
+		w.issueBackend = &kv.Keyed{Keys: keys, Rest: b}
+		return w.issueBackend, cases
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -80,8 +81,26 @@ func sameRow(a, b []any) bool {
 // ReadChats returns the kept conversations whose session starts with
 // prefix, by session: "proposal:" for the waiting changes'.
 func ReadChats(ctx context.Context, q db.Querier, prefix string) (map[string]KeptChat, error) {
+	return readChats(ctx, q, "starts_with(session, $1)", prefix)
+}
+
+// ReadChat returns the conversation kept under exactly one session, nil
+// when none is: a case's ("case:C-1" is also how "case:C-12" starts).
+func ReadChat(ctx context.Context, q db.Querier, session string) (*KeptChat, error) {
+	kept, err := readChats(ctx, q, "session = $1", session)
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := kept[session]; ok {
+		return &c, nil
+	}
+	return nil, nil
+}
+
+// readChats reads the conversations whose session meets a condition on $1.
+func readChats(ctx context.Context, q db.Querier, where, arg string) (map[string]KeptChat, error) {
 	out := map[string]KeptChat{}
-	rows, err := q.Query(ctx, "SELECT session, cluster_id, updated_at FROM chats WHERE starts_with(session, $1)", prefix)
+	rows, err := q.Query(ctx, "SELECT session, cluster_id, updated_at FROM chats WHERE "+where, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +121,7 @@ func ReadChats(ctx context.Context, q db.Querier, prefix string) (map[string]Kep
 	}
 	rows, err = q.Query(ctx, `SELECT c.session, m.message_number, m.role, m.body, m.note, m.status, m.error, m.asked_by, m.agent_id, m.model, m.at, m.first_at, m.done_at,
 			m.cost_usd, m.tokens_in, m.tokens_out, m.tokens_cache_write, m.tokens_cache_read, m.parts
-		FROM chat_messages m JOIN chats c USING (chat_id) WHERE starts_with(c.session, $1) ORDER BY c.session, m.position`, prefix)
+		FROM chat_messages m JOIN chats c USING (chat_id) WHERE `+strings.Replace(where, "session", "c.session", 1)+` ORDER BY c.session, m.position`, arg)
 	if err != nil {
 		return nil, err
 	}

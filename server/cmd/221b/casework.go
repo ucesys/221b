@@ -214,7 +214,7 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	{
 		st := casework.CleanStores{Cases: w.issueSvc.Cases()}
 		if w.issueStored != nil {
-			st.Issues = w.issueStored
+			st.Issues = w.issueBackend
 		}
 		if caseStored != nil {
 			// Through the same backend the service reads, so what the
