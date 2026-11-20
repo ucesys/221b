@@ -155,12 +155,12 @@ type probeKey struct{}
 // says nothing of the database.
 func (d *DB) probe() (int, error) {
 	cc := d.pool.Config().ConnConfig
-	if err := d.password(cc); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), probeKey{}, true), probeTime)
+	defer cancel()
+	if err := d.password(ctx, cc); err != nil {
 		return unsure, err
 	}
 	cc.ConnectTimeout = probeTime
-	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), probeKey{}, true), probeTime)
-	defer cancel()
 	conn, err := pgx.ConnectConfig(ctx, cc)
 	if err == nil {
 		cctx, ccancel := context.WithTimeout(context.Background(), time.Second)

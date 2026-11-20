@@ -280,6 +280,21 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- if not (has $e.sslMode (list "verify-full" "verify-ca" "require" "disable")) -}}
 {{- fail (printf "database.external.sslMode must be verify-full, verify-ca or require, not %q" (toString $e.sslMode)) -}}
 {{- end -}}
+{{- $iam := default "none" $e.iamAuth -}}
+{{- if not (has $iam (list "none" "aws" "gcp")) -}}
+{{- fail (printf "database.external.iamAuth must be none, aws or gcp, not %q" (toString $iam)) -}}
+{{- end -}}
+{{- if ne $iam "none" -}}
+{{- if $e.passwordSecret.name -}}
+{{- fail (printf "database.external.iamAuth=%s signs in with a token in place of the password: remove database.external.passwordSecret.name" $iam) -}}
+{{- end -}}
+{{- if eq $e.sslMode "disable" -}}
+{{- fail (printf "database.external.iamAuth=%s sends its token over TLS only: set database.external.sslMode to verify-full, verify-ca or require" $iam) -}}
+{{- end -}}
+{{- if and (eq $iam "aws") (not (($e.aws).region)) -}}
+{{- fail "database.external.iamAuth=aws needs database.external.aws.region, the RDS database's region" -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq $e.sslMode "disable") (not $e.allowInsecure) -}}
 {{- fail "database.external.sslMode=disable sends the password and every record in the clear; set database.external.allowInsecure=true if that is meant" -}}
 {{- end -}}

@@ -157,6 +157,15 @@ spec:
             - name: DB_PASSWORD_FILE
               value: /etc/221b/db/password
             {{- end }}
+            {{- if and $e.iamAuth (ne $e.iamAuth "none") }}
+            # No password: a token of the cloud's IAM for each connection (DB-83).
+            - name: DB_IAM_AUTH
+              value: {{ $e.iamAuth | quote }}
+            {{- if eq $e.iamAuth "aws" }}
+            - name: DB_AWS_REGION
+              value: {{ $e.aws.region | quote }}
+            {{- end }}
+            {{- end }}
             - name: DB_SSLMODE
               value: {{ $e.sslMode | quote }}
             {{- if $e.caSecret }}

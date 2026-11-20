@@ -211,6 +211,24 @@ database_modes() {
     refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29 &&
     refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=yesterday
 }
+# DB-83: an external database signed in to with a token of the cloud's
+# IAM: no password, the way and the region passed; with a password, without
+# TLS, without a region or of an unknown way, refused.
+database_iam() {
+  local ext=(--set clusterName=ci --set database.mode=external --set database.external.host=db.abc.eu-west-1.rds.amazonaws.com)
+  local aws gcp
+  aws=$(render_db k8s-console "${ext[@]}" --set database.external.iamAuth=aws --set database.external.aws.region=eu-west-1 \
+    --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/console')
+  gcp=$(render_db k8s-console "${ext[@]}" --set database.external.iamAuth=gcp --set database.external.sslMode=verify-ca --set database.external.caSecret=sql-ca)
+  grep -A1 'name: DB_IAM_AUTH' <<<"$aws" | has '"aws"' && grep -A1 'name: DB_AWS_REGION' <<<"$aws" | has '"eu-west-1"' &&
+    ! has 'DB_PASSWORD_FILE' <<<"$aws" && has 'eks.amazonaws.com/role-arn' <<<"$aws" &&
+    grep -A1 'name: DB_IAM_AUTH' <<<"$gcp" | has '"gcp"' && ! has 'DB_AWS_REGION' <<<"$gcp" && ! has 'DB_PASSWORD_FILE' <<<"$gcp" &&
+    ! render_db k8s-console "${ext[@]}" | has 'DB_IAM_AUTH' &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=azure &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=aws --set database.external.aws.region=eu-west-1 --set database.external.passwordSecret.name=pg &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=gcp --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=aws
+}
 # The mode guard and the production refusal go by what a lookup finds,
 # which helm template never finds. So they are rendered from a copy of the
 # chart whose lookups read values instead (guardTest.namespace, .deployment
@@ -850,6 +868,7 @@ check "SSH to nodes is in the toolbox config, off by default with port 22 and ro
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
 check "the database: bundled by default, as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it and no value starts without it; none, values from before 0.13 and what cannot work are refused" database_modes
+check "an external database's IAM sign-in: the way and the region passed and no password; a password, no TLS, no region and an unknown way refused" database_iam
 check "the mode guard: a release without a database gets one, bundled by default or external; bundled and external do not flip without allowModeChange; one member in a production namespace only when acknowledged" database_guard
 check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports

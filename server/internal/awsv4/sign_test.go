@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +130,32 @@ func TestTheRolesWebIdentityIsKeptUntilItNearlyExpires(t *testing.T) {
 	none := &Identity{Ambient: &Ambient{Getenv: func(string) string { return "" }}}
 	if _, err := none.Credentials(context.Background(), ""); none.Available() || err == nil || !strings.Contains(err.Error(), "IRSA") {
 		t.Fatalf("no identity: %v", err)
+	}
+}
+
+// The example of S3's documentation of presigned URLs (examplebucket, 24
+// May 2013, valid for a day).
+func TestTheS3PresignedExample(t *testing.T) {
+	key := Credentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
+	u, _ := url.Parse("https://examplebucket.s3.amazonaws.com/test.txt")
+	got := Presign("GET", u, key, "us-east-1", "s3", time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC), 24*time.Hour, UnsignedPayload)
+	if sig := got.Query().Get("X-Amz-Signature"); sig != "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404" {
+		t.Fatalf("signature %s in %s", sig, got)
+	}
+}
+
+// An RDS IAM authentication token is what the AWS SDK for Go v2 makes
+// (feature/rds/auth BuildAuthToken, v1.7.12, run once on November 20,
+// 2026 with these credentials and this time; the SDK is not a dependency).
+func TestAnRDSTokenIsTheSDKs(t *testing.T) {
+	k := Credentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", SessionToken: "IQoJb3JpZ2luX2VjEXAMPLE/+=="}
+	at := time.Date(2026, 11, 20, 21, 37, 55, 0, time.UTC)
+	for user, want := range map[string]string{
+		"app_221b":   "db.abc.eu-west-1.rds.amazonaws.com:5432?Action=connect&DBUser=app_221b&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20261120%2Feu-west-1%2Frds-db%2Faws4_request&X-Amz-Date=20261120T213755Z&X-Amz-Expires=900&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEXAMPLE%2F%2B%3D%3D&X-Amz-SignedHeaders=host&X-Amz-Signature=c2f9069ccc8c606f7eacaaaa4ab1a3f35a1469391710084323f728ead114aa46",
+		"iam user+x": "db.abc.eu-west-1.rds.amazonaws.com:5432?Action=connect&DBUser=iam%20user%2Bx&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20261120%2Feu-west-1%2Frds-db%2Faws4_request&X-Amz-Date=20261120T213755Z&X-Amz-Expires=900&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEXAMPLE%2F%2B%3D%3D&X-Amz-SignedHeaders=host&X-Amz-Signature=a5c3f97a8d485e7e79f3880b2a172cbe0113692b3328f48623450833f1fc924d",
+	} {
+		if got := RDSAuthToken("db.abc.eu-west-1.rds.amazonaws.com:5432", "eu-west-1", user, k, at); got != want {
+			t.Errorf("%s:\ngot  %s\nwant %s", user, got, want)
+		}
 	}
 }

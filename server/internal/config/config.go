@@ -273,6 +273,8 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.Database.Name, "db-name", env("DB_NAME", "221b"), "name of the database")
 	fs.StringVar(&c.Database.User, "db-user", env("DB_USER", "app_221b"), "role the console signs in to the database as; it owns the tables and migrates them")
 	fs.StringVar(&c.Database.PasswordFile, "db-password-file", env("DB_PASSWORD_FILE", ""), "file holding the role's password, read at every connection so a rotated Secret needs no restart (empty: no password, for client certificates)")
+	fs.StringVar(&c.Database.IAMAuth, "db-iam-auth", env("DB_IAM_AUTH", db.IAMNone), "sign in to the database with a token of the cloud's IAM in place of a password, made for each connection from the pod's identity: none, aws (RDS and Aurora) or gcp (Cloud SQL); needs TLS and no -db-password-file")
+	fs.StringVar(&c.Database.AWSRegion, "db-aws-region", env("DB_AWS_REGION", os.Getenv("AWS_REGION")), "the RDS database's region, for -db-iam-auth aws (empty: AWS_REGION)")
 	fs.StringVar(&c.Database.SSLMode, "db-sslmode", env("DB_SSLMODE", "verify-full"), "how the connection to the database is secured: verify-full, verify-ca, require or disable")
 	fs.StringVar(&c.Database.CAFile, "db-ca-file", env("DB_CA_FILE", ""), "CA bundle the database's certificate is verified against (empty: the system's)")
 	fs.StringVar(&c.Database.ClientCertFile, "db-client-cert-file", env("DB_CLIENT_CERT_FILE", ""), "client certificate for a database that asks for one")

@@ -59,8 +59,15 @@ type Config struct {
 	Name string
 	User string
 	// PasswordFile holds the role's password; empty when the server takes
-	// a client certificate alone.
+	// a client certificate alone, or an IAM token.
 	PasswordFile string
+	// IAMAuth is how the console signs in with a token of the cloud's IAM
+	// in place of a password (DB-83): IAMNone, IAMAWS (RDS and Aurora) or
+	// IAMGCP (Cloud SQL). Tokens makes the token; AWSRegion is the RDS
+	// database's region.
+	IAMAuth   string
+	AWSRegion string
+	Tokens    TokenSource
 	// SSLMode is verify-full, verify-ca, require or disable, as libpq
 	// means them. CAFile verifies the server; ClientCertFile and
 	// ClientKeyFile sign the console in where the server asks for one.
@@ -105,8 +112,26 @@ func (c Config) Validate() error {
 	if c.MaxConns < 2 {
 		return fmt.Errorf("database maxConnections %d: give 2 or more", c.MaxConns)
 	}
+	switch c.IAMAuth {
+	case "", IAMNone:
+	case IAMAWS, IAMGCP:
+		if c.PasswordFile != "" {
+			return fmt.Errorf("database iamAuth %s signs in with a token in place of the password: give no password Secret", c.IAMAuth)
+		}
+		if c.SSLMode == "disable" {
+			return fmt.Errorf("database iamAuth %s sends its token over TLS only: give sslMode verify-full, verify-ca or require", c.IAMAuth)
+		}
+		if c.IAMAuth == IAMAWS && c.AWSRegion == "" {
+			return errors.New("database iamAuth aws needs the database's region")
+		}
+	default:
+		return fmt.Errorf("database iamAuth %q: give none, aws or gcp", c.IAMAuth)
+	}
 	return nil
 }
+
+// IAM reports whether the console signs in with an IAM token.
+func (c Config) IAM() bool { return c.IAMAuth == IAMAWS || c.IAMAuth == IAMGCP }
 
 // dsn is the connection string for one host, in libpq's keyword form. The
 // password is not in it; BeforeConnect reads it.
@@ -189,6 +214,9 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*DB, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	if cfg.IAM() && cfg.Tokens == nil {
+		return nil, fmt.Errorf("database iamAuth %s: nothing makes its tokens", cfg.IAMAuth)
+	}
 	d := newDB(cfg, log)
 	var err error
 	if d.pool, err = d.open(ctx, cfg.Host, int32(cfg.MaxConns)); err != nil {
@@ -235,13 +263,22 @@ func (d *DB) open(ctx context.Context, host string, max int32) (*pgxpool.Pool, e
 	pc.MaxConns = max
 	pc.MaxConnIdleTime = 5 * time.Minute
 	pc.HealthCheckPeriod = 30 * time.Second
-	pc.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error { return d.password(cc) }
+	pc.BeforeConnect = d.password
 	return pgxpool.NewWithConfig(ctx, pc)
 }
 
 // password reads the role's password into a connection's settings, each
-// time a connection is opened (DB-04).
-func (d *DB) password(cc *pgx.ConnConfig) error {
+// time a connection is opened (DB-04), or, with iamAuth, makes the IAM
+// token that stands for it (DB-83). Neither is logged or put in an error.
+func (d *DB) password(ctx context.Context, cc *pgx.ConnConfig) error {
+	if d.cfg.IAM() {
+		t, err := d.cfg.Tokens.Token(ctx)
+		if err != nil {
+			return fmt.Errorf("making the database's %s IAM token: %w", d.cfg.IAMAuth, err)
+		}
+		cc.Password = t.Value
+		return nil
+	}
 	file := d.cfg.PasswordFile
 	if file == "" {
 		return nil

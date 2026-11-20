@@ -659,10 +659,36 @@ database:
     database: "221b"
     user: "app_221b"
     # The Secret and key holding the password. No name: no password, for a
-    # server that takes the client certificate alone.
+    # server that takes the client certificate alone, or with iamAuth.
     passwordSecret:
       name: ""
       key: password
+    # Sign in with a token of the cloud's IAM in place of a password
+    # (DB-83; docs/database.md). The token is made for each new connection
+    # from the console's own identity, so no password is kept anywhere;
+    # it is sent over TLS only, and no passwordSecret is given with it.
+    #   none  a password (passwordSecret) or a client certificate.
+    #   aws   RDS or Aurora PostgreSQL: an RDS IAM authentication token,
+    #         signed with the ServiceAccount's IAM role (IRSA or EKS Pod
+    #         Identity) and valid for 15 minutes. Give aws.region. The role
+    #         needs rds-db:connect on
+    #         arn:aws:rds-db:<region>:<account>:dbuser:<DbiResourceId>/<user>,
+    #         the user GRANT rds_iam, and IRSA the ServiceAccount annotation
+    #         eks.amazonaws.com/role-arn (serviceAccount.annotations).
+    #   gcp   Cloud SQL for PostgreSQL with cloudsql.iam_authentication on:
+    #         an OAuth2 access token of the ServiceAccount's Google identity
+    #         (GKE Workload Identity: the annotation
+    #         iam.gke.io/gcp-service-account: <gsa>@<project>.iam.gserviceaccount.com
+    #         under serviceAccount.annotations, the Google service account
+    #         holding roles/cloudsql.instanceUser). user is the database
+    #         user of that account, <gsa>@<project>.iam. Cloud SQL's
+    #         certificate names the instance, not its address: give
+    #         sslMode verify-ca with the instance's server CA in caSecret.
+    iamAuth: none
+    aws:
+      # The RDS database's region, such as eu-west-1. Required with
+      # iamAuth aws.
+      region: ""
     # verify-full, verify-ca or require; disable only with allowInsecure.
     sslMode: verify-full
     allowInsecure: false

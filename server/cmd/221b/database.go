@@ -13,6 +13,7 @@ import (
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/db"
+	"github.com/ucesys/221b/server/internal/db/iamauth"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -56,6 +57,15 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 	if cfg.AppName == "" {
 		host, _ := os.Hostname()
 		cfg.AppName = "221b/" + host
+	}
+	// A token of the cloud's IAM in place of a password (DB-83).
+	if cfg.IAM() {
+		tokens, err := iamauth.Source(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		cfg.Tokens = tokens
+		log.Info("signing in to the database with an IAM token for each connection", "iamAuth", cfg.IAMAuth)
 	}
 	// The bundled database may still be starting, or failing over, when
 	// the console does: try for the wait before giving up on it. The
