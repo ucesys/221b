@@ -22,7 +22,9 @@ import (
 // and the draft, one an agent, a version by its number and a revision by
 // its own; a row that changed is updated in place, and of what hangs from
 // it only what changed is written, a test run's result added being one
-// insert. So a row can be pointed at (approval_request_id, item 17).
+// insert. So a row can be pointed at: a draft that waits for a second
+// SuperAdmin keeps the key of its request (approval_request_id, DB-91),
+// looked up by its number whenever the row is written.
 
 // The states of a row of prompt_versions.
 const (
@@ -313,6 +315,12 @@ const promptColumns = `agent_id, state, position, version_number, revision_numbe
 	base_body, stage, request_number, restored_version, pilot_started_at, pilot_until, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
 	tested_at, tested_cases, tested_passed, tested_state`
 
+// requestOf is the key of the request a row names by its number ($14,
+// request_number): a draft's request for going live, a row of
+// approval_requests (twoperson.KindPrompt). None when the row names none
+// or the request was pruned.
+const requestOf = `(SELECT approval_request_id FROM approval_requests WHERE kind = 'prompt' AND request_number = $14 AND $14 > 0)`
+
 func promptValues(r promptRow) []any {
 	var pilotStarted, pilotUntil, tested *time.Time
 	var pilot Pilot
@@ -332,8 +340,8 @@ func promptValues(r promptRow) []any {
 // queuePrompt queues a new row of prompt_versions under the key id, with
 // what hangs from it.
 func queuePrompt(b *pgx.Batch, id string, r promptRow) {
-	b.Queue(`INSERT INTO prompt_versions (prompt_version_id, `+promptColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+	b.Queue(`INSERT INTO prompt_versions (prompt_version_id, `+promptColumns+`, approval_request_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, `+requestOf+`)`,
 		append([]any{id}, promptValues(r)...)...)
 	queueNotes(b, id, r.notes)
 	queueParts(b, id, r.parts, r.bases)
@@ -374,8 +382,8 @@ func queueParts(b *pgx.Batch, id string, parts, bases map[string]string) {
 // writes it.
 func queuePromptChange(b *pgx.Batch, id, runID string, was, r promptRow) {
 	if !sameDoc(promptValues(was), promptValues(r)) {
-		b.Queue(`UPDATE prompt_versions SET (`+promptColumns+`) =
-			($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) WHERE prompt_version_id = $1`,
+		b.Queue(`UPDATE prompt_versions SET (`+promptColumns+`, approval_request_id) =
+			($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, `+requestOf+`) WHERE prompt_version_id = $1`,
 			append([]any{id}, promptValues(r)...)...)
 	}
 	if !sameDoc(was.notes, r.notes) {

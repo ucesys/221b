@@ -104,18 +104,12 @@ func writeRecord(ctx context.Context, tx pgx.Tx, old, next record) error {
 		_, err := tx.Exec(ctx, "DELETE FROM approval_requests WHERE request_number = $1 AND kind = $2", r.ID, r.Kind)
 		return err
 	}
-	add := func(r Request) error {
-		summary, _ := json.Marshal(asked{ClusterName: r.ClusterName, From: r.From, To: r.To, User: r.User, Super: r.Super, Groups: r.Groups,
+	summaryOf := func(r Request) []byte {
+		b, _ := json.Marshal(asked{ClusterName: r.ClusterName, From: r.From, To: r.To, User: r.User, Super: r.Super, Groups: r.Groups,
 			Agent: r.Agent, AgentName: r.AgentName, Rev: r.Rev, Untested: r.Untested})
-		id := db.NewID()
-		// One other person decides today; the count is here for the day a
-		// request needs more.
-		if _, err := tx.Exec(ctx, `INSERT INTO approval_requests
-			(approval_request_id, request_number, kind, cluster_id, summary, requested_by, requested_by_key, required_count, state, created_at, decided_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10)`,
-			id, r.ID, r.Kind, r.Cluster, summary, r.By.Name, r.By.Key, r.State, r.At.UTC(), r.DecidedAt); err != nil {
-			return err
-		}
+		return b
+	}
+	decision := func(id string, r Request) error {
 		if r.DecidedBy == nil {
 			return nil
 		}
@@ -127,12 +121,36 @@ func writeRecord(ctx context.Context, tx pgx.Tx, old, next record) error {
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`, db.NewID(), id, r.DecidedBy.Name, r.DecidedBy.Key, verdict, r.Comment, r.DecidedAt)
 		return err
 	}
-	// A request changes once, when it is decided: its rows are written anew.
-	change := func(_, r Request) error {
-		if err := remove(r); err != nil {
+	add := func(r Request) error {
+		id := db.NewID()
+		// One other person decides today; the count is here for the day a
+		// request needs more.
+		if _, err := tx.Exec(ctx, `INSERT INTO approval_requests
+			(approval_request_id, request_number, kind, cluster_id, summary, requested_by, requested_by_key, required_count, state, created_at, decided_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10)`,
+			id, r.ID, r.Kind, r.Cluster, summaryOf(r), r.By.Name, r.By.Key, r.State, r.At.UTC(), r.DecidedAt); err != nil {
 			return err
 		}
-		return add(r)
+		return decision(id, r)
+	}
+	// A request changes once, when it is decided: its row is updated in
+	// place, so that what points at it (a draft of instructions, DB-91)
+	// keeps pointing at it, and its decision is written anew.
+	change := func(_, r Request) error {
+		var id string
+		err := tx.QueryRow(ctx, `UPDATE approval_requests SET cluster_id = $3, summary = $4, state = $5, decided_at = $6
+			WHERE request_number = $1 AND kind = $2 RETURNING approval_request_id::text`,
+			r.ID, r.Kind, r.Cluster, summaryOf(r), r.State, r.DecidedAt).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return add(r)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM approval_decisions WHERE approval_request_id = $1", id); err != nil {
+			return err
+		}
+		return decision(id, r)
 	}
 	key := func(r Request) string { return strconv.Itoa(r.ID) }
 	return db.Diff(old.Requests, next.Requests, key, add, change, remove)
