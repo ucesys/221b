@@ -346,11 +346,14 @@ func approvable(rec changesRecord, cluster string, id int, who Who) (VariableCha
 // alters something c alters too, a rejected one aside, which changed
 // nothing; nil when there is none. A change is what it alters (DB-34), so
 // a newer change of the fleet that names none of c's values, marks,
-// ceiling or reboot times neither undoes c nor is undone by it.
+// ceiling or reboot times neither undoes c nor is undone by it. A name's
+// value and its sensitive mark are one thing here: whoever approves the
+// mark's change approves it of the value they were shown (the tenth
+// cluster test's F2).
 func NewerChange(changes []VariableChange, c VariableChange) *VariableChange {
 	mine := map[string]bool{}
 	for _, it := range Items(c.Before, c.After) {
-		mine[it.Kind+"\x00"+it.Node+"\x00"+it.Name] = true
+		mine[alters(it)] = true
 	}
 	var newer *VariableChange
 	for i := range changes {
@@ -359,13 +362,24 @@ func NewerChange(changes []VariableChange, c VariableChange) *VariableChange {
 			continue
 		}
 		for _, it := range Items(x.Before, x.After) {
-			if mine[it.Kind+"\x00"+it.Node+"\x00"+it.Name] {
+			if mine[alters(it)] {
 				newer = x
 				break
 			}
 		}
 	}
 	return newer
+}
+
+// alters names the thing an item alters, for telling whether two changes
+// alter the same thing: a fleet's value and the sensitive mark of its
+// name are one, every other kind is its own.
+func alters(it ChangeItem) string {
+	kind := it.Kind
+	if kind == "sensitive" {
+		kind = "value"
+	}
+	return kind + "\x00" + it.Node + "\x00" + it.Name
 }
 
 // Overtaken says why an older change can no longer be approved, "" when it

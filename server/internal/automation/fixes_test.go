@@ -204,6 +204,31 @@ func TestANewerChangeOfSomethingElseDoesNotHoldAnOlderOne(t *testing.T) {
 	}
 }
 
+// A name's value and its sensitive mark are one thing: a waiting change
+// of the mark is held by a newer change of the value (the tenth cluster
+// test's F2), since whoever approves it was shown the value of before.
+func TestANewerChangeOfAValueHoldsAnOlderChangeOfItsMark(t *testing.T) {
+	ctx := context.Background()
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	v0 := FleetVariables{Values: map[string]string{"MODE": "1"}, Sensitive: []string{"MODE"}}
+	st := NewStore(&kv.Memory{}, nil)
+	if err := st.SetVariables(ctx, "c", "db", v0); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: ChangeWaiting, Before: v0, After: FleetVariables{Values: map[string]string{"MODE": "1"}}})
+	v1 := FleetVariables{Values: map[string]string{"MODE": "5"}, Sensitive: []string{"MODE"}}
+	st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: ChangeApplied, Before: v0, After: v1})
+	if err := st.SetVariables(ctx, "c", "db", v1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideChange(ctx, "c", old.ID, true, "", sam); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "is newer") {
+		t.Fatalf("the mark's change was approved over a newer value: %v", err)
+	}
+	if got, _ := st.Variables(ctx, "c"); len(got["db"].Sensitive) != 1 {
+		t.Fatalf("the mark went: %+v", got["db"])
+	}
+}
+
 // Of the changes on a fleet that alter the same thing only the newest can
 // be approved, and approving it applies it over the values it was asked
 // against.

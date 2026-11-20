@@ -1,13 +1,13 @@
 # Phase 13 handover: storage in PostgreSQL
 
-Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 121 tables in 12 domains, every column, and their rules) first; the requirements are DB-01 to DB-68 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
+Written on November 19, 2026, for the session that continues Phase 13. It replaces the handover of November 18. Read [database.md](database.md) (how the database is run, and how to write a repository) and [data-model.md](data-model.md) (the 121 tables in 12 domains, every column, and their rules) first; the requirements are DB-01 to DB-68, with IN-11 in [requirements.md](requirements.md), and the decisions ADR-162 to ADR-164 in [architecture.md](architecture.md).
 
 ## Start here
 
 - **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **Every record set kept in a ConfigMap is in the database** when one is configured: Activity log, Approvals, Inventory, Platform's ConfigMap-kept records, Automation, AI configuration, Jobs, Changes, Knowledge and Cases. Iteration A is done. **Iteration B is done too** (November 20): of what is kept in Secrets, the part that is not secret is in the database, and every secret stays in its Secret (DB-59 to DB-66, steps `0034` to `0037`). Without a database (`database.mode=none`, the default) nothing changes for an installation.
-- **Nine cluster tests have run**, the ninth on `c86ed30a` (schema 37, iteration B): see *The ninth test*. The eighth ran on `c509f8ce` (schema 33): see *The eighth test*. The seventh ran on `9750780` (schema 31). It saw every record set that was kept in a ConfigMap read the same from the database, the ConfigMaps emptied and the cases' own deleted, an older console find nothing waiting, three members, and a restore to a point in time. Its one finding of weight (a restore's time given as `…Z`) is fixed in the chart and not seen in a cluster; the rest is in the table under that test. The release there is at Helm revision 3 (its history started again with the uninstall of the restore): bundled, three members, schema 31, one console replica. Step `0032` has not been in a cluster.
+- **Ten cluster tests have run**, the tenth on `4f153c5a` (the fixes of the ninth and a console started without its database): its findings are under *The night of November 20*. The ninth ran on `c86ed30a` (schema 37, iteration B): see *The ninth test*. The eighth ran on `c509f8ce` (schema 33): see *The eighth test*. The seventh ran on `9750780` (schema 31). It saw every record set that was kept in a ConfigMap read the same from the database, the ConfigMaps emptied and the cases' own deleted, an older console find nothing waiting, three members, and a restore to a point in time. Its one finding of weight (a restore's time given as `…Z`) is fixed in the chart and not seen in a cluster; the rest is in the table under that test. The release there is at Helm revision 3 (its history started again with the uninstall of the restore): bundled, three members, schema 31, one console replica. Step `0032` has not been in a cluster.
 - **A record set is removed from its ConfigMap once it is copied** (the owner's decision of November 19; DB-55, done). The database is then the only copy: going back to a console without it means a restore, and the cluster session must save the ConfigMaps to a file before the next upgrade. A restore in place to the newest point ran once and worked; a restore to a point in time has not run.
 - **Since November 20 one session writes the code and tests it in the cluster** (the owner lifted the rule that the cluster session changes nothing). Its work, in order: what was left of the seventh test; the conversations' keys and the hand-overs (DB-56 to DB-58, step `0033`); the Inbox row for what a person submitted (IN-11); a cluster test of those; iteration B; its cluster test; the final data model. *The night of November 20*, at the end of this page, says how far it got.
 - **Before November 20 the order was:** a seventh cluster test of what is listed under *To see in a cluster next* (steps `0030` and `0031`, the removal, the clean start's two changes); its findings; then, when the owner says, iteration B: what is kept in Secrets, on its own and with its own cluster test.
@@ -418,6 +418,8 @@ One list, kept at the owner's request, of what the decisions above leave to be c
 33. `docs/architecture.md` (ADR-162) and the Phase 13 introduction of `docs/requirements.md` still say 73 tables in eleven domains.
 34. **Running a saved command of an application writes its parameters into the audit log and the console's log** (the ninth test's F5): Watson records the command line it runs. From before Phase 13; **the owner's to decide** whether a command's parameters are masked there (X-01).
 35. From the ninth test: the page of a connection whose Secret is gone names only the token, and the CA certificate is needed too; an application never installed cannot be removed; removing a Mycroft source leaves an empty key in a Secret `<release>-knowledge`; a connection's last test is lost at a restart; the log's volume during an outage.
+36. A console started without its database starts again in place when the database answers (exec itself), in place of stopping and leaving the start to the kubelet, whose back-off grows on a pod that restarted before (the tenth test's F1); a replica started without its database stands back from the Lease while another replica has the database; the stops of several such replicas are spread over a few seconds.
+37. With the database away: a banner in the app (DB-15); AIOps › Inbox says nothing is pending where it cannot know (the tenth test's F3); the issue service's `/me` and `/settings` answer 500, not 503 (N1).
 
 **Around the database:**
 
@@ -540,16 +542,65 @@ Agreed during the data model's review on November 18, 2026. **Done: item 1, the 
 
 ## The night of November 20
 
-One session, unattended, with the owner's list of six items. This section is kept up to date as it goes: **if the work stopped, it stopped after the last line marked done here.**
+One session, unattended, with the owner's list of six items, from the early hours to midday (UTC) of November 20, 2026. **All six items are done and pushed**; the branch `phase-13-store` is at the commit that carries this section. Nothing is merged, there is no pull request, no release, and CI has not run.
 
-| Item | State |
-| --- | --- |
-| 0. What was left of the seventh test (F1's words, N2, N4, N5) | Done, `cbf5a95d`, pushed. |
-| 1. A conversation joined to its change or case by a key; the hand-overs kept | Done, `011fa4fb`, pushed: DB-56 to DB-58, step `0033`. |
-| 2. The Inbox row for what a person submitted | Done, `9275c29a`, pushed: IN-11. |
-| 3. Cluster test of 0 to 2 (the eighth) | Done on `c509f8ce`: everything held; its one finding of weight (F1, a variable change held by any newer change of its fleet) is fixed since. The table is under *The eighth test*. |
-| 4. Iteration B: what is kept in Secrets | Done: DB-59 to DB-67, steps `0034` to `0037`: the start's order, the credentials' list, the applications, the cluster connections, the signed session, the sessions, and a console that starts while the database is away (DB-67, ADR-166). |
-| 5. Cluster test of iteration B | Done on `c86ed30a` (the ninth): the move held; F1, F3 and F4 are fixed since, in commits of their own. **A tenth, short test of those fixes and of the start without the database is the last thing under way**; until its section is here, they have not been in a cluster. |
-| 6. The final data model, with a test that the page and the schema agree | Done: DB-68, `docs/data-model.md` and `TestTheDataModelIsTheSchema`. What it found in the schema and left is item 32 of *Changes put off*. The two Claude docs were not touched (item 14). |
+### What is done, with its commit
 
-**On this machine the Go suite runs in the Go image** (`golang:1.26.9`, with the host's network for the test database): on the host itself `internal/nodessh` fails, because its pairing script reloads sshd and finds the machine's real one. In the image all 55 packages pass.
+| Item | Commits | What |
+| --- | --- | --- |
+| 0. What was left of the seventh test | `cbf5a95d` | N2: the clean start's line for the cases names rows with a database, and a line counts the RCAs. F1's words: `docs/database.md`, *After a restore that failed*. N4 and N5 looked into: both from before Phase 13, written under the seventh test and put off (items 23, 24). |
+| 1. A conversation joined by a key; the hand-overs kept | `011fa4fb` | DB-56 to DB-58, step `0033`: a change keeps its row, `chats.change_id` and `chats.case_id` in place of the session's name, a message's hand-overs kept, scrubbed and bounded. |
+| 2. The Inbox row for what a person submitted | `9275c29a` | IN-11: a script's version in review, a variable change and a Watson command that takes a second person are rows of the asker's own Inbox, *Waiting for another SuperAdmin*, read-only, not counted by the bell. |
+| 3. Cluster test of 0 to 2 (the eighth) | `74e02cd8`, `2917a1e0` | On `c509f8ce`: everything held. Its F1 fixed (a variable change is held only by a newer change of the same thing); a data race in the approvals' list, which IN-11's test hit, fixed. |
+| 4. Iteration B: what is kept in Secrets | `fbb37709`, `c5315506`, `a67541fb`, `39a1871f`, `6e5de292`, `2e445c01`, `63f33865` | DB-59 to DB-67, steps `0034` to `0037`, 121 tables: the start's order; the credentials' list; the applications; the cluster connections; the signed session (ADR-165); the sessions; a console that starts while the database is away (ADR-166). The secret part of each stays in its Secret, and no Secret is deleted by the move. |
+| 5. Cluster test of iteration B (the ninth), and a tenth of what it found | `023b1a37`, `cf19ed55`, `ac3ba91e`, and the commit of this section | The ninth, on `c86ed30a`: the move held; F1 (a signed-out outage session exchanged for a seven-day one), F3 (`/metrics` and the home page waiting on a database that is away) and F4 (slow answers showing the driver's text) fixed. The tenth, on `4f153c5a`: the three fixes and the start without the database held; its F2 fixed in the commit of this section, with a Go test and not seen in a cluster. |
+| 6. The final data model | `7e06720c` | DB-68: `docs/data-model.md` is the schema at step `0037`, every table and column with its keys, and `TestTheDataModelIsTheSchema` fails when the page and the schema disagree. |
+
+### What each cluster test found
+
+- **The eighth** (`c509f8ce`; `~/phase-13-findings-8.md`): steps `0032` and `0033`, the conversations' keys on a database that held conversations, a change's row through its life, hand-overs after a restart, IN-11 in the API and in a browser, the first approvals by a second person in a cluster, the clean start's words, a restore to a time given as `…Z`: all held. One finding of weight, fixed. 0.58 USD.
+- **The ninth** (`c86ed30a`; `~/phase-13-findings-9.md`): the four record sets copied once, no Secret deleted, every secret's digest unchanged, no marker in the database or the log, everyone still signed in, a second connection reconnected, the database stopped and started, removal, backup, going back and forward: all held. Three findings around the outage, fixed; two left with a reason (F2, F5). 0 USD.
+- **The tenth** (`4f153c5a`; `~/phase-13-findings-10.md`): with the database away every scrape of `/metrics` answered in milliseconds, the home page showed its clusters, eight routes answered 503 in a millisecond with the console's sentence and nothing of the driver's; a signed-out outage session stayed out, and one accepted after its replica was deleted ended 30 minutes after its sign-in on both replicas; a console started without its database answered after 116 seconds, wrote nothing (the inventories of Secrets and ConfigMaps, versions included, differed only in the test's own object and Patroni's leader), stopped itself 6 to 8 seconds after the database was asked to start and was started again in 1 to 2 seconds, three times, with no step and no copy run again; a variable change approved after another value was set. 0 USD.
+
+| # | The tenth test found | Done, or to do |
+| --- | --- | --- |
+| F1 | The console's stop when the database answers counts as a restart for the kubelet: on a pod that had restarted before, the new container came 30 seconds after the stop as its third restart and 82 as its fifth, with nothing ready meanwhile; 1 to 2 seconds on a fresh pod. | `docs/upgrading.md` says so and that deleting the pod starts it at once. Item 36 of *Changes put off*: start the console again in place (exec itself) in place of stopping. |
+| F2 | A waiting change that takes the sensitive mark off a value was approved after the value itself was changed meanwhile: the mark and the value counted as different things. | **Fixed**: a name's value and its mark are one thing for which change holds which (`alters` in `automation/changes.go`, `TestANewerChangeOfAValueHoldsAnOlderChangeOfItsMark`). Not seen in a cluster. |
+| F3 | AIOps › Inbox says nothing is pending while the database is away; its requests are refused. | Item 37 of *Changes put off*, with the banner (DB-15). |
+| N1 | `/api/issues/v1/me` and `/settings` answer 500, not 503, with the database away: their sentence is worded apart. | Item 37. |
+| N2 | `helm upgrade --wait` does not finish while the database's pods are not ready, and puts a StatefulSet scaled down by hand back. | `docs/upgrading.md` says so. |
+| N3 | DB-67 spoke of a ConfigMap's own page; the console has none that writes one. | DB-67 reworded. |
+| — | With two replicas, one of them started without the database: a person signed in before is refused on about every second request through the Service until they sign in again; the new replica shows both clusters, since the leader's routes are forwarded to the replica that has them. With both started without it, the Service has no ready pod for about 6 seconds when the database answers. | As DB-67 has it; the first is on item 36. |
+
+Spent on the agents in the three tests: 0.58 USD of the 20 allowed.
+
+### Every decision taken for the owner
+
+They are the rows of *Decisions made for the owner to confirm* from "A kept conversation is joined to its record by a key on `chats`" to the end, with why and how to undo each. In short:
+
+1. Conversations: key columns on `chats` (`change_id`, `case_id`), not two header tables; a conversation of a change with no row is not kept; a message's hand-overs are kept bounded (16 of them, 16,000 characters).
+2. The Inbox: the own row is not counted by the bell; a variable change and a Watson command got it too; a person's own run requests and console changes stay counted; no withdraw for a version in review.
+3. A variable change is held only by a newer change of the same thing; a value and its sensitive mark are one thing.
+4. Iteration B: an application's values, parameters and commands' parameters, and a connection's whole credential, stay in their Secrets; what is not secret leaves a Secret at the start that copies it, no Secret is deleted, session Secrets are left empty; `is_kept` on `clusters` and `credentials`; a removed connection's row is kept with only its id; with connections in memory the four record sets stay in memory; a copy that fails does not stop the start; a record's two halves are written row, Secret, commit; three columns became keys and a repository keeps its row through a rename.
+5. Sign-in without the database: a signed session for all three ways of signing in, 30 minutes, not renewed, made only when the store is away; a session it is exchanged for ends when it would have; its ending is a record in the session store; a sign-out reaches other replicas within 5 seconds at the latest; whoever can read the session key's Secret can sign a session as anyone.
+6. A console starts without a database that does not answer in two minutes, on by default, with one handle that refuses, no write of a ConfigMap or a Secret as itself, cautious settings, and a stop when the database answers.
+7. While the database is away nothing waits for it: one failed probe of 2 seconds marks it away; the sentence a person sees is the console's own.
+8. The data model: Conversations as a twelfth domain in the flow tier; the mark ≈ for an id kept as plain data; the page names the last step.
+9. For the tests: two local SuperAdmin test accounts made through the chart's values (`p13-admin@test.local`, `p13-second@test.local`), since the owner's account could not be used; they are still in the release's values.
+
+The five questions that are the owner's are under *Questions for the owner from the night of November 20*.
+
+### What is not done, and why
+
+- **The two Claude docs** were not touched, as told (item 14 of *Changes put off*).
+- **`pgdata.failed` was not removed by this session** (it was not allowed to delete on the database's volume); the directory went with the data claim in the eighth test's restore. The command in `docs/database.md` has not been run in a cluster.
+- **Not seen in a cluster**: the tenth test's F2 (a Go test holds it); the browser app's banner for a database that is away, which is not built (DB-15).
+- **Left on purpose, each on *Changes put off***: N4 and N5 of the seventh test (23, 24); the backup file's values in clear (27) and a run command's parameters in the audit log (34), both from before Phase 13 and the owner's to decide; what the final data model found in the schema (32); the build before this branch's step `0034` cannot read some pages on the new schema (the ninth test's F2: only builds of this unreleased branch).
+- **Not run**: CI; the kind scripts, which have no database variant; the whole end-to-end suite of the app (five of its tests ran for IN-11).
+- **Flaky tests seen, in code this work does not touch**: `TestACapLoweredDuringARunHolds` (`internal/ai`), and once `TestTunnelForwardsConnections` (`internal/sessions`); each passed alone.
+
+### The state the release is left in
+
+Namespace `221b-github`, release `221b-github`, Helm revision 19, deployed: console image `p13-4f153c5`, database image `p13-c509f8c` (the same bytes as `p13-c0a0175`), bundled, `ha: true` with three healthy members and `db-0` the leader, schema 37 (121 tables and the database's own two), one console replica pinned to `rke2cp1`, `database.startWithoutIt` at its default, `localCluster.mode: write`, no `cases.cleanStart`, the agents' jobs off, the two test accounts in the values. No credential, repository or application; the local cluster alone. Left by the tests: two emptied rows of `clusters` (`p13-second`, `p13-must-not-be-added`), the Secret `<release>-session-key`, the emptied session Secrets and `<release>-cluster-local` with no keys, variable changes 20 to 27 as history, three `p13t8-*` scripts, a waiting change PC-16 that expires by itself.
+
+On the build machine (`rke2cp1`), outside the repository: the reports `~/phase-13-findings-8.md`, `-9.md`, `-10.md` and their logs `~/p13-8`, `~/p13-9`, `~/p13-10`; the values in `~/p13-10/values-final.yaml`; iteration B's design `~/p13-8/iterB-plan.md`; the data model's generator `~/p13-8/datamodel-gen/`. **Three files there hold every Secret of the namespace as saved before each upgrade** (`~/p13-8/before-secrets.yaml`, `~/p13-9/before-secrets.yaml`, `~/p13-10/before-secrets.yaml`, mode 600): delete them once the upgrades have been lived with. On that machine the Go suite runs in the Go image (`~/p13-8/suite.sh`): on the host itself `internal/nodessh` fails, because its pairing script reloads the machine's real sshd.
