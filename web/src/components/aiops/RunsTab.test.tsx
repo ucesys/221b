@@ -201,6 +201,19 @@ describe('AIOps › Runs', () => {
     expect(within(rows[0]!).getByTestId('run-ended').textContent).not.toBe('—')
   })
 
+  it('says an audit could not read its cluster, in red with what to do, never as nothing found (JB-23)', async () => {
+    const note = "the agents' identity (221b:agents) cannot read any namespace of prod, so nothing there was looked at: set Administration › AI › Jobs › reader role, or bind a role to 221b:agents in the cluster"
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [{ ...brief, status: 'noAccess', health: 'failed', severities: {}, findings: 0, proposals: 0, note, failedClusters: ['prod'] }], total: 1 })
+    render(<RunsTab route={route()} />)
+    const [row] = await screen.findAllByTestId('run-row')
+    const status = within(row!).getByTestId('run-status-cell')
+    expect(status.textContent).toBe('Cannot read the cluster')
+    expect(status.getAttribute('data-tone')).toBe('err')
+    expect(within(row!).getByTestId('run-health-cell').textContent).toBe('Failed')
+    expect(row!.textContent).toContain('cannot read any namespace of prod')
+    expect(row!.textContent).not.toContain('None found')
+  })
+
   it('says a note said many times once, with how many (JR-02)', async () => {
     const refuse = 'a proposed command Watson would refuse was left out: kubectl delete is refused on production'
     vi.mocked(api.fetchRun).mockResolvedValue({ ...run, note: [refuse, refuse, refuse, refuse].join('; ') })

@@ -257,16 +257,38 @@ type agentRunner struct {
 
 func (a agentRunner) Usable(agent, cluster string) string { return a.ai.Usable(agent, cluster) }
 
+// Blind says whether the reader identity can read nothing of a cluster
+// (JB-23), so an audit says so in place of finding nothing.
+func (a agentRunner) Blind(ctx context.Context, cluster string, reader jobs.Settings) (bool, error) {
+	sess, err := a.reader(reader)
+	if err != nil {
+		return false, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return a.handler.ReaderBlind(rctx, cluster, sess)
+}
+
+// reader is the session agents on their own read with; nil is the
+// console itself, with sign-in off.
+func (a agentRunner) reader(reader jobs.Settings) (*auth.Session, error) {
+	if a.auth == nil {
+		return nil, nil
+	}
+	s, on, err := a.auth.Reader(roles.ID(reader.Role()), reader.ReaderGroup)
+	if err != nil {
+		return nil, fmt.Errorf("the reader identity: %w", err)
+	}
+	if !on {
+		return nil, nil
+	}
+	return &s, nil
+}
+
 func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentResult {
-	var sess *auth.Session
-	if a.auth != nil {
-		s, on, err := a.auth.Reader(roles.ID(req.Reader.Role()), req.Reader.ReaderGroup)
-		if err != nil {
-			return jobs.AgentResult{Err: fmt.Errorf("the reader identity: %w", err)}
-		}
-		if on {
-			sess = &s
-		}
+	sess, err := a.reader(req.Reader)
+	if err != nil {
+		return jobs.AgentResult{Err: err}
 	}
 	rd, err := a.handler.ReaderFor(ctx, req.Cluster, sess)
 	if err != nil {

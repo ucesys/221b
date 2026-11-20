@@ -375,10 +375,29 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	rctx, cancel := context.WithTimeout(cctx, s.o.RunTimeout)
 	var out Outcome
 	var rerr error
-	if k.Run == nil {
+	// An audit reads only the clusters its identity can read (JB-23): the
+	// others are said, and none counts as read.
+	blind := s.blind(rctx, k, env)
+	env.Clusters = slices.DeleteFunc(env.Clusters, func(c string) bool { return slices.Contains(blind, c) })
+	switch {
+	case len(blind) > 0 && len(env.Clusters) == 0:
+		rerr = errNoAccess
+	case k.Run == nil:
 		rerr = errors.New("this kind of job has nothing to run")
-	} else {
+	default:
 		out, rerr = k.Run(rctx, env)
+	}
+	if len(blind) > 0 {
+		names := make([]string, len(blind))
+		for i, c := range blind {
+			names[i] = s.clusterName(c)
+		}
+		env.Note("the agents' identity (221b:agents) cannot read any namespace of %s, so nothing there was looked at: %s", strings.Join(names, ", "), NoAccessHint)
+		for _, c := range blind {
+			if !slices.Contains(out.Failed, c) {
+				out.Failed = append(out.Failed, c)
+			}
+		}
 	}
 	timedOut := errors.Is(rctx.Err(), context.DeadlineExceeded)
 	var byPerson *cancelled
@@ -400,6 +419,8 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	case byPerson != nil:
 		r.Status = StatusCancelled
 		notes = append(notes, "cancelled by "+byPerson.by.Label())
+	case errors.Is(rerr, errNoAccess):
+		r.Status = StatusNoAccess
 	case rerr == nil:
 		r.Status = StatusOK
 	case errors.Is(rerr, ErrBudget):
@@ -425,7 +446,7 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	// Each finding becomes a case or joins one (CF-01); the fixes the run
 	// re-checked inside its scope are verified (W-1).
 	r.Routed = Routed{}
-	if s.o.Router != nil && len(k.Checks) > 0 {
+	if s.o.Router != nil && len(k.Checks) > 0 && r.Status != StatusNoAccess {
 		res := s.o.Router.Route(sctx, RouteInput{Run: r.ID, Job: j.ID, Kind: k.ID, Label: r.Label, Clusters: r.Clusters, OK: r.Status == StatusOK, Findings: r.Findings,
 			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys})
 		r.Findings, r.Routed, r.VerifiedCases, r.NewChecks, r.NotRechecked = res.Findings, res.Routed, res.Verified, res.NewChecks, res.NotRechecked
@@ -459,6 +480,31 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	// The alert it handled is acknowledged in the job's name (CF-79).
 	s.ackAlert(sctx, j, r, ev)
 	return r, out, rerr
+}
+
+// errNoAccess is a run whose identity could read none of its clusters.
+var errNoAccess = errors.New("the agents' identity cannot read the clusters")
+
+// blind are the clusters of an audit's run that the reader identity
+// cannot read (JB-23): asked before the run, of kinds whose agent's
+// findings go into cases. A cluster the answer is unknown for is read.
+func (s *Service) blind(ctx context.Context, k Kind, env *RunEnv) []string {
+	rc, ok := s.o.Agents.(ReadChecker)
+	if !ok || k.Agent == "" || len(k.Checks) == 0 {
+		return nil
+	}
+	var out []string
+	for _, c := range env.Clusters {
+		b, err := rc.Blind(ctx, c, env.settings)
+		if err != nil {
+			s.o.Logger.Warn("whether the agents' identity can read a cluster is not known", "job", env.Job.ID, "cluster", c, "err", err)
+			continue
+		}
+		if b {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // addSpend counts a run's cost on the job's day, and notes the moment the
@@ -647,7 +693,7 @@ var idPattern = regexp.MustCompile(`^(C|KI)-[1-9][0-9]{0,8}$`)
 func (s *Service) audit(j Job, k Kind, r Run) {
 	outcome := audit.OutcomeOK
 	switch r.Status {
-	case StatusFailed, StatusInterrupted:
+	case StatusFailed, StatusInterrupted, StatusNoAccess:
 		outcome = audit.OutcomeFailed
 	case StatusBudget, StatusSkipped, StatusMissed, StatusCancelled:
 		outcome = audit.OutcomeDenied

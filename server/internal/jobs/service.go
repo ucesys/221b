@@ -70,6 +70,18 @@ type AgentRunner interface {
 	Usable(agent, cluster string) string
 }
 
+// ReadChecker is an AgentRunner that also says, before an audit reads a
+// cluster, whether the reader identity can read it at all (JB-23): blind
+// when it may list none of what an audit reads. An error is no answer,
+// and the run goes on.
+type ReadChecker interface {
+	Blind(ctx context.Context, cluster string, reader Settings) (bool, error)
+}
+
+// NoAccessHint is what a run that could not read a cluster tells the
+// person to do (JB-23).
+const NoAccessHint = "set Administration › AI › Jobs › reader role, or bind a role to 221b:agents in the cluster"
+
 // Cluster is a cluster a job may cover.
 type Cluster struct {
 	ID   string `json:"id"`

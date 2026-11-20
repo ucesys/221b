@@ -21,6 +21,7 @@ const STATUSES: [string, string][] = [
   ['missed', 'Missed'],
   ['interrupted', 'Interrupted'],
   ['cancelled', 'Cancelled'],
+  ['noAccess', 'Cannot read the cluster'],
 ]
 
 /** A run's status, as a pill: a run done takes the tone of what it found, "Done · 2 critical" (JR-01); "Done, with errors" when a cluster did not answer (W-2). */

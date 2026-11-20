@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -64,21 +66,9 @@ var ErrNoCluster = errors.New("the cluster is not connected")
 // the console itself, with sign-in off. None of the tools writes, and none
 // shows a Secret's values.
 func (s *Server) ReaderFor(ctx context.Context, cluster string, sess *auth.Session) (AgentReader, error) {
-	var cl Cluster
-	if s.opts.Clusters == nil {
-		if cluster != clusters.LocalID || s.opts.Cluster == nil {
-			return AgentReader{}, ErrNoCluster
-		}
-		cl = s.opts.Cluster
-	} else {
-		st, client, ok := s.opts.Clusters.Lookup(cluster)
-		if !ok {
-			return AgentReader{}, ErrNoCluster
-		}
-		cl, _ = client.(Cluster)
-		if st == nil || cl == nil {
-			return AgentReader{}, ErrNoCluster
-		}
+	cl, err := s.readerCluster(cluster)
+	if err != nil {
+		return AgentReader{}, err
 	}
 	var as auth.Session
 	hasSess := false
@@ -99,6 +89,74 @@ func (s *Server) ReaderFor(ctx context.Context, cluster string, sess *auth.Sessi
 		out.Platform = s.platformPrompt(req, cl, out.Name, out.Version)
 	}
 	return out, nil
+}
+
+// readerCluster is a cluster an agent on its own may read.
+func (s *Server) readerCluster(cluster string) (Cluster, error) {
+	if s.opts.Clusters == nil {
+		if cluster != clusters.LocalID || s.opts.Cluster == nil {
+			return nil, ErrNoCluster
+		}
+		return s.opts.Cluster, nil
+	}
+	st, client, ok := s.opts.Clusters.Lookup(cluster)
+	if !ok {
+		return nil, ErrNoCluster
+	}
+	cl, _ := client.(Cluster)
+	if st == nil || cl == nil {
+		return nil, ErrNoCluster
+	}
+	return cl, nil
+}
+
+// readerReads are what an audit reads in the namespaces, each listed
+// across the cluster: the reader may list one of them, and it reads
+// something. Nodes and namespaces do not count: a Viewer reader lists
+// them out of the box, and an audit of them alone finds nothing.
+var readerReads = [][2]string{{"", "pods"}, {"apps", "deployments"}, {"", "events"}}
+
+// maxReaderNamespaces bounds the namespaces asked one by one.
+const maxReaderNamespaces = 100
+
+// ReaderBlind says whether the reader identity sess can read no
+// namespace of a cluster (JB-23): it may list none of readerReads across
+// the cluster,
+// nor the pods of any of its namespaces (the first 100), as Kubernetes
+// answers SubjectAccessReviews made by the console. The console itself
+// (sign-in off, or nil) reads everything. An error is no answer.
+func (s *Server) ReaderBlind(ctx context.Context, cluster string, sess *auth.Session) (bool, error) {
+	cl, err := s.readerCluster(cluster)
+	if err != nil {
+		return false, err
+	}
+	if sess == nil {
+		return false, nil
+	}
+	p := s.toolPerson(*sess, true)
+	if p.Nobody() {
+		return false, nil
+	}
+	for _, rd := range readerReads {
+		ok, err := cl.CanI(ctx, p, "list", rd[0], rd[1], "")
+		if err != nil || ok {
+			return false, err
+		}
+	}
+	for i, o := range cl.Objects("namespaces", "") {
+		if i == maxReaderNamespaces {
+			break
+		}
+		m, ok := o.(metav1.Object)
+		if !ok {
+			continue
+		}
+		may, err := cl.CanI(ctx, p, "list", "", "pods", m.GetName())
+		if err != nil || may {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // JobsClusters are the clusters a job may cover.

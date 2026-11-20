@@ -45,7 +45,7 @@ export interface Trigger {
   key?: string
 }
 
-export type RunStatus = 'running' | 'ok' | 'failed' | 'skipped' | 'missed' | 'budget' | 'interrupted' | 'cancelled'
+export type RunStatus = 'running' | 'ok' | 'failed' | 'skipped' | 'missed' | 'budget' | 'interrupted' | 'cancelled' | 'noAccess'
 
 // --- Jobs and findings, round 2 (Phase 12, wave 5, JR-01 to JR-11) ---
 
@@ -405,6 +405,7 @@ export const STATUS: Record<RunStatus, [string, 'ok' | 'warn' | 'err' | undefine
   budget: ['Budget spent', 'warn'],
   interrupted: ['Interrupted', 'err'],
   cancelled: ['Cancelled', 'warn'],
+  noAccess: ['Cannot read the cluster', 'err'],
 }
 
 const HEALTH_TONE: Record<RunHealth, 'ok' | 'warn' | 'err'> = { critical: 'err', warning: 'warn', info: 'ok', none: 'ok', failed: 'err' }

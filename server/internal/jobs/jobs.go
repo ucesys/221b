@@ -73,6 +73,10 @@ const (
 	StatusInterrupted = "interrupted"
 	// StatusCancelled is a run a person cancelled while it ran (FX-12).
 	StatusCancelled = "cancelled"
+	// StatusNoAccess is an audit that did not run because the agents'
+	// identity can read none of the clusters it covers (JB-23): it says
+	// so, in place of a clean "nothing found".
+	StatusNoAccess = "noAccess"
 )
 
 // --- One flow for findings and cases (Phase 12, wave 6, CF-05) ---
@@ -501,7 +505,7 @@ func (r Run) Health() (string, Counts) {
 	switch r.Status {
 	case StatusRunning, StatusSkipped, StatusMissed:
 		return "", c
-	case StatusFailed, StatusInterrupted:
+	case StatusFailed, StatusInterrupted, StatusNoAccess:
 		return HealthFailed, c
 	}
 	// A run of a kind that makes no findings found nothing to weigh

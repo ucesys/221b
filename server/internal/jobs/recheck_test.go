@@ -320,3 +320,67 @@ func between(s, from, to string) string {
 	in, _, _ := strings.Cut(rest, to)
 	return in
 }
+
+// blindAgents are clusterAgents whose reader identity cannot read some
+// clusters (JB-23).
+type blindAgents struct {
+	clusterAgents
+	blind map[string]bool
+}
+
+func (a *blindAgents) Blind(_ context.Context, cluster string, _ Settings) (bool, error) {
+	return a.blind[cluster], nil
+}
+
+// JB-23: an audit whose identity cannot read a cluster says so: a
+// cluster it cannot read is not asked about, is named on the run with
+// what to do, and is out of the scope the router is given; when it can
+// read none, the run reads "noAccess", no agent is asked, and nothing is
+// routed, so no finding counts as gone.
+func TestAnAuditThatCannotReadSaysSoJB23(t *testing.T) {
+	w := setup(t)
+	w.s.RegisterBuiltins()
+	router := &recheckRouter{}
+	w.s.SetRouter(router)
+	agents := &blindAgents{clusterAgents: clusterAgents{text: map[string]string{"prod": "Read it.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```"}}, blind: map[string]bool{"local": true}}
+	w.s.SetAgents(agents)
+	on(t, w.s, KindAudit, Change{})
+	ctx := context.Background()
+	b, err := w.s.RunNow(ctx, KindAudit, Person{Email: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	if agents.task("local") != "" {
+		t.Fatal("the agent was asked about a cluster its identity cannot read")
+	}
+	in := router.last(t)
+	if in.Scope == nil || fmt.Sprint(in.Scope.Clusters) != "[prod]" {
+		t.Fatalf("the scope: %+v", in.Scope)
+	}
+	r, _ := w.s.GetRun(ctx, b.ID)
+	if r.Status != StatusOK || fmt.Sprint(r.FailedClusters) != "[local]" || !strings.Contains(r.Note, "the agents' identity (221b:agents) cannot read any namespace of local") || !strings.Contains(r.Note, NoAccessHint) {
+		t.Fatalf("the run: %s %v %q", r.Status, r.FailedClusters, r.Note)
+	}
+
+	agents.blind["prod"] = true
+	routed := len(router.in)
+	b, err = w.s.RunNow(ctx, KindAudit, Person{Email: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	r, _ = w.s.GetRun(ctx, b.ID)
+	if r.Status != StatusNoAccess || !strings.Contains(r.Note, "cannot read any namespace of local, prod-eu") || len(r.Findings) != 0 {
+		t.Fatalf("the run: %s %q", r.Status, r.Note)
+	}
+	if h, _ := r.Health(); h != HealthFailed {
+		t.Fatalf("its health: %q", h)
+	}
+	if len(router.in) != routed {
+		t.Fatal("a run that read nothing was routed")
+	}
+	if !strings.Contains(w.audit.String(), `"outcome":"failed"`) {
+		t.Fatalf("the audit: %s", w.audit.String())
+	}
+}
