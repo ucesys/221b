@@ -9,7 +9,7 @@ import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
 import { AdminRequestDetail } from './AdminRequest'
 import { DecidedVersion, linkOf, RequestActions, WaitingRunFacts } from './InboxApprovals'
-import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
+import { APPROVAL_KIND, APPROVAL_STATE, waitingForText } from './inboxRows'
 import { DraftRunCard } from './KnowledgeDraft'
 import { Tag } from './parts'
 import { PageRequestCard } from './WikiPageActions'
@@ -25,13 +25,24 @@ function Missing({ label, what, loaded, onClose, testId }: { label: string; what
   )
 }
 
+/** What a row of the person's own says in its drawer, kind by kind (IN-11): who decides it, and what they may still do where it lives. */
+const OWN_HINT: Record<ApprovalRow['kind'], (who: string) => string> = {
+  script: (who) => `You wrote or submitted this version, so you cannot approve or reject it: it waits for ${who}. Open shows it on Scripts.`,
+  change: (who) => `You asked for this change, so you cannot approve it: it waits for ${who}. Open shows it on the fleet’s Variables, where you may reject it yourself, with a reason, to take it back.`,
+  command: (who) => `You sent this command, so you cannot approve it: it waits for ${who}. Open shows its card in Watson, where you may discard it.`,
+  admin: (who) => `You asked for this: it waits for ${who}.`,
+  run: (who) => `You asked for this run: it waits for ${who}.`,
+}
+
 /**
  * An approval (CS-06): what waits, who asked and when, and who decided.
  * A console change is decided here, with what it asks for in full (AI-35):
  * for an agent's instructions, the agent, the draft, tested or not, its
  * test and its diff against the version in force. Every other kind is
  * reviewed where it lives (Review); a decided script version is read here.
- * A decision someone else made first says who and when (IB-09).
+ * A decision someone else made first says who and when (IB-09). What the
+ * person asked for and cannot decide (IN-11) says who it waits for, with
+ * Open in place of Review and nothing to decide.
  */
 export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: string; row: ApprovalRow | undefined; loaded: boolean; onClose: () => void; onDecided: () => void }) {
   const [conflict, setConflict] = useState('')
@@ -39,6 +50,8 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
   if (row.kind === 'script' && row.state !== 'pending') return <DecidedVersion row={row} onClose={onClose} />
   const link = linkOf(row)
   const state = APPROVAL_STATE[row.state]
+  // Theirs, and someone else's to decide (IN-11).
+  const waitingFor = row.state === 'pending' && row.own && row.waitingFor ? row.waitingFor : undefined
   return (
     <Drawer
       label={`Approval: ${APPROVAL_KIND[row.kind]}`}
@@ -46,8 +59,8 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       title={row.what}
       facts={
         <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <Tag tone={state.tone} testId="approval-state">
-            {state.text}
+          <Tag tone={waitingFor ? 'info' : state.tone} testId="approval-state">
+            {waitingFor ? waitingForText(waitingFor) : state.text}
           </Tag>
           {(row.mine || row.own) && <Tag tone="info">yours</Tag>}
         </span>
@@ -58,8 +71,8 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
             <RequestActions row={row} onConflict={setConflict} onDecided={onDecided} />
           ) : (
             link && (
-              <a className="rk-btn" data-on={row.state === 'pending' ? true : undefined} href={link} data-testid={`approval-${row.kind}-review`}>
-                {row.state === 'pending' ? 'Review' : 'Open'}
+              <a className="rk-btn" data-on={row.state === 'pending' && !waitingFor ? true : undefined} href={link} data-testid={`approval-${row.kind}-review`}>
+                {row.state === 'pending' && !waitingFor ? 'Review' : 'Open'}
               </a>
             )
           )}
@@ -115,9 +128,11 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
             : 'Decided.'
           : row.kind === 'run'
             ? 'A run’s own values on production are weighed as a change of the fleet’s values; these need a second admin. It is decided here: approving starts the run as whoever asked; whoever asked may only withdraw it.'
-            : row.state === 'pending'
-              ? 'Review opens it where it is read and approved. What you wrote or asked for yourself is left out where it takes a second person.'
-              : 'Decided; Open shows it where it lives.'}
+            : waitingFor
+              ? OWN_HINT[row.kind](waitingFor)
+              : row.state === 'pending'
+                ? 'Review opens it where it is read and approved. What you wrote or asked for yourself waits for someone else, and says so.'
+                : 'Decided; Open shows it where it lives.'}
       </p>
     </Drawer>
   )

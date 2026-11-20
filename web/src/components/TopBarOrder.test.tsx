@@ -5,7 +5,7 @@ import { setPref } from '../lib/prefs'
 import { parseHash } from '../lib/router'
 import type { InboxCounts } from './aiops/useInbox'
 import { inboxCounts } from './aiops/useInbox'
-import { suggestionRow, type InboxRow } from './aiops/inboxRows'
+import { approvalRow, suggestionRow, type InboxRow } from './aiops/inboxRows'
 import { bellOf, TopBar } from './TopBar'
 
 // What the Inbox has pending for the person, as each test sets it.
@@ -160,6 +160,21 @@ describe('the bell is the Inbox’s (CF-80)', () => {
     ])
     expect(c).toMatchObject({ total: 5, p0: 1, p1: 2 })
     expect(c.byKind).toMatchObject({ case: 4, proposal: 1, approval: 0 })
+  })
+
+  it('leaves out of the count what the person asked for and someone else decides (IN-11)', () => {
+    const version = { kind: 'script', state: 'pending', what: 'reserve v2', requestedBy: 'Ann', requestedAt: '2026-11-02T00:00:00Z', script: 'reserve', version: 2 } as const
+    // Their own, waiting for another SuperAdmin: listed, not counted, and the bell stays plain.
+    const own = inboxCounts([approvalRow({ ...version, own: true, waitingFor: 'another SuperAdmin' })])
+    expect(own).toMatchObject({ total: 0, p0: 0, p1: 0 })
+    expect(own.byKind.approval).toBe(0)
+    expect(bellOf(own)).toEqual({ state: 'none', text: 'Nothing waiting for you in AIOps › Inbox' })
+    // The approver's row of the same version counts, and makes the bell yellow.
+    const theirs = inboxCounts([approvalRow(version)])
+    expect(theirs.byKind.approval).toBe(1)
+    expect(bellOf(theirs)).toEqual({ state: 'waiting', text: '1 waiting for you: open AIOps › Inbox' })
+    // Beside one that does wait for them, only that one counts.
+    expect(inboxCounts([approvalRow({ ...version, own: true, waitingFor: 'another SuperAdmin' }), approvalRow({ ...version, script: 'other', what: 'other v1', version: 1 })]).total).toBe(1)
   })
 
   it('counts a suggested validation rule, which makes the bell yellow (CF-87)', () => {

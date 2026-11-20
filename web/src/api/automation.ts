@@ -546,8 +546,10 @@ export interface ApprovalRow {
   comment?: string
   /** Someone else decided what this person asked for. */
   mine?: boolean
-  /** This person asked for what waits, and may approve it themselves. */
+  /** This person asked for what waits: theirs to approve themselves, to withdraw, or only to read (waitingFor). */
   own?: boolean
+  /** On a row of the person's own that they can neither approve nor reject, who decides it: "another SuperAdmin", "a second person" (IN-11). */
+  waitingFor?: string
   /** Why a waiting change can only be rejected now. */
   overtaken?: string
   /** The run an approved run request started. */

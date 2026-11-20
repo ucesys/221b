@@ -442,6 +442,37 @@ describe('an approval in its drawer (CS-06, IB-09)', () => {
     expect((await screen.findByTestId('approval-script-review')).getAttribute('href')).toContain('scripts')
   })
 
+  it('lists what the person submitted as waiting for another SuperAdmin, with nothing to decide (IN-11)', async () => {
+    const own: automation.ApprovalRow = { kind: 'script', state: 'pending', what: 'mine v3', requestedBy: 'Ann', requestedAt: '2026-11-03T00:00:00Z', script: 'mine', version: 3, own: true, waitingFor: 'another SuperAdmin' }
+    const theirs: automation.ApprovalRow = { kind: 'script', state: 'pending', what: 'reserve v2', requestedBy: 'Cy', requestedAt: '2026-11-02T00:00:00Z', script: 'reserve', version: 2 }
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [theirs, own] })
+    page('#/aiops/inbox')
+    // Both rows are listed while they wait: the person's own says who it waits for, the other Pending.
+    const mine = (await screen.findByText('mine v3')).closest('[data-inbox-row]') as HTMLElement
+    expect(mine.getAttribute('data-inbox-row')).toBe('approval:script-mine-v3')
+    expect(within(mine).getByTestId('inbox-row-status').textContent).toBe('Waiting for another SuperAdmin')
+    expect(mine.getAttribute('aria-label')).toContain('Waiting for another SuperAdmin')
+    expect(within(document.querySelector('[data-inbox-row="approval:script-reserve-v2"]') as HTMLElement).getByTestId('inbox-row-status').textContent).toBe('Pending')
+    cleanup()
+    // Its drawer: the same one, marked, with Open in place of Review and nothing to approve or reject.
+    page('#/aiops/inbox/approval/script-mine-v3')
+    const drawer = await screen.findByTestId('approval-drawer')
+    expect(within(drawer).getByTestId('approval-state').textContent).toBe('Waiting for another SuperAdmin')
+    expect(within(drawer).getByText('yours')).toBeTruthy()
+    const open = within(drawer).getByTestId('approval-script-review')
+    expect(open.textContent).toBe('Open')
+    expect(open.getAttribute('href')).toContain('script=mine')
+    expect(open.hasAttribute('data-on')).toBe(false)
+    expect(within(drawer).queryByTestId('approval-admin-approve')).toBeNull()
+    expect(within(drawer).queryByTestId('approval-admin-reject')).toBeNull()
+    expect(drawer.textContent).toContain('You wrote or submitted this version, so you cannot approve or reject it: it waits for another SuperAdmin.')
+    cleanup()
+    // The approver's drawer of the other version still says Pending and Review.
+    page('#/aiops/inbox/approval/script-reserve-v2')
+    expect((await screen.findByTestId('approval-state')).textContent).toBe('Pending')
+    expect(screen.getByTestId('approval-script-review').textContent).toBe('Review')
+  })
+
   it('decides a console change here, after a confirmation, and reads the list again', async () => {
     vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [console1] })
     page('#/aiops/inbox/approval/9')

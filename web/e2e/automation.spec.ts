@@ -1,3 +1,4 @@
+import { E2E_ADMIN2, signInAs } from './accounts'
 import { inKind } from './cluster'
 import { expect, test } from './test'
 
@@ -514,7 +515,7 @@ test('Approvals moved to AIOps › Inbox, where the old Administration link open
   await expect(page.locator('[data-admin-page=approvals]')).toHaveCount(0)
 })
 
-test('Approvals lists what waits on top, then what was decided, each opening with who asked and who approved', async ({ page, request }) => {
+test('Approvals lists what waits on top, then what was decided, each opening with who asked and who approved; what one submitted waits for another SuperAdmin (IN-11)', async ({ page, request, browser }) => {
   const name = `e2e-appr-${Date.now()}`
   const SAME = { 'Sec-Fetch-Site': 'same-origin' }
   await page.goto('/#/scripts')
@@ -529,9 +530,35 @@ test('Approvals lists what waits on top, then what was decided, each opening wit
   await expect(page.getByRole('grid', { name: 'Inbox' })).toBeVisible()
   // Pending approvals come before decided ones (IN-03); no Kind filter (CF-38), so the approvals' rows are read.
   await expect(page.getByText('Loading the Inbox…')).toHaveCount(0)
+  // What the person asked for themselves waits too, for someone else, and says for whom (IN-11).
+  const waits = (x: string) => x === 'Pending' || x.startsWith('Waiting for ')
   const states = await page.locator('[data-inbox-row^="approval:"]').getByTestId('inbox-row-status').allTextContents()
-  const firstDecided = states.findIndex((x) => x !== 'Pending')
-  expect(firstDecided === -1 || !states.slice(firstDecided).includes('Pending')).toBe(true)
+  const firstDecided = states.findIndex((x) => !waits(x))
+  expect(firstDecided === -1 || !states.slice(firstDecided).some(waits)).toBe(true)
+  // The version just submitted is a row of whoever submitted it, marked
+  // as waiting for another SuperAdmin, with nothing to decide (IN-11).
+  const own = page.locator(`[data-inbox-row="approval:script-${name}-v1"]`)
+  await expect(own.getByTestId('inbox-row-status')).toHaveText('Waiting for another SuperAdmin')
+  await own.locator('[role=rowheader]').click()
+  const ownDrawer = page.getByTestId('approval-drawer')
+  await expect(ownDrawer.getByTestId('approval-state')).toHaveText('Waiting for another SuperAdmin')
+  await expect(ownDrawer).toContainText('you cannot approve or reject it')
+  await expect(ownDrawer.getByTestId('approval-script-review')).toHaveText('Open')
+  await expect(ownDrawer.getByRole('button', { name: /Approve|Reject|Withdraw/ })).toHaveCount(0)
+  await page.goto('/#/aiops/inbox?show=all')
+  await expect(ownDrawer).toHaveCount(0)
+  // The second SuperAdmin has the same version to decide: Pending, with Review.
+  if (!inKind) {
+    const second = await signInAs(browser, E2E_ADMIN2)
+    try {
+      await second.goto(`/#/aiops/inbox/approval/script-${name}-v1`)
+      await expect(second.locator(`[data-inbox-row="approval:script-${name}-v1"]`).getByTestId('inbox-row-status')).toHaveText('Pending')
+      await expect(second.getByTestId('approval-drawer').getByTestId('approval-state')).toHaveText('Pending')
+      await expect(second.getByTestId('approval-drawer').getByTestId('approval-script-review')).toHaveText('Review')
+    } finally {
+      await second.context().close()
+    }
+  }
   // A row opens with who asked; one waiting is reviewed where it lives.
   const at = new Date().toISOString()
   await page.route('**/api/v1/admin/approvals', (route) => route.fulfill({ json: { items: [{ kind: 'script', state: 'pending', what: `${name} v1`, requestedBy: 'Bea', requestedAt: at, script: name, version: 1 }] } }))
