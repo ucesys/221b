@@ -45,9 +45,9 @@ type Instance struct {
 	// startErr is why the connection could not even be prepared (a
 	// kubeconfig that cannot be read); then Cluster and Store are nil.
 	startErr string
-	// lastTest is the latest test's result, kept for the cluster page.
-	lastTest   *TestResult
-	lastTested time.Time
+	// tested is the latest test, for the cluster page: run here, or read
+	// with the connection from a store that keeps it (TestKeeper).
+	tested *LastTest
 	// conn fingerprints what the instance connects with, so a sync
 	// restarts it only when that changed.
 	conn string
@@ -150,13 +150,14 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	// one when the store answers.
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
+		spec.Tested = saved.Tested
 	} else if !errors.Is(err, ErrNotFound) {
 		m.log.Warn("the local connection's saved name could not be read; using the installation's", "err", err)
 	}
 	if spec.Added.IsZero() {
 		spec.Added = m.opts.Now().UTC()
 	}
-	inst := &Instance{Spec: spec, Cluster: cluster, Store: store}
+	inst := &Instance{Spec: spec, Cluster: cluster, Store: store, tested: spec.Tested}
 	m.mu.Lock()
 	// The local cluster's watches and pollers follow the role too; ctx
 	// bounds them, as it does the server.
@@ -270,6 +271,9 @@ func (m *Manager) Sync(ctx context.Context) error {
 		default:
 			m.mu.Lock()
 			inst.Spec = spec
+			if spec.Tested != nil {
+				inst.tested = spec.Tested
+			}
 			m.mu.Unlock()
 		}
 	}
@@ -341,6 +345,9 @@ func (m *Manager) applyLocal(saved Spec) {
 	spec := inst.Spec
 	spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 	inst.Spec = spec
+	if saved.Tested != nil {
+		inst.tested = saved.Tested
+	}
 }
 
 // Run syncs with the saved connections every interval until ctx is done.
@@ -391,7 +398,7 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 	if old := m.instances[spec.ID]; old != nil && old.cancel != nil {
 		old.cancel()
 	}
-	inst := &Instance{Spec: spec, conn: connKey(spec, cred)}
+	inst := &Instance{Spec: spec, conn: connKey(spec, cred), tested: spec.Tested}
 	if cred.HasPlaceholder() {
 		inst.startErr = "Its credential is not in the backup it was restored from: edit the connection and paste it again."
 		m.instances[spec.ID] = inst
@@ -475,9 +482,12 @@ type Summary struct {
 	// has (P3-07).
 	Expiring bool `json:"expiring,omitempty"`
 	Expired  bool `json:"expired,omitempty"`
-	// LastTest is the latest connection test, when one ran.
-	LastTest   *TestResult `json:"lastTest,omitempty"`
-	LastTested *time.Time  `json:"lastTested,omitempty"`
+	// LastTest is the latest connection test, when one ran, LastTested
+	// when, and LastTestedBy who ran it. Kept with the connection, so a
+	// restart does not lose it (DB-64).
+	LastTest     *TestResult `json:"lastTest,omitempty"`
+	LastTested   *time.Time  `json:"lastTested,omitempty"`
+	LastTestedBy string      `json:"lastTestedBy,omitempty"`
 }
 
 func (m *Manager) summarize(inst *Instance) Summary {
@@ -499,10 +509,9 @@ func (m *Manager) summarize(inst *Instance) Summary {
 		}
 		s.Nodes, s.Pods, _, _ = inst.Cluster.Counts()
 	}
-	if inst.lastTest != nil {
-		s.LastTest = inst.lastTest
-		t := inst.lastTested
-		s.LastTested = &t
+	if t := inst.tested; t != nil {
+		r, at := t.Result, t.At
+		s.LastTest, s.LastTested, s.LastTestedBy = &r, &at, t.By
 	}
 	return s
 }
@@ -765,6 +774,9 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	if err != nil {
 		return Summary{}, err
 	}
+	// The kept test stays the connection's through an edit, as the store
+	// keeps it.
+	spec.Tested = orig.Tested
 	if spec.Local {
 		if err := m.store.Save(ctx, spec, nil); err != nil {
 			return Summary{}, err
@@ -866,8 +878,11 @@ func (m *Manager) TestDraft(ctx context.Context, id string, d Draft) (TestResult
 	return Test(ctx, spec, *cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now}), nil
 }
 
-// TestSaved tests a saved connection and keeps the result for its page.
-func (m *Manager) TestSaved(ctx context.Context, id string) (TestResult, error) {
+// TestSaved tests a saved connection and keeps the result for its page,
+// with when it ran and who ran it (by): in the store, when it keeps tests,
+// so a restart does not lose it and every replica shows it (DB-64). A
+// store that cannot keep it leaves it here alone, and says so in the log.
+func (m *Manager) TestSaved(ctx context.Context, id, by string) (TestResult, error) {
 	spec, cred, err := m.getSpec(ctx, id)
 	if err != nil {
 		return TestResult{}, err
@@ -881,9 +896,15 @@ func (m *Manager) TestSaved(ctx context.Context, id string) (TestResult, error) 
 	} else {
 		r = Test(ctx, spec, cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now})
 	}
+	kept := &LastTest{Result: r, At: m.opts.Now().UTC(), By: by}
+	if k, ok := m.store.(TestKeeper); ok {
+		if err := k.SaveTest(ctx, id, *kept); err != nil && !errors.Is(err, ErrNotFound) {
+			m.log.Warn("the connection's test could not be kept; it is shown by this replica until it restarts", "cluster", id, "err", err)
+		}
+	}
 	m.mu.Lock()
 	if inst := m.instances[id]; inst != nil {
-		inst.lastTest, inst.lastTested = &r, m.opts.Now().UTC()
+		inst.tested = kept
 	}
 	m.mu.Unlock()
 	return r, nil

@@ -75,6 +75,19 @@ type Spec struct {
 	Cred    CredInfo  `json:"cred"`
 	Added   time.Time `json:"added"`
 	Updated time.Time `json:"updated"`
+	// Tested is the connection's last test, as a store that keeps it
+	// reads it (TestKeeper); a save never writes it. Never in the
+	// connection's JSON: the summary carries it (Summary.LastTest).
+	Tested *LastTest `json:"-"`
+}
+
+// LastTest is a connection's last test as it is kept with the
+// connection (DB-64): the result as the page shows it, when it ran and
+// who ran it.
+type LastTest struct {
+	Result TestResult
+	At     time.Time
+	By     string
 }
 
 // CredInfo is what a saved credential says about itself (X-04: the

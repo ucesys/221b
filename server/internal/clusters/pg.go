@@ -174,8 +174,110 @@ var emptySQL = func() string {
 			sets = append(sets, c+" = ''")
 		}
 	}
-	return "UPDATE clusters SET " + strings.Join(sets, ", ") + ", is_kept = false, version = version + 1 WHERE cluster_id = $1 AND is_kept"
+	return "UPDATE clusters SET " + strings.Join(sets, ", ") + ", " + noTestSQL + ", is_kept = false, version = version + 1 WHERE cluster_id = $1 AND is_kept"
 }()
+
+// The last test (step 0041): columns of the connection's row beside its
+// spec, written only by SaveTest, and its steps in cluster_test_steps.
+
+// testRow is the last test's columns of a row of clusters.
+type testRow struct {
+	At          *time.Time `col:"tested_at"`
+	By          string     `col:"tested_by"`
+	Tone        string     `col:"test_tone"`
+	Summary     string     `col:"test_summary"`
+	Error       string     `col:"test_error"`
+	Version     string     `col:"test_version"`
+	Nodes       int        `col:"test_nodes"`
+	NodesMore   bool       `col:"is_test_nodes_more"`
+	Who         string     `col:"test_who"`
+	Impersonate bool       `col:"is_test_impersonate"`
+}
+
+// noTestSQL empties the last test's columns, with a removal.
+const noTestSQL = "tested_at = NULL, tested_by = '', test_tone = '', test_summary = '', test_error = '', test_version = '', test_nodes = 0, is_test_nodes_more = false, test_who = '', is_test_impersonate = false"
+
+// saveTestSQL writes the last test's columns of a kept row and counts the
+// write, so the other replicas read it.
+var saveTestSQL = func() string {
+	cols := db.Columns(&testRow{})
+	sets := make([]string, len(cols))
+	for i, c := range cols {
+		sets[i] = c + " = $" + strconv.Itoa(i+2)
+	}
+	return "UPDATE clusters SET " + strings.Join(sets, ", ") + ", version = version + 1 WHERE cluster_id = $1 AND is_kept"
+}()
+
+// SaveTest keeps a connection's last test (DB-64): its row's columns and
+// its steps, in one transaction, and tells the other replicas. It never
+// touches the spec, and ErrNotFound is a connection with no kept row.
+func (s *PGStore) SaveTest(ctx context.Context, id string, t LastTest) error {
+	r := t.Result
+	row := testRow{At: nullable(t.At), By: t.By, Tone: r.Tone, Summary: r.Summary, Error: r.Error, Version: r.Version, Nodes: r.Nodes, NodesMore: r.NodesMore, Who: r.Who, Impersonate: r.Impersonate}
+	found := false
+	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, saveTestSQL, append([]any{id}, db.Fields(&row)...)...)
+		if err != nil {
+			return err
+		}
+		if found = tag.RowsAffected() > 0; !found {
+			return nil
+		}
+		b := &pgx.Batch{}
+		b.Queue("DELETE FROM cluster_test_steps WHERE cluster_id = $1", id)
+		for i, st := range r.Steps {
+			b.Queue("INSERT INTO cluster_test_steps (cluster_id, position, step_key, tone, text) VALUES ($1, $2, $3, $4, $5)", id, i, st.Key, st.Tone, st.Text)
+		}
+		if err := tx.SendBatch(ctx, b).Close(); err != nil {
+			return err
+		}
+		return s.db.Notify(ctx, tx, Topic)
+	})
+	if err != nil {
+		return fmt.Errorf("keeping the test of the connection %s: %w", id, err)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// readTests puts each connection's last test into its spec.
+func readTests(ctx context.Context, q db.Querier, specs []Spec) error {
+	if len(specs) == 0 {
+		return nil
+	}
+	ids := make([]string, len(specs))
+	at := map[string]int{}
+	for i, spec := range specs {
+		ids[i], at[spec.ID] = spec.ID, i
+	}
+	var id string
+	var row testRow
+	rows, err := q.Query(ctx, "SELECT cluster_id, "+strings.Join(db.Columns(&row), ", ")+" FROM clusters WHERE cluster_id = ANY($1) AND tested_at IS NOT NULL", ids)
+	if err != nil {
+		return err
+	}
+	if _, err := pgx.ForEachRow(rows, append([]any{&id}, db.Fields(&row)...), func() error {
+		specs[at[id]].Tested = &LastTest{At: utc(row.At), By: row.By, Result: TestResult{Steps: []Step{}, Tone: row.Tone, Summary: row.Summary, Error: row.Error, Version: row.Version,
+			Nodes: row.Nodes, NodesMore: row.NodesMore, Who: row.Who, Impersonate: row.Impersonate}}
+		return nil
+	}); err != nil {
+		return err
+	}
+	var st Step
+	rows, err = q.Query(ctx, "SELECT cluster_id, step_key, tone, text FROM cluster_test_steps WHERE cluster_id = ANY($1) ORDER BY cluster_id, position", ids)
+	if err != nil {
+		return err
+	}
+	_, err = pgx.ForEachRow(rows, []any{&id, &st.Key, &st.Tone, &st.Text}, func() error {
+		if t := specs[at[id]].Tested; t != nil {
+			t.Result.Steps = append(t.Result.Steps, st)
+		}
+		return nil
+	})
+	return err
+}
 
 // write puts a connection's row in, kept.
 func write(ctx context.Context, q db.Querier, spec Spec) error {
@@ -207,8 +309,10 @@ func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Spec,
 func (s *PGStore) List(ctx context.Context) ([]Spec, error) {
 	var specs []Spec
 	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
-		specs, _, err = read(ctx, q, "")
-		return err
+		if specs, _, err = read(ctx, q, ""); err != nil {
+			return err
+		}
+		return readTests(ctx, q, specs)
 	}); err != nil {
 		return nil, fmt.Errorf("reading the connections: %w", err)
 	}
@@ -224,8 +328,10 @@ func (s *PGStore) List(ctx context.Context) ([]Spec, error) {
 func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) {
 	var specs []Spec
 	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
-		specs, _, err = read(ctx, q, "AND cluster_id = $1", id)
-		return err
+		if specs, _, err = read(ctx, q, "AND cluster_id = $1", id); err != nil {
+			return err
+		}
+		return readTests(ctx, q, specs)
 	}); err != nil {
 		return Spec{}, Credential{}, fmt.Errorf("reading the connection %s: %w", id, err)
 	}
@@ -289,6 +395,9 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 			// Not a connection: a Secret of that name is not this store's
 			// to delete.
 			return nil
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM cluster_test_steps WHERE cluster_id = $1", id); err != nil {
+			return err
 		}
 		if err := s.db.Notify(ctx, tx, Topic); err != nil {
 			return err

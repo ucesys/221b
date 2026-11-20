@@ -132,7 +132,7 @@ type Clusters interface {
 	Update(ctx context.Context, id string, d clusters.Draft) (clusters.Summary, error)
 	Remove(ctx context.Context, id string) error
 	TestDraft(ctx context.Context, id string, d clusters.Draft) (clusters.TestResult, error)
-	TestSaved(ctx context.Context, id string) (clusters.TestResult, error)
+	TestSaved(ctx context.Context, id, by string) (clusters.TestResult, error)
 	// Sealed and Restore are the backup's: a credential with each secret
 	// sealed for a backup (ADR-137), and a connection brought back with
 	// one, opened or a placeholder.

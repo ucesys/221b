@@ -395,7 +395,7 @@ func testManagerAddsUpdatesAndRemoves(t *testing.T, store clusters.Store) {
 	if err != nil || r.Tone != "warn" || r.Nodes != 3 {
 		t.Fatalf("test draft: %v %+v", err, r)
 	}
-	r, err = m.TestSaved(ctx, "analytics-dev")
+	r, err = m.TestSaved(ctx, "analytics-dev", "ann")
 	if err != nil || r.Nodes != 3 {
 		t.Fatalf("test saved: %v %+v", err, r)
 	}

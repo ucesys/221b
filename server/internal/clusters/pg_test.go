@@ -1237,7 +1237,7 @@ func TestNoCredentialIsEverInTheDatabaseOrTheLog(t *testing.T) {
 	_, err = a.Update(ctx, file.ID, clusters.Draft{Spec: clusters.Spec{Name: "from-a-file-renamed", Env: "staging", Server: srv.URL, CA: "system", Auth: "kubeconfig", Mode: "read"}})
 	must(t, err)
 	for _, id := range []string{added.ID, file.ID, "before-token", "before-cert"} {
-		if _, err := a.TestSaved(ctx, id); err != nil {
+		if _, err := a.TestSaved(ctx, id, "ann"); err != nil {
 			t.Fatalf("testing %s: %v", id, err)
 		}
 	}
@@ -1304,5 +1304,77 @@ func TestNoCredentialIsEverInTheDatabaseOrTheLog(t *testing.T) {
 	}
 	if inSecrets < 6*len(methods) {
 		t.Errorf("only %d values in the Secrets hold the marker", inSecrets)
+	}
+}
+
+// A connection's last test is kept with the connection (DB-64): a manager
+// started again over the same store shows it, every step, when it ran and
+// who ran it; another replica shows it once it syncs; an edit keeps it; a
+// removal takes it away, and a connection made again under the id was
+// never tested. Over memory and the database (the Secrets alone are only
+// the copy's source, and keep no test).
+func TestALastTestIsKeptOverARestart(t *testing.T) {
+	t.Run("memory", func(t *testing.T) { testALastTestIsKept(t, clusters.NewMemoryStore()) })
+	t.Run("database", func(t *testing.T) {
+		s, _, _ := clusterstest.PG(t, nil)
+		testALastTestIsKept(t, s)
+	})
+}
+
+func testALastTestIsKept(t *testing.T, store clusters.Store) {
+	_, srv := simServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true, Now: func() time.Time { return at }}
+	a := clusters.New(store, opts)
+	must(t, a.Start(ctx))
+	b := clusters.New(store, opts)
+	must(t, b.Start(ctx))
+	sa := token(map[string]any{"sub": "system:serviceaccount:kube-system:cluster-console", "exp": time.Now().Add(24 * time.Hour).Unix()})
+	draft := clusters.Draft{Spec: clusters.Spec{Name: "tested", Env: "staging", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}, Credential: clusters.Credential{Token: sa}}
+	_, err := a.Add(ctx, draft)
+	must(t, err)
+	must(t, b.Sync(ctx))
+	if s, _ := b.Summary("tested"); s.LastTest != nil || s.LastTested != nil {
+		t.Fatalf("a connection never tested has a test: %+v", s.LastTest)
+	}
+	r, err := a.TestSaved(ctx, "tested", "ann@example.com")
+	must(t, err)
+	if len(r.Steps) == 0 || r.Nodes != 3 {
+		t.Fatalf("the test: %+v", r)
+	}
+	kept := func(m *clusters.Manager, what string) {
+		t.Helper()
+		s, ok := m.Summary("tested")
+		if !ok || s.LastTest == nil || s.LastTested == nil || !s.LastTested.Equal(at) || s.LastTestedBy != "ann@example.com" || asJSON(*s.LastTest) != asJSON(r) {
+			t.Fatalf("%s: the test is not as it ran: %+v at %v by %q, want %+v", what, s.LastTest, s.LastTested, s.LastTestedBy, r)
+		}
+	}
+	kept(a, "the replica that ran it")
+	must(t, b.Sync(ctx))
+	kept(b, "another replica")
+	// Started again over the same store.
+	c := clusters.New(store, opts)
+	must(t, c.Start(ctx))
+	kept(c, "after a restart")
+	// An edit of the name keeps it, and so does one that restarts the
+	// connection.
+	_, err = c.Update(ctx, "tested", clusters.Draft{Spec: clusters.Spec{Name: "tested-renamed", Env: "staging", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}})
+	must(t, err)
+	kept(c, "after a rename")
+	_, err = c.Update(ctx, "tested", clusters.Draft{Spec: clusters.Spec{Name: "tested-renamed", Env: "staging", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}, Credential: clusters.Credential{Token: sa}})
+	must(t, err)
+	kept(c, "after a new credential")
+	d := clusters.New(store, opts)
+	must(t, d.Start(ctx))
+	kept(d, "after an edit and a restart")
+	// Removed and made again: no test.
+	must(t, d.Remove(ctx, "tested"))
+	_, err = d.Add(ctx, draft)
+	must(t, err)
+	e := clusters.New(store, opts)
+	must(t, e.Start(ctx))
+	if s, _ := e.Summary("tested"); s.LastTest != nil || s.LastTested != nil || s.LastTestedBy != "" {
+		t.Errorf("a connection made again has the removed one's test: %+v", s)
 	}
 }

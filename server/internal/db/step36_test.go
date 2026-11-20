@@ -58,7 +58,9 @@ func TestStep0036KeepsTheClustersWithOnlyAnID(t *testing.T) {
 	}
 	found.Close()
 	for _, want := range []string{"cluster_id", "name", "environment", "description", "server_url", "ca_mode", "ca_info", "auth_method", "mode", "is_local", "is_kept",
-		"cred_who", "cred_context", "cred_cluster", "cred_issuer", "cred_client_id", "cred_expires_at", "cred_set_at", "created_at", "updated_at", "version"} {
+		"cred_who", "cred_context", "cred_cluster", "cred_issuer", "cred_client_id", "cred_expires_at", "cred_set_at", "created_at", "updated_at", "version",
+		// The last test, kept with the connection since step 0041.
+		"tested_at", "tested_by", "test_tone", "test_summary", "test_error", "test_version", "test_nodes", "is_test_nodes_more", "test_who", "is_test_impersonate"} {
 		if !columns[want] {
 			t.Errorf("clusters has no column %s", want)
 		}

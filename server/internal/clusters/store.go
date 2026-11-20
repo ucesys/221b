@@ -44,19 +44,31 @@ type Store interface {
 	Kind() string
 }
 
+// TestKeeper is a store that keeps each connection's last test, so that a
+// restart does not lose it (DB-64); its List and Get give it as
+// Spec.Tested. A test is no save of the connection: it never changes the
+// spec, but it changes the revision, so the other replicas show it too.
+type TestKeeper interface {
+	// SaveTest keeps t as the connection's last test; ErrNotFound for a
+	// connection the store does not keep (the local cluster before its
+	// name was ever saved).
+	SaveTest(ctx context.Context, id string, t LastTest) error
+}
+
 // MemoryStore keeps connections until the server restarts: for running
 // outside a cluster and for tests.
 type MemoryStore struct {
 	mu    sync.Mutex
 	specs map[string]Spec
 	creds map[string]Credential
+	tests map[string]LastTest
 	revs  map[string]int
 	saves int
 }
 
 // NewMemoryStore makes an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}, revs: map[string]int{}}
+	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}, tests: map[string]LastTest{}, revs: map[string]int{}}
 }
 
 func (m *MemoryStore) Revisions(context.Context) (map[string]string, error) {
@@ -75,8 +87,8 @@ func (m *MemoryStore) List(context.Context) ([]Spec, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Spec, 0, len(m.specs))
-	for _, s := range m.specs {
-		out = append(out, s)
+	for id, s := range m.specs {
+		out = append(out, m.withTest(id, s))
 	}
 	sortSpecs(out)
 	return out, nil
@@ -89,12 +101,37 @@ func (m *MemoryStore) Get(_ context.Context, id string) (Spec, Credential, error
 	if !ok {
 		return Spec{}, Credential{}, ErrNotFound
 	}
-	return s, m.creds[id], nil
+	return m.withTest(id, s), m.creds[id], nil
+}
+
+// withTest is a spec with its kept test, under the lock.
+func (m *MemoryStore) withTest(id string, s Spec) Spec {
+	s.Tested = nil
+	if t, ok := m.tests[id]; ok {
+		s.Tested = &t
+	}
+	return s
+}
+
+// SaveTest keeps a connection's last test, and changes its revision.
+func (m *MemoryStore) SaveTest(_ context.Context, id string, t LastTest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.specs[id]; !ok {
+		return ErrNotFound
+	}
+	t.Result.Steps = append([]Step(nil), t.Result.Steps...)
+	m.tests[id] = t
+	m.saves++
+	m.revs[id] = m.saves
+	return nil
 }
 
 func (m *MemoryStore) Save(_ context.Context, s Spec, c *Credential) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// A save never writes the test (TestKeeper).
+	s.Tested = nil
 	m.specs[s.ID] = s
 	if c != nil {
 		m.creds[s.ID] = *c
@@ -112,6 +149,7 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	}
 	delete(m.specs, id)
 	delete(m.creds, id)
+	delete(m.tests, id)
 	delete(m.revs, id)
 	return nil
 }

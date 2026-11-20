@@ -221,7 +221,7 @@ func (s *Server) testCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("cluster")
-	res, err := s.opts.Clusters.TestSaved(r.Context(), id)
+	res, err := s.opts.Clusters.TestSaved(r.Context(), id, repoBy(r))
 	if err != nil {
 		clusterError(w, err)
 		return
