@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -179,6 +180,30 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
 	if got, _, _ := again.LoadKey(ctx, "setup.json"); !strings.Contains(string(got), "sso") {
 		t.Fatalf("a second start reads %s", got)
+	}
+}
+
+// The database is opened before anything that keeps records is made
+// (DB-59): the sign-in's stores, the local cluster, the election, the
+// connections, the settings and the credentials are wired after it, so
+// each can be given the database.
+func TestTheDatabaseIsOpenedBeforeTheStoresAreMade(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(string(src), "\nfunc run(")
+	if !ok {
+		t.Fatal("main.go has no run")
+	}
+	opened := strings.Index(body, "w.wireDatabase(ctx)")
+	if opened < 0 {
+		t.Fatal("run does not open the database")
+	}
+	for _, later := range []string{"w.wireAuth()", "w.wireLocalCluster()", "w.startAuth(ctx)", "w.wireLeader(ctx)", "w.wireClusters(ctx)", "w.wireSettings(ctx)", "w.wireCredentials(", "w.manager.Start(ctx)"} {
+		if i := strings.Index(body, later); i < 0 || i < opened {
+			t.Errorf("%s is not after the database is opened (at %d, the database at %d)", later, i, opened)
+		}
 	}
 }
 

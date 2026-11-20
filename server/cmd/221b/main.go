@@ -203,27 +203,32 @@ func run(args []string) error {
 	if w.restCfg, w.mode, err = kube.RestConfig(kube.ConnectOptions{Kubeconfig: cfg.Kubeconfig, Context: cfg.Context, APIServer: cfg.APIServer}); err != nil {
 		return err
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	// The database is opened before anything that keeps records is made
+	// (DB-59), so each store made below can be given it: the sign-in's, the
+	// connections', the applications', the credentials'. It uses nothing
+	// but the configuration and the log, and nothing listens until it and
+	// the rest are done, so the start's order is all that changes.
+	if err := w.wireDatabase(ctx); err != nil {
+		return err
+	}
+	if w.database != nil {
+		defer w.database.Close()
+	}
 	if err := w.wireAuth(); err != nil {
 		return err
 	}
 	if err := w.wireLocalCluster(); err != nil {
 		return err
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	w.startAuth(ctx)
 	if err := w.wireLeader(ctx); err != nil {
 		return err
 	}
 	if err := w.wireClusters(ctx); err != nil {
 		return err
-	}
-	if err := w.wireDatabase(ctx); err != nil {
-		return err
-	}
-	if w.database != nil {
-		defer w.database.Close()
 	}
 	if err := w.wireSettings(ctx); err != nil {
 		return err
