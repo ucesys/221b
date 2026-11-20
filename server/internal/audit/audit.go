@@ -28,7 +28,10 @@ const (
 	// away, kept in its cookie, exchanged for a stored one once the store
 	// is back (DB-65). The record names the person, never the cookie.
 	ActionSessionExchange = "session.exchange"
-	ActionSettings        = "settings.update"
+	// ActionSessionsEnded is every stored session ended at a start, after a
+	// rollback to a console without the database (DB-66).
+	ActionSessionsEnded = "session.end-all"
+	ActionSettings      = "settings.update"
 	// ActionSettingsUI is a SuperAdmin's change of the console-wide page
 	// settings: Show costs (Phase 12, wave 6c, CF-40).
 	ActionSettingsUI    = "settings.ui"

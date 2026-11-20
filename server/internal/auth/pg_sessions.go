@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -509,6 +510,113 @@ func SessionsToEmpty(ctx context.Context, d *db.DB, recs map[string][]byte, idle
 		if rows[key] || !live || !row.Created.After(copiedAt) {
 			out = append(out, key)
 		}
+	}
+	return out, nil
+}
+
+// --- After a rollback (DB-66; the owner, November 20, 2026, answer 2) ---
+
+// RollbackGrace is how long after the sessions' copy a session a console
+// from before the move started is taken for one of the rolling upgrade
+// itself (a replica of the release before, still serving while the new
+// ones start), and not for the sign of a rollback.
+const RollbackGrace = 10 * time.Minute
+
+// rollbackPrefix names, in imports, each ending of the stored sessions
+// after a rollback: the prefix and the time the newest sign was started,
+// so the same sign is acted on once.
+const rollbackPrefix = "auth/sessions-ended-after-rollback/"
+
+// AfterRollback is what EndAfterRollback found and did.
+type AfterRollback struct {
+	// Signs is how many sessions a console without the database started
+	// after the copy (and its grace), in the Secrets now.
+	Signs int
+	// Ended is how many stored sessions were ended; Done says they were
+	// ended now, and not before for the same signs.
+	Ended int
+	Done  bool
+}
+
+// EndAfterRollback ends every session the table keeps when the session
+// Secrets show that a console without the database ran since the copy
+// was recorded: a Secret holding a session it started more than
+// RollbackGrace after the copy, whether or not that session has expired.
+// The rows from before the rollback would otherwise be sessions again,
+// though a sign-out or a password reset made on the rolled-back console
+// did not reach them. Ending is deleting the rows, in one transaction
+// with a notice to every replica; the rows that say a signed session was
+// ended (DB-65) stay, so it stays ended. It is done once for a given
+// newest sign, recorded in imports under rollbackPrefix and the sign's
+// time; a later rollback, with a newer sign, ends them again. It reads
+// the Secrets' records by key, as SessionsToEmpty does, and must be given
+// them before they are emptied. An error ends nothing.
+func EndAfterRollback(ctx context.Context, d *db.DB, recs map[string][]byte) (AfterRollback, error) {
+	var out AfterRollback
+	var copiedAt time.Time
+	if err := d.Do(ctx, func(q db.Querier) error {
+		return q.QueryRow(ctx, "SELECT imported_at FROM imports WHERE import_id = $1", SessionsImportID).Scan(&copiedAt)
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return out, errors.New("the sessions' copy is not recorded")
+		}
+		return out, fmt.Errorf("reading when the sessions were copied: %w", err)
+	}
+	var newest time.Time
+	for key, b := range recs {
+		row, err := rowOfRecord(key, b)
+		if err != nil {
+			continue
+		}
+		if row.Created.After(copiedAt.Add(RollbackGrace)) {
+			out.Signs++
+			if row.Created.After(newest) {
+				newest = row.Created
+			}
+		}
+	}
+	if out.Signs == 0 {
+		return out, nil
+	}
+	id := rollbackPrefix + newest.UTC().Format(time.RFC3339Nano)
+	err := d.Tx(ctx, func(tx pgx.Tx) error {
+		out.Ended, out.Done = 0, false
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", rollbackPrefix); err != nil {
+			return err
+		}
+		// Done for this sign, or a newer one, before.
+		rows, err := tx.Query(ctx, "SELECT import_id FROM imports WHERE starts_with(import_id, $1)", rollbackPrefix)
+		if err != nil {
+			return err
+		}
+		var done string
+		before := false
+		if _, err := pgx.ForEachRow(rows, []any{&done}, func() error {
+			if t, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(done, rollbackPrefix)); err == nil && !t.Before(newest.UTC()) {
+				before = true
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if before {
+			return nil
+		}
+		tag, err := tx.Exec(ctx, "DELETE FROM auth_sessions WHERE method <> $1", endedMethod)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO imports (import_id, source, record_count) VALUES ($1, $2, $3)", id, "secret", tag.RowsAffected()); err != nil {
+			return err
+		}
+		if err := d.Notify(ctx, tx, sessionsTopic); err != nil {
+			return err
+		}
+		out.Ended, out.Done = int(tag.RowsAffected()), true
+		return nil
+	})
+	if err != nil {
+		return AfterRollback{Signs: out.Signs}, fmt.Errorf("ending the sessions from before a rollback: %w", err)
 	}
 	return out, nil
 }

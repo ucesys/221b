@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/access"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/ldap"
@@ -240,6 +241,15 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 		if err != nil {
 			return 0, err
 		}
+		// First, before anything is emptied: a console without the
+		// database ran since the copy (a rollback, and now the roll
+		// forward) when a Secret holds a session it started; the sessions
+		// from before the rollback are then ended (answer 2 of the owner,
+		// November 20, 2026). An error empties nothing, so the sign is
+		// there at the next try.
+		if err := w.endAfterRollback(ctx, recs); err != nil {
+			return 0, err
+		}
 		keys, err := auth.SessionsToEmpty(ctx, w.database, recs, idle, time.Now())
 		if err != nil {
 			return 0, err
@@ -299,6 +309,25 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 	}
 	w.inDatabase = append(w.inDatabase, "identity")
 	return auth.NewPGSessions(w.database, nil)
+}
+
+// endAfterRollback ends every stored session when the session Secrets
+// show that a console without the database ran since the copy
+// (auth.EndAfterRollback), says so in one line of the log and one audit
+// event, and does nothing more for the same sign at a later start.
+func (w *wiring) endAfterRollback(ctx context.Context, recs map[string][]byte) error {
+	after, err := auth.EndAfterRollback(ctx, w.database, recs)
+	if err != nil || !after.Done {
+		return err
+	}
+	w.dbLog().Warn("a console without the database ran since the sessions were copied (a rollback): every session kept from before it is ended, and everyone signs in again",
+		"sessions_it_started", after.Signs, "sessions_ended", after.Ended)
+	if w.auditLog != nil {
+		w.auditLog.Record(audit.Event{Action: audit.ActionSessionsEnded, Who: audit.Who{Subject: "221b", Name: "the console"}, Target: "every session",
+			Detail:  fmt.Sprintf("a console without the database ran since the sessions were copied (%d sessions it started are in their Secrets): the %d sessions kept from before are ended, since a sign-out or a password reset made there did not reach them", after.Signs, after.Ended),
+			Outcome: audit.OutcomeOK})
+	}
+	return nil
 }
 
 // startAuth keeps the sessions and accounts shared with the other
