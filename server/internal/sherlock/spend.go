@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
@@ -75,6 +76,33 @@ type Ledger struct {
 	// is not saved yet, as rows.
 	rows  SpendRows
 	costs []Cost
+
+	// known is the spend and the save's error as the ledger last had them,
+	// for whoever must not wait for the ledger (Known).
+	known atomic.Pointer[knownSpend]
+}
+
+// knownSpend is what Known returns.
+type knownSpend struct {
+	spend   Spend
+	unsaved string
+}
+
+// remember keeps what the ledger has now for Known; called with mu held.
+func (l *Ledger) remember() {
+	l.known.Store(&knownSpend{spend: plus(rolled(l.saved, l.now()), l.pending), unsaved: l.unsaved})
+}
+
+// Known is the spend so far and why it could not be saved ("" when it
+// was), as the ledger last had them: it reads nothing and waits for
+// nothing, not even for a read of the saved spend that is under way. The
+// metrics read it; Now is the spend a cap is checked against.
+func (l *Ledger) Known() (Spend, string) {
+	k := l.known.Load()
+	if k == nil {
+		return Spend{}, ""
+	}
+	return rolled(k.spend, l.now()), k.unsaved
 }
 
 // Cost is one cost counted: of an agent and the provider it was spent on,
@@ -267,6 +295,7 @@ func (l *Ledger) Reload() {
 func (l *Ledger) Now(ctx context.Context) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	l.refreshLocked(ctx)
 	return plus(rolled(l.saved, l.now()), l.pending)
 }
@@ -281,6 +310,7 @@ func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
 func (l *Ledger) AddFor(ctx context.Context, agent, provider string, usd float64, asked bool) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	l.refreshLocked(ctx)
 	t := l.now()
 	l.pending = rolled(l.pending, t)
@@ -322,6 +352,7 @@ func addShare(m map[string]AgentSpend, id string, usd float64, asked bool) map[s
 func (l *Ledger) Save(ctx context.Context) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	defer func() {
 		if err != nil {
 			l.unsaved = err.Error()

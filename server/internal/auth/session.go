@@ -174,6 +174,10 @@ type Sessions struct {
 	// exMu makes the exchanges one at a time, so two requests of one
 	// browser do not start two stored sessions.
 	exMu sync.Mutex
+	// counted is how many sessions were live at the last list of them, and
+	// countedOK that there has been one (Counted).
+	counted   int
+	countedOK bool
 }
 
 // exchange is the stored session started in place of a signed one, kept
@@ -724,6 +728,22 @@ func (s *Sessions) all() (map[string]Session, error) {
 // were ended (endedRecord), by key, each with when it may be removed. They
 // are no sessions: nothing lists them, counts them or ends them.
 func (s *Sessions) allAndEnded() (map[string]Session, map[string]time.Time, error) {
+	out, markers, err := s.listed()
+	if err == nil {
+		now, n := s.now(), 0
+		for _, sess := range out {
+			if !s.expired(&sess, now) {
+				n++
+			}
+		}
+		s.mu.Lock()
+		s.counted, s.countedOK = n, true
+		s.mu.Unlock()
+	}
+	return out, markers, err
+}
+
+func (s *Sessions) listed() (map[string]Session, map[string]time.Time, error) {
 	s.mu.Lock()
 	shared := s.shared
 	out := map[string]Session{}
@@ -1029,8 +1049,29 @@ func (s *Sessions) StoreIsBack() {
 	s.tellEnded(ended)
 }
 
-// Count is how many sessions are live.
+// Count is how many sessions are live. It asks the shared store; Counted
+// does not.
 func (s *Sessions) Count() int { return len(s.Live()) }
+
+// Counted is how many sessions were live the last time they were listed
+// (the sweep lists them each minute, and so do the Users page and Count),
+// without asking the shared store anything: the metrics read it, and a
+// scrape must not wait for a store. Without a shared store, and until the
+// first list, it counts what this replica holds.
+func (s *Sessions) Counted() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shared != nil && s.countedOK {
+		return s.counted
+	}
+	now, n := s.now(), 0
+	for _, sess := range s.byID {
+		if !s.expired(sess, now) {
+			n++
+		}
+	}
+	return n
+}
 
 // IdleAfter is how long a session lives without activity.
 func (s *Sessions) IdleAfter() time.Duration { return s.idle }

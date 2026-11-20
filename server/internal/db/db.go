@@ -155,14 +155,32 @@ type DB struct {
 	health Health
 	onUp   []func()
 	subs   map[string][]func()
+	// probing says a probe is finding out whether the database is there,
+	// answered when one last found that it is, and closed that the handle
+	// is closed (away.go).
+	probing  bool
+	answered time.Time
+	closed   bool
+	done     chan struct{}
+
+	// conns are the connections open to the database and dialing the ones
+	// being made, so that both can be ended when a probe finds the
+	// database away; dropped says it did, and none is made until it is
+	// back.
+	connMu  sync.Mutex
+	conns   map[*trackedConn]struct{}
+	dialing map[uint64]context.CancelFunc
+	dialSeq uint64
+	dropped bool
 }
 
-// Health is whether the database answered the last time it was asked.
+// Health is whether the database answered the last probe (away.go).
 type Health struct {
 	Available bool `json:"available"`
 	// Since is when it last changed between answering and not.
 	Since time.Time `json:"since"`
-	// Error is why not, in a sentence, when it is not.
+	// Error is why not, in the console's words, when it is not: never the
+	// driver's text, which is logged.
 	Error string `json:"error,omitempty"`
 }
 
@@ -180,7 +198,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*DB, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	d := &DB{cfg: cfg, log: log, subs: map[string][]func(){}}
+	d := newDB(cfg, log)
 	var err error
 	if d.pool, err = d.open(ctx, cfg.Host, int32(cfg.MaxConns)); err != nil {
 		return nil, err
@@ -233,7 +251,8 @@ func OpenWithout(cfg Config, log *slog.Logger) (*DB, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	d := &DB{cfg: cfg, log: log, subs: map[string][]func(){}, without: true}
+	d := newDB(cfg, log)
+	d.without = true
 	d.health = Health{Since: time.Now(), Error: ErrStartedWithout.Error()}
 	// No connection is made before the first query, so the pools can be
 	// made while the database is away.
@@ -247,6 +266,10 @@ func OpenWithout(cfg Config, log *slog.Logger) (*DB, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+func newDB(cfg Config, log *slog.Logger) *DB {
+	return &DB{cfg: cfg, log: log, subs: map[string][]func(){}, done: make(chan struct{}), conns: map[*trackedConn]struct{}{}, dialing: map[uint64]context.CancelFunc{}}
 }
 
 // StartedWithout says whether this is the handle of a console that was
@@ -267,27 +290,41 @@ func (d *DB) open(ctx context.Context, host string, max int32) (*pgxpool.Pool, e
 		// byte is sent.
 		pc.ConnConfig.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
 		pc.ConnConfig.DialFunc = func(context.Context, string, string) (net.Conn, error) { return nil, ErrStartedWithout }
+	} else {
+		// Every connection is one the console can end when a probe finds
+		// the database away (away.go).
+		pc.ConnConfig.DialFunc = d.dial(pc.ConnConfig.DialFunc)
 	}
 	pc.MaxConns = max
 	pc.MaxConnIdleTime = 5 * time.Minute
 	pc.HealthCheckPeriod = 30 * time.Second
+	pc.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error { return d.password(cc) }
+	return pgxpool.NewWithConfig(ctx, pc)
+}
+
+// password reads the role's password into a connection's settings, each
+// time a connection is opened (DB-04).
+func (d *DB) password(cc *pgx.ConnConfig) error {
 	file := d.cfg.PasswordFile
-	pc.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
-		if file == "" {
-			return nil
-		}
-		b, err := os.ReadFile(file)
-		if err != nil {
-			return fmt.Errorf("reading the database password: %w", err)
-		}
-		cc.Password = strings.TrimRight(string(b), "\r\n")
+	if file == "" {
 		return nil
 	}
-	return pgxpool.NewWithConfig(ctx, pc)
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("reading the database password: %w", err)
+	}
+	cc.Password = strings.TrimRight(string(b), "\r\n")
+	return nil
 }
 
 // Close ends every connection.
 func (d *DB) Close() {
+	d.mu.Lock()
+	if !d.closed {
+		d.closed = true
+		close(d.done)
+	}
+	d.mu.Unlock()
 	if d.direct != nil {
 		d.direct.Close()
 	}
@@ -312,9 +349,10 @@ type Querier interface {
 // changed the same rows first is run again, a few times, so fn must read
 // what it writes from inside it.
 func (d *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	if d.without {
-		return refused()
+	if err := d.gate(); err != nil {
+		return err
 	}
+	defer d.waiting()()
 	var err error
 	for try := 0; try < 4; try++ {
 		err = pgx.BeginFunc(ctx, d.pool, fn)
@@ -327,12 +365,13 @@ func (d *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	return d.note(err)
 }
 
-// Do runs one read or write that needs no transaction, and notes whether
-// the database answered.
+// Do runs one read or write that needs no transaction. While the database
+// is away it returns ErrUnavailable at once, as every call does (gate).
 func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
-	if d.without {
-		return refused()
+	if err := d.gate(); err != nil {
+		return err
 	}
+	defer d.waiting()()
 	return d.note(fn(d.pool))
 }
 
@@ -343,27 +382,32 @@ func (d *DB) Do(ctx context.Context, fn func(q Querier) error) error {
 // children's can return the children of one write beside the parent of
 // the next.
 func (d *DB) Snapshot(ctx context.Context, fn func(q Querier) error) error {
-	if d.without {
-		return refused()
+	if err := d.gate(); err != nil {
+		return err
 	}
+	defer d.waiting()()
 	return d.note(pgx.BeginTxFunc(ctx, d.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		return fn(tx)
 	}))
 }
 
-// note keeps the health in step with what the calls meet, and wraps a
-// failure to reach the database in ErrUnavailable.
+// note is given what a call met. A failure to reach the database is
+// returned wrapped in ErrUnavailable, and has a probe
+// find out whether the database is there (doubt): the call's failure alone
+// does not say so, since a slow query on a database that answers runs out
+// of its time the same way.
 func (d *DB) note(err error) error {
 	switch {
 	case d.without:
 		// Whatever was met, the answer of this handle is one.
 		return refused()
 	case err == nil:
-		d.set(true, "")
 		return nil
+	case errors.Is(err, ErrUnavailable):
+		return err
 	case unreachable(err):
-		d.set(false, describe(err).Error())
-		return fmt.Errorf("%w: %w", ErrUnavailable, describe(err))
+		d.doubt(describe(err))
+		return unavailable(describe(err))
 	}
 	return err
 }
@@ -383,7 +427,9 @@ func (d *DB) OnAvailable(fn func()) {
 	d.onUp = append(d.onUp, fn)
 }
 
-func (d *DB) set(ok bool, why string) {
+// set is the probe's: what it found, why in the console's words, and the
+// driver's own text for the log.
+func (d *DB) set(ok bool, why, detail string) {
 	if d.without {
 		// Away, whatever is met, until the console starts again.
 		return
@@ -407,11 +453,13 @@ func (d *DB) set(ok bool, why string) {
 		}
 		return
 	}
-	d.log.Error("the database is unavailable; pages that need it say so, and the rest go on", "err", why)
+	d.log.Error("the database is unavailable; pages that need it say so at once, and the rest go on", "why", why, "err", detail)
 }
 
 // Watch asks the database whether it is there every interval until ctx
-// ends, so the health is right also while nobody uses the console.
+// ends, so that an outage is found also while nobody uses the console, and
+// a call left waiting with no time of its own is ended. While the database
+// is away the probe asks, by itself (away.go).
 func (d *DB) Watch(ctx context.Context, every time.Duration) {
 	if d.without {
 		return
@@ -423,16 +471,17 @@ func (d *DB) Watch(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if !d.Health().Available {
+				continue
+			}
+			pctx, cancel := context.WithTimeout(ctx, probeTime)
 			err := d.pool.Ping(pctx)
 			cancel()
 			if ctx.Err() != nil {
 				return
 			}
 			if err != nil {
-				d.set(false, describe(err).Error())
-			} else {
-				d.set(true, "")
+				d.doubt(describe(err))
 			}
 		}
 	}
@@ -455,7 +504,7 @@ func unreachable(err error) bool {
 	if errors.As(err, &ce) {
 		return true
 	}
-	return pgconn.SafeToRetry(err) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "conn closed") || strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "broken pipe") || strings.Contains(err.Error(), "unexpected EOF")
+	return pgconn.SafeToRetry(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, net.ErrClosed) || errors.Is(err, errAwayDial) || strings.Contains(err.Error(), "conn closed") || strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "broken pipe") || strings.Contains(err.Error(), "unexpected EOF")
 }
 
 // describe shortens the driver's errors to what an operator needs.

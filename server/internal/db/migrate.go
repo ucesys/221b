@@ -155,6 +155,9 @@ func (d *DB) migrate(ctx context.Context, steps []Migration) (int, error) {
 
 // SchemaVersion is the newest step the database has, 0 before the first.
 func (d *DB) SchemaVersion(ctx context.Context) (int, error) {
+	if err := d.gate(); err != nil {
+		return 0, err
+	}
 	var v int
 	err := d.pool.QueryRow(ctx, "SELECT coalesce(max(schema_migration_id), 0) FROM schema_migrations").Scan(&v)
 	return v, d.note(err)

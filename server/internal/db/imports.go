@@ -99,8 +99,8 @@ func After(t, since time.Time) bool {
 
 // Imported says whether the record set named id was copied.
 func (d *DB) Imported(ctx context.Context, id string) (bool, error) {
-	if d.without {
-		return false, refused()
+	if err := d.gate(); err != nil {
+		return false, err
 	}
 	var one int
 	err := d.pool.QueryRow(ctx, "SELECT 1 FROM imports WHERE import_id = $1", id).Scan(&one)

@@ -330,29 +330,33 @@ func TestNotifyAndPoll(t *testing.T) {
 }
 
 // Calls made while the database is away say so, the health follows, and
-// what waits for it is told when it is back.
+// what waits for it is told when it is back. (Until the ninth cluster
+// test's F3 this test ended the connections of a database that was there
+// and asserted that the health then said "away" until the next call: a
+// call's failure no longer says that by itself, a probe does, see
+// TestAConnectionCutByTheServerIsNotAnOutage; the outage here is a real
+// one.)
 func TestHealthFollowsTheDatabase(t *testing.T) {
-	d := dbtest.Open(t)
+	away, d, _, _ := awayHandle(t)
 	ctx := ctxT(t)
 	if h := d.Health(); !h.Available {
 		t.Fatalf("an open database is %+v", h)
 	}
 	back := make(chan struct{}, 1)
 	d.OnAvailable(func() { back <- struct{}{} })
-	// Every connection of this database is ended from under the pool.
-	err := d.Do(ctx, func(q db.Querier) error {
-		_, err := q.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database()")
-		return err
-	})
-	if !errors.Is(err, db.ErrUnavailable) {
-		t.Fatalf("a call cut off by the server returned %v", err)
+	away.Cut()
+	if err := one(ctx, d); !errors.Is(err, db.ErrUnavailable) {
+		t.Fatalf("a call made while the database is away returned %v", err)
 	}
+	until(t, 5*time.Second, "the health says the database is away", func() bool { return !d.Health().Available })
 	if h := d.Health(); h.Available || h.Error == "" {
 		t.Errorf("health after the cut: %+v", h)
 	}
-	if err := d.Do(ctx, func(q db.Querier) error { _, err := q.Exec(ctx, "SELECT 1"); return err }); err != nil {
-		t.Fatalf("the pool did not reconnect: %v", err)
+	if err := one(ctx, d); !errors.Is(err, db.ErrUnavailable) {
+		t.Fatalf("a call made while the database is away returned %v", err)
 	}
+	away.Back()
+	until(t, 5*time.Second, "the pool reconnects", func() bool { return one(ctx, d) == nil })
 	select {
 	case <-back:
 	case <-time.After(5 * time.Second):

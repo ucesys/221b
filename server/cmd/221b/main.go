@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -97,6 +98,9 @@ type wiring struct {
 	twoPerson    *twoperson.Store
 	authSvc      *auth.Service
 	people       *access.Cache
+	// gaugesAt is when the figures the metrics show of what is kept
+	// elsewhere were last asked for, in nanoseconds (metrics.go).
+	gaugesAt atomic.Int64
 
 	// The clusters (clusters.go) and the election (leader.go).
 	cluster    *kube.Cluster

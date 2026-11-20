@@ -47,9 +47,10 @@ type Lock struct {
 // TryLock takes the lock of that name if no session holds it, and says
 // whether it did. It never waits.
 func (d *DB) TryLock(ctx context.Context, name string) (*Lock, bool, error) {
-	if d.without {
-		return nil, false, refused()
+	if err := d.gate(); err != nil {
+		return nil, false, err
 	}
+	defer d.waiting()()
 	conn, err := d.direct.Acquire(ctx)
 	if err != nil {
 		return nil, false, d.note(err)
@@ -107,6 +108,9 @@ func (d *DB) Claim(ctx context.Context, q Querier, jobID string, slot time.Time,
 
 // ForgetClaims removes the claims older than before, and says how many.
 func (d *DB) ForgetClaims(ctx context.Context, before time.Time) (int64, error) {
+	if err := d.gate(); err != nil {
+		return 0, err
+	}
 	tag, err := d.pool.Exec(ctx, "DELETE FROM schedule_claims WHERE slot_at < $1", before.UTC())
 	return tag.RowsAffected(), d.note(err)
 }
@@ -153,9 +157,25 @@ func (d *DB) Listen(ctx context.Context) {
 	}
 	wait := time.Second
 	for ctx.Err() == nil {
+		if !d.Health().Available {
+			// Nothing is tried while the database is away; it is tried at
+			// once when it is back.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(probeEvery / 4):
+			}
+			wait = time.Second
+			continue
+		}
 		err := d.listen(ctx)
 		if ctx.Err() != nil {
 			return
+		}
+		if unreachable(err) {
+			// The listener's connection is the one always open: its loss
+			// is often the first sign that the database is gone.
+			d.doubt(describe(err))
 		}
 		d.log.Warn("the database listener stopped; trying again", "err", err, "in", wait.String())
 		select {
@@ -197,7 +217,10 @@ func (d *DB) listen(ctx context.Context) error {
 		case errors.Is(err, context.DeadlineExceeded):
 			// Nothing was announced for a while: look anyway, and make
 			// sure the connection is still there.
-			if err := conn.Ping(ctx); err != nil {
+			pctx, cancel := context.WithTimeout(ctx, probeTime)
+			err := conn.Ping(pctx)
+			cancel()
+			if err != nil {
 				return err
 			}
 			d.call("")
