@@ -28,7 +28,7 @@ func TestThePagesThatNeedTheDatabaseSayOnlyThatItIsUnavailable(t *testing.T) {
 	}
 	c := newSimCluster(t, nil)
 	con := c.start(t, consoleOptions{database: &cfg})
-	if con.url == "" || con.w.without {
+	if con.url == "" {
 		t.Fatalf("the console did not start with its database: %v\n%s", con.stopped(time.Second), con.logs.String())
 	}
 	seen := &held{t: t, needles: needles, port: strconv.Itoa(cfg.Port)}

@@ -24,8 +24,8 @@ import (
 // databaseWait is how long a start waits for a database that does not
 // answer, and databaseMigrate how long the schema's steps may take. The
 // chart's startup probe (deployment.yaml) is sized from their sum. After
-// the wait the console starts without the database (DB-67, without.go),
-// or stops, as -db-start-without says.
+// the wait the console stops, and is started again: a console does not
+// start without its database (DB-02).
 const (
 	databaseWait    = 2 * time.Minute
 	databaseMigrate = 5 * time.Minute
@@ -52,8 +52,7 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 	// The bundled database may still be starting, or failing over, when
 	// the console does: try for the wait before giving up on it. The
 	// chart's startup probe allows for this wait and the schema's steps
-	// after it; the console does not listen until both are done, or until
-	// the wait is over and it starts without the database.
+	// after it; the console does not listen until both are done.
 	wait := w.databaseWait
 	if wait <= 0 {
 		wait = databaseWait
@@ -78,11 +77,8 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	if err != nil && w.cfg.DatabaseStartWithout {
-		return w.startWithoutTheDatabase(ctx, cfg, wait, err, log)
-	}
 	if err != nil {
-		return fmt.Errorf("the database (-db-host, database.* in the chart) did not answer in %s of trying, so the console stops here and is started again (-db-start-without is off): %w", wait, err)
+		return fmt.Errorf("the database (-db-host, database.* in the chart) did not answer in %s of trying, so the console stops here and is started again: a console does not start without its database: %w", wait, err)
 	}
 	mctx, cancel := context.WithTimeout(ctx, databaseMigrate)
 	defer cancel()
@@ -105,7 +101,7 @@ func (w *wiring) wireDatabase(ctx context.Context) error {
 
 // databaseState is what GET /api/v1/database shows.
 func (w *wiring) databaseState() api.DatabaseState {
-	return api.DatabaseState{Health: w.database.Health(), SchemaVersion: w.schemaVersion, Domains: w.inDatabase, StartedWithout: w.without}
+	return api.DatabaseState{Health: w.database.Health(), SchemaVersion: w.schemaVersion, Domains: w.inDatabase}
 }
 
 // databaseGauges are the database's metrics.
@@ -117,17 +113,12 @@ func (w *wiring) databaseGauges() []api.Gauge {
 	if w.database.Health().Available {
 		up = 1
 	}
-	without := 0.0
-	if w.without {
-		without = 1
-	}
 	stat := w.database.Pool().Stat()
 	return []api.Gauge{
 		{Name: "b221_database_up", Help: "1 when the database answered the last time it was asked.", Value: up},
 		{Name: "b221_database_schema_version", Help: "The newest step of the schema this replica applied or found.", Value: float64(w.schemaVersion)},
 		{Name: "b221_database_connections", Help: "Connections this replica has open to the database.", Value: float64(stat.TotalConns())},
 		{Name: "b221_database_connections_max", Help: "Most connections this replica opens to the database.", Value: float64(stat.MaxConns())},
-		{Name: "b221_database_started_without", Help: "1 when this replica was started without its database and waits for it to answer, to stop and be started again.", Value: without},
 	}
 }
 
@@ -147,7 +138,7 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 	for _, id := range s.ImportIDs() {
 		w.claimImport(id)
 	}
-	if _, inMemory := b.(*kv.Memory); !inMemory && w.keepsRecords() {
+	if _, inMemory := b.(*kv.Memory); !inMemory {
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
 		copied, err := s.Import(ictx, b, "configmap")
 		cancel()
@@ -239,7 +230,7 @@ func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB)
 		doc := docs[key]
 		keys[key] = doc
 		w.claimImport(doc.ImportID())
-		if inMemory || !w.keepsRecords() {
+		if inMemory {
 			continue
 		}
 		if first, ok := copiedAfter[key]; ok && notCopied[first] {
@@ -290,7 +281,7 @@ func emptied(b []byte) bool {
 // delete a key has it emptied. A failure is logged and does not stop the
 // start: the next one tries again.
 func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID string, keys ...string) {
-	if w.database == nil || from == nil || !w.keepsRecords() {
+	if w.database == nil || from == nil {
 		return
 	}
 	log := w.dbLog()
@@ -323,7 +314,7 @@ func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID str
 // whole (a case's own ConfigMap), when the copy recorded under importID is
 // in the database.
 func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, importID string) {
-	if w.database == nil || from == nil || !w.keepsRecords() {
+	if w.database == nil || from == nil {
 		return
 	}
 	log := w.dbLog()
@@ -367,7 +358,7 @@ func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, impor
 // and removes nothing: the next start tries again.
 func (w *wiring) moveFromSecrets(ctx context.Context, importID, what string, copy, remove func(ctx context.Context) (int, error)) {
 	w.claimImport(importID)
-	if w.database == nil || !w.keepsRecords() {
+	if w.database == nil {
 		return
 	}
 	log := w.dbLog()
@@ -391,7 +382,7 @@ func (w *wiring) moveFromSecrets(ctx context.Context, importID, what string, cop
 // before the move wrote since, which is removed and not read). Nothing is
 // removed when the database cannot say the copy was made.
 func (w *wiring) removeCopiedFromSecrets(ctx context.Context, importID, what string, remove func(ctx context.Context) (int, error)) {
-	if w.database == nil || !w.keepsRecords() {
+	if w.database == nil {
 		return
 	}
 	log := w.dbLog()

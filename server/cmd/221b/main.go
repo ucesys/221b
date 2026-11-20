@@ -118,19 +118,10 @@ type wiring struct {
 	database      *db.DB
 	schemaVersion int
 	inDatabase    []string
-	// without is set when the console was started without its database
-	// (DB-67, without.go): database is then a handle that refuses every
-	// call, restCfg refuses the console's own writes of ConfigMaps and
-	// Secrets, signInCfg is the configuration as it was, for the accounts'
-	// Secret and the session key's, and restart is closed when the
-	// database answers. databaseWait and withoutProbe are how long a start
-	// waits for the database and how often it is asked for afterwards; 0
-	// is the default (a test sets them).
-	without      bool
-	signInCfg    *rest.Config
-	restart      chan struct{}
+	// databaseWait is how long a start waits for the database before it
+	// gives up and the console stops (DB-02); 0 is the default (a test
+	// sets it).
 	databaseWait time.Duration
-	withoutProbe time.Duration
 	// importIDs are the names record sets are copied under, each once;
 	// importClash those named twice (claimImport).
 	importIDs   map[string]bool
@@ -246,7 +237,7 @@ func serve(parent context.Context, args []string, h *hooks) error {
 
 	// The audit log (P3-10) owns standard output; the ordinary logs go to
 	// standard error.
-	w := &wiring{cfg: parsed, log: log, restart: make(chan struct{}), auditLog: audit.New(audit.Options{Out: h.audit, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
+	w := &wiring{cfg: parsed, log: log, auditLog: audit.New(audit.Options{Out: h.audit, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
 	if h.wiring != nil {
 		h.wiring(w)
 	}
@@ -268,8 +259,8 @@ func serve(parent context.Context, args []string, h *hooks) error {
 	// connections', the applications', the credentials'. It uses nothing
 	// but the configuration and the log, and nothing listens until it and
 	// the rest are done, so the start's order is all that changes. A
-	// database that does not answer within the wait leaves a handle that
-	// refuses every call, and a console that keeps no records (DB-67).
+	// database that does not answer within the wait ends the start: a
+	// console does not start without its database (DB-02).
 	if err := w.wireDatabase(ctx); err != nil {
 		return err
 	}
@@ -353,19 +344,13 @@ func serve(parent context.Context, args []string, h *hooks) error {
 		return err
 	}
 	// Administration › Credentials (0.12.1, CR-12): the secrets kept with what
-	// used them move to credentials, on the leader. Not on a console
-	// started without its database, which keeps no records (DB-67): the
-	// move, like the jobs below, waits for the start that follows.
-	if w.keepsRecords() {
-		go w.migrateCredentials(ctx)
-	}
+	// used them move to credentials, on the leader.
+	go w.migrateCredentials(ctx)
 	// Jobs (Phase 12): the agents read through the handler's tools as
 	// the reader identity; the schedules and alerts are looked at on the
 	// leader.
 	w.jobsW.svc.SetAgents(agentRunner{ai: w.aiSvc.Service, engine: w.sherlockSvc, handler: w.handler, auth: w.authSvc})
-	if w.keepsRecords() {
-		go w.jobsW.svc.Run(ctx)
-	}
+	go w.jobsW.svc.Run(ctx)
 	// The deployed roles are compared with the shipped ones every five
 	// minutes, for the Permissions page, the audit log and rbac.enforce;
 	// on the leader only, and at once when a replica becomes it.
@@ -414,12 +399,6 @@ func serve(parent context.Context, args []string, h *hooks) error {
 		}
 		return err
 	case <-ctx.Done():
-	case <-w.restart:
-		// The database answers, and this console was started without it
-		// (DB-67): it stops as it does when asked to, and the kubelet
-		// starts it again, to migrate, copy and serve as every start does.
-		log.Warn("stopping, to be started again with the database")
-		stop()
 	case <-w.lost:
 		lostLease = true
 		log.Error("the Lease was lost; a cold standby cannot watch again, so this replica exits and starts afresh (replicas.warmStandby=false)")
@@ -482,16 +461,6 @@ func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logge
 } {
 	l := w.auditLog
 	_, inMemory := b.(*kv.Memory)
-	if w.database != nil && !w.keepsRecords() {
-		// Started without the database (DB-67): the events go to the
-		// stream and the webhook as always, and the page shows them from
-		// memory until the console starts again. Nothing is queued for a
-		// database this console never writes to, and nothing is copied,
-		// removed or trimmed.
-		w.inDatabase = append(w.inDatabase, "activity")
-		l.KeepInMemory(audit.DefaultKeep)
-		return nil
-	}
 	if w.database != nil {
 		st := audit.NewPGStore(w.database, logger)
 		l.SetStore(st)

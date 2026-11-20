@@ -152,9 +152,6 @@ func (d *DB) call(topic string) {
 // Listen hears the notices until ctx ends, on one direct connection it
 // opens again whenever it drops.
 func (d *DB) Listen(ctx context.Context) {
-	if d.without {
-		return
-	}
 	wait := time.Second
 	for ctx.Err() == nil {
 		if !d.Health().Available {

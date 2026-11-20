@@ -339,7 +339,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 	var backupRepo backup.Repo
 	if w.database != nil {
 		pg := backup.NewPGRepo(w.database)
-		if _, inMemory := w.spendBackend.(*kv.Memory); !inMemory && w.keepsRecords() {
+		if _, inMemory := w.spendBackend.(*kv.Memory); !inMemory {
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			copied, err := pg.Import(ictx, backup.NewKVRepo(w.spendBackend), "configmap key "+backup.SettingsKey)
 			cancel()
@@ -355,11 +355,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 		w.inDatabase = append(w.inDatabase, "backups")
 	}
 	backups := backup.NewScheduler(backup.Options{Registry: backup.Default, Store: w.spendBackend, Repo: backupRepo, Secrets: backupKeys, Leads: w.elector.IsLeader, Audit: w.auditLog, Version: version.String(), Logger: log.With("component", "backup")})
-	// Not on a console started without its database (DB-67): it has no
-	// records to back up and keeps no run.
-	if w.keepsRecords() {
-		go backups.Run(ctx)
-	}
+	go backups.Run(ctx)
 	registerBackupParts(backup.Default, w.aiSvc.Service, w.issueSvc)
 	// Jobs (Phase 12): the backups to S3 show as a job, and the jobs'
 	// settings are in every backup.

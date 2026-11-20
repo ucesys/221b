@@ -254,12 +254,6 @@ func (w *wiring) wireCards(ctx context.Context) error {
 		if w.database == nil {
 			return false
 		}
-		if !w.keepsRecords() {
-			// Started without the database (DB-67): whether the cards
-			// were copied cannot be asked, and nothing is copied from
-			// the ConfigMap of before.
-			return true
-		}
 		copied, _ := w.database.Imported(ctx, cards.CardsKey)
 		return copied
 	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
@@ -277,9 +271,7 @@ func (w *wiring) wireCards(ctx context.Context) error {
 		cardConsole.Hosts = w.sshSvc
 	}
 	cardStore.RegisterConsole(cardConsole)
-	if w.keepsRecords() {
-		go cardStore.Run(ctx, 30*time.Second)
-	}
+	go cardStore.Run(ctx, 30*time.Second)
 	// What the jobs propose waits as cards (JB-15, WC-01).
 	w.jobsW.svc.SetProposer(jobsProposer{cardsProposer{cardStore}})
 	w.mycroftProposals.cards.Store(&cardsProposer{cardStore})

@@ -79,9 +79,6 @@ func loadMigrations(fsys fs.FS, dir string) ([]Migration, error) {
 // not an error: during a rollout the older replicas run against the newer
 // schema, which only added.
 func (d *DB) Migrate(ctx context.Context) (int, error) {
-	if d.without {
-		return 0, refused()
-	}
 	steps, err := Migrations()
 	if err != nil {
 		return 0, err

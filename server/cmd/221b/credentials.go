@@ -69,9 +69,6 @@ func (w *wiring) credentialsList(ctx context.Context, secrets credentials.Secret
 			return 0, err
 		})
 	list := credentials.NewPG(w.database)
-	if !w.keepsRecords() {
-		return list
-	}
 	// The two halves that do not go together, said once at the start: a
 	// database restored to an earlier time, or a write cut short. Nothing
 	// is removed on that guess.

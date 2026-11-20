@@ -71,9 +71,6 @@ func unavailable(cause error) error { return &unavailableError{cause: cause} }
 // gate is asked before every call: while the database is away it returns
 // ErrUnavailable at once.
 func (d *DB) gate() error {
-	if d.without {
-		return refused()
-	}
 	d.mu.Lock()
 	ok := d.health.Available
 	d.mu.Unlock()
@@ -90,9 +87,6 @@ func (d *DB) doubt(cause error) { d.doubtAfter(cause, probeEvery) }
 
 // doubtAfter is doubt with how long a probe's answer stands.
 func (d *DB) doubtAfter(cause error, stands time.Duration) {
-	if d.without {
-		return
-	}
 	d.mu.Lock()
 	if d.probing || d.closed || time.Since(d.answered) < stands {
 		d.mu.Unlock()

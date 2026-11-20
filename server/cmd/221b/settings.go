@@ -61,26 +61,13 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
 	defaults := settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}
-	if !w.keepsRecords() {
-		// Started without the database (DB-67): the saved settings cannot
-		// be read, and what stands in for them until the console starts
-		// again is the cautious choice wherever a setting allows something:
-		// no registry is asked about newer images, costs are not shown, and
-		// a change in a production cluster needs two people. Sherlock is
-		// off without a saved setting as it is.
-		off := false
-		defaults.ImageChecks, defaults.HideCosts, defaults.Watson = &off, true, &settings.Watson{TwoPerson: true}
-	}
 	shared := settings.NewService(ctx, storage, defaults, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
 		w.manager.SetSettings(st.Refresh(), b)
 	})
 	// Read again every few seconds: a change saved through another replica,
-	// or by hand, reaches this one's browsers within seconds (P7-02). Not
-	// on a console started without its database, which never reads them.
-	if w.keepsRecords() {
-		go shared.Run(ctx, 3*time.Second)
-	}
+	// or by hand, reaches this one's browsers within seconds (P7-02).
+	go shared.Run(ctx, 3*time.Second)
 	w.spendBackend, w.stored, w.shared = spendBackend, stored, shared
 	return nil
 }

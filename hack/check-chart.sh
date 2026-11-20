@@ -178,12 +178,12 @@ database_modes() {
     grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
     grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
     netpol "$ext" | has 'port: 6432$' &&
-    # A start without the database (DB-67): off unless the values turn it
-    # on, for both kinds of database, and not rendered without one.
-    grep -A1 'name: DB_START_WITHOUT' "$d" | has '"false"' && grep -A1 'name: DB_START_WITHOUT' "$ext" | has '"false"' &&
-    ! has 'name: DB_START_WITHOUT' < "$out" &&
-    render k8s-console --set clusterName=ci --set database.mode=bundled --set database.startWithoutIt=true | grep -A1 'name: DB_START_WITHOUT' | has '"true"' &&
-    grep -q '^  startWithoutIt: false$' "$CHART/values.yaml" &&
+    # No value starts a console without its database (DB-02; DB-67 is
+    # withdrawn): the option is gone from the values and the Deployment,
+    # also when someone still sets it.
+    ! has 'DB_START_WITHOUT' < "$d" && ! has 'DB_START_WITHOUT' < "$ext" && ! has 'DB_START_WITHOUT' < "$out" &&
+    ! render k8s-console --set clusterName=ci --set database.mode=bundled --set database.startWithoutIt=true | has 'DB_START_WITHOUT' &&
+    ! grep -q 'startWithoutIt' "$CHART/values.yaml" "$CHART"/templates/* &&
     refused --set database.mode=mongo && refused --set database.mode=external &&
     refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
     ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&

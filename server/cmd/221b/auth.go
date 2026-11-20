@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/rest"
-
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -147,7 +145,7 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 		if !ok || ns == "" || name == "" {
 			return fmt.Errorf("-users-secret must be namespace/name, got %q", usersRef)
 		}
-		sk, err := kube.NewSecretKey(w.signInConfig(), ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "users", "app.kubernetes.io/managed-by": "221b"})
+		sk, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "users", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
@@ -186,7 +184,7 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 		// reaches every replica. Never logged. Without Secrets the key is
 		// this process's own.
 		name := prefix + auth.SessionKeySecretSuffix
-		ks, err := kube.NewSecretKey(w.signInConfig(), ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
+		ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return fmt.Errorf("the session key's Secret: %w", err)
 		}
@@ -217,18 +215,6 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 		w.database.OnAvailable(authSvc.Sessions().StoreIsBack)
 	}
 	return nil
-}
-
-// signInConfig is the connection the accounts' Secret and the session
-// key's are read and written through: the console's own, also on a console
-// started without its database, whose other clients are refused a write of
-// a ConfigMap or a Secret (DB-67). Sign-in never depends on the database,
-// and these two Secrets never move.
-func (w *wiring) signInConfig() *rest.Config {
-	if w.signInCfg != nil {
-		return w.signInCfg
-	}
-	return w.restCfg
 }
 
 // sessionSecrets is what is still done with the session Secrets once the

@@ -127,12 +127,6 @@ func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore)
 		connLog = w.log.With("component", "clusters")
 	}
 	store := clusters.NewPGStore(w.database, secrets, connLog)
-	if !w.keepsRecords() {
-		// Started without the database (DB-67): no copy is made or tried
-		// again, and the rows cannot be read, so the local cluster is the
-		// only one until the console is started again.
-		return store
-	}
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if copied, err := w.database.Imported(cctx, clusters.ImportID); err != nil || !copied {
@@ -203,9 +197,6 @@ func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) ap
 		appLog = w.log.With("component", "applications")
 	}
 	store := apps.NewPGStore(w.database, secrets, appLog)
-	if !w.keepsRecords() {
-		return store
-	}
 	// The two halves that do not go together, said once at the start: a
 	// database restored to an earlier time, or a write cut short. Nothing
 	// is removed on that guess.

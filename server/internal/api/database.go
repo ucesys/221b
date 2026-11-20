@@ -20,10 +20,6 @@ type DatabaseState struct {
 	// Domains are the domains whose records are in the database; the rest
 	// are still in ConfigMaps.
 	Domains []string
-	// StartedWithout says this console was started without its database
-	// (DB-67): it keeps no records, and stops and is started again when
-	// the database answers.
-	StartedWithout bool
 }
 
 type databaseView struct {
@@ -31,9 +27,6 @@ type databaseView struct {
 	Configured bool       `json:"configured"`
 	Available  bool       `json:"available"`
 	Since      *time.Time `json:"since,omitempty"`
-	// StartedWithout: the console was started while the database was away
-	// and serves only what needs none until it is started again.
-	StartedWithout bool `json:"startedWithout,omitempty"`
 	// Error, SchemaVersion and Domains are for SuperAdmins: the error can
 	// name the database's host.
 	Error         string   `json:"error,omitempty"`
@@ -48,7 +41,7 @@ func (s *Server) getDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.opts.Database()
-	v := databaseView{Configured: true, Available: st.Health.Available, StartedWithout: st.StartedWithout}
+	v := databaseView{Configured: true, Available: st.Health.Available}
 	if !st.Health.Since.IsZero() {
 		since := st.Health.Since.UTC()
 		v.Since = &since

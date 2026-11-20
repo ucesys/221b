@@ -116,9 +116,7 @@ func (w *wiring) wireIssues(ctx context.Context) error {
 	issueSvc = svc
 	w.knownSvc = svc
 	w.jobsW.setIssues(issueSvc)
-	if w.keepsRecords() {
-		go issueSvc.Run(ctx, 5*time.Minute, w.activity.Active)
-	}
+	go issueSvc.Run(ctx, 5*time.Minute, w.activity.Active)
 	if cfg.Issues {
 		issueAPI = issueSvc
 	}
@@ -150,7 +148,7 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 		// look kept already, and its counter would not be copied. The cases
 		// wait for the documents' copy for the same reason.
 		setCopied := true
-		if _, inMemory := b.(*kv.Memory); !inMemory && w.keepsRecords() {
+		if _, inMemory := b.(*kv.Memory); !inMemory {
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			copied, err := set.Import(ictx, b, "configmap")
 			cancel()
@@ -167,7 +165,7 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 				}
 			}
 		}
-		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory && setCopied && w.keepsRecords() {
+		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory && setCopied {
 			// One read of the cluster for each case: allow for many.
 			ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			n, err := cases.Import(ictx, objs, "configmap")
