@@ -161,7 +161,7 @@ func CleanStart(ctx context.Context, st CleanStores, token string, dryRun bool, 
 			object, what = "cases", "cases in the database (each with its messages, the work on it and its conversation)"
 		}
 		c.item(CleanItem{Object: object, What: what, Count: len(names)})
-		c.item(CleanItem{Object: object, Key: issues.WorkKey, What: "RCAs (each kept with its case's work, and gone with its case)", Count: rcas})
+		c.item(CleanItem{Object: object, What: "RCAs (each kept with its case's work, and gone with its case)", Count: rcas})
 		if !dryRun {
 			for _, n := range names {
 				if err := st.Cases.Delete(ctx, n); err != nil {

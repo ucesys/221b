@@ -248,8 +248,10 @@ func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChang
 // DecideChange approves or rejects a waiting change; whoever asked for it
 // cannot approve it, and a rejection says why. Approving applies what the
 // change alters (Items) and leaves the rest of the fleet's variables as
-// they are. Only the newest change on a fleet can be approved, and only
-// while what it alters is still as it was when it was asked for.
+// they are. Of the changes on a fleet that alter the same thing only the
+// newest can be approved, and only while what it alters is still as it
+// was when it was asked for; a newer change that alters something else
+// does not hold it.
 func (st *Store) DecideChange(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
 	comment = strings.TrimSpace(comment)
 	if !approve && comment == "" {
@@ -340,14 +342,27 @@ func approvable(rec changesRecord, cluster string, id int, who Who) (VariableCha
 	return *c, nil
 }
 
-// NewerChange is the newest change on c's fleet asked for after c, a
-// rejected one aside, which changed nothing; nil when there is none.
+// NewerChange is the newest change on c's fleet asked for after c that
+// alters something c alters too, a rejected one aside, which changed
+// nothing; nil when there is none. A change is what it alters (DB-34), so
+// a newer change of the fleet that names none of c's values, marks,
+// ceiling or reboot times neither undoes c nor is undone by it.
 func NewerChange(changes []VariableChange, c VariableChange) *VariableChange {
+	mine := map[string]bool{}
+	for _, it := range Items(c.Before, c.After) {
+		mine[it.Kind+"\x00"+it.Node+"\x00"+it.Name] = true
+	}
 	var newer *VariableChange
 	for i := range changes {
 		x := &changes[i]
-		if x.Cluster == c.Cluster && x.Fleet == c.Fleet && x.ID > c.ID && x.State != ChangeRejected && (newer == nil || x.ID > newer.ID) {
-			newer = x
+		if x.Cluster != c.Cluster || x.Fleet != c.Fleet || x.ID <= c.ID || x.State == ChangeRejected || (newer != nil && x.ID < newer.ID) {
+			continue
+		}
+		for _, it := range Items(x.Before, x.After) {
+			if mine[it.Kind+"\x00"+it.Node+"\x00"+it.Name] {
+				newer = x
+				break
+			}
 		}
 	}
 	return newer
@@ -374,7 +389,7 @@ func (n VariableChange) overtakes(c VariableChange) string {
 	case ChangeApproved:
 		state = "approved"
 	}
-	return fmt.Sprintf("Change %d can't be approved: change %d on fleet %s is newer (by %s, %s, %s). Only the newest change on a fleet can be approved. Each change carries all the fleet's values as they were when it was asked for, so %s. Reject change %d, and ask for it again if it is still needed.",
+	return fmt.Sprintf("Change %d can't be approved: change %d on fleet %s is newer (by %s, %s, %s). It alters something this change alters too, and of such changes only the newest can be approved, so %s. Reject change %d, and ask for it again if it is still needed.",
 		c.ID, n.ID, c.fleetName(), n.By.Name, n.At.UTC().Format("2 Jan 15:04 UTC"), state, undo, c.ID)
 }
 

@@ -95,7 +95,7 @@ The screens are in `docs/design/automation/`: the Scripts page with a Tools menu
 What a run checks and keeps, as built after the review of November 3, 2026:
 
 - A node runs under the strictest ceiling of the fleets it is in (All nodes' when it is in none), and on production a variable change waiting on any of its fleets suspends the versions it touches there, whichever fleet the run picked. On production a run's own values are weighed as a variable change for that run, and wait for a second admin when they need it (FU-05, below).
-- Only the newest change on a fleet can be approved; approving applies it over the values it was asked against, or refuses and says what differs.
+- Of the changes on a fleet that alter the same value, mark, ceiling or reboot time, only the newest can be approved; approving applies it over the values it was asked against, or refuses and says what differs. A newer change of the fleet that alters something else does not hold an older one.
 - A node is in one live run at a time (dry runs and scripts on the cluster aside), and a cluster's control-plane nodes are worked on one at a time. A request id makes a start sent twice one run.
 - A reboot runs with the script's privilege, so a nobody script cannot ask for one. The node is back when its boot ID changed and Kubernetes reports it Ready, within its reboot timeout: the node's own, else the longest of its fleets', else 10 minutes. A host outside Kubernetes is back when its boot ID changed, which SSH answering again tells.
 - A console that loses the lead stops its runs; a cancel also goes through the run's record; a production run re-reads its version before each batch and stops when it changed or lost its approval. Runs and facts live in `<release>-automation-runs`.
