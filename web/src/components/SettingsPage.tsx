@@ -373,7 +373,14 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const choices: number[] = [...REFRESH_CHOICES]
   if (current && !choices.includes(current)) choices.push(current)
   choices.sort((a, b) => a - b)
-  const kept = settings?.storage === 'configmap' ? 'Kept on the server in its ConfigMap, so it survives restarts.' : settings ? 'Kept on the server until it restarts; it was started without a ConfigMap to keep settings in.' : ''
+  const kept =
+    settings?.storage === 'database'
+      ? 'Kept on the server in its database, so it survives restarts.'
+      : settings?.storage === 'configmap'
+        ? 'Kept on the server in its ConfigMap, so it survives restarts.'
+        : settings
+          ? 'Kept on the server until it restarts.'
+          : ''
   return (
     <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Refresh rate">

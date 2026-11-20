@@ -48,11 +48,13 @@ func (w *wiring) wireLocalCluster() error {
 // among them, and the Helm applications kept beside them.
 func (w *wiring) wireClusters(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
-	// The other clusters (P3-04 to P3-09): their connections live in
-	// Secrets in the console's own namespace when running in a cluster,
-	// otherwise in memory; with a database as well, each is a row and its
-	// Secret holds its credential alone (DB-64). The cluster the console
-	// was started against is the connection "local".
+	// The other clusters (P3-04 to P3-09): each connection is a row of the
+	// database, and its credential is a Secret in the console's own
+	// namespace (DB-64). Without -connections-secrets the console may keep
+	// no Secret, so a connection has nowhere to keep its credential and
+	// is kept in memory, whole, until a restart (connections.store:
+	// memory). The cluster the console was started against is the
+	// connection "local".
 	var connStore clusters.Store = clusters.NewMemoryStore()
 	// The Helm applications (Phase 10) are kept beside the connections.
 	var appStore apps.Store = apps.NewMemoryStore()
@@ -72,8 +74,7 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 		}
 		appStore = w.applications(ctx, as)
 	} else {
-		// In memory, with a database or without: the record set's name is
-		// still its own.
+		// In memory: the record set's name is still its own.
 		w.claimImport(apps.ImportID)
 		w.claimImport(clusters.ImportID)
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
@@ -98,25 +99,21 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 const moveAgainEvery = 30 * time.Second
 
 // connections is where the cluster connections are kept when the console
-// keeps them in Secrets: with a database each is a row of clusters
-// (DB-64) and its Secret holds its credential alone; without one, the
-// Secrets hold all of it, as before. What the Secrets held of the
-// connections ("spec.json") is copied once, and then leaves the Secrets
-// whose connection has a row: no Secret is deleted, no key of a credential
-// is touched, and a Secret whose record could not be copied is left whole.
+// may keep Secrets: each is a row of clusters (DB-64) and its Secret holds
+// its credential alone. What the Secrets of a release before 0.13 held of
+// the connections ("spec.json") is copied once, and then leaves the
+// Secrets whose connection has a row: no Secret is deleted, no key of a
+// credential is touched, and a Secret whose record could not be copied is
+// left whole.
 //
 // A copy that fails does not stop the start, and the Secrets stay as they
 // were; but the console would then show the local cluster alone until its
 // next start, so the copy is tried again while it runs, and the
 // connections start when it is made (Manager.Run).
 //
-// With a database and the connections in memory (no -connections-secrets)
-// they stay in memory, as the credentials' list and the applications do.
+// With the connections in memory (no -connections-secrets) they stay in
+// memory, as the credentials' list and the applications do.
 func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore) clusters.Store {
-	if w.database == nil {
-		w.claimImport(clusters.ImportID)
-		return secrets
-	}
 	log := w.dbLog()
 	const what = "the cluster connections"
 	copy := func(ctx context.Context) (int, error) { return clusters.CopyFromSecrets(ctx, w.database, secrets, log) }
@@ -171,23 +168,19 @@ func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore)
 	return store
 }
 
-// applications is where the applications are kept when the console keeps
-// its connections in Secrets: with a database, their records are rows
-// (DB-62) and only their values, parameters and commands' parameters stay
-// in their Secrets; without one, the Secrets hold all of it, as before.
-// What the Secrets held of the records is copied once, and the Secrets are
-// then rewritten to hold the secret part alone (DB-63): no Secret is
-// deleted, and one whose record could not be copied is left whole.
+// applications is where the applications are kept when the console may
+// keep Secrets: their records are rows (DB-62) and only their values,
+// parameters and commands' parameters stay in their Secrets. What the
+// Secrets of a release before 0.13 held of the records is copied once,
+// and the Secrets are then rewritten to hold the secret part alone
+// (DB-63): no Secret is deleted, and one whose record could not be copied
+// is left whole.
 //
-// With a database and the connections in memory (no -connections-secrets:
-// the simulator, a console run by hand) the applications stay in memory
+// With the connections in memory (no -connections-secrets: a console run
+// by hand, connections.store: memory) the applications stay in memory
 // too, as the credentials' list does: rows that outlived the values they
 // are deployed with would be applications nobody could deploy.
 func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) apps.Store {
-	if w.database == nil {
-		w.claimImport(apps.ImportID)
-		return secrets
-	}
 	log := w.dbLog()
 	w.moveFromSecrets(ctx, apps.ImportID, "the applications",
 		func(ctx context.Context) (int, error) { return apps.CopyFromSecrets(ctx, w.database, secrets, log) },

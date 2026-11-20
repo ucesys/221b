@@ -36,11 +36,14 @@ func issueLimits() issues.Limits {
 // manager's clusters are the ones a reporter may say a report is about
 // (CF-64).
 //
-// moved keeps the records in the database when there is one (Phase 13);
-// nil leaves them where they are.
+// moved keeps the records in the database (Phase 13) and is given the
+// one-time copy's source and nothing else: the ConfigMap a release before
+// 0.13 kept the issue service's documents in, and the ConfigMaps it kept
+// the cases in, one each; nil for one the flags do not name. A caller
+// that gives no moved (a test) keeps the records in memory.
 func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, inv issues.Investigator, moved func(kv.Backend, kv.Objects) (kv.Backend, kv.Objects), log *slog.Logger) (*issues.Service, *kv.Limited, error) {
-	var backend kv.Backend = &kv.Memory{}
-	var cases kv.Objects = &kv.MemoryObjects{}
+	var backend kv.Backend
+	var cases kv.Objects
 	var stored *kv.Limited
 	if cfg.CaseConfigMaps != "" {
 		objs, err := kube.NewConfigMapObjects(restCfg, cfg.CaseConfigMaps, cfg.CaseInstance, "221b.io/case")
@@ -56,11 +59,16 @@ func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, ma
 		}
 		stored = limited(cm, objIssues, log.With("component", "storage"))
 		backend = stored
-	} else {
-		log.Warn("the issue service's reports are kept in memory and lost on restart (set -issues-configmap to keep them)")
 	}
 	if moved != nil {
 		backend, cases = moved(backend, cases)
+	} else {
+		if backend == nil {
+			backend = &kv.Memory{}
+		}
+		if cases == nil {
+			cases = &kv.MemoryObjects{}
+		}
 	}
 	svc := issues.New(issues.Options{
 		Backend: backend,
@@ -124,8 +132,8 @@ func (w *wiring) wireIssues(ctx context.Context) error {
 	return nil
 }
 
-// casesInDatabase keeps the issue service's records in the database when
-// there is one (Phase 13, DB-52 to DB-54): the index, the known issues and
+// casesInDatabase keeps the issue service's records in the database
+// (Phase 13, DB-52 to DB-54): the index, the known issues and
 // the settings as one set of documents at one version, and each case as a
 // row of cases with the work on it and its conversation with Sherlock,
 // which the case work keeps in the same object. What the ConfigMaps held
@@ -133,10 +141,6 @@ func (w *wiring) wireIssues(ctx context.Context) error {
 // under another.
 func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Objects) (kv.Backend, kv.Objects) {
 	return func(b kv.Backend, objs kv.Objects) (kv.Backend, kv.Objects) {
-		w.issueBackend = b
-		if w.database == nil {
-			return b, objs
-		}
 		w.inDatabase = append(w.inDatabase, "cases")
 		log := w.log.With("component", "database")
 		cases := issues.NewCasesPG(w.database, casework.CaseParts())
@@ -148,7 +152,7 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 		// look kept already, and its counter would not be copied. The cases
 		// wait for the documents' copy for the same reason.
 		setCopied := true
-		if _, inMemory := b.(*kv.Memory); !inMemory {
+		if hasSource(b) {
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			copied, err := set.Import(ictx, b, "configmap")
 			cancel()
@@ -165,7 +169,7 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 				}
 			}
 		}
-		if _, inMemory := objs.(*kv.MemoryObjects); !inMemory && setCopied {
+		if objs != nil && setCopied {
 			// One read of the cluster for each case: allow for many.
 			ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			n, err := cases.Import(ictx, objs, "configmap")
@@ -183,7 +187,7 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 		for key := range set.Members {
 			keys[key] = set
 		}
-		w.issueBackend = &kv.Keyed{Keys: keys, Rest: b}
+		w.issueBackend = &kv.Keyed{Keys: keys, Rest: notNamed(b)}
 		return w.issueBackend, cases
 	}
 }

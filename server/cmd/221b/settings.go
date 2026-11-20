@@ -21,28 +21,24 @@ import (
 // wireSettings opens the shared settings and what is kept beside them.
 func (w *wiring) wireSettings(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
-	// The shared settings: in the chart's ConfigMap when running in a
-	// cluster, otherwise in memory. Every change reaches every browser
-	// through the stores.
-	var storage settings.Storage = &settings.Memory{}
-	// What the settings ConfigMap holds beside the settings, with the audit
-	// log and the session records in ConfigMaps of their own when the chart
-	// names them, and every key within its limit (#46).
-	var spendBackend kv.Backend = &kv.Memory{}
+	// The copies' source and nothing else: the settings ConfigMap of a
+	// release before 0.13, with the audit log and the session records in
+	// ConfigMaps of their own when the chart names them (#46). Nil when
+	// -settings-configmap names none.
+	var from kv.Backend
 	var stored storedObjects
 	if cfg.SettingsConfigMap != "" {
 		cm, err := kube.NewConfigMapStorage(w.restCfg, cfg.SettingsConfigMap)
 		if err != nil {
 			return err
 		}
-		if spendBackend, stored, err = settingsBackend(ctx, w.restCfg, cm, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage")); err != nil {
+		if from, stored, err = settingsBackend(ctx, w.restCfg, cm, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage")); err != nil {
 			return err
 		}
-		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
 	// Getting started's dismissed steps (GS-04) are a scope of the
-	// database's settings when there is a database (Phase 13).
-	spendBackend = w.inScopes(ctx, spendBackend, map[string]string{api.SetupKey: "setup"})
+	// database's settings (Phase 13).
+	spendBackend := w.inScopes(ctx, from, map[string]string{api.SetupKey: "setup"})
 	// The requests that wait for a second person, rows of the database's
 	// approval_requests, and the shared settings. Every reader of this
 	// backend, the backup among them, finds both where they are kept.
@@ -55,11 +51,10 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 			sherlock.SpendKey: sherlock.NewSpendPG(d, nil)}
 	})
 	// The shared settings themselves: three scopes and the acknowledged
-	// alerts' rows, read through the same backend.
-	if w.database != nil {
-		w.inDatabase = append(w.inDatabase, "platform", "approvals", "inventory")
-		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
-	}
+	// alerts' rows, read through the same backend. Every change reaches
+	// every browser through the stores.
+	w.inDatabase = append(w.inDatabase, "platform", "approvals", "inventory")
+	storage := databaseSettings{kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}}
 	defaults := settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}
 	shared := settings.NewService(ctx, storage, defaults, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
@@ -68,6 +63,13 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// Read again every few seconds: a change saved through another replica,
 	// or by hand, reaches this one's browsers within seconds (P7-02).
 	go shared.Run(ctx, 3*time.Second)
-	w.spendBackend, w.stored, w.shared = spendBackend, stored, shared
+	w.spendBackend, w.settingsSource, w.stored, w.shared = spendBackend, from, stored, shared
 	return nil
 }
+
+// databaseSettings is where the shared settings are kept: the database's
+// rows, behind the key the service reads them by. The Settings page says
+// so.
+type databaseSettings struct{ kube.KeyStorage }
+
+func (databaseSettings) Kind() string { return "database" }

@@ -111,7 +111,7 @@ export function GettingStartedSection({ onToast }: { onToast?: (msg: string) => 
       </ol>
       {!view.kept && (
         <p className="rk-fhint" style={{ margin: 0 }}>
-          Dismissed steps are kept in memory until the console restarts: it was started without a ConfigMap for its settings.
+          Dismissed steps are kept in memory until the console restarts.
         </p>
       )}
     </div>

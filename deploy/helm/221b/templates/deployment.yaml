@@ -3,6 +3,7 @@
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
 {{- include "b221.validate" . }}
+{{- include "b221.validateDatabase" . }}
 {{- if and (eq .Values.auth.mode "oidc") (or (not .Values.auth.oidc.issuer) (not .Values.auth.oidc.clientID)) }}
 {{- fail "OIDC sign-in needs auth.oidc.issuer and auth.oidc.clientID" }}
 {{- end }}
@@ -476,8 +477,8 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
-          # With a database the console does not listen until it has
-          # reached it (two minutes of trying) and brought its schema up to
+          # The console does not listen until it has reached its database
+          # (two minutes of trying) and brought its schema up to
           # date (five at most), so the liveness probe waits for the start.
           startupProbe:
             httpGet:
@@ -485,7 +486,7 @@ spec:
               port: http
             periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: {{ ternary 12 90 (eq (include "b221.dbMode" .) "none") }}
+            failureThreshold: 90
           livenessProbe:
             httpGet:
               path: /healthz

@@ -309,10 +309,11 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 }
 
 // Where the sessions are kept, by what the console is given (DB-66):
-// with Secrets and a database, the database, and the Secrets are not
-// watched; with Secrets and no database, the Secrets, as before; without
-// Secrets (the simulator, a console run by hand), memory, with or without
-// a database, and the copy's name is claimed all the same.
+// with Secrets, the database, and the Secrets are read once for the copy
+// and not watched; without Secrets (connections.store: memory, a console
+// run by hand), memory, and the copy's name is claimed all the same. A
+// console always has its database (DB-69): the case of Secrets without
+// one, which kept the sessions in Secrets, is gone with it.
 func TestWhereTheSessionsAreKept(t *testing.T) {
 	ctx := t.Context()
 	// An API server that is not there: with Secrets the start reads them
@@ -339,8 +340,8 @@ func TestWhereTheSessionsAreKept(t *testing.T) {
 
 	// Secrets and a database: the database.
 	w := wire(d, "221b/k8s-console-221b", auth.ModeLocal)
-	if _, ok := w.authCfg.SessionStore.(*auth.PGSessions); !ok || w.sessionStore != nil || !slices.Contains(w.inDatabase, "identity") || !w.importIDs[auth.SessionsImportID] {
-		t.Fatalf("with Secrets and a database: the store %T, the Secrets watched: %v, the domains %v", w.authCfg.SessionStore, w.sessionStore != nil, w.inDatabase)
+	if _, ok := w.authCfg.SessionStore.(*auth.PGSessions); !ok || !slices.Contains(w.inDatabase, "identity") || !w.importIDs[auth.SessionsImportID] {
+		t.Fatalf("with Secrets and a database: the store %T, the domains %v", w.authCfg.SessionStore, w.inDatabase)
 	}
 	sess := w.authSvc.Sessions().Start(auth.Session{User: auth.User{Username: "ann"}, Method: "local"})
 	if n := rows(); n != 1 || sess.Signed {
@@ -351,27 +352,19 @@ func TestWhereTheSessionsAreKept(t *testing.T) {
 		t.Fatalf("a copy that could not read the Secrets is recorded (%v): %v", copied, err)
 	}
 
-	// Secrets and no database: the Secrets, watched, as before.
-	w = wire(nil, "221b/k8s-console-221b", auth.ModeLocal)
-	if _, ok := w.authCfg.SessionStore.(*kube.SessionStore); !ok || w.sessionStore == nil || len(w.inDatabase) != 0 {
-		t.Fatalf("with Secrets and no database: the store %T, the Secrets watched: %v, the domains %v", w.authCfg.SessionStore, w.sessionStore != nil, w.inDatabase)
+	// No Secrets: memory.
+	w = wire(d, "", auth.ModeLocal)
+	if w.authCfg.SessionStore != nil || slices.Contains(w.inDatabase, "identity") || !w.importIDs[auth.SessionsImportID] || len(w.importClash) != 0 {
+		t.Fatalf("without Secrets: the store %T, the domains %v, the names claimed %v", w.authCfg.SessionStore, w.inDatabase, w.importIDs)
 	}
-
-	// No Secrets: memory, with a database and without.
-	for _, d := range []*db.DB{d, nil} {
-		w = wire(d, "", auth.ModeLocal)
-		if w.authCfg.SessionStore != nil || w.sessionStore != nil || slices.Contains(w.inDatabase, "identity") || !w.importIDs[auth.SessionsImportID] || len(w.importClash) != 0 {
-			t.Fatalf("without Secrets (database: %v): the store %T, the domains %v, the names claimed %v", d != nil, w.authCfg.SessionStore, w.inDatabase, w.importIDs)
-		}
-		before := rows()
-		sess := w.authSvc.Sessions().Start(auth.Session{User: auth.User{Username: "bob"}, Method: "local"})
-		if _, ok := w.authSvc.Sessions().Get(sess.ID); !ok || rows() != before {
-			t.Fatalf("a session kept in memory (database: %v): found %v, %d rows more", d != nil, ok, rows()-before)
-		}
+	before := rows()
+	sess = w.authSvc.Sessions().Start(auth.Session{User: auth.User{Username: "bob"}, Method: "local"})
+	if _, ok := w.authSvc.Sessions().Get(sess.ID); !ok || rows() != before {
+		t.Fatalf("a session kept in memory: found %v, %d rows more", ok, rows()-before)
 	}
 	// Sign-in off: nobody signs in, and nothing is kept anywhere.
 	w = wire(d, "221b/k8s-console-221b", auth.ModeNone)
-	if w.authCfg.SessionStore != nil || w.sessionStore != nil || slices.Contains(w.inDatabase, "identity") {
+	if w.authCfg.SessionStore != nil || slices.Contains(w.inDatabase, "identity") {
 		t.Fatalf("with sign-in off: the store %T, the domains %v", w.authCfg.SessionStore, w.inDatabase)
 	}
 }

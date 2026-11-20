@@ -156,7 +156,7 @@ Secrets and there is no Helm tab, since Helm keeps its release records in Secret
 {{- $dbMode := include "b221.dbMode" . }}
 {{- if eq $dbMode "bundled" }}
 
-The console keeps the records that have moved to PostgreSQL in the chart's own database, {{ include "b221.dbName" . }}
+The console keeps its records in the chart's own database, {{ include "b221.dbName" . }}
 ({{ ternary "three members: a commit waits for one of the two standbys" "one member; database.bundled.ha=true makes it three" .Values.database.bundled.ha }}):
 
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=221b-db -L role
@@ -171,7 +171,7 @@ The database is NOT backed up (database.bundled.backup.enabled=false).
 {{- end }}
 {{- else if eq $dbMode "external" }}
 
-The console keeps the records that have moved to PostgreSQL in the database at
+The console keeps its records in the database at
 {{ .Values.database.external.host }}:{{ .Values.database.external.port }} ({{ .Values.database.external.database }}), which you run and back up.
 {{- if eq .Values.database.external.sslMode "require" }}
 database.external.sslMode=require encrypts the connection without checking who answers; verify-full does both.

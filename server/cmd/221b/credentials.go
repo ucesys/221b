@@ -20,9 +20,8 @@ import (
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 // wireCredentials opens the credentials: their secrets in the Secret
-// <release>-credentials when the console keeps its connections in
-// Secrets, with their list in the database when there is one (DB-60) and
-// in that Secret otherwise; in memory, both, without the Secret. The
+// <release>-credentials when the console may keep Secrets, with their
+// list in the database (DB-60); in memory, both, without the Secret. The
 // applications, the Helm repositories and Mycroft's sources say which
 // ones they use (Used by): the API registers the first two, the knowledge
 // the last.
@@ -41,20 +40,16 @@ func (w *wiring) wireCredentials(ctx context.Context) error {
 	return nil
 }
 
-// credentialsList is where the credentials' list is kept when it is not
-// the Secret's "index" key: the database's rows (DB-60), when there is a
-// database and the secrets are kept in a Secret. What the Secret held
-// under "index" is copied once and then leaves it (DB-61); the secrets
-// stay there, untouched.
+// credentialsList is where the credentials' list is kept: the database's
+// rows (DB-60), when the secrets are kept in a Secret. What the Secret of
+// a release before 0.13 held under "index" is copied once and then leaves
+// it (DB-61); the secrets stay there, untouched.
 //
-// With a database and the secrets in memory (no -connections-secrets: the
-// simulator, a console run by hand) the list stays in memory too, and nil
+// With the secrets in memory (no -connections-secrets: a console run by
+// hand, connections.store: memory) the list stays in memory too, and nil
 // is returned: a list that outlived the secrets it names would show, after
 // a restart, credentials that no use could send.
 func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore, inSecret bool) kv.Backend {
-	if w.database == nil {
-		return nil
-	}
 	if !inSecret {
 		w.claimImport(credentials.ListImportID)
 		return nil

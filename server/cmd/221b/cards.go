@@ -47,12 +47,13 @@ func cardLimits() cards.Limits {
 	return cards.Limits{CardsBytes: l[cards.CardsKey].Bytes, StandingBytes: l[cards.StandingKey].Bytes, NotifyBytes: l[cards.NotifyKey].Bytes, ChatsBytes: l[cards.ChatsKey].Bytes}
 }
 
-// openCards opens the cards: in <release>-proposals when the chart names
-// it, in memory otherwise; the channels' addresses in the Secret
-// <release>-cases beside the connections. It returns the ConfigMap too,
-// for the metrics of its size.
+// openCards opens the cards: their records where o.wrap keeps them, the
+// database; the channels' addresses in the Secret <release>-cases beside
+// the connections. <release>-proposals, when the chart names it, is the
+// one-time copy's source and nothing else: where a release before 0.13
+// kept the cards. It is returned too, for the metrics of its size.
 func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o cardsOptions) (*cards.Store, *kv.Limited, error) {
-	var backend kv.Backend = &kv.Memory{}
+	var backend kv.Backend
 	var stored *kv.Limited
 	if cfg.ProposalsConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.ProposalsConfigMap)
@@ -66,8 +67,6 @@ func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o c
 		}
 		stored = limited(cm, objProposals, o.log.With("component", "storage"))
 		backend = stored
-	} else {
-		o.log.Warn("the agents' proposed changes are kept in memory and lost on restart (set -proposals-configmap to keep them)")
 	}
 	var secrets cards.SecretStore
 	if cfg.ConnectionsSecrets != "" {
@@ -78,9 +77,12 @@ func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o c
 		}
 		secrets = sk
 	}
-	// With a database some of what the store keeps is kept there.
+	// Everything the store keeps is kept in the database; a caller that
+	// gives no wrap (a test) keeps it in memory.
 	if o.wrap != nil {
 		backend = o.wrap(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
 	}
 	st := cards.New(cards.Options{
 		Backend: backend,
@@ -237,23 +239,18 @@ func (w *wiring) wireCards(ctx context.Context) error {
 	// proposals, durable in <release>-cases, with the console actions they
 	// may carry; expired on the leader.
 	cardStore, cardsStored, err := openCards(ctx, cfg, w.restCfg, cardsOptions{wrap: func(b kv.Backend) kv.Backend {
-		// With a database everything the store keeps is rows (Phase 13):
-		// the standing approvals and the notification channels
-		// (approval_policies, notification_channels), the proposed changes
-		// (changes and the tables that hang from it, DB-45) and the waiting
-		// changes' conversations with Sherlock (chats, chat_messages, DB-46).
-		if w.database != nil {
-			w.inDatabase = append(w.inDatabase, "changes")
-		}
+		// Everything the store keeps is rows (Phase 13): the standing
+		// approvals and the notification channels (approval_policies,
+		// notification_channels), the proposed changes (changes and the
+		// tables that hang from it, DB-45) and the waiting changes'
+		// conversations with Sherlock (chats, chat_messages, DB-46).
+		w.inDatabase = append(w.inDatabase, "changes")
 		w.cardsBackend = w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
 			return map[string]movedDoc{cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d),
 				cards.CardsKey: cards.NewCardsPG(d), cards.ChatsKey: cards.NewChatsPG(d)}
 		})
 		return w.cardsBackend
 	}, inDatabase: func() bool {
-		if w.database == nil {
-			return false
-		}
 		copied, _ := w.database.Imported(ctx, cards.CardsKey)
 		return copied
 	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})

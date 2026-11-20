@@ -30,8 +30,9 @@ func (a *awaySecret) LoadKey(ctx context.Context, key string) ([]byte, string, b
 // whose secrets stay; a copy that fails leaves the list there for the
 // next start; a list a console from before the move wrote since is
 // removed and not read; and nothing is removed when the database cannot
-// say the copy was made. Without a database, or with the secrets in
-// memory, the list stays where the secrets are.
+// say the copy was made. With the secrets in memory, the list stays in
+// memory with them. (A console without a database, whose list stayed in
+// the Secret, is no more: DB-69.)
 func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 	ctx := context.Background()
 	d := dbtest.Open(t)
@@ -130,12 +131,9 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 		t.Fatalf("removed (%v) on a database that did not answer; the Secret: %v", removed, got)
 	}
 
-	// Without a database the list is the Secret's, and with one but the
-	// secrets in memory (no -connections-secrets) it stays in memory with
-	// them: nothing is copied, no row is made, and the credentials work.
-	if list := (&wiring{}).credentialsList(ctx, mem, true); list != nil {
-		t.Fatal("without a database the list is not the Secret's")
-	}
+	// With the secrets in memory (no -connections-secrets) the list stays
+	// in memory with them: nothing is copied, no row is made, and the
+	// credentials work.
 	d2 := dbtest.Open(t)
 	inMemory := &credentials.MemorySecret{}
 	w2 := &wiring{database: d2}

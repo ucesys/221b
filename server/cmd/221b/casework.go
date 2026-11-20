@@ -32,13 +32,13 @@ import (
 // SetLessons by the packages that keep them.
 
 // openCasework opens the cases' work: Administration › AI › Cases, the checks seen
-// and the analyses under way in <release>-casework when the chart names
-// it, in memory otherwise; the work on each case beside it in the case's
-// own ConfigMap; the exceptions and RCAs (lessons) in the casework
-// ConfigMap too; and the case analysis job, registered. It returns the
-// ConfigMap too, for the metrics of its size and the lessons' records.
+// and the analyses under way where wrap keeps them, the database, with
+// the exceptions and the fixes; and the case analysis job, registered.
+// <release>-casework, when the chart names it, is the one-time copy's
+// source and nothing else: where a release before 0.13 kept them. It is
+// returned too, for the metrics of its size.
 func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, js *jobs.Service, iss *issues.Service, auditLog *audit.Log, leads func() bool, log *slog.Logger, wrap func(kv.Backend) kv.Backend) (*casework.Service, *kv.Limited, error) {
-	var backend kv.Backend = &kv.Memory{}
+	var backend kv.Backend
 	var stored *kv.Limited
 	if cfg.CaseworkConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.CaseworkConfigMap)
@@ -47,12 +47,13 @@ func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, 
 		}
 		stored = limited(cm, objCasework, log.With("component", "storage"))
 		backend = stored
-	} else {
-		log.Warn("the cases' settings are kept in memory and lost on restart (set -casework-configmap to keep them)")
 	}
-	// With a database some of what the service keeps is kept there.
+	// Everything the service keeps is kept in the database; a caller that
+	// gives no wrap (a test) keeps it in memory.
 	if wrap != nil {
 		backend = wrap(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
 	}
 	svc := casework.New(casework.Options{
 		Backend: backend,
@@ -120,8 +121,12 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// RCAs are the lessons'.
 	caseSvc, caseStored, err := openCasework(ctx, cfg, w.restCfg, w.manager, w.jobsW.svc, w.issueSvc, w.auditLog, w.elector.IsLeader, log, func(b kv.Backend) kv.Backend {
 		// Administration › AI › Cases, with the counter and the analyses under
-		// way: a scope of the database's settings (Phase 13).
-		w.caseBackend = w.inScopes(ctx, b, map[string]string{casework.SettingsKey: "cases"})
+		// way: a scope of the database's settings (Phase 13). So are the
+		// two marks of what ran once, which were the last of the case work
+		// kept in its ConfigMap (DB-69): the clean start's, which says a
+		// clean start with this token ran (without it the cases would be
+		// deleted again), and the mark of the fixes' one import.
+		w.caseBackend = w.inScopes(ctx, b, map[string]string{casework.SettingsKey: "cases", casework.CleanKey: "clean-start", casework.FixesImportKey: "fixes-import"})
 		// The checks seen on each cluster, the validation rules and what
 		// the runs found are rows (DB-43); so are the accepted exceptions
 		// and the fixes, which the lessons and the fixes keep beside the
@@ -143,12 +148,13 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// Administration › AI › Cases, the people's addresses from the cases, the local
 	// accounts and the directory.
 	{
-		var mailBackend kv.Backend
+		// Settings › Email: a scope of the database's settings (Phase 13),
+		// copied once from the casework ConfigMap of a release before.
+		var from kv.Backend
 		if caseStored != nil {
-			mailBackend = caseStored
+			from = caseStored
 		}
-		// Settings › Email: a scope of the database's settings (Phase 13).
-		mailBackend = w.inScopes(ctx, mailBackend, map[string]string{mail.ConfigKey: "email"})
+		mailBackend := w.inScopes(ctx, from, map[string]string{mail.ConfigKey: "email"})
 		w.mailSvc = openMail(cfg, w.restCfg, mailBackend, w.cardStore, w.auditLog, log)
 		caseSvc.SetMail(w.mailSvc, func(id string) string {
 			if w.authSvc == nil {
@@ -167,12 +173,9 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// the accepted exceptions the runs leave out, and the cases' RCAs, in
 	// the casework ConfigMap beside the cases; written to the wiki too when
 	// one is kept.
-	var lessonsBackend kv.Backend
-	if caseStored != nil || w.database != nil {
-		// Through the case work's backend, which routes the exceptions and
-		// the fixes to the database when there is one.
-		lessonsBackend = w.caseBackend
-	}
+	// Through the case work's backend, which keeps the exceptions and the
+	// fixes in the database.
+	lessonsBackend := w.caseBackend
 	lessonsSvc := openLessons(lessonsBackend, w.auditLog, w.knowledgeSvc, log)
 	// Fixes (wave 6g, CF-50 to CF-55): beside the exceptions; the
 	// cases save them, the agents read the active ones, the daily
@@ -212,31 +215,28 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// The clean start (CF-23) runs once on the leader, before the cases'
 	// loops start.
 	{
-		st := casework.CleanStores{Cases: w.issueSvc.Cases(), CasesInDatabase: w.database != nil}
-		if w.issueStored != nil {
-			st.Issues = w.issueBackend
-		}
-		if caseStored != nil {
-			// Through the same backend the service reads, so what the
-			// database keeps of it is cleaned there.
-			st.Casework = w.caseBackend
-		}
-		// The runs and the cards through the backends their services read,
-		// for the same reason.
-		if w.jobsW.stored != nil {
-			st.Runs = w.jobsW.backend
-		}
-		if w.cardsStored != nil {
-			st.Cards = w.cardsBackend
-		}
-		if w.knowledgeStored != nil {
-			st.Knowledge = w.knowledgeBackend
+		// Through the backends the services read, so what the database
+		// keeps is cleaned there, and what a release before 0.13 left in
+		// a ConfigMap under a key of its own is deleted there.
+		st := casework.CleanStores{Cases: w.issueSvc.Cases(), CasesInDatabase: true,
+			Issues: w.issueBackend, Casework: w.caseBackend, Runs: w.jobsW.backend, Cards: w.cardsBackend, Knowledge: w.knowledgeBackend}
+		// The clean start goes by its mark (casework.CleanKey), which was
+		// kept in the casework ConfigMap. A start that could not copy the
+		// mark into the database must not take it for missing: it would
+		// delete the cases a second time. It waits for the next start.
+		cleanStart := !w.notCopied[casework.CleanKey]
+		if !cleanStart && cfg.CleanStartToken != "" {
+			log.Error("the clean start is not run at this start: its mark of the last clean start could not be copied from the casework ConfigMap into the database, and without it the cases would be deleted again; the next start tries again")
 		}
 		go func() {
-			runCleanStart(ctx, cfg, st, w.knowledgeSvc, w.elector.IsLeader, w.auditLog, log)
+			if cleanStart {
+				runCleanStart(ctx, cfg, st, w.knowledgeSvc, w.elector.IsLeader, w.auditLog, log)
+			}
 			// The fixes of the cases closed as Fixed before (CF-54), once,
 			// after any clean start.
-			runFixesImport(ctx, caseSvc, w.elector.IsLeader, log)
+			if !w.notCopied[casework.FixesImportKey] {
+				runFixesImport(ctx, caseSvc, w.elector.IsLeader, log)
+			}
 		}()
 	}
 	go caseSvc.Run(ctx)

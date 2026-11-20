@@ -107,14 +107,30 @@ chart-lint: ## Lint and render the Helm chart
 SIM_OIDC = -oidc-issuer http://127.0.0.1:7443/oidc
 SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-id 221b -oidc-client-secret 221b-secret -oidc-provider-name "Simulated provider" -admin-groups platform-admins -access-ttl 10s
 
-# The settings ConfigMap and the connection Secrets (P3-07) live in the
-# simulated cluster too, in the namespace 221b.
-SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/k8s-console-221b \
-	-audit-configmap 221b/k8s-console-221b-audit -sessions-configmap 221b/k8s-console-221b-sessions \
-	-automation-configmap 221b/k8s-console-221b-automation -automation-runs-configmap 221b/k8s-console-221b-automation-runs \
-	-ai-configmap 221b/k8s-console-221b-ai -issues-configmap 221b/k8s-console-221b-issues -runs-configmap 221b/k8s-console-221b-runs \
-	-proposals-configmap 221b/k8s-console-221b-proposals -knowledge-configmap 221b/k8s-console-221b-knowledge \
-	-wiki-configmap 221b/k8s-console-221b-wiki -casework-configmap 221b/k8s-console-221b-casework
+# The console keeps its records in PostgreSQL and does not run without it
+# (DB-69). dev-sim, e2e-sim and screenshots start one in Docker for the run
+# (postgres:18 on 127.0.0.1:$(DEV_DB_PORT), thrown away at the end), unless
+# DEV_DATABASE names one as host:port that lets the user postgres in
+# without a password; the database DEV_DB_NAME there must be empty, or
+# this console's from an earlier run.
+DEV_DATABASE ?=
+DEV_DB_PORT ?= 55433
+DEV_DB_NAME ?= postgres
+# Starts the database (sets db, the container to stop, and dbaddr).
+DEV_DB_START = if [ -z "$(DEV_DATABASE)" ]; then \
+	  db=221b-dev-db-$$$$; dbaddr=127.0.0.1:$(DEV_DB_PORT); \
+	  docker run -d --rm --name $$db -e POSTGRES_HOST_AUTH_METHOD=trust -p $$dbaddr:5432 postgres:18 > /dev/null || exit 1; \
+	  until docker exec $$db pg_isready -q -h 127.0.0.1; do sleep 1; done; \
+	else db=; dbaddr=$(DEV_DATABASE); fi
+# The container was started with --rm: stopping it removes it.
+DEV_DB_STOP = if [ -n "$$db" ]; then docker stop -t 1 $$db > /dev/null; fi
+DEV_DB_FLAGS = -db-host $${dbaddr%:*} -db-port $${dbaddr\#\#*:} -db-user postgres -db-name $(DEV_DB_NAME) -db-sslmode disable
+
+# The records are in that database; the connections' credentials and the
+# other secrets are Secrets of the simulated cluster, in the namespace
+# 221b (P3-07), and so is the temporary wiki store's ConfigMap. No
+# ConfigMap of a release before 0.13 is named: there is nothing to copy.
+SIM_STORE = -connections-secrets 221b/k8s-console-221b -wiki-configmap 221b/k8s-console-221b-wiki
 
 # Sherlock (Phase 5) talks to the simulator's fake Claude API; an
 # administrator turns it on in Settings with any key of the right shape.
@@ -122,11 +138,13 @@ SIM_SHERLOCK = -sherlock-api-url http://127.0.0.1:7443/claude
 # Watson (Phase 6) may change the simulated cluster once someone approves.
 SIM_WATSON = -local-mode write -toolbox-config hack/e2e-toolbox.json
 
-dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
+dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster and a throwaway PostgreSQL in Docker (or DEV_DATABASE), signing in through the simulated provider
+	@$(DEV_DB_START); \
+	trap '$(DEV_DB_STOP)' EXIT INT TERM; \
+	bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
-	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH)
+	trap 'kill $$sim $$sim2 2>/dev/null; $(DEV_DB_STOP)' EXIT INT TERM; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(DEV_DB_FLAGS) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH)
 
 # E2E_PORT is where e2e-sim serves the console, for a machine where 8080 is taken.
 E2E_PORT ?= 8080
@@ -135,23 +153,27 @@ E2E_ARGS ?=
 
 # A second simulator on 7444 stands in for another cluster (P3-09); the
 # tests tell it which token to require.
-e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
+e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster and a throwaway PostgreSQL in Docker (or DEV_DATABASE)
+	@$(DEV_DB_START); \
+	trap '$(DEV_DB_STOP)' EXIT INT TERM; \
+	bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
-	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
+	trap 'kill $$sim $$sim2 2>/dev/null; $(DEV_DB_STOP)' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && curl -fs http://127.0.0.1:7444/version >/dev/null && break; sleep 0.2; done; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -health-interval 2s -log-format text -listen 127.0.0.1:$(E2E_PORT) $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
-	trap 'kill $$sim $$sim2 $$srv 2>/dev/null' EXIT INT TERM; \
-	for i in $$(seq 50); do curl -fs http://127.0.0.1:$(E2E_PORT)/readyz >/dev/null && break; sleep 0.2; done; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(DEV_DB_FLAGS) $(SIM_SHERLOCK) $(SIM_WATSON) -health-interval 2s -log-format text -listen 127.0.0.1:$(E2E_PORT) $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
+	trap 'kill $$sim $$sim2 $$srv 2>/dev/null; $(DEV_DB_STOP)' EXIT INT TERM; \
+	for i in $$(seq 600); do curl -fs http://127.0.0.1:$(E2E_PORT)/readyz >/dev/null && break; sleep 0.2; done; \
 	cd web && E2E_BASE_URL=http://127.0.0.1:$(E2E_PORT) E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e -- $(E2E_ARGS)
 
 screenshots: build ## Take the README's screenshots (docs/screenshots) against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
-	trap 'kill $$sim 2>/dev/null' EXIT INT TERM; \
+	@$(DEV_DB_START); \
+	trap '$(DEV_DB_STOP)' EXIT INT TERM; \
+	bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
+	trap 'kill $$sim 2>/dev/null; $(DEV_DB_STOP)' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && break; sleep 0.2; done; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH) > bin/shots-audit.log 2> bin/shots-server.log & srv=$$!; \
-	trap 'kill $$sim $$srv 2>/dev/null' EXIT INT TERM; \
-	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(DEV_DB_FLAGS) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH) > bin/shots-audit.log 2> bin/shots-server.log & srv=$$!; \
+	trap 'kill $$sim $$srv 2>/dev/null; $(DEV_DB_STOP)' EXIT INT TERM; \
+	for i in $$(seq 600); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
 	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 npx playwright test -c screenshots/playwright.config.ts
 
 sherlock-eval: ## Ask Sherlock about the simulator's sample problems (P5-06); with ANTHROPIC_API_KEY, through the Claude API

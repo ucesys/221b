@@ -56,16 +56,17 @@ type jobsWiring struct {
 	issues *issues.Service
 }
 
-// openJobs builds the jobs: their ConfigMap when the chart names one,
-// memory otherwise; the console's own kinds; the investigator, whose kind
-// is report triage. The agents and the backups' kind come later, once
-// the console has them.
+// openJobs builds the jobs: the console's own kinds; the investigator,
+// whose kind is report triage. The agents and the backups' kind come
+// later, once the console has them.
 //
-// moved keeps the keys that have tables in the database, when there is one
-// (Phase 13); nil leaves every key where it is.
+// moved keeps the jobs and their runs in the database (Phase 13) and is
+// given the one-time copy's source and nothing else: <release>-runs, the
+// ConfigMap a release before 0.13 kept them in, nil when the flags name
+// none. A caller that gives no moved (a test) keeps them in memory.
 func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, leads func() bool, moved func(kv.Backend) kv.Backend, log *slog.Logger) (*jobsWiring, error) {
 	w := &jobsWiring{}
-	var backend kv.Backend = &kv.Memory{}
+	var backend kv.Backend
 	if cfg.RunsConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.RunsConfigMap)
 		if err != nil {
@@ -73,11 +74,11 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 		}
 		w.stored = limited(cm, objRuns, log.With("component", "storage"))
 		backend = w.stored
-	} else {
-		log.Warn("the jobs' settings and runs are kept in memory and lost on restart (set -runs-configmap to keep them)")
 	}
 	if moved != nil {
 		backend = moved(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
 	}
 	w.backend = backend
 	w.svc = jobs.New(jobs.Options{
@@ -335,9 +336,7 @@ func (w *wiring) wireJobs(ctx context.Context) error {
 	// service's investigator.
 	// The jobs and their runs are rows of the database (DB-42).
 	jobsW, err := openJobs(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.elector.IsLeader, func(b kv.Backend) kv.Backend {
-		if w.database != nil {
-			w.inDatabase = append(w.inDatabase, "jobs")
-		}
+		w.inDatabase = append(w.inDatabase, "jobs")
 		return w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
 			return map[string]movedDoc{jobs.JobsKey: jobs.NewJobsPG(d), jobs.RunsKey: jobs.NewRunsPG(d)}
 		})

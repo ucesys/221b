@@ -38,13 +38,15 @@ type aiService struct {
 	stored *kv.Limited
 }
 
-// openAI opens the agents: their ConfigMap (memory without one), each other
+// openAI opens the agents: their records where o.moved keeps them, the
+// database (<release>-ai, when the flags name it, is the one-time copy's
+// source and nothing else: where a release before 0.13 kept them), each other
 // provider's credential in a Secret beside Sherlock's
 // (<release>-ai-<provider>), and the baselines. It carries Sherlock's
 // instructions and notes from before Phase 12 over, once.
 func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secretRef string, o aiOptions) (aiService, error) {
 	var out aiService
-	var backend kv.Backend = &kv.Memory{}
+	var backend kv.Backend
 	if cfg.AIConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.AIConfigMap)
 		if err != nil {
@@ -52,11 +54,11 @@ func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secret
 		}
 		l := limited(cm, objAI, o.log)
 		backend, out.stored = l, l
-	} else {
-		o.log.Warn("the AI agents' providers, instructions and test cases are kept in memory and lost on restart (set -ai-configmap to keep them)")
 	}
 	if o.moved != nil {
 		backend = o.moved(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
 	}
 	baselines, err := ai.LoadBaselines(cfg.AgentsDir)
 	if err != nil {

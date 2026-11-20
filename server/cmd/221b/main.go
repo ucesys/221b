@@ -88,9 +88,8 @@ type wiring struct {
 	mode     kube.Mode
 
 	// Sign-in (auth.go).
-	authCfg      auth.Config
-	authFile     auth.FileConfig
-	sessionStore *kube.SessionStore
+	authCfg  auth.Config
+	authFile auth.FileConfig
 	// sessionsLeft empties the session Secrets that were copied into the
 	// database and could not be emptied at the start, and says whether it
 	// is done (DB-66); nil when nothing is left.
@@ -113,11 +112,14 @@ type wiring struct {
 	lost       chan struct{}
 	leaderDone chan struct{}
 
-	// The database (database.go): nil while the records are in ConfigMaps.
-	// inDatabase names the domains whose records it holds.
+	// The database (database.go), where every record set is kept (DB-69),
+	// and the domains whose records it holds, for GET /api/v1/database.
 	database      *db.DB
 	schemaVersion int
 	inDatabase    []string
+	// notCopied are the keys whose one-time copy from a ConfigMap failed
+	// at this start (noteNotCopied).
+	notCopied map[string]bool
 	// databaseWait is how long a start waits for the database before it
 	// gives up and the console stops (DB-02); 0 is the default (a test
 	// sets it).
@@ -130,11 +132,16 @@ type wiring struct {
 	// at the start is tried again; 0 is the default (a test sets it).
 	moveAgainEvery time.Duration
 
-	// The settings and what is kept beside them (settings.go); stored are
-	// the ConfigMaps whose sizes the metrics show.
-	shared       *settings.Service
-	spendBackend kv.Backend
-	stored       storedObjects
+	// The settings and what is kept beside them (settings.go): spendBackend
+	// is their store, in the database. settingsSource is the one-time
+	// copies' source, the settings ConfigMap of a release before 0.13 with
+	// the audit log's and the session records' own (nil when none is
+	// named), and stored are the ConfigMaps of before whose sizes the
+	// metrics show until they are gone.
+	shared         *settings.Service
+	spendBackend   kv.Backend
+	settingsSource kv.Backend
+	stored         storedObjects
 
 	// Sherlock and the agents (sherlock.go). Sherlock's ask_knowledge reads
 	// the last four once they are opened, further on.
@@ -264,9 +271,7 @@ func serve(parent context.Context, args []string, h *hooks) error {
 	if err := w.wireDatabase(ctx); err != nil {
 		return err
 	}
-	if w.database != nil {
-		defer w.database.Close()
-	}
+	defer w.database.Close()
 	if err := w.wireAuth(ctx); err != nil {
 		return err
 	}
@@ -293,15 +298,14 @@ func serve(parent context.Context, args []string, h *hooks) error {
 		return err
 	}
 	w.twoPerson.SetBackend(w.spendBackend)
-	if auditStore := w.keepAudit(ctx, w.spendBackend, log.With("component", "audit")); auditStore != nil {
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := auditStore.Close(ctx); err != nil {
-				log.Warn("saving the audit log at shutdown failed", "err", err)
-			}
-		}()
-	}
+	auditStore := w.keepAudit(ctx, w.settingsSource, log.With("component", "audit"))
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := auditStore.Close(ctx); err != nil {
+			log.Warn("saving the audit log at shutdown failed", "err", err)
+		}
+	}()
 	if err := w.wireSherlock(ctx); err != nil {
 		return err
 	}
@@ -452,69 +456,53 @@ func workWithin(grace time.Duration) time.Duration {
 // Audit log page; the stream and the webhook are the full record.
 const auditRetention = 365 * 24 * time.Hour
 
-// keepAudit gives the log its store for Administration › Audit log, and
-// returns it to close: the database's audit_events when there is a
-// database (Phase 13), else beside the settings, or in memory on a laptop,
-// where the page says so.
-func (w *wiring) keepAudit(ctx context.Context, b kv.Backend, logger *slog.Logger) interface {
+// keepAudit gives the log its store for Administration › Audit log, the
+// database's audit_events (Phase 13), and returns it to close. from is
+// the copy's source and nothing else: where a release before 0.13 kept
+// the audit log, the settings ConfigMap or the audit log's own; nil when
+// none is named.
+func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Logger) interface {
 	Close(ctx context.Context) error
 } {
 	l := w.auditLog
-	_, inMemory := b.(*kv.Memory)
-	if w.database != nil {
-		st := audit.NewPGStore(w.database, logger)
-		l.SetStore(st)
-		w.inDatabase = append(w.inDatabase, "activity")
-		go func() {
-			// What a release before Phase 13 kept in the ConfigMap, once.
-			if !inMemory {
-				ictx, cancel := context.WithTimeout(ctx, time.Minute)
-				n, err := st.Import(ictx, &audit.KVStore{Backend: b, Key: audit.StoreKey, Logger: logger}, "configmap key "+audit.StoreKey)
-				cancel()
-				switch {
-				case err != nil:
-					logger.Warn("copying the audit log from its ConfigMap failed; the next start tries again", "err", err)
-				case n > 0:
-					logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
-				}
-				// What was copied leaves the ConfigMap (DB-55): a console
-				// rolled back writes there again, and that is copied and
-				// removed at the next start with the database.
-				if err == nil {
-					w.removeCopied(ctx, b, audit.StoreKey, audit.StoreKey)
-				}
-			}
-			// Retention, once a day on whichever replica gets the lock.
-			t := time.NewTicker(24 * time.Hour)
-			defer t.Stop()
-			for {
-				tctx, cancel := context.WithTimeout(ctx, time.Minute)
-				if n, err := st.Trim(tctx, time.Now().Add(-auditRetention)); err != nil {
-					logger.Warn("trimming the audit log failed", "err", err)
-				} else if n > 0 {
-					logger.Info("trimmed the audit log", "events", n)
-				}
-				cancel()
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-				}
-			}
-		}()
-		return st
-	}
-	if inMemory {
-		l.KeepInMemory(audit.DefaultKeep)
-		return nil
-	}
-	st := audit.NewKVStore(b, logger)
+	st := audit.NewPGStore(w.database, logger)
 	l.SetStore(st)
+	w.inDatabase = append(w.inDatabase, "activity")
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := st.Sweep(ctx); err != nil {
-			logger.Warn("cleaning the kept audit log failed", "err", err)
+		// What a release before Phase 13 kept in the ConfigMap, once.
+		if hasSource(from) {
+			ictx, cancel := context.WithTimeout(ctx, time.Minute)
+			n, err := st.Import(ictx, &audit.KVStore{Backend: from, Key: audit.StoreKey, Logger: logger}, "configmap key "+audit.StoreKey)
+			cancel()
+			switch {
+			case err != nil:
+				logger.Warn("copying the audit log from its ConfigMap failed; the next start tries again", "err", err)
+			case n > 0:
+				logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
+			}
+			// What was copied leaves the ConfigMap (DB-55): a console
+			// rolled back writes there again, and that is copied and
+			// removed at the next start with the database.
+			if err == nil {
+				w.removeCopied(ctx, from, audit.StoreKey, audit.StoreKey)
+			}
+		}
+		// Retention, once a day on whichever replica gets the lock.
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			tctx, cancel := context.WithTimeout(ctx, time.Minute)
+			if n, err := st.Trim(tctx, time.Now().Add(-auditRetention)); err != nil {
+				logger.Warn("trimming the audit log failed", "err", err)
+			} else if n > 0 {
+				logger.Info("trimmed the audit log", "events", n)
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 	}()
 	return st

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -80,28 +79,10 @@ func TestStoppingFitsTheTerminationGracePeriod(t *testing.T) {
 // persistent is a storage that outlasts a restart, as the ConfigMap does.
 type persistent struct{ kv.Memory }
 
-// The Audit log page says events are in memory exactly when they are.
-func TestTheAuditStoreIsOnlyUsedOverStorageThatPersists(t *testing.T) {
-	mem := audit.New(audit.Options{})
-	if st := (&wiring{auditLog: mem}).keepAudit(t.Context(), &kv.Memory{}, slog.Default()); st != nil || mem.Stored() {
-		t.Fatalf("over memory: store %v, stored %v", st, mem.Stored())
-	}
-	mem.Record(audit.Event{Action: "signin"})
-	if got, _ := mem.Events(context.Background()); len(got) != 1 {
-		t.Fatalf("the page lists %+v", got)
-	}
-	kept := audit.New(audit.Options{})
-	st := (&wiring{auditLog: kept}).keepAudit(t.Context(), &persistent{}, slog.Default())
-	if st == nil || !kept.Stored() {
-		t.Fatalf("over a ConfigMap: store %v, stored %v", st, kept.Stored())
-	}
-	if err := st.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// With a database the audit log is kept in it (Phase 13), and what the
-// ConfigMap held from the release before is copied over once.
+// The audit log is kept in the database (Phase 13), and what the
+// ConfigMap held from the release before is copied over once. (The test
+// that it was kept in memory or in the ConfigMap without a database went
+// with that console: DB-69.)
 func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := t.Context()
@@ -144,18 +125,16 @@ func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 	}
 }
 
-// With a database a service's singleton settings are scopes of its
-// settings table: copied from the ConfigMap once, read and written there
-// from then on, while the service's other keys stay where they were.
+// A service's singleton settings are scopes of its settings table: copied
+// from the ConfigMap once, read and written there from then on. A key no
+// scope or table names is kept nowhere (DB-69): what the ConfigMap holds
+// under it is read and can be deleted, and a save is refused, so nothing
+// is kept in a ConfigMap by oversight.
 func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	ctx := t.Context()
 	cm := &persistent{}
 	if _, err := cm.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup"]}`), ""); err != nil {
 		t.Fatal(err)
-	}
-	none := &wiring{log: slog.Default()}
-	if got := none.inScopes(ctx, cm, map[string]string{"setup.json": "setup"}); got != kv.Backend(cm) {
-		t.Fatalf("without a database the backend became %T", got)
 	}
 	w := &wiring{log: slog.Default(), database: dbtest.Open(t)}
 	b := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
@@ -170,11 +149,23 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	if old, _, err := cm.LoadKey(ctx, "setup.json"); !errors.Is(err, kv.ErrNotFound) {
 		t.Fatalf("the ConfigMap still holds %s: %v", old, err)
 	}
-	if _, err := b.SaveKey(ctx, "other.json", []byte(`1`), ""); err != nil {
+	if _, err := cm.SaveKey(ctx, "left.json", []byte(`1`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, err := cm.LoadKey(ctx, "other.json"); err != nil || string(v) != "1" {
-		t.Fatalf("another key did not stay in the ConfigMap: %s %v", v, err)
+	if v, _, err := b.LoadKey(ctx, "left.json"); err != nil || string(v) != "1" {
+		t.Fatalf("a key no scope names is not read from the ConfigMap: %s %v", v, err)
+	}
+	if _, err := b.SaveKey(ctx, "other.json", []byte(`1`), ""); err == nil {
+		t.Fatal("a key no scope names was saved")
+	}
+	if v, _, err := cm.LoadKey(ctx, "other.json"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("a key no scope names was kept in the ConfigMap: %s %v", v, err)
+	}
+	if err := b.(kv.Deleter).DeleteKey(ctx, "left.json"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, err := cm.LoadKey(ctx, "left.json"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("a key no scope names was not deleted from the ConfigMap: %s %v", v, err)
 	}
 	// A second start copies nothing over what was saved since.
 	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})

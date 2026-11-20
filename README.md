@@ -58,11 +58,12 @@ Three steps: deploy the console into a cluster, set up that cluster (the "local"
      --set service.type=LoadBalancer
    ```
 
-   This installs the console, its read-only account, and the four roles for people (see [Four roles](#reference) below). The roles' names are fixed, one set per cluster: a second console in another namespace uses the first one's.
+   This installs the console, its read-only account, the four roles for people (see [Four roles](#reference) below), and the database it keeps its records in: PostgreSQL from the image `ghcr.io/ucesys/221b-postgres`, one member with a 10 GiB volume of the cluster's default storage class and a 20 GiB volume for its backups (`database.bundled.*`; three members with `database.bundled.ha=true`, or a PostgreSQL you run with `database.mode=external`: [docs/database.md](docs/database.md)). The console does not run without it. The roles' names are fixed, one set per cluster: a second console in another namespace uses the first one's.
 
 4. **Wait for it and find its address.**
 
    ```sh
+   kubectl -n 221b rollout status statefulset/k8s-console-221b-db   # the database
    kubectl -n 221b rollout status deploy/k8s-console-221b
    kubectl -n 221b get svc k8s-console-221b          # EXTERNAL-IP, port 8081
    kubectl -n 221b logs deploy/k8s-console-221b | grep -m1 serving   # the build that runs
@@ -74,7 +75,7 @@ Three steps: deploy the console into a cluster, set up that cluster (the "local"
 
    **Check:** the home page shows the cluster with its nodes, pods and alerts, and the top bar says *Live* ([screenshot](docs/screenshots/home.png)).
 
-**Upgrade** to a release with `helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version <version> -n 221b --reset-then-reuse-values`; [docs/upgrading.md](docs/upgrading.md) says which upgrades are tested, what each release changes and how to go back. To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too). Images tagged `main`, `pr-<number>` and `branch-<name>` move to every new build, so the console pulls the image again on every restart and upgrade; to pin one build use `image.tag=sha-<commit>`. To remove it: `helm uninstall k8s-console -n 221b`. Users, connections, sign-ins and Sherlock's key that the console created are Secrets in its namespace that the uninstall leaves, and so are the AIOps cases (a ConfigMap each, labelled `221b.io/case`), the backup key (`k8s-console-221b-backup-key`: without it, the secrets in your backups cannot be restored) and the credentials of AI providers, knowledge sources and Helm repositories; delete the namespace to remove them too.
+**Upgrade** to a release with `helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version <version> -n 221b --reset-then-reuse-values`; [docs/upgrading.md](docs/upgrading.md) says which upgrades are tested, what each release changes and how to go back; read its 0.13.0 section before upgrading from 0.12, which adds the bundled database and copies every record into it. To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too). Images tagged `main`, `pr-<number>` and `branch-<name>` move to every new build, so the console pulls the image again on every restart and upgrade; to pin one build use `image.tag=sha-<commit>`. To remove it: `helm uninstall k8s-console -n 221b`. Users, connections, sign-ins and Sherlock's key that the console created are Secrets in its namespace that the uninstall leaves, and so are the database's Secrets and volumes (`k8s-console-221b-db`, `k8s-console-221b-db-tls` and the claims `data-k8s-console-221b-db-*` and `backup-k8s-console-221b-db-*`, kept so that a reinstall finds its records), the backup key (`k8s-console-221b-backup-key`: without it, the secrets in your backups cannot be restored) and the credentials of AI providers, knowledge sources and Helm repositories; delete the namespace to remove them too.
 
 ### 2. Set up the local cluster
 
@@ -282,7 +283,7 @@ CPU and memory in use come from [metrics-server](https://github.com/kubernetes-s
 
 **Every table** sorts by any column, picks columns and exports what is on screen to Excel, CSV or JSON, with the same controls everywhere. Column choices are kept in your browser. The search box suggests names, labels, nodes, namespaces and statuses as you type. Rows are keyboard-navigable: Enter opens a row's details, the arrow keys move between rows and into a row's links, and Escape closes the details.
 
-**Settings** (the gear in the top bar opens Administration; Settings is one of its pages, for SuperAdmins) hold Getting started, the refresh rate, for everyone, the AI providers, agents and knowledge sources, Watson's and the applications' settings, and the AIOps sections (Issues, SLA, Cases, Jobs); the theme is personal and in the account menu. For the refresh rate, the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its ConfigMap (`k8s-console-221b`) so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
+**Settings** (the gear in the top bar opens Administration; Settings is one of its pages, for SuperAdmins) hold Getting started, the refresh rate, for everyone, the AI providers, agents and knowledge sources, Watson's and the applications' settings, and the AIOps sections (Issues, SLA, Cases, Jobs); the theme is personal and in the account menu. For the refresh rate, the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its database so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
 
 ## Develop
 
@@ -302,10 +303,13 @@ make help        # everything else
 
 ```sh
 make build
-bin/221b -kubeconfig ~/.kube/config -context my-cluster -cluster-name my-cluster
+bin/221b -kubeconfig ~/.kube/config -context my-cluster -cluster-name my-cluster \
+  -db-host 127.0.0.1 -db-port 5432 -db-user postgres -db-name postgres -db-sslmode disable
 ```
 
-**The browser app with hot reload:** run `make dev-sim` in one terminal and `npm run dev` in `web/` in another, then open <http://localhost:5173>; Vite sends API calls to the server on port 8080.
+The console keeps its records in PostgreSQL 16 or later and does not start without one: any that lets it in will do, such as `docker run -d --rm -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:5432:5432 postgres:18`.
+
+**The browser app with hot reload:** run `make dev-sim` in one terminal (it starts a throwaway PostgreSQL in Docker for the console, or uses the one `DEV_DATABASE=host:port` names) and `npm run dev` in `web/` in another, then open <http://localhost:5173>; Vite sends API calls to the server on port 8080.
 
 **The simulator** (`bin/221b-sim`) serves enough of the Kubernetes API for the server's real informers: every kind the console watches, with namespaces full of workloads, Services, Ingresses, ConfigMaps, Secrets and Helm release records, pod logs and metrics, plus the kubelets' boot times through the node proxy and a ConfigMap for the settings. It takes `-nodes`, `-pods` and `-churn`, and `POST /sim/...` changes things: cordon a node, make it not ready, reboot it, crash a pod, delete a pod, give a Service an external IP, take the API server down. See `server/internal/sim`.
 

@@ -76,7 +76,7 @@ replicas:
 # browser the same update at the same moment. Nodes and pods are watched,
 # so the rate adds no load there. This is the starting value; the Settings
 # dialog changes it for everyone and keeps the choice in the console's
-# ConfigMap. 1s to 10m.
+# database. 1s to 10m.
 refresh: 3s
 # Read each node's boot time from its kubelet, for the uptime in the node
 # details. It is read through the API server's node proxy, once per node
@@ -246,10 +246,9 @@ auth:
   sessionIdle: 8h
   sessionMax: 168h
   # How long a session lasts that was made while the session store could
-  # not be written (DB-65). The sessions are kept in the database when
-  # there is one (database.mode, with connections.store: secrets; DB-66),
-  # and in Secrets of the release's namespace otherwise, so that is the
-  # database being away, or the Kubernetes API server. Such a session is
+  # not be written (DB-65). The sessions are kept in the database (with
+  # connections.store: secrets; DB-66), so that is the database being
+  # away. Such a session is
   # kept in its cookie, signed with a key the console makes at its first
   # start in the Secret <release>-session-key, so every replica can check
   # it without the store. It counts from sign-in, is not renewed by use,
@@ -299,10 +298,13 @@ ingress:
     secretName: ""
 
 # Other clusters (P3-04 to P3-09). An administrator adds them in the
-# console; each connection is kept as a Secret in the release namespace,
-# named <release>-cluster-<id>, and the console's Role may manage Secrets
-# there (and only there). store: memory keeps them in memory instead,
-# losing them on restart, and grants nothing on Secrets.
+# console; each connection is a row of the database, and its credential a
+# Secret in the release namespace, named <release>-cluster-<id>; the
+# console's Role may manage Secrets there (and only there). store: memory
+# keeps the connections in memory instead, with the applications, the
+# credentials and the sign-in sessions, whose records would outlive their
+# secrets, losing them on restart, and grants nothing on Secrets; every
+# other record is in the database either way.
 connections:
   store: secrets
 
@@ -353,7 +355,8 @@ agents:
   # easiest from a file:
   #   helm upgrade … --set-file agents.troubleshooter.instructions=troubleshooter.md
   # The agents' providers, models, budgets and versions of instructions are
-  # kept in the ConfigMap <release>-ai.
+  # kept in the database; <release>-ai is where a release before 0.13 kept
+  # them, copied once at the first start with the database.
   sherlock:
     instructions: ""
   troubleshooter:
@@ -402,8 +405,9 @@ automation:
   # where SuperAdmins keep scripts, approve their versions once and run
   # them on a fleet's nodes over SSH. It runs nothing unless
   # toolbox.ssh.enabled is on too, since it reaches nodes only through
-  # their SSH pairings. Its records live in the ConfigMap
-  # <release>-automation.
+  # their SSH pairings. Its records are kept in the database
+  # (<release>-automation is where a release before 0.13 kept them, copied
+  # once).
   enabled: true
   # runIdentities are the service accounts, by name, that Kubernetes scripts
   # and hooks may run as. Each adds impersonate on that name to the console's
@@ -417,7 +421,8 @@ issues:
   # each report is matched against the known issues, and the reporter is
   # told how it stands until it is resolved. Its API is /api/issues/v1/
   # (docs/issues-api.yaml). Its reports, known issues, services and
-  # settings live in the ConfigMap <release>-issues. Since Phase 12's wave
+  # settings are kept in the database (<release>-issues held them before
+  # 0.13, and is copied once). Since Phase 12's wave
   # 5 a report is a case, and every case (reported, from a finding or an
   # alert, or opened by hand) is kept there: false turns off the report
   # page and the issue API only, and Cases keep working.
@@ -452,8 +457,9 @@ issues:
 cases:
   # The agents' proposals (Phase 12, ADR-99 to ADR-102): every change an
   # agent wants, asked in a chat or on its own, waits as a durable Watson
-  # card in AIOps › Inbox and the cluster's Watson panel, in the ConfigMap
-  # <release>-proposals, until people approve or reject it, it expires (24
+  # card in AIOps › Inbox and the cluster's Watson panel, in the database
+  # (<release>-proposals held them before 0.13, and is copied once), until
+  # people approve or reject it, it expires (24
   # hours, or when its alert resolves), or a newer one replaces it.
   # The roles that may approve proposals, of superAdmin, superViewer,
   # admin and viewer: the approval permission. A SuperAdmin always may; a
@@ -467,18 +473,19 @@ cases:
   # exceptions.
   approverRoles: [superAdmin, admin]
   # --- One flow for findings and cases (Phase 12, wave 6, CF-20, CF-23) ---
-  # Every case is a ConfigMap of its own the console makes and deletes,
-  # <release>-case-<n> (labels app.kubernetes.io/instance=<release> and
-  # 221b.io/case=<n>), with one line per case in <release>-issues. So the
-  # console's Role grants create, list, get, update, patch and delete on
-  # ConfigMaps in its namespace: Kubernetes cannot grant by a name that
-  # does not exist yet, and the console lists only those with its labels.
-  # Keep the console in a namespace of its own.
+  # Every case is a row of the database. A release before 0.13 kept each
+  # in a ConfigMap of its own, <release>-case-<n> (labels
+  # app.kubernetes.io/instance=<release> and 221b.io/case=<n>), which the
+  # first start with the database copies and deletes. So the console's
+  # Role still grants list, get and delete (with create, update and patch,
+  # until the next release) on ConfigMaps in its namespace: Kubernetes
+  # cannot grant by a name it does not know, and the console lists only
+  # those with its labels. Keep the console in a namespace of its own.
   #
   # The clean start: 0.12.0 changed what a case and a finding are, without
   # a migration. Set token to any new text (the date, say) and the leader
-  # deletes the Cases area's records once at start: the cases (the index
-  # and every case's ConfigMap) and known issues; the cases' work, the
+  # deletes the Cases area's records once at start: the cases and known
+  # issues; the cases' work, the
   # exceptions and RCAs; the jobs' runs and findings (the jobs, schedules
   # and instructions stay); the proposed changes agents made for cases or
   # runs (Watson's own cards and the standing approvals stay); Mycroft's
@@ -507,8 +514,8 @@ cases:
   # they open a case by hand or from a finding, change its priority,
   # complete it with an RCA, which goes to Knowledge, and reopen it. The
   # console-wide roles and those who may edit jobs read them. The cases
-  # are kept in the ConfigMap <release>-casework, which the chart creates
-  # empty; opening one starts the Troubleshooter when the case analysis
+  # are kept in the database (<release>-casework, which the chart still
+  # creates empty, held them before 0.13 and is copied once); opening one starts the Troubleshooter when the case analysis
   # job is on in Cases › Jobs. Nothing to set here.
 
 jobs:
@@ -518,7 +525,8 @@ jobs:
   # investigation of each new report, the Summarizer's daily digest. All
   # are off until a SuperAdmin turns them on there, each with its own
   # budget. Their output is read-only: runs with a report and findings,
-  # kept in the ConfigMap <release>-runs, and proposals that wait for a
+  # kept in the database (<release>-runs held them before 0.13), and
+  # proposals that wait for a
   # person in Cases › Inbox. They read the clusters as the user
   # 221b:agents with the role Administration › AI › Jobs chooses (Viewer by default;
   # bind a role to that user to let them read a namespace, or pick a group
@@ -528,19 +536,22 @@ jobs:
   timeZone: ""
 
 # --- The database (Phase 13, docs/database.md) ---
-# The console is moving its records from ConfigMaps to PostgreSQL, a domain
-# at a time. This says which PostgreSQL:
-#   none      no database; every record stays in its ConfigMap. The default
-#             until the move is complete.
-#   bundled   the chart runs one beside the console, from the image
-#             221b-postgres: PostgreSQL with Patroni and WAL-G.
+# The console keeps every record in PostgreSQL, and does not run without
+# it (DB-69). This says which PostgreSQL:
+#   bundled   the default: the chart runs one beside the console, from the
+#             image 221b-postgres (PostgreSQL with Patroni and WAL-G), one
+#             member with a 10 GiB volume of the default storage class.
 #   external  one you run: a managed service, your own Patroni or
 #             CloudNativePG cluster, a central database platform.
+# There is no mode without a database: none, which kept the records in
+# ConfigMaps, was removed in 0.13.0 and is refused. A release that had no
+# database (0.12, or none) gets the bundled one at its upgrade, and the
+# first start copies its ConfigMaps and Secrets in (docs/upgrading.md).
 # Moving between bundled and external later is a migration (a backup export
 # restored into the new one), so the chart refuses to flip the mode of an
 # installed release unless allowModeChange says the data was moved.
 database:
-  mode: none
+  mode: bundled
   allowModeChange: false
   # How often a replica looks for changes the others made, besides being
   # told through LISTEN/NOTIFY.
@@ -703,8 +714,9 @@ knowledge:
   # Mycroft's knowledge: the sources a SuperAdmin connects in Administration › AI ›
   # Knowledge (Confluence spaces, git repositories of runbooks, uploaded
   # documents, and what the console knows), and the wiki it keeps in a git
-  # repository or an S3 bucket. Its records are in the ConfigMap
-  # <release>-knowledge, every credential in the Secret <release>-knowledge
+  # repository or an S3 bucket. Its records are in the database
+  # (<release>-knowledge held them before 0.13, and is copied once), every
+  # credential in the Secret <release>-knowledge
   # (with connections.store secrets). A live source (Administration › AI › Knowledge,
   # mode Live) is never copied: its pages are fetched when an agent
   # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
@@ -746,7 +758,7 @@ knowledge:
 helmRepositories:
   # Applications install charts from git, and from the Helm repositories
   # and OCI registries a SuperAdmin lists in Settings › Applications. The
-  # list is kept in the settings ConfigMap; each password or token in the
+  # list is kept in the database; each password or token in the
   # Secret <release>-helm-repositories (with connections.store secrets),
   # which the console writes.
   #
@@ -901,8 +913,9 @@ rbac:
   # secrets.read is on. With sign-in it may impersonate any user name
   # (Kubernetes cannot narrow that by rule, so the server alone decides
   # which name it sends; guard its token), only the groups listed in auth,
-  # and create access reviews. A Role to get and
-  # patch its own settings ConfigMap. It has no right on roles or
+  # and create access reviews. A Role on its own ConfigMaps (read once
+  # for the copy into the database, and the temporary wiki store) and
+  # Secrets. It has no right on roles or
   # bindings, and no other writes, except Watson's with sign-in off and
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true

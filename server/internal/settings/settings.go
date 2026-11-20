@@ -338,7 +338,8 @@ type Storage interface {
 	// over whatever it holds) and returns the new version; ErrConflict when
 	// another writer came first.
 	Save(ctx context.Context, b []byte, version string) (string, error)
-	// Kind names the storage for the browser: "configmap" or "memory".
+	// Kind names the storage for the browser: "database" (the console's,
+	// DB-69), "configmap" or "memory" (tests).
 	Kind() string
 }
 

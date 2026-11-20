@@ -18,8 +18,15 @@ import (
 )
 
 // The database (Phase 13, ADR-162): PostgreSQL, the chart's bundled one or
-// one the operator runs. A domain whose repository is written keeps its
-// records there; the others stay in their ConfigMaps until theirs is.
+// one the operator runs. It is the only store (DB-69): every record set
+// the console keeps is kept there, and the console does not run without
+// it. The ConfigMaps a release before 0.13 kept its records in are the
+// one-time copies' source and nothing else: each is read once, at the
+// first start with the database, what was copied is removed from it, and
+// no record is ever saved there (notKept).
+
+// errNoDatabase is why a console given no database does not start.
+var errNoDatabase = errors.New("the console keeps its records in PostgreSQL and does not run without one (DB-69): name the database with -db-host and the other -db-* flags; the chart does, with database.mode bundled (the default) or external")
 
 // databaseWait is how long a start waits for a database that does not
 // answer, and databaseMigrate how long the schema's steps may take. The
@@ -38,12 +45,13 @@ func earlier(a, b time.Time) time.Time {
 	return b
 }
 
-// wireDatabase opens the database when one is configured, brings its
-// schema to this build's, and starts hearing the other replicas.
+// wireDatabase opens the database, brings its schema to this build's, and
+// starts hearing the other replicas. A console that is given none does
+// not start.
 func (w *wiring) wireDatabase(ctx context.Context) error {
 	cfg, log := w.cfg.Database, w.log.With("component", "database")
 	if !cfg.Enabled() {
-		return nil
+		return errNoDatabase
 	}
 	if cfg.AppName == "" {
 		host, _ := os.Hostname()
@@ -106,9 +114,6 @@ func (w *wiring) databaseState() api.DatabaseState {
 
 // databaseGauges are the database's metrics.
 func (w *wiring) databaseGauges() []api.Gauge {
-	if w.database == nil {
-		return nil
-	}
 	up := 0.0
 	if w.database.Health().Available {
 		up = 1
@@ -122,35 +127,86 @@ func (w *wiring) databaseGauges() []api.Gauge {
 	}
 }
 
+// notKept is the rest of a store whose record sets are all in the
+// database: a key that no table and no scope keeps. Reading one finds
+// what a release before 0.13 left under it in the copy's source (the
+// clean start deletes such keys), and deleting one deletes it there. A
+// save is refused: nothing is kept outside the database by oversight.
+type notKept struct{ from kv.Backend }
+
+func (n notKept) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if n.from == nil {
+		return nil, "0", kv.ErrNotFound
+	}
+	return n.from.LoadKey(ctx, key)
+}
+
+func (n notKept) SaveKey(_ context.Context, key string, _ []byte, _ string) (string, error) {
+	return "", fmt.Errorf("the console keeps nothing under %q: every record set is kept in the database (DB-69)", key)
+}
+
+func (n notKept) DeleteKey(ctx context.Context, key string) error {
+	if d, ok := n.from.(kv.Deleter); ok {
+		return d.DeleteKey(ctx, key)
+	}
+	return nil
+}
+
+// hasSource says whether from holds anything to copy: a ConfigMap that
+// was named, under whatever earlier calls here made of it.
+func hasSource(from kv.Backend) bool {
+	switch b := from.(type) {
+	case nil:
+		return false
+	case *kv.Keyed:
+		return hasSource(b.Rest)
+	case notKept:
+		return b.from != nil
+	}
+	return true
+}
+
+// notNamed is where the keys a store does not name go: nowhere (notKept),
+// reading from. A store that inScopes or inTables made already is given
+// back as it is: its own rest refuses.
+func notNamed(from kv.Backend) kv.Backend {
+	if k, ok := from.(*kv.Keyed); ok {
+		return k
+	}
+	return notKept{from: from}
+}
+
 // inScopes keeps the documents under the keys named (key to scope) as
-// scopes of the database's settings table, and every other key in b as
-// before; without a database it is b. What b held under those keys is
-// copied once. These are a service's singletons, read whole and written
-// rarely (model rule 14), so they need no repository beyond the scope.
-func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]string) kv.Backend {
-	if w.database == nil {
-		return b
-	}
-	if b == nil {
-		b = &kv.Memory{}
-	}
+// scopes of the database's settings table. These are a service's
+// singletons, read whole and written rarely (model rule 14), so they need
+// no repository beyond the scope.
+//
+// from is the one-time copy's source and nothing else: the ConfigMap a
+// release before 0.13 kept the documents in (or a store an earlier call
+// here made over it), nil when no ConfigMap is named. What it holds under
+// the keys named is copied once and then removed from it (DB-55). A key
+// that is not named is kept nowhere (notNamed).
+func (w *wiring) inScopes(ctx context.Context, from kv.Backend, scopes map[string]string) kv.Backend {
 	s := db.NewScopeKV(w.database, scopes)
 	for _, id := range s.ImportIDs() {
 		w.claimImport(id)
 	}
-	if _, inMemory := b.(*kv.Memory); !inMemory {
+	if hasSource(from) {
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
-		copied, err := s.Import(ictx, b, "configmap")
+		copied, err := s.Import(ictx, from, "configmap")
 		cancel()
-		log := w.log.With("component", "database")
+		log := w.dbLog()
 		if err != nil {
+			for _, key := range s.ImportIDs() {
+				w.noteNotCopied(key)
+			}
 			log.Warn("copying settings from their ConfigMap into the database failed; the next start tries again", "err", err)
 		} else if len(copied) > 0 {
 			log.Info("copied settings from their ConfigMap into the database", "keys", copied)
 		}
 		if err == nil {
 			for _, key := range s.ImportIDs() {
-				w.removeCopied(ctx, b, key, key)
+				w.removeCopied(ctx, from, key, key)
 			}
 		}
 	}
@@ -158,7 +214,17 @@ func (w *wiring) inScopes(ctx context.Context, b kv.Backend, scopes map[string]s
 	for key := range scopes {
 		keys[key] = s
 	}
-	return &kv.Keyed{Keys: keys, Rest: b}
+	return &kv.Keyed{Keys: keys, Rest: notNamed(from)}
+}
+
+// noteNotCopied remembers that the one-time copy of a key failed at this
+// start, for what must not run on a record set that is not there yet (the
+// clean start, whose marker says it ran).
+func (w *wiring) noteNotCopied(key string) {
+	if w.notCopied == nil {
+		w.notCopied = map[string]bool{}
+	}
+	w.notCopied[key] = true
 }
 
 // movedDoc is one of a service's documents kept as rows of the model's
@@ -210,19 +276,14 @@ func copyOrder(docs map[string]movedDoc) []string {
 }
 
 // inTables keeps the documents under the keys named in the database, each
-// through its own mapping to tables, and every other key in b as before;
-// without a database it is b. make is given the database and returns the
-// mappings, so nothing is made without one. What b held under those keys
-// is copied once, in copyOrder.
-func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB) map[string]movedDoc) kv.Backend {
-	if w.database == nil {
-		return b
-	}
-	if b == nil {
-		b = &kv.Memory{}
-	}
-	log := w.log.With("component", "database")
-	_, inMemory := b.(*kv.Memory)
+// through its own mapping to tables. make is given the database and
+// returns the mappings.
+//
+// from is the one-time copy's source and nothing else, as for inScopes:
+// what it holds under the keys named is copied once, in copyOrder, and
+// then removed from it. A key that is not named is kept nowhere (notNamed).
+func (w *wiring) inTables(ctx context.Context, from kv.Backend, make func(d *db.DB) map[string]movedDoc) kv.Backend {
+	log := w.dbLog()
 	keys := map[string]kv.Backend{}
 	docs := make(w.database)
 	notCopied := map[string]bool{}
@@ -230,29 +291,31 @@ func (w *wiring) inTables(ctx context.Context, b kv.Backend, make func(d *db.DB)
 		doc := docs[key]
 		keys[key] = doc
 		w.claimImport(doc.ImportID())
-		if inMemory {
+		if !hasSource(from) {
 			continue
 		}
 		if first, ok := copiedAfter[key]; ok && notCopied[first] {
 			// Its rows would have nothing to hang from, and would not be kept.
 			notCopied[key] = true
+			w.noteNotCopied(key)
 			log.Warn("records are not copied from their ConfigMap before the records they belong to; the next start tries again", "key", key, "after", first)
 			continue
 		}
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
-		copied, err := doc.Import(ictx, b, "configmap")
+		copied, err := doc.Import(ictx, from, "configmap")
 		cancel()
 		if err != nil {
 			notCopied[key] = true
+			w.noteNotCopied(key)
 			log.Warn("copying records from their ConfigMap into the database failed; the next start tries again", "key", key, "err", err)
 		} else if copied {
 			log.Info("copied records from their ConfigMap into the database", "key", key)
 		}
 		if err == nil {
-			w.removeCopied(ctx, b, doc.ImportID(), key)
+			w.removeCopied(ctx, from, doc.ImportID(), key)
 		}
 	}
-	return &kv.Keyed{Keys: keys, Rest: b}
+	return &kv.Keyed{Keys: keys, Rest: notNamed(from)}
 }
 
 // --- A record set leaves its ConfigMap once it is copied (DB-55) ---
@@ -281,7 +344,7 @@ func emptied(b []byte) bool {
 // delete a key has it emptied. A failure is logged and does not stop the
 // start: the next one tries again.
 func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID string, keys ...string) {
-	if w.database == nil || from == nil {
+	if !hasSource(from) {
 		return
 	}
 	log := w.dbLog()
@@ -314,7 +377,7 @@ func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID str
 // whole (a case's own ConfigMap), when the copy recorded under importID is
 // in the database.
 func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, importID string) {
-	if w.database == nil || from == nil {
+	if from == nil {
 		return
 	}
 	log := w.dbLog()
@@ -358,9 +421,6 @@ func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, impor
 // and removes nothing: the next start tries again.
 func (w *wiring) moveFromSecrets(ctx context.Context, importID, what string, copy, remove func(ctx context.Context) (int, error)) {
 	w.claimImport(importID)
-	if w.database == nil {
-		return
-	}
 	log := w.dbLog()
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	n, err := copy(cctx)
@@ -382,9 +442,6 @@ func (w *wiring) moveFromSecrets(ctx context.Context, importID, what string, cop
 // before the move wrote since, which is removed and not read). Nothing is
 // removed when the database cannot say the copy was made.
 func (w *wiring) removeCopiedFromSecrets(ctx context.Context, importID, what string, remove func(ctx context.Context) (int, error)) {
-	if w.database == nil {
-		return
-	}
 	log := w.dbLog()
 	rctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()

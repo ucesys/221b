@@ -92,14 +92,11 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 		}
 		return ""
 	}
-	// What the agents spend: with a database each cost is a row of ai_spend,
-	// only ever added (DB-41); without one, sums under a key of the
-	// settings ConfigMap.
+	// What the agents spend: each cost is a row of ai_spend, only ever
+	// added (DB-41).
 	ledger := sherlock.NewLedger(w.spendBackend, nil, log.With("component", "sherlock"))
-	if w.database != nil {
-		ledger.UseRows(sherlock.NewSpendPG(w.database, nil))
-		w.inDatabase = append(w.inDatabase, "ai")
-	}
+	ledger.UseRows(sherlock.NewSpendPG(w.database, nil))
+	w.inDatabase = append(w.inDatabase, "ai")
 	sherlockSvc := sherlock.New(sherlock.Options{
 		Agent:    aiSvc.Agent,
 		OnAnswer: aiSvc.OnAnswer,

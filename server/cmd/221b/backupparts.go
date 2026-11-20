@@ -16,7 +16,6 @@ import (
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
-	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/version"
 )
@@ -334,26 +333,24 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 		}
 		backup.Default.SetKey(name, func(ctx context.Context) (*backup.SecretsKey, error) { return backup.EnsureSecretsKey(ctx, ks) })
 	}
-	// The settings and the runs: in the database when there is one (Phase
-	// 13), with what the ConfigMap held copied over once.
-	var backupRepo backup.Repo
-	if w.database != nil {
-		pg := backup.NewPGRepo(w.database)
-		if _, inMemory := w.spendBackend.(*kv.Memory); !inMemory {
-			ictx, cancel := context.WithTimeout(ctx, time.Minute)
-			copied, err := pg.Import(ictx, backup.NewKVRepo(w.spendBackend), "configmap key "+backup.SettingsKey)
-			cancel()
-			if err != nil {
-				return fmt.Errorf("copying the backups' settings and runs into the database: %w", err)
-			}
-			if copied {
-				log.Info("copied the backups' settings and runs from their ConfigMap into the database")
-			}
-			w.removeCopied(ctx, w.spendBackend, backup.SettingsKey, backup.SettingsKey, backup.StatusKey)
+	// The settings and the runs are in the database (Phase 13). What a
+	// release before 0.13 kept of them in the settings ConfigMap (the
+	// copy's source, read for nothing else) is copied over once.
+	pg := backup.NewPGRepo(w.database)
+	if from := w.settingsSource; hasSource(from) {
+		ictx, cancel := context.WithTimeout(ctx, time.Minute)
+		copied, err := pg.Import(ictx, backup.NewKVRepo(from), "configmap key "+backup.SettingsKey)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("copying the backups' settings and runs into the database: %w", err)
 		}
-		backupRepo = pg
-		w.inDatabase = append(w.inDatabase, "backups")
+		if copied {
+			log.Info("copied the backups' settings and runs from their ConfigMap into the database")
+		}
+		w.removeCopied(ctx, from, backup.SettingsKey, backup.SettingsKey, backup.StatusKey)
 	}
+	var backupRepo backup.Repo = pg
+	w.inDatabase = append(w.inDatabase, "backups")
 	backups := backup.NewScheduler(backup.Options{Registry: backup.Default, Store: w.spendBackend, Repo: backupRepo, Secrets: backupKeys, Leads: w.elector.IsLeader, Audit: w.auditLog, Version: version.String(), Logger: log.With("component", "backup")})
 	go backups.Run(ctx)
 	registerBackupParts(backup.Default, w.aiSvc.Service, w.issueSvc)

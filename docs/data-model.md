@@ -72,7 +72,7 @@ Who is signed in. Local accounts are not here: they stay in a Kubernetes Secret,
 
 The key is what the session's Secret was named for, and a check refuses anything but 64 hexadecimal digits, so the cookie's value cannot be a key. The four times are never empty. Sessions have no key to users, since none are stored. Neither the key that signs a session made while the session store is away, nor such a session, is ever in the database (DB-65). When the store is back such a session becomes a row at its next request, under a key worked out from the session, and that row expires when the signed session would have. A signed session that was signed out or ended, or the row it had become, leaves a row whose `method` is `ended`, with no groups and no roles, until that time, so that no replica takes or exchanges its cookie again.
 
-A replica answers from a row as it last read it for 5 seconds and drops what it holds at a notice (`auth-sessions`) that a session ended or changed. With the console's connections kept in memory the sessions are in memory too, and without a database they are Secrets.
+A replica answers from a row as it last read it for 5 seconds and drops what it holds at a notice (`auth-sessions`) that a session ended or changed. With the console's connections kept in memory the sessions are in memory too. (A release before 0.13, which had no database, kept them in Secrets.)
 
 ### Approvals
 

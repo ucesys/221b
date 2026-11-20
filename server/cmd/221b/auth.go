@@ -154,29 +154,24 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
 	}
 	// Sign-ins are kept where every replica knows them and a restart keeps
-	// them (P7-02) when running in a cluster: rows of the database when
-	// there is one (DB-66), else Secrets of the console's namespace, one per
-	// session. Otherwise (no -connections-secrets: the simulator, a console
-	// run by hand) they are kept in memory, with or without a database, as
-	// the accounts made in the console and the key that signs a session
-	// are there: a session that outlived a restart would be of an account
-	// that did not.
-	var sessionStore *kube.SessionStore
+	// them (P7-02) when running in a cluster: rows of the database
+	// (DB-66). Otherwise (no -connections-secrets: a console run by hand,
+	// connections.store: memory) they are kept in memory, as the accounts
+	// made in the console and the key that signs a session are there: a
+	// session that outlived a restart would be of an account that did
+	// not.
 	inDatabase := false
 	if cfg.ConnectionsSecrets != "" && w.authCfg.Mode != auth.ModeNone {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
-		sessionStore, err = kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+		// The copy's source and nothing else: the session Secrets of a
+		// release before 0.13 are read once more, for the copy, and
+		// emptied; they are not watched, and none is made from here on.
+		before, err := kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
-		if w.database != nil {
-			// The Secrets are read once more, for the copy, and emptied; they
-			// are not watched, and none is made from here on.
-			w.authCfg.SessionStore = w.sessionsInDatabase(ctx, sessionStore)
-			sessionStore, inDatabase = nil, true
-		} else {
-			w.authCfg.SessionStore = sessionStore
-		}
+		w.authCfg.SessionStore = w.sessionsInDatabase(ctx, before)
+		inDatabase = true
 		// The key that signs a session made while the session store is
 		// away (DB-65): the Secret <release>-session-key, made here at
 		// start when there is none, as the backups' key is, and read again
@@ -208,7 +203,7 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	w.sessionStore, w.twoPerson, w.authSvc = sessionStore, twoPerson, authSvc
+	w.twoPerson, w.authSvc = twoPerson, authSvc
 	if inDatabase {
 		// The database answers again: the sessions ended here meanwhile are
 		// removed from it at once, so the other replicas stop taking them.
@@ -296,15 +291,6 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 // startAuth keeps the sessions and accounts shared with the other
 // replicas, and the directory, read.
 func (w *wiring) startAuth(ctx context.Context) {
-	log := w.log
-	if w.sessionStore != nil {
-		go w.sessionStore.Run(ctx)
-		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if !w.sessionStore.Synced(syncCtx) {
-			log.Warn("the shared sessions are not cached yet; reading them one by one")
-		}
-		cancel()
-	}
 	if left := w.sessionsLeft; left != nil {
 		// Session Secrets that were copied and could not be emptied at the
 		// start: until they are, a console from before the move could take

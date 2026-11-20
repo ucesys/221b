@@ -24,7 +24,8 @@ import (
 // console from before the move wrote since is removed where the database
 // has the application, and not read, and left whole where it has not; and
 // nothing is rewritten when the database cannot say the copy was made. No
-// Secret is ever deleted. Without a database the Secrets keep all of it.
+// Secret is ever deleted. (A console without a database, whose Secrets
+// kept all of it, is no more: DB-69.)
 func TestTheApplicationsLeaveTheirSecretsAtAStart(t *testing.T) {
 	ctx := context.Background()
 	d := dbtest.Open(t)
@@ -61,11 +62,6 @@ func TestTheApplicationsLeaveTheirSecretsAtAStart(t *testing.T) {
 	}
 	shop, blog, late := appstest.SecretName("local", "web", "shop"), appstest.SecretName("local", "web", "blog"), appstest.SecretName("local", "web", "late")
 
-	// Without a database the Secrets are the store, and the name is claimed.
-	none := &wiring{}
-	if got := none.applications(ctx, secrets); got != apps.Store(secrets) || !none.importIDs[apps.ImportID] {
-		t.Fatalf("without a database the store is %T (claimed %v)", got, none.importIDs)
-	}
 	token := "ghp-of-before-0.12.1"
 	if err := errors.Join(secrets.Save(ctx, app("shop", "db:\n  password: hunter2\n"), &token), secrets.Save(ctx, app("blog", "replicas: 2\n"), nil)); err != nil {
 		t.Fatal(err)

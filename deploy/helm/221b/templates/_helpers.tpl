@@ -167,9 +167,11 @@ file from before has no agents block; a key that is no agent is refused.
 
 {{/* --- The database (Phase 13) --- */}}
 
-{{/* none, bundled or external. Values kept from before have no block. */}}
+{{/* bundled or external (DB-69); bundled when nothing says. Values kept
+     from a release before 0.13 have no block, which validateDatabase
+     refuses. */}}
 {{- define "b221.dbMode" -}}
-{{- (.Values.database | default dict).mode | default "none" -}}
+{{- (.Values.database | default dict).mode | default "bundled" -}}
 {{- end -}}
 
 {{/* The bundled database's objects are named after this, and its
@@ -213,8 +215,14 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{/* What cannot work is refused when the chart is rendered. */}}
 {{- define "b221.validateDatabase" -}}
 {{- $mode := include "b221.dbMode" . -}}
-{{- if not (has $mode (list "none" "bundled" "external")) -}}
-{{- fail (printf "database.mode must be none, bundled or external, not %q" $mode) -}}
+{{- if not (and .Values.database .Values.database.bundled .Values.database.external) -}}
+{{- fail "the values have no database block: they were kept from a release before 0.13 (helm upgrade --reuse-values), which had no database. The console now keeps its records in PostgreSQL and does not run without it: upgrade with --reset-then-reuse-values, or with your values file, so the chart's defaults (database.mode=bundled) apply (docs/upgrading.md)" -}}
+{{- end -}}
+{{- if eq $mode "none" -}}
+{{- fail "database.mode=none was removed in 0.13.0: the console keeps its records in PostgreSQL and does not run without it. Remove database.mode to get the bundled database (the default), or set database.mode=external with database.external.host for one you run; the records in the ConfigMaps are copied in at the first start (docs/upgrading.md)" -}}
+{{- end -}}
+{{- if not (has $mode (list "bundled" "external")) -}}
+{{- fail (printf "database.mode must be bundled or external, not %q" $mode) -}}
 {{- end -}}
 {{- if eq $mode "external" -}}
 {{- $e := .Values.database.external -}}
@@ -255,7 +263,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 a migration. The Deployment says which it has. After a rollback to a
 revision from before the database it says nothing, so the bundled
 database's Secret, which is kept through a rollback as its volumes are,
-is asked too. */ -}}
+is asked too. A release that has no database (a 0.12 release, whose
+Deployment has no annotation, or one of mode none, which 0.13 builds
+before DB-69 had) gets one: bundled, the default, with nothing to ask, or
+external, unless a bundled database's Secret says one was there. */ -}}
 {{- $was := "" -}}
 {{- $d := lookup "apps/v1" "Deployment" .Release.Namespace (include "b221.fullname" .) -}}
 {{- if $d -}}

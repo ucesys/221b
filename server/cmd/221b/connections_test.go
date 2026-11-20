@@ -33,7 +33,8 @@ import (
 // from before the move wrote since is removed where the database keeps
 // the connection, and not read, and left whole where it does not; and
 // nothing is taken out when the database cannot say the copy was made. No
-// Secret is ever deleted. Without a database the Secrets keep all of it.
+// Secret is ever deleted. (A console without a database, whose Secrets
+// kept all of it, is no more: DB-69.)
 func TestTheConnectionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,11 +71,6 @@ func TestTheConnectionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	}
 	staging, local, late := clusterstest.SecretName("staging"), clusterstest.SecretName("local"), clusterstest.SecretName("late")
 
-	// Without a database the Secrets are the store, and the name is claimed.
-	none := &wiring{}
-	if got := none.connections(ctx, secrets); got != clusters.Store(secrets) || !none.importIDs[clusters.ImportID] {
-		t.Fatalf("without a database the store is %T (claimed %v)", got, none.importIDs)
-	}
 	lake := clusters.Spec{ID: clusters.LocalID, Name: "Lakehouse", Env: "production", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster", Mode: "read", Local: true, Added: at, Updated: at}
 	if err := errors.Join(secrets.Save(ctx, conn("staging", "Staging"), &clusters.Credential{Token: "the-token", CAPEM: "the-ca"}), secrets.Save(ctx, lake, nil)); err != nil {
 		t.Fatal(err)

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -498,6 +500,21 @@ func gaveUp(t *testing.T, con *console, wait time.Duration) {
 		t.Error("the log says the console serves")
 	}
 	noSecretIn(t, con)
+}
+
+// A console given no database does not start (DB-69): there is no mode in
+// which it keeps its records anywhere else, so a start without -db-host
+// stops at once with the sentence that says what to set, before it has
+// made anything that keeps records.
+func TestAConsoleGivenNoDatabaseDoesNotStart(t *testing.T) {
+	w := &wiring{log: slog.New(slog.DiscardHandler)}
+	err := w.wireDatabase(t.Context())
+	if !errors.Is(err, errNoDatabase) || w.database != nil {
+		t.Fatalf("a start without a database: %v (database %v)", err, w.database)
+	}
+	if !strings.Contains(err.Error(), "-db-host") || !strings.Contains(err.Error(), "database.mode") {
+		t.Fatalf("the refusal does not say what to set: %v", err)
+	}
 }
 
 // A console never starts without its database (DB-02; the option to start

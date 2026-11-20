@@ -22,69 +22,55 @@ import (
 func (w *wiring) wireAutomation(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	// Automation (Phase 11 part 2, ADR-73): scripts run over SSH to
-	// nodes (wireSSH), with their records in a ConfigMap of their own,
-	// beside the settings'. Runs live on the leader, like Watson's
-	// commands.
+	// nodes (wireSSH), with their records in the database (Phase 13).
+	// Runs live on the leader, like Watson's commands.
 	var autoEngine *automation.Engine
 	var autoStore *automation.Store
 	if cfg.Automation {
-		var autoBackend, runsBackend kv.Backend = &kv.Memory{}, nil
+		// The copy's source and nothing else: the ConfigMap a release
+		// before 0.13 kept the scripts in, and the one it kept the runs and
+		// the nodes' facts in when the chart names one. A ConfigMap that
+		// is named and cannot be read stops the start: a copy must not be
+		// taken for made when its source was not there.
+		var from kv.Backend
 		if cfg.AutomationConfigMap != "" {
 			cm, err := kube.NewConfigMapStorage(w.restCfg, cfg.AutomationConfigMap)
 			if err != nil {
 				return fmt.Errorf("automation's ConfigMap: %w", err)
 			}
 			l := limited(cm, objAutomation, log.With("component", "storage"))
-			autoBackend, w.stored = l, append(w.stored, l)
-			// The runs and the nodes' facts have a ConfigMap of their own when
-			// the chart names one, so neither they nor the scripts press on the
-			// other's 1 MiB; every replica is told the same, and one that
-			// cannot read it does not start.
+			from, w.stored = l, append(w.stored, l)
 			if cfg.AutomationRunsConfigMap != "" {
 				runs, err := openConfigMap(ctx, w.restCfg, cfg.AutomationRunsConfigMap)
 				if err != nil {
 					return fmt.Errorf("automation's runs: %w", err)
 				}
 				rl := limited(runs, objAutomationRuns, log.With("component", "storage"))
-				runsBackend, w.stored = rl, append(w.stored, rl)
+				w.stored = append(w.stored, rl)
+				// The runs and the facts are copied from wherever they
+				// were kept: their own ConfigMap when there is one.
+				routes := map[string]kv.Backend{}
+				for _, k := range automation.RunsKeys {
+					routes[k] = rl
+				}
+				from = &kv.Routed{Default: l, Routes: routes}
 			}
-		} else {
-			log.Warn("Automation's scripts and runs are kept in memory and lost on restart (set -automation-configmap to keep them)")
 		}
 		outDir := ""
 		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
 			outDir = w.toolboxCfg.TranscriptDir
 		}
-		if w.database == nil {
-			autoStore = automation.NewStore(autoBackend, nil)
-			if runsBackend != nil {
-				autoStore.SetRunsBackend(runsBackend)
-			}
-		} else {
-			// With a database (Phase 13) what is known of each node is
-			// rows of host_facts, and the scripts with their versions, the
-			// script groups, the execution profiles, the variables, their
-			// changes and the runs rows of their tables. The runs and the
-			// facts are copied from wherever they were kept: their own
-			// ConfigMap when there is one.
-			kept := autoBackend
-			if runsBackend != nil {
-				routes := map[string]kv.Backend{}
-				for _, k := range automation.RunsKeys {
-					routes[k] = runsBackend
-				}
-				kept = &kv.Routed{Default: autoBackend, Routes: routes}
-			}
-			autoStore = automation.NewStore(w.inTables(ctx, kept, func(d *db.DB) map[string]movedDoc {
-				return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d),
-					automation.GroupsKey: automation.NewGroupsPG(d), automation.ProfilesKey: automation.NewProfilesPG(d),
-					automation.ScriptsKey: automation.NewScriptsPG(d), automation.VariablesKey: automation.NewVariablesPG(d),
-					automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
-			}), nil)
-			if w.database != nil {
-				w.inDatabase = append(w.inDatabase, "automation")
-			}
-		}
+		// What is known of each node is rows of host_facts, and the
+		// scripts with their versions, the script groups, the execution
+		// profiles, the variables, their changes and the runs rows of
+		// their tables.
+		autoStore = automation.NewStore(w.inTables(ctx, from, func(d *db.DB) map[string]movedDoc {
+			return map[string]movedDoc{automation.FactsKey: automation.NewFactsPG(d),
+				automation.GroupsKey: automation.NewGroupsPG(d), automation.ProfilesKey: automation.NewProfilesPG(d),
+				automation.ScriptsKey: automation.NewScriptsPG(d), automation.VariablesKey: automation.NewVariablesPG(d),
+				automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
+		}), nil)
+		w.inDatabase = append(w.inDatabase, "automation")
 		autoEngine = automation.NewEngine(automation.Options{
 			Node: func(cluster, node string) (automation.NodeState, bool) {
 				_, client, ok := w.manager.Lookup(cluster)

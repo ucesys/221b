@@ -54,7 +54,10 @@ type knowledgeOptions struct {
 // returns the ConfigMaps too, the knowledge's and the temporary wiki
 // store's, for the metrics of their size.
 func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config, o knowledgeOptions) (*knowledge.Service, *kv.Limited, *kv.Limited, error) {
-	var backend kv.Backend = &kv.Memory{}
+	// The one-time copy's source and nothing else: <release>-knowledge,
+	// where a release before 0.13 kept the sources, the drafts and the
+	// syncs' state; nil when the flags name none.
+	var backend kv.Backend
 	var stored, wikiStored *kv.Limited
 	if cfg.KnowledgeConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.KnowledgeConfigMap)
@@ -63,13 +66,14 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		}
 		stored = limited(cm, objKnowledge, o.log.With("component", "storage"))
 		backend = stored
-	} else {
-		o.log.Warn("Mycroft's sources and drafts are kept in memory and lost on restart (set -knowledge-configmap to keep them)")
 	}
-	// With a database the sources, the syncs' state and the page changes
-	// that wait for review are kept there.
+	// The sources, the syncs' state and the page changes that wait for
+	// review are kept in the database; a caller that gives no wrap (a
+	// test) keeps them in memory.
 	if o.wrap != nil {
 		backend = o.wrap(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
 	}
 	var secrets knowledge.SecretStore = &knowledge.MemorySecret{}
 	if cfg.ConnectionsSecrets != "" {
@@ -81,7 +85,10 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		secrets = sk
 	}
 	// The temporary wiki store (CF-57): the wiki in <release>-wiki while
-	// Administration › AI › Knowledge names no store.
+	// Administration › AI › Knowledge names no store. It is a place the
+	// wiki's pages can be kept, like a repository or a bucket, and not a
+	// record set of the console's: the one ConfigMap the console still
+	// writes (DB-69).
 	var wiki kv.Backend
 	if cfg.WikiConfigMap != "" {
 		cm, err := openConfigMap(ctx, restCfg, cfg.WikiConfigMap)
@@ -783,9 +790,7 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 			// Mycroft's sources, the syncs' state and the runs of page
 			// changes are rows (DB-48 to DB-50). The fixes and the
 			// exceptions, Knowledge's too, are routed with the case work.
-			if w.database != nil {
-				w.inDatabase = append(w.inDatabase, "knowledge")
-			}
+			w.inDatabase = append(w.inDatabase, "knowledge")
 			w.knowledgeBackend = w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
 				return map[string]movedDoc{knowledge.SettingsKey: knowledge.NewSettingsPG(d), knowledge.StatusKey: knowledge.NewStatusPG(d), knowledge.DraftsKey: knowledge.NewDraftsPG(d)}
 			})
