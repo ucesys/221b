@@ -40,6 +40,10 @@ const (
 // cache; a key it has not seen yet, a sign-in on another replica a moment
 // ago, is read from the API server. It needs get, list, watch, create,
 // update and delete on Secrets in that namespace.
+//
+// With a database the sessions are rows of auth_sessions (DB-66) and this
+// store is not run: it is then only what reads the Secrets for the
+// one-time copy (All) and empties them after it (Empty).
 type SessionStore struct {
 	secrets   corev1client.SecretInterface
 	namespace string
@@ -259,4 +263,70 @@ func (s *SessionStore) List(context.Context) (map[string][]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// All reads every session Secret from the API server, not from the cache,
+// which need not be running, and returns the records by key: what the
+// one-time copy into the database reads (DB-66). A Secret that holds no
+// record, one emptied after the copy, is not among them.
+func (s *SessionStore) All(ctx context.Context) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	head := s.prefix + "-session-"
+	opts := metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + sessionComponent, Limit: 500}
+	for {
+		list, err := s.secrets.List(ctx, opts)
+		if err != nil {
+			return nil, away(fmt.Errorf("listing the session Secrets: %w", err))
+		}
+		for _, sec := range list.Items {
+			key, ok := strings.CutPrefix(sec.Name, head)
+			if !ok {
+				continue
+			}
+			if b, ok := sec.Data[sessionKey]; ok {
+				out[key] = b
+			}
+		}
+		if list.Continue == "" {
+			return out, nil
+		}
+		opts.Continue = list.Continue
+	}
+}
+
+// Empty takes the record out of a session's Secret and leaves the Secret,
+// with no keys: the session is a row of the database from then on, and
+// the console deletes no Secret because a record set moved (DB-61). An
+// emptied Secret is no session to any console: one from before the move
+// reads it as a session that ended. It reports whether it emptied one; a
+// Secret already empty, or gone, is not an error.
+func (s *SessionStore) Empty(ctx context.Context, key string) (bool, error) {
+	name := s.name(key)
+	for range 3 {
+		cur, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, away(fmt.Errorf("reading the session Secret: %w", err))
+		}
+		if _, ok := cur.Data[sessionKey]; !ok {
+			return false, nil
+		}
+		// Over the version read: a console from before the move may be
+		// writing the session's last activity.
+		cur.Data = map[string][]byte{}
+		_, err = s.secrets.Update(ctx, cur, metav1.UpdateOptions{})
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, away(fmt.Errorf("emptying the session Secret: %w", err))
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("emptying the session Secret: it kept changing")
 }

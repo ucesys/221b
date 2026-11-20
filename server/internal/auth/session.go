@@ -65,7 +65,8 @@ type Session struct {
 
 // SharedStore keeps session records where every replica of the console
 // sees them, by key: a hash of the session's ID, never the ID itself
-// (P7-02). The Kubernetes one is kube.SessionStore.
+// (P7-02). The Kubernetes one is kube.SessionStore, the database's
+// PGSessions (DB-66).
 type SharedStore interface {
 	// Get returns a record; ok is false when there is none.
 	Get(ctx context.Context, key string) (b []byte, ok bool, err error)
@@ -825,17 +826,8 @@ func (s *Sessions) Sweep() {
 		return
 	}
 	// What was ended here while the store could not be told.
-	for _, key := range ended {
-		err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) })
-		if err != nil {
-			if StoreAway(err) {
-				return
-			}
-			continue
-		}
-		s.mu.Lock()
-		delete(s.ended, key)
-		s.mu.Unlock()
+	if !s.tellEnded(ended) {
+		return
 	}
 	// Drop what this replica holds of sessions it no longer uses.
 	stored, err := s.list()
@@ -852,6 +844,49 @@ func (s *Sessions) Sweep() {
 		}
 	}
 	s.mu.Unlock()
+}
+
+// tellEnded removes from the shared store the sessions ended here while
+// it could not be told, and says whether the store could be asked.
+func (s *Sessions) tellEnded(ended []string) bool {
+	for _, key := range ended {
+		err := s.reach(func(ctx context.Context, shared SharedStore) error { return shared.Delete(ctx, key) })
+		if err != nil {
+			if StoreAway(err) {
+				return false
+			}
+			continue
+		}
+		s.mu.Lock()
+		delete(s.ended, key)
+		s.mu.Unlock()
+	}
+	return true
+}
+
+// StoreIsBack is told when the shared store answers again after being
+// away (the database's health says so, db.OnAvailable): the store is not
+// left alone any longer, and the sessions ended here meanwhile are
+// removed from it now, not at the next sweep, so the other replicas stop
+// taking them. A store that is not back after all is found away again by
+// the first call.
+func (s *Sessions) StoreIsBack() {
+	s.mu.Lock()
+	if s.shared == nil || s.probing {
+		s.mu.Unlock()
+		return
+	}
+	was := !s.awayUntil.IsZero()
+	s.awayUntil = time.Time{}
+	ended := make([]string, 0, len(s.ended))
+	for key := range s.ended {
+		ended = append(ended, key)
+	}
+	s.mu.Unlock()
+	if was {
+		s.log.Info("the session store is back")
+	}
+	s.tellEnded(ended)
 }
 
 // Count is how many sessions are live.

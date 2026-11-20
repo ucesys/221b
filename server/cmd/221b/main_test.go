@@ -200,7 +200,7 @@ func TestTheDatabaseIsOpenedBeforeTheStoresAreMade(t *testing.T) {
 	if opened < 0 {
 		t.Fatal("run does not open the database")
 	}
-	for _, later := range []string{"w.wireAuth()", "w.wireLocalCluster()", "w.startAuth(ctx)", "w.wireLeader(ctx)", "w.wireClusters(ctx)", "w.wireSettings(ctx)", "w.wireCredentials(", "w.manager.Start(ctx)"} {
+	for _, later := range []string{"w.wireAuth(ctx)", "w.wireLocalCluster()", "w.startAuth(ctx)", "w.wireLeader(ctx)", "w.wireClusters(ctx)", "w.wireSettings(ctx)", "w.wireCredentials(", "w.manager.Start(ctx)"} {
 		if i := strings.Index(body, later); i < 0 || i < opened {
 			t.Errorf("%s is not after the database is opened (at %d, the database at %d)", later, i, opened)
 		}

@@ -89,6 +89,10 @@ type wiring struct {
 	authCfg      auth.Config
 	authFile     auth.FileConfig
 	sessionStore *kube.SessionStore
+	// sessionsLeft empties the session Secrets that were copied into the
+	// database and could not be emptied at the start, and says whether it
+	// is done (DB-66); nil when nothing is left.
+	sessionsLeft func(ctx context.Context) bool
 	twoPerson    *twoperson.Store
 	authSvc      *auth.Service
 	people       *access.Cache
@@ -220,7 +224,7 @@ func run(args []string) error {
 	if w.database != nil {
 		defer w.database.Close()
 	}
-	if err := w.wireAuth(); err != nil {
+	if err := w.wireAuth(ctx); err != nil {
 		return err
 	}
 	if err := w.wireLocalCluster(); err != nil {

@@ -127,7 +127,7 @@ func (w *wiring) wireAuthConfig() error {
 
 // wireAuth opens the sign-in: the users created in the console, the
 // sessions and what waits for a second SuperAdmin.
-func (w *wiring) wireAuth() error {
+func (w *wiring) wireAuth(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	var err error
 	// The users created in the console are kept in a Secret of the console's
@@ -153,17 +153,30 @@ func (w *wiring) wireAuth() error {
 	} else if localAccounts {
 		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
 	}
-	// Sign-ins are kept in Secrets of the console's namespace when running
-	// in a cluster, one per session, so every replica knows them and they
-	// survive a restart (P7-02); otherwise in memory.
+	// Sign-ins are kept where every replica knows them and a restart keeps
+	// them (P7-02) when running in a cluster: rows of the database when
+	// there is one (DB-66), else Secrets of the console's namespace, one per
+	// session. Otherwise (no -connections-secrets: the simulator, a console
+	// run by hand) they are kept in memory, with or without a database, as
+	// the accounts made in the console and the key that signs a session
+	// are there: a session that outlived a restart would be of an account
+	// that did not.
 	var sessionStore *kube.SessionStore
+	inDatabase := false
 	if cfg.ConnectionsSecrets != "" && w.authCfg.Mode != auth.ModeNone {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		sessionStore, err = kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
-		w.authCfg.SessionStore = sessionStore
+		if w.database != nil {
+			// The Secrets are read once more, for the copy, and emptied; they
+			// are not watched, and none is made from here on.
+			w.authCfg.SessionStore = w.sessionsInDatabase(ctx, sessionStore)
+			sessionStore, inDatabase = nil, true
+		} else {
+			w.authCfg.SessionStore = sessionStore
+		}
 		// The key that signs a session made while the session store is
 		// away (DB-65): the Secret <release>-session-key, made here at
 		// start when there is none, as the backups' key is, and read again
@@ -184,6 +197,8 @@ func (w *wiring) wireAuth() error {
 		}
 		cancel()
 		w.authCfg.SessionKey = key
+	} else {
+		w.claimImport(auth.SessionsImportID)
 	}
 	// What waits for a second SuperAdmin (review item 14), kept beside the
 	// settings once their storage is open.
@@ -194,7 +209,88 @@ func (w *wiring) wireAuth() error {
 		return err
 	}
 	w.sessionStore, w.twoPerson, w.authSvc = sessionStore, twoPerson, authSvc
+	if inDatabase {
+		// The database answers again: the sessions ended here meanwhile are
+		// removed from it at once, so the other replicas stop taking them.
+		w.database.OnAvailable(authSvc.Sessions().StoreIsBack)
+	}
 	return nil
+}
+
+// sessionSecrets is what is still done with the session Secrets once the
+// sessions are rows: they are read for the copy, and emptied after it.
+type sessionSecrets interface {
+	All(ctx context.Context) (map[string][]byte, error)
+	Empty(ctx context.Context, key string) (bool, error)
+}
+
+// sessionsInDatabase keeps the sign-in sessions in the database (DB-66),
+// and moves there the ones their Secrets hold: copied once, so whoever is
+// signed in stays signed in across the upgrade, and then taken out of the
+// Secrets, which are left with no keys (no Secret is deleted because a
+// record set moved, DB-61). Emptying is not tidying: a session's Secret
+// left whole would let a console from before the move take up a session
+// that was ended since. Only what the copy took, or what has expired, is
+// emptied (auth.SessionsToEmpty); a copy that fails empties nothing and
+// does not stop the start; an emptying that fails is tried again every
+// minute (startAuth) and at the next start.
+func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets) auth.SharedStore {
+	idle := w.authCfg.SessionIdle
+	if idle <= 0 {
+		idle = 8 * time.Hour
+	}
+	empty := func(ctx context.Context) (int, error) {
+		recs, err := secrets.All(ctx)
+		if err != nil {
+			return 0, err
+		}
+		keys, err := auth.SessionsToEmpty(ctx, w.database, recs, idle, time.Now())
+		if err != nil {
+			return 0, err
+		}
+		n := 0
+		var first error
+		for _, key := range keys {
+			emptied, err := secrets.Empty(ctx, key)
+			if err != nil {
+				if first == nil {
+					first = err
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				continue
+			}
+			if emptied {
+				n++
+			}
+		}
+		return n, first
+	}
+	failed := false
+	const what = "the sign-in sessions"
+	w.moveFromSecrets(ctx, auth.SessionsImportID, what,
+		func(ctx context.Context) (int, error) {
+			return auth.CopySessions(ctx, w.database, secrets.All, idle, time.Now())
+		},
+		func(ctx context.Context) (int, error) {
+			n, err := empty(ctx)
+			failed = err != nil
+			return n, err
+		})
+	if failed {
+		w.sessionsLeft = func(ctx context.Context) bool {
+			failed = false
+			w.removeCopiedFromSecrets(ctx, auth.SessionsImportID, what, func(ctx context.Context) (int, error) {
+				n, err := empty(ctx)
+				failed = err != nil
+				return n, err
+			})
+			return !failed
+		}
+	}
+	w.inDatabase = append(w.inDatabase, "identity")
+	return auth.NewPGSessions(w.database, nil)
 }
 
 // startAuth keeps the sessions and accounts shared with the other
@@ -208,6 +304,25 @@ func (w *wiring) startAuth(ctx context.Context) {
 			log.Warn("the shared sessions are not cached yet; reading them one by one")
 		}
 		cancel()
+	}
+	if left := w.sessionsLeft; left != nil {
+		// Session Secrets that were copied and could not be emptied at the
+		// start: until they are, a console from before the move could take
+		// up a session ended since.
+		go func() {
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if left(ctx) {
+						return
+					}
+				}
+			}
+		}()
 	}
 	// Accounts created, changed or removed through another replica take
 	// effect here within seconds.

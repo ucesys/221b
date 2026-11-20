@@ -246,12 +246,15 @@ auth:
   sessionIdle: 8h
   sessionMax: 168h
   # How long a session lasts that was made while the session store could
-  # not be written (DB-65): the Kubernetes API server away, or, once the
-  # sessions are kept there, the database. Such a session is kept in its
-  # cookie, signed with a key the console makes at its first start in the
-  # Secret <release>-session-key, so every replica can check it without the
-  # store. It counts from sign-in, is not renewed by use, and becomes an
-  # ordinary session at the first request after the store is back. Until
+  # not be written (DB-65). The sessions are kept in the database when
+  # there is one (database.mode, with connections.store: secrets; DB-66),
+  # and in Secrets of the release's namespace otherwise, so that is the
+  # database being away, or the Kubernetes API server. Such a session is
+  # kept in its cookie, signed with a key the console makes at its first
+  # start in the Secret <release>-session-key, so every replica can check
+  # it without the store. It counts from sign-in, is not renewed by use,
+  # and becomes an ordinary session at the first request after the store
+  # is back. Until
   # then it cannot be ended everywhere at once: a sign-out ends it on the
   # replica that served it, and a password reset on the replicas that hold
   # it; a local account disabled or deleted loses it at once everywhere.
