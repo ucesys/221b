@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/sim"
@@ -23,16 +24,16 @@ import (
 // appsSetup is a console with Watson on the simulator, and a record of
 // team-b/pay with a saved token. A person is denied team-b unless they
 // are named in allow.
-func appsSetup(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, *apps.MemoryStore, *source) {
+func appsSetup(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, apps.Store, *source) {
 	t.Helper()
 	srv, c, store, local, _ := appsSetupCreds(t, deny)
 	return srv, c, store, local
 }
 
 // appsSetupCreds is appsSetup with Administration › Credentials (CR-11).
-func appsSetupCreds(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, *apps.MemoryStore, *source, *credentials.Service) {
+func appsSetupCreds(t *testing.T, deny map[string]bool) (*httptest.Server, *http.Client, apps.Store, *source, *credentials.Service) {
 	t.Helper()
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	creds := credentials.New(credentials.Options{})
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)

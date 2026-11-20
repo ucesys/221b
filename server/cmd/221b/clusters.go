@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -68,8 +69,11 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		appStore = as
+		appStore = w.applications(ctx, as)
 	} else {
+		// In memory, with a database or without: the record set's name is
+		// still its own.
+		w.claimImport(apps.ImportID)
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
 	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: w.activity})
@@ -80,6 +84,46 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 	}
 	w.appStore, w.manager = appStore, manager
 	return nil
+}
+
+// applications is where the applications are kept when the console keeps
+// its connections in Secrets: with a database, their records are rows
+// (DB-62) and only their values, parameters and commands' parameters stay
+// in their Secrets; without one, the Secrets hold all of it, as before.
+// What the Secrets held of the records is copied once, and the Secrets are
+// then rewritten to hold the secret part alone (DB-63): no Secret is
+// deleted, and one whose record could not be copied is left whole.
+//
+// With a database and the connections in memory (no -connections-secrets:
+// the simulator, a console run by hand) the applications stay in memory
+// too, as the credentials' list does: rows that outlived the values they
+// are deployed with would be applications nobody could deploy.
+func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) apps.Store {
+	if w.database == nil {
+		w.claimImport(apps.ImportID)
+		return secrets
+	}
+	log := w.dbLog()
+	w.moveFromSecrets(ctx, apps.ImportID, "the applications",
+		func(ctx context.Context) (int, error) { return apps.CopyFromSecrets(ctx, w.database, secrets, log) },
+		func(ctx context.Context) (int, error) { return apps.RewriteSecrets(ctx, w.database, secrets, log) })
+	appLog := log
+	if w.log != nil {
+		appLog = w.log.With("component", "applications")
+	}
+	store := apps.NewPGStore(w.database, secrets, appLog)
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if noSecret, noRow, err := store.Unmatched(cctx); err != nil {
+		log.Warn("the applications in the database and their Secrets could not be compared", "err", err)
+	} else if len(noSecret) > 0 || len(noRow) > 0 {
+		log.Warn("the applications in the database and their Secrets do not match: an application without its Secret reads with no values until it is saved again, and a Secret without an application is kept and never read",
+			"applications_without_secret", noSecret, "secrets_without_application", noRow)
+	}
+	return store
 }
 
 // localSpec describes the cluster the console was started against as a

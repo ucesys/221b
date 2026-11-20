@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
@@ -48,7 +49,7 @@ func unzip(t *testing.T, body string) string {
 // back and says what is left to do by hand.
 func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	ctx := context.Background()
-	store, kvb, auditStore := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	store, kvb, auditStore := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	var shared Settings
 	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV, o.Version = store, kvb, "0.10.2 (test)"
@@ -113,7 +114,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	}
 
 	// Into another console.
-	store2, kvb2, auditStore2 := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	store2, kvb2, auditStore2 := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	var shared2 Settings
 	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV = store2, kvb2
@@ -338,7 +339,7 @@ func TestARestoreChecksWhatItBringsBack(t *testing.T) {
 		`"gone/d":{"cluster":"gone","node":"d","loginUser":"ops","port":22,"hostKeys":["` + key + `"]}}`)
 	f.Audit = []audit.Event{{Action: "settings.update", Outcome: "ok", Detail: "from the old console"}}
 
-	appStore, kvb, auditStore := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	appStore, kvb, auditStore := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	dst := automation.NewStore(&kv.Memory{}, nil)
 	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV = appStore, kvb

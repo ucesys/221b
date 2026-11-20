@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 )
 
 // What an upgrade would apply, for the Apps diff, renders on the console:
@@ -24,7 +25,7 @@ func TestAnUpgradesRenderReadsNoSecretThroughLookup(t *testing.T) {
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
 	tg, _ := simTarget(t)
 	tg.Cluster = "local"
-	tg.Apps = apps.NewMemoryStore()
+	tg.Apps = appstest.Store(t)
 	asJSON := rest.CopyConfig(tg.Config)
 	asJSON.ContentType = "application/json"
 	k := kubernetes.NewForConfigOrDie(asJSON)

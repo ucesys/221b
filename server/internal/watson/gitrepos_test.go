@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
@@ -24,7 +25,7 @@ func TestHelmGitTakesARepositoryByName(t *testing.T) {
 	tg, _ := simTarget(t)
 	creds := credentials.New(credentials.Options{})
 	repos := apps.NewRepos(apps.RepoOptions{Credentials: creds})
-	raw := apps.NewMemoryStore()
+	raw := appstest.Store(t)
 	store := apps.WithRepositories(raw, repos)
 	tg.Cluster, tg.Apps, tg.Repos, tg.Credentials = "local", store, repos, creds
 	repos.AddUsers(apps.AppRepoUses(store))

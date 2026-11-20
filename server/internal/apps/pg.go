@@ -102,12 +102,37 @@ func writeRepos(ctx context.Context, tx pgx.Tx, old, next repoRecord) error {
 	if _, err := pgx.ForEachRow(rows, []any{&name, &id}, func() error { ids[name] = id; return nil }); err != nil {
 		return err
 	}
+	// A repository given a new name keeps its row, so what points at it
+	// (an application, a source of Mycroft's) follows it there: a name
+	// that is new takes the row of a name that is gone when the two are
+	// the same repository in all but the name.
+	listed := map[string]bool{}
+	for _, r := range next.Repositories {
+		listed[r.Name] = true
+	}
+	for _, r := range next.Repositories {
+		if ids[r.Name] != "" {
+			continue
+		}
+		for _, was := range old.Repositories {
+			id := ids[was.Name]
+			if listed[was.Name] || id == "" {
+				continue
+			}
+			if was.Name = r.Name; string(mustJSON(was)) == string(mustJSON(r)) {
+				ids[r.Name] = id
+				break
+			}
+		}
+	}
 	keep := make([]string, 0, len(next.Repositories))
+	taken := map[string]bool{}
 	for i, r := range next.Repositories {
 		id := ids[r.Name]
-		if id == "" {
+		if id == "" || taken[id] {
 			id = db.NewID()
 		}
+		taken[id] = true
 		keep = append(keep, id)
 		var cred *string
 		if r.Credential != "" {

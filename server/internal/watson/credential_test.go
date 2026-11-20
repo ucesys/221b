@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/credentials"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestAGitSourcesCredentialIsChosenNotGuessed(t *testing.T) {
 	ctx := context.Background()
 	creds := credentials.New(credentials.Options{})
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	tg := Target{Cluster: "local", Apps: store, Credentials: creds}
 	repo := "https://github.com/ucesys/221b"
 	choose := func(line string) (*appChart, apps.GitAuth, error) {

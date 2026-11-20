@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/backup"
@@ -37,7 +38,7 @@ func TestSecretsComeBackWithTheSameBackupKey(t *testing.T) {
 	ctx := context.Background()
 	secret := "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6b3BzOmNvbnNvbGUifQ.c2ln"
 	repoToken := "ghp_verysecret0123"
-	store, auditStore := apps.NewMemoryStore(), &audit.MemoryStore{}
+	store, auditStore := appstest.Store(t), &audit.MemoryStore{}
 	srv, c, m, logs, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Backup, o.Apps = keyed(testKeyA), store
 		o.Audit.SetStore(auditStore)
@@ -86,7 +87,7 @@ func TestSecretsComeBackWithTheSameBackupKey(t *testing.T) {
 	}
 
 	// The same key, on a console with neither.
-	store2, audit2 := apps.NewMemoryStore(), &audit.MemoryStore{}
+	store2, audit2 := appstest.Store(t), &audit.MemoryStore{}
 	srv2, c2, m2, logs2, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Backup, o.Apps = keyed(testKeyA), store2
 		o.Audit.SetStore(audit2)
@@ -108,7 +109,7 @@ func TestSecretsComeBackWithTheSameBackupKey(t *testing.T) {
 	}
 
 	// Another key: asked first, then everything else, and the list.
-	store3 := apps.NewMemoryStore()
+	store3 := appstest.Store(t)
 	srv3, c3, m3, logs3, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Backup, o.Apps = keyed(testKeyB), store3
 	})

@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/sim"
@@ -20,9 +21,9 @@ import (
 // adoptSetup is a console on the simulator, whose release web/shop
 // (revision 3) has replicas, image.tag, ingress.host, db.host and a
 // db.password; the console runs as that release.
-func adoptSetup(t *testing.T) (*httptest.Server, *http.Client, *apps.MemoryStore) {
+func adoptSetup(t *testing.T) (*httptest.Server, *http.Client, apps.Store) {
 	t.Helper()
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)
 	srv, c, m, _, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
@@ -37,7 +38,7 @@ func adoptSetup(t *testing.T) (*httptest.Server, *http.Client, *apps.MemoryStore
 	return srv, c, store
 }
 
-func savedValues(t *testing.T, store *apps.MemoryStore) (apps.Record, map[string]any) {
+func savedValues(t *testing.T, store apps.Store) (apps.Record, map[string]any) {
 	t.Helper()
 	rec, _, err := store.Get(context.Background(), clusters.LocalID, "web", "shop")
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/sim"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -20,7 +21,7 @@ import (
 // parameters, unique by name within the application, renamed, run as a
 // Watson card carrying the parameters as --set flags, and deleted.
 func TestAnApplicationsCommandsAreSavedAndRun(t *testing.T) {
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)
 	srv, c, m, _, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
@@ -88,7 +89,7 @@ func (staleStore) Save(context.Context, apps.Record, *string) error { return app
 // A save that lost to another says so, and asks to look again, rather
 // than overwrite it.
 func TestASaveThatLostToAnotherIsAConflict(t *testing.T) {
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	ctx := context.Background()
 	rec := apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://git.invalid/example/shop", Ref: "main", RefKind: apps.RefBranch}}
 	if err := store.Save(ctx, rec, nil); err != nil {

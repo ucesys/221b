@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
@@ -162,7 +163,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 // old secrets stay where they were, unread; a second run makes nothing.
 func TestTheUpgradeMovesApplicationsAndRepositories(t *testing.T) {
 	ctx := context.Background()
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	tok := "ghp_shared-token-for-both"
 	for _, a := range [][2]string{{"221b", "k8s-console"}, {"221b-github", "221b-github"}} {
 		rec := apps.Record{Cluster: "local", Namespace: a[0], Name: a[1], Source: apps.Source{Repo: "https://github.com/ucesys/" + a[1], Ref: "main", RefKind: apps.RefBranch}}

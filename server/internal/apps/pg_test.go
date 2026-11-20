@@ -62,3 +62,56 @@ func TestRepositoriesInTheDatabase(t *testing.T) {
 		t.Fatalf("after removing one: %+v", got)
 	}
 }
+
+// A repository given a new name keeps its row, so what points at it
+// follows it there (DB-62): an application's row, a source of Mycroft's.
+// A name that is new beside one that is gone is the same repository only
+// when nothing else about it differs.
+func TestARenamedRepositoryKeepsItsRow(t *testing.T) {
+	d := dbtest.Open(t)
+	b := NewReposPG(d)
+	ctx := context.Background()
+	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	charts := Repository{Name: "charts", Kind: "git", URL: "https://git.corp.example/platform/charts", SetBy: "Ann", SetAt: at}
+	mirror := Repository{Name: "mirror", Kind: "git", URL: "https://git.corp.example/platform/mirror", SetBy: "Ann", SetAt: at}
+	version := "0"
+	save := func(list ...Repository) {
+		t.Helper()
+		raw, _ := json.Marshal(repoRecord{Repositories: list})
+		if _, err := b.SaveKey(ctx, RepositoriesKey, raw, version); err != nil {
+			t.Fatal(err)
+		}
+		_, v, err := b.LoadKey(ctx, RepositoriesKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version = v
+	}
+	id := func(name string) (out string) {
+		_ = d.Do(ctx, func(q db.Querier) error {
+			return q.QueryRow(ctx, "SELECT repository_id::text FROM repositories WHERE name = $1", name).Scan(&out)
+		})
+		return out
+	}
+	save(charts, mirror)
+	was, other := id("charts"), id("mirror")
+	renamed := charts
+	renamed.Name = "platform-charts"
+	save(renamed, mirror)
+	if got := id("platform-charts"); got != was || id("charts") != "" || id("mirror") != other {
+		t.Fatalf("the renamed repository's row is %s, was %s", got, was)
+	}
+	// Another repository in its place is another row.
+	replaced := Repository{Name: "elsewhere", Kind: "git", URL: "https://git.corp.example/elsewhere", SetBy: "Bob", SetAt: at}
+	save(replaced, mirror)
+	if got := id("elsewhere"); got == "" || got == was || id("platform-charts") != "" {
+		t.Fatalf("a repository in another's place has the row %s (the other's was %s)", got, was)
+	}
+	// Two of the same that take the place of one: only one has its row.
+	twin, twin2 := replaced, replaced
+	twin.Name, twin2.Name = "twin", "twin-2"
+	save(twin, twin2, mirror)
+	if a, b := id("twin"), id("twin-2"); a == "" || b == "" || a == b {
+		t.Fatalf("two repositories share the row %s %s", a, b)
+	}
+}
