@@ -297,7 +297,7 @@ Exactly one of `chats.change_id` and `chats.case_id` is set (a check), and each 
 
 Sherlock names a conversation by a session, which is worked out from the key and kept nowhere: `'proposal:' || changes.change_key`, `'case:C-' || cases.case_number`. A conversation is read and written through its key, never by a name.
 
-A message's parts are one JSON value by decision: a chat is read and written whole, never asked for by its parts, and the parts change shape as Sherlock gains features. The column is `json` and not `jsonb` so that it reads back as written: a thing shown carries the input the model gave, key for key.
+A message's parts are one JSON value by decision: a chat is read and written whole, never asked for by its parts, and the parts change shape as Sherlock gains features. The column is `json` and not `jsonb` so that it reads back as written: a thing shown carries the input the model gave, key for key. Checked again on November 20, 2026 (item 13 of the Phase 13 handover): no query reads into `parts` (it is selected whole in `sherlock/pgchat.go` and nowhere else), so it stays `json`; a query that asks for a chat by its parts would be the reason for `jsonb`, in a step of its own.
 
 ### Knowledge
 
