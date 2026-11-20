@@ -753,7 +753,7 @@ func (p params) Apply(ctx context.Context, c Card, i int, by Approver) (Result, 
 	// in: the card sets those of the nodes it names, and no other node's.
 	cur := automation.View(all, in.Fleet, in.nodes())
 	next := in.next(cur)
-	if err := p.c.Params.SetVariablesFor(ctx, c.Cluster, in.Fleet, next, in.nodes()); err != nil {
+	if err := p.c.Params.SetVariablesFor(automation.SetBy(ctx, automation.Who{Name: by.Name, User: by.Key}), c.Cluster, in.Fleet, next, in.nodes()); err != nil {
 		p.c.record(audit.ActionAutomationParams, c, by, "fleet "+in.Fleet, audit.OutcomeFailed, err.Error())
 		return Result{}, err
 	}

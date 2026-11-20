@@ -317,6 +317,9 @@ type Store struct {
 	inTables  bool
 	collectIn func(ctx context.Context, drop func(live map[string]map[string]bool) error) error
 	log       *slog.Logger
+	// runs keeps the runs and the run requests in a database (KeepRunsIn,
+	// DB-87); nil keeps them in the documents RunsKey and ChangesKey.
+	runs RunRepo
 }
 
 // RunsKeys are the keys that may live apart from the scripts, so neither

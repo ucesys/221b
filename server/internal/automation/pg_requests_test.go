@@ -25,7 +25,9 @@ func TestRunRequestsAreRowsOfTheRuns(t *testing.T) {
 	tick := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	now := func() time.Time { tick = tick.Add(time.Second); return tick }
 	open := func() *Store {
-		return NewStore(&kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d), ChangesKey: NewChangesPG(d)}, Rest: &kv.Memory{}}, now)
+		st := NewStore(&kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d), ChangesKey: NewChangesPG(d)}, Rest: &kv.Memory{}}, now)
+		st.KeepRunsIn(d)
+		return st
 	}
 	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
 	ask := func(st *Store, request string) WaitingRun {

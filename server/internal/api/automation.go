@@ -695,7 +695,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		answerJSON(w, r, variablesAnswer{Params: before, Change: &saved})
 		return
 	}
-	if err := s.opts.AutomationStore.SetVariablesFor(r.Context(), list.Cluster, id, next, scope); err != nil {
+	if err := s.opts.AutomationStore.SetVariablesFor(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, next, scope); err != nil {
 		s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeFailed, err.Error())
 		jsonError(w, automationStatus(err), err.Error())
 		return

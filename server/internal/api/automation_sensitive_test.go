@@ -50,6 +50,7 @@ func sensitiveSetup(t *testing.T, env string, mods ...func(*Options)) sensitiveE
 		automation.RunsKey: automation.NewRunsPG(d), automation.ScriptsKey: automation.NewScriptsPG(d)}, Rest: &kv.Memory{}}, nil)
 	sens := automation.NewMemorySensitive()
 	st.SensitiveInTables(d, sens, log)
+	st.KeepRunsIn(d)
 	eng := automation.NewEngine(automation.Options{Store: st, Exec: noExec{}, Logger: log})
 	srv, c, m, auditOut, local, store := multiSetupWith(t, "ops@corp.example", nil, append([]func(*Options){func(o *Options) {
 		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: log})

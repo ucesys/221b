@@ -82,6 +82,8 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 				automation.ScriptsKey: automation.NewScriptsPG(d), automation.VariablesKey: automation.NewVariablesPG(d),
 				automation.ChangesKey: automation.NewChangesPG(d), automation.RunsKey: automation.NewRunsPG(d)}
 		}), nil)
+		// The runs and the run requests through their repository (DB-87).
+		autoStore.KeepRunsIn(w.database)
 		w.inDatabase = append(w.inDatabase, "automation")
 		w.sensitiveValues(ctx, autoStore, sens)
 		autoEngine = automation.NewEngine(automation.Options{

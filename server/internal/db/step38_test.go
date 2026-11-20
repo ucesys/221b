@@ -95,6 +95,7 @@ func TestStep0038AndTheStartMoveTheSensitiveValuesOut(t *testing.T) {
 	st := automation.NewStore(&kv.Keyed{Keys: map[string]kv.Backend{automation.VariablesKey: automation.NewVariablesPG(a), automation.ChangesKey: automation.NewChangesPG(a),
 		automation.RunsKey: automation.NewRunsPG(a), automation.ScriptsKey: automation.NewScriptsPG(a)}, Rest: &kv.Memory{}}, nil)
 	st.SensitiveInTables(a, automation.NewMemorySensitive(), quiet)
+	st.KeepRunsIn(a)
 	ann := automation.Who{Name: "Ann", User: "ann"}
 	must := func(err error) {
 		t.Helper()
@@ -178,6 +179,7 @@ func TestStep0038AndTheStartMoveTheSensitiveValuesOut(t *testing.T) {
 	read := automation.NewStore(&kv.Keyed{Keys: map[string]kv.Backend{automation.VariablesKey: automation.NewVariablesPG(b), automation.ChangesKey: automation.NewChangesPG(b),
 		automation.RunsKey: automation.NewRunsPG(b), automation.ScriptsKey: automation.NewScriptsPG(b)}, Rest: &kv.Memory{}}, nil)
 	read.SensitiveInTables(b, sens, quiet)
+	read.KeepRunsIn(b)
 	if v, _ := read.Variables(ctx, "c1"); v["gpu"].Values["TOKEN"] != automation.Unmoved || v["gpu"].Values["PORT"] != "5432" {
 		t.Fatalf("before the move the variables read %+v", v["gpu"])
 	}

@@ -57,6 +57,7 @@ func (f *failingSensitive) Drop(ctx context.Context, cluster string, digests []s
 func pgSensitiveStore(d *db.DB, sens SensitiveStore, log *slog.Logger) *Store {
 	st := NewStore(&kv.Keyed{Keys: map[string]kv.Backend{VariablesKey: NewVariablesPG(d), ChangesKey: NewChangesPG(d), RunsKey: NewRunsPG(d), ScriptsKey: NewScriptsPG(d)}, Rest: &kv.Memory{}}, nil)
 	st.SensitiveInTables(d, sens, log)
+	st.KeepRunsIn(d)
 	return st
 }
 
@@ -209,11 +210,13 @@ func TestASensitiveValueIsKeptInTheSecretAndNeverInARow(t *testing.T) {
 	_, err = st.Save(ctx, "uses", "", "echo hi\n", ann, true)
 	must(err)
 	at := time.Now().UTC().Truncate(time.Second)
-	_, err = st.NewRun(ctx, Run{Script: "uses", Version: 1, Cluster: "c1", Fleet: "gpu", By: ann, State: RunSucceeded, Started: at, Beat: at, Ended: &at,
+	used, err := st.NewRun(ctx, Run{Script: "uses", Version: 1, Cluster: "c1", Fleet: "gpu", By: ann, State: RunSucceeded, Started: at, Beat: at, Ended: &at,
 		Overrides: map[string]string{"PLAIN": marker + "-plain"},
 		Fleets:    []RunFleet{{ID: "gpu", Values: map[string]string{"PLAIN": marker + "-plain", "PORT": "5432"}}},
 		Nodes:     []NodeResult{{Node: "n1", State: NodeChanged, Values: map[string]string{"PLAIN": marker + "-plain"}, Tail: "connected with " + marker + "-plain\n"}}})
 	must(err)
+	// Its whole output quotes the value too (DB-87).
+	must(st.PutNode(ctx, used.ID, used.Nodes[0], "starting\nconnected with "+marker+"-plain\n"))
 	if h := dbtest.Holding(t, d, marker+"-plain"); len(h) == 0 {
 		t.Fatal("a value that is not sensitive is not in the rows")
 	}
@@ -222,6 +225,9 @@ func TestASensitiveValueIsKeptInTheSecretAndNeverInARow(t *testing.T) {
 	mark.Sensitive = append(mark.Sensitive, "PLAIN")
 	must(st.SetVariablesFor(ctx, "c1", "gpu", mark, gpu))
 	nowhere("marked", marker)
+	if out, err := st.Outputs(ctx, used.ID); err != nil || out["n1"] != "starting\nconnected with "+maskText+"\n" {
+		t.Fatalf("the past run's output once the name is marked: %q: %v", out["n1"], err)
+	}
 	vars, _ = st.Variables(ctx, "c1")
 	plainTok := vars["gpu"].Values["PLAIN"]
 	if v, ok := reveal(t, st, "c1", plainTok); !ok || v != marker+"-plain" {

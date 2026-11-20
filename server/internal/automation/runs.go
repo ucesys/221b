@@ -284,7 +284,13 @@ type runsRecord struct {
 // leader stopped beating is shown interrupted (AU-12).
 func (st *Store) Runs(ctx context.Context) ([]Run, error) {
 	var rec runsRecord
-	if _, err := st.load(ctx, RunsKey, &rec); err != nil {
+	if st.runs != nil {
+		runs, err := st.runs.Runs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rec.Runs = runs
+	} else if _, err := st.load(ctx, RunsKey, &rec); err != nil {
 		return nil, err
 	}
 	now := st.now()
@@ -293,6 +299,47 @@ func (st *Store) Runs(ctx context.Context) ([]Run, error) {
 	}
 	sort.Slice(rec.Runs, func(i, j int) bool { return rec.Runs[i].ID > rec.Runs[j].ID })
 	return rec.Runs, nil
+}
+
+// Run is one kept run, shown interrupted as Runs shows it.
+func (st *Store) Run(ctx context.Context, id int) (Run, bool, error) {
+	if st.runs == nil {
+		list, err := st.Runs(ctx)
+		if err != nil {
+			return Run{}, false, err
+		}
+		for _, r := range list {
+			if r.ID == id {
+				return r, true, nil
+			}
+		}
+		return Run{}, false, nil
+	}
+	r, ok, err := st.runs.Run(ctx, id)
+	if ok {
+		stale(&r, st.now())
+	}
+	return r, ok, err
+}
+
+// PutNode records one node's part of a run as it ended, with its whole
+// output (DB-87), where the runs are kept by a repository; a store of
+// documents keeps the node's part with the next save of the run, and no
+// output.
+func (st *Store) PutNode(ctx context.Context, id int, n NodeResult, output string) error {
+	if st.runs == nil {
+		return nil
+	}
+	return st.runs.PutNode(ctx, id, n, output)
+}
+
+// Outputs is each node's whole output of a run, as the store keeps it:
+// none for a store of documents.
+func (st *Store) Outputs(ctx context.Context, id int) (map[string]string, error) {
+	if st.runs == nil {
+		return map[string]string{}, nil
+	}
+	return st.runs.Outputs(ctx, id)
 }
 
 func stale(r *Run, now time.Time) {
@@ -319,6 +366,9 @@ func stale(r *Run, now time.Time) {
 // scripts on the cluster aside. A request asked for again answers the run
 // it started, with ErrSameRequest.
 func (st *Store) NewRun(ctx context.Context, r Run) (Run, error) {
+	if st.runs != nil {
+		return st.runs.NewRun(ctx, r, st.now())
+	}
 	var same Run
 	err := change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
 		now := st.now()
@@ -366,6 +416,9 @@ func (st *Store) NewRun(ctx context.Context, r Run) (Run, error) {
 // whatever a late save says; it answers whether someone asked through the
 // record for the run to be cancelled.
 func (st *Store) PutRun(ctx context.Context, r Run) (cancel bool, err error) {
+	if st.runs != nil {
+		return st.runs.PutRun(ctx, r)
+	}
 	err = change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
 		for i := range rec.Runs {
 			if rec.Runs[i].ID != r.ID {
@@ -391,6 +444,9 @@ func (st *Store) PutRun(ctx context.Context, r Run) (cancel bool, err error) {
 // AskCancel marks a running run for cancelling, for the console running it
 // to see at its next beat; it says whether the run was running.
 func (st *Store) AskCancel(ctx context.Context, id int) (bool, error) {
+	if st.runs != nil {
+		return st.runs.AskCancel(ctx, id, st.now())
+	}
 	found := false
 	err := change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
 		for i := range rec.Runs {

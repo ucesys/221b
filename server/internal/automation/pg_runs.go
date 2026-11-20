@@ -22,9 +22,9 @@ import (
 // from the changes' document (pg_changes.go): a row with no run number is
 // a request that has not started a run, and this document leaves it alone.
 //
-// The store is unchanged and reaches the rows through db.Doc, which reads
-// every kept run for each save, as the ConfigMap's document was read: a
-// repository that writes one node's row at a time is the rework due.
+// The store reaches these rows through its repository (pg_runrepo.go,
+// DB-87), one run at a time. This document, which reads every run, stays
+// for the one-time copy from a ConfigMap and the move of sensitive values.
 // The fleets a run's nodes were in when it started are rows of
 // script_run_fleets, each fleet's values then rows of script_run_values,
 // and each node's fleets rows of script_run_host_fleets (DB-38): a run's
@@ -64,15 +64,33 @@ func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, er
 		}
 		rec.Next = c.Next
 	}
+	runs, err := readRunsWhere(ctx, q, raw, "")
+	if err != nil {
+		return rec, false, err
+	}
+	rec.Runs = runs
+	return rec, found || len(rec.Runs) > 0, nil
+}
+
+// readRunsWhere reads the runs that where picks, a condition on
+// script_runs whose arguments are args, oldest first; every run when
+// where is "". The rows that hang from the runs are read for those runs
+// alone.
+func readRunsWhere(ctx context.Context, q db.Querier, raw bool, where string, args ...any) ([]Run, error) {
+	out := []Run{}
+	cond := ""
+	if where != "" {
+		cond = " AND (" + where + ")"
+	}
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT script_run_id::text, run_number, script_name, version_number, version_hash, is_dry_run, privilege, cluster_id,
 			cluster_name, fleet_key, fleet_name, rollout_mode, rollout_size, rollout_stop_after, rollout_timeout_minutes, started_by, started_by_user,
 			state, target, coalesce(run_profile_id, ''), identity, basis, hook_names, hooks_before, hooks_after, coalesce(retry_of_number, 0), note,
 			request_key, is_cancel_asked, values_request_number, values_approved_by, values_approved_by_user, values_approved_at,
 			started_at, ended_at, heartbeat_at
-		FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number`)
+		FROM script_runs WHERE run_number IS NOT NULL`+cond+` ORDER BY run_number`, args...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	var id string
 	var r Run
@@ -108,20 +126,33 @@ func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, er
 			}
 			x.ValuesApproved = &va
 		}
-		at[id] = len(rec.Runs)
-		rec.Runs = append(rec.Runs, x)
+		at[id] = len(out)
+		out = append(out, x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
+	}
+	// The rows that hang from the runs read: of those runs alone, when
+	// not every run is read.
+	var ids []string
+	only, of := "", []any{}
+	if where != "" {
+		if len(out) == 0 {
+			return out, nil
+		}
+		for id := range at {
+			ids = append(ids, id)
+		}
+		only, of = " AND script_run_id = ANY($1::uuid[])", []any{ids}
 	}
 
 	type place struct{ run, node int }
 	nodes := map[string]place{}
 	rows, err = q.Query(ctx, `SELECT script_run_host_id::text, script_run_id::text, host_name, batch, state, exit_code, message, error, started_at,
 			ended_at, output_tail, coalesce(reboot_minutes, 0), is_cordoned
-		FROM script_run_hosts ORDER BY script_run_id, position, host_name`)
+		FROM script_run_hosts WHERE true`+only+` ORDER BY script_run_id, position, host_name`, of...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	var hid string
 	var n NodeResult
@@ -144,68 +175,72 @@ func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, er
 			t := ended.UTC()
 			x.Ended = &t
 		}
-		nodes[hid] = place{i, len(rec.Runs[i].Nodes)}
-		rec.Runs[i].Nodes = append(rec.Runs[i].Nodes, x)
+		nodes[hid] = place{i, len(out[i].Nodes)}
+		out[i].Nodes = append(out[i].Nodes, x)
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
 	}
 
 	type spot struct{ run, fleet int }
 	fleets := map[string]spot{}
 	keys := map[string]string{}
-	rows, err = q.Query(ctx, "SELECT script_run_fleet_id::text, script_run_id::text, fleet_key, fleet_name FROM script_run_fleets ORDER BY script_run_id, position, fleet_key")
+	rows, err = q.Query(ctx, "SELECT script_run_fleet_id::text, script_run_id::text, fleet_key, fleet_name FROM script_run_fleets WHERE true"+only+" ORDER BY script_run_id, position, fleet_key", of...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	var fid string
 	var f RunFleet
 	if _, err := pgx.ForEachRow(rows, []any{&fid, &id, &f.ID, &f.Name}, func() error {
 		if i, ok := at[id]; ok {
-			fleets[fid], keys[fid] = spot{i, len(rec.Runs[i].Fleets)}, f.ID
-			rec.Runs[i].Fleets = append(rec.Runs[i].Fleets, RunFleet{ID: f.ID, Name: f.Name})
+			fleets[fid], keys[fid] = spot{i, len(out[i].Fleets)}, f.ID
+			out[i].Fleets = append(out[i].Fleets, RunFleet{ID: f.ID, Name: f.Name})
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
 	}
-	rows, err = q.Query(ctx, `SELECT m.script_run_host_id::text, m.script_run_fleet_id::text FROM script_run_host_fleets m
-		ORDER BY m.script_run_host_id, m.position`)
+	ofHosts := ""
+	if where != "" {
+		ofHosts = " WHERE m.script_run_host_id IN (SELECT script_run_host_id FROM script_run_hosts WHERE true" + only + ")"
+	}
+	rows, err = q.Query(ctx, `SELECT m.script_run_host_id::text, m.script_run_fleet_id::text FROM script_run_host_fleets m`+ofHosts+`
+		ORDER BY m.script_run_host_id, m.position`, of...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	if _, err := pgx.ForEachRow(rows, []any{&hid, &fid}, func() error {
 		if p, ok := nodes[hid]; ok {
-			node := &rec.Runs[p.run].Nodes[p.node]
+			node := &out[p.run].Nodes[p.node]
 			node.Fleets = append(node.Fleets, keys[fid])
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
 	}
 
 	var names func(cluster string) map[string]bool
 	if !raw {
 		if names, err = namesIn(ctx, q); err != nil {
-			return rec, false, err
+			return nil, err
 		}
 	}
 	rows, err = q.Query(ctx, `SELECT script_run_id::text, coalesce(script_run_host_id::text, ''), coalesce(script_run_fleet_id::text, ''), scope, name,
 			coalesce(value_digest, value)
-		FROM script_run_values WHERE scope IN ('run', 'host', 'fleet')`)
+		FROM script_run_values WHERE scope IN ('run', 'host', 'fleet')`+only, of...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	var scope, name, value string
 	if _, err := pgx.ForEachRow(rows, []any{&id, &hid, &fid, &scope, &name, &value}, func() error {
-		if i, ok := at[id]; ok && !raw && !IsHidden(value) && names(rec.Runs[i].Cluster)[name] {
+		if i, ok := at[id]; ok && !raw && !IsHidden(value) && names(out[i].Cluster)[name] {
 			if _, bound := Bound(value); !bound || scope != "run" {
 				value = Unmoved
 			}
 		}
 		if scope == "fleet" {
 			if p, ok := fleets[fid]; ok {
-				fl := &rec.Runs[p.run].Fleets[p.fleet]
+				fl := &out[p.run].Fleets[p.fleet]
 				if fl.Values == nil {
 					fl.Values = map[string]string{}
 				}
@@ -215,15 +250,15 @@ func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, er
 		}
 		if scope == "run" {
 			if i, ok := at[id]; ok {
-				if rec.Runs[i].Overrides == nil {
-					rec.Runs[i].Overrides = map[string]string{}
+				if out[i].Overrides == nil {
+					out[i].Overrides = map[string]string{}
 				}
-				rec.Runs[i].Overrides[name] = value
+				out[i].Overrides[name] = value
 			}
 			return nil
 		}
 		if p, ok := nodes[hid]; ok {
-			node := &rec.Runs[p.run].Nodes[p.node]
+			node := &out[p.run].Nodes[p.node]
 			if node.Values == nil {
 				node.Values = map[string]string{}
 			}
@@ -231,23 +266,23 @@ func readRuns(ctx context.Context, q db.Querier, raw bool) (runsRecord, bool, er
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
 	}
 
-	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, user_name FROM script_run_approvers ORDER BY script_run_id, position")
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, user_name FROM script_run_approvers WHERE true"+only+" ORDER BY script_run_id, position", of...)
 	if err != nil {
-		return rec, false, err
+		return nil, err
 	}
 	var who Who
 	if _, err := pgx.ForEachRow(rows, []any{&id, &who.Name, &who.User}, func() error {
 		if i, ok := at[id]; ok {
-			rec.Runs[i].Approvers = append(rec.Runs[i].Approvers, who)
+			out[i].Approvers = append(out[i].Approvers, who)
 		}
 		return nil
 	}); err != nil {
-		return rec, false, err
+		return nil, err
 	}
-	return rec, found || len(rec.Runs) > 0, nil
+	return out, nil
 }
 
 // writeRuns hides the sensitive values the runs recorded, should any

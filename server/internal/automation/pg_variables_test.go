@@ -138,3 +138,57 @@ func TestVariablesCopiedFromAConfigMap(t *testing.T) {
 		t.Fatalf("n2's reboot time in its row: %d: %v", minutes, err)
 	}
 }
+
+// A variable's row names who set it (variables.updated_by, DB-87): the
+// person a save is made for, and for an approved change the person who
+// asked for it. A value the save leaves as it was keeps its name, and a
+// save that says no one names no one.
+func TestAVariableNamesWhoSetIt(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := NewStore(&kv.Keyed{Keys: map[string]kv.Backend{VariablesKey: NewVariablesPG(d), ChangesKey: NewChangesPG(d)}, Rest: &kv.Memory{}}, nil)
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	by := func(name string) string {
+		t.Helper()
+		var who string
+		if err := d.Pool().QueryRow(ctx, "SELECT updated_by FROM variables WHERE name = $1", name).Scan(&who); err != nil {
+			t.Fatal(err)
+		}
+		return who
+	}
+	if err := st.SetVariables(SetBy(ctx, ann), "c1", AllNodes, FleetVariables{Values: map[string]string{"MODE": "fast", "ZONE": "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if by("MODE") != "Ann" || by("ZONE") != "Ann" {
+		t.Fatalf("set by Ann, the rows name %q and %q", by("MODE"), by("ZONE"))
+	}
+	// Sam changes ZONE through a change Ann approves.
+	vars, _ := st.Variables(ctx, "c1")
+	before := View(vars, AllNodes, nil)
+	after := View(vars, AllNodes, nil)
+	after.Values = map[string]string{"MODE": "fast", "ZONE": "b"}
+	c, err := st.NewChange(ctx, VariableChange{Cluster: "c1", Fleet: AllNodes, By: sam, Changed: []string{"ZONE"}, Before: before, After: after, State: ChangeWaiting})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideChange(SetBy(ctx, ann), "c1", c.ID, true, "", ann); err != nil {
+		t.Fatal(err)
+	}
+	if by("ZONE") != "Sam" || by("MODE") != "Ann" {
+		t.Fatalf("after Sam's change, ZONE names %q and MODE %q", by("ZONE"), by("MODE"))
+	}
+	// A save for no one in particular.
+	if err := st.SetVariables(ctx, "c1", AllNodes, FleetVariables{Values: map[string]string{"MODE": "fast", "ZONE": "b", "NEW": "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if by("NEW") != "" || by("ZONE") != "Sam" {
+		t.Fatalf("NEW names %q, ZONE %q", by("NEW"), by("ZONE"))
+	}
+	// The user, where there is no name.
+	if err := st.SetVariables(SetBy(ctx, Who{User: "cy"}), "c1", AllNodes, FleetVariables{Values: map[string]string{"MODE": "slow", "ZONE": "b", "NEW": "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if by("MODE") != "cy" {
+		t.Fatalf("MODE names %q", by("MODE"))
+	}
+}

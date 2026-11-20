@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -23,7 +24,9 @@ func TestRunsInTheDatabase(t *testing.T) {
 	tick := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
 	now := func() time.Time { tick = tick.Add(time.Second); return tick }
 	open := func() *Store {
-		return NewStore(&kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d), ScriptsKey: NewScriptsPG(d)}, Rest: &kv.Memory{}}, now)
+		st := NewStore(&kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d), ScriptsKey: NewScriptsPG(d)}, Rest: &kv.Memory{}}, now)
+		st.KeepRunsIn(d)
+		return st
 	}
 	ada, bob := Who{Name: "Ada", User: "ada"}, Who{Name: "Bob", User: "bob"}
 	steps := func(st *Store) {
@@ -170,6 +173,7 @@ func TestTheEngineRunsOverTheDatabase(t *testing.T) {
 		return 0, nil
 	}}
 	st := NewStore(backend(), time.Now)
+	st.KeepRunsIn(d)
 	e := NewEngine(Options{Store: st, Exec: x})
 	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a", "b", "c"},
 		Rollout: Rollout{Mode: RolloutSize, Size: 1}, Values: map[string]map[string]string{"a": {"MODE": "x"}, "b": {"MODE": "y"}, "c": {"MODE": "z"}}})
@@ -180,7 +184,9 @@ func TestTheEngineRunsOverTheDatabase(t *testing.T) {
 	if done.State == RunRunning || done.Ended == nil {
 		t.Fatalf("the run did not end: %+v", done)
 	}
-	runs, err := NewStore(backend(), time.Now).Runs(ctx)
+	other := NewStore(backend(), time.Now)
+	other.KeepRunsIn(d)
+	runs, err := other.Runs(ctx)
 	if err != nil || len(runs) != 1 || len(runs[0].Nodes) != 3 {
 		t.Fatalf("another replica reads %+v: %v", runs, err)
 	}
@@ -201,5 +207,78 @@ func TestTheEngineRunsOverTheDatabase(t *testing.T) {
 	var hosts, values int
 	if err := d.Pool().QueryRow(ctx, "SELECT (SELECT count(*) FROM script_run_hosts), (SELECT count(*) FROM script_run_values WHERE scope = 'host')").Scan(&hosts, &values); err != nil || hosts != 3 || values != 3 {
 		t.Fatalf("%d hosts' rows and %d values' rows: %v", hosts, values, err)
+	}
+}
+
+// A run's whole output is kept (DB-87): each host's output, not only its
+// tail, is a row the run's page reads from any replica, after the console
+// that ran it is gone. It is kept masked as the tail is, so a secret
+// parameter's or a sensitive variable's value is in no row: the marker
+// the script prints is blanked. An output longer than OutputBytes keeps
+// its newest OutputBytes, and says what came before was not kept.
+func TestARunKeepsEachHostsWholeOutput(t *testing.T) {
+	const marker = "MARKERout9Zq4secret"
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	backend := func() kv.Backend {
+		return &kv.Keyed{Keys: map[string]kv.Backend{RunsKey: NewRunsPG(d)}, Rest: &kv.Memory{}}
+	}
+	long := strings.Repeat("0123456789abcdef", OutputBytes/16+64)
+	x := &stubExec{run: func(node, _, stdin string, out io.Writer) (int, error) {
+		// What the node was given, its secret among it, then many lines.
+		io.WriteString(out, stdin)
+		for i := 0; i < 200; i++ {
+			fmt.Fprintf(out, "line %d of %s, past the tail\n", i, node)
+		}
+		if node == "big" {
+			io.WriteString(out, long+"\n")
+		}
+		fmt.Fprintf(out, "the secret was %s\n", marker)
+		return 0, nil
+	}}
+	st := NewStore(backend(), time.Now)
+	st.KeepRunsIn(d)
+	e := NewEngine(Options{Store: st, Exec: x})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a", "big"},
+		Rollout: Rollout{Mode: RolloutAll}, Values: map[string]map[string]string{"a": {}, "big": {}},
+		Secrets: map[string]map[string]string{"a": {"TOKEN": marker}, "big": {"TOKEN": marker}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, e, r.ID)
+	_, here, _, err := e.Get(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another replica, which never ran it.
+	other := NewStore(backend(), time.Now)
+	other.KeepRunsIn(d)
+	run, kept, found, err := NewEngine(Options{Store: other, Exec: x}).Get(ctx, r.ID)
+	if err != nil || !found {
+		t.Fatalf("another replica finds the run %v: %v", found, err)
+	}
+	a := kept["a"]
+	if a != here["a"] || !strings.Contains(a, "line 0 of a, past the tail") || !strings.Contains(a, "line 199 of a") || len(a) <= tailBytes {
+		t.Fatalf("a's output as another replica reads it:\n%s\nas the engine had it:\n%s", a, here["a"])
+	}
+	if !strings.Contains(a, "the secret was "+maskText) || strings.Contains(a, marker) {
+		t.Fatalf("a's output is not masked as its tail is:\n%s", a)
+	}
+	if run.Nodes[0].Tail == "" || !strings.HasSuffix(a, run.Nodes[0].Tail) {
+		t.Errorf("the tail is not the end of the output: %q", run.Nodes[0].Tail)
+	}
+	big := kept["big"]
+	if !strings.HasPrefix(big, cutMark) || len(big) > OutputBytes+len(cutMark) || !strings.Contains(big, "the secret was "+maskText) || strings.Contains(big, "line 0 of big") {
+		t.Fatalf("big's output: %d bytes, starting %q", len(big), big[:min(len(big), 80)])
+	}
+	var rows, cut int
+	if err := d.Pool().QueryRow(ctx, "SELECT count(*), count(*) FILTER (WHERE is_cut) FROM script_run_outputs").Scan(&rows, &cut); err != nil || rows != 2 || cut != 1 {
+		t.Fatalf("%d outputs' rows, %d cut: %v", rows, cut, err)
+	}
+	if h := dbtest.Holding(t, d, marker); len(h) > 0 {
+		t.Errorf("the database holds the secret in %v", h)
+	}
+	if h := dbtest.Holding(t, d, "line 0 of a, past the tail"); h["script_run_outputs"] == 0 {
+		t.Errorf("the output's start is in no row of script_run_outputs: %v", h)
 	}
 }

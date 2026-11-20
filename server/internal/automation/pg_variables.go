@@ -372,18 +372,18 @@ func syncVariables(ctx context.Context, tx pgx.Tx, scope, id string, want map[st
 			if w.sensitive {
 				return fmt.Errorf("%w: %s is sensitive and its value was not moved to the Secret yet: type its value", ErrInvalid, n)
 			}
-			if _, err := tx.Exec(ctx, "UPDATE variables SET is_sensitive = $3, updated_at = now() WHERE "+column+" = $1 AND name = $2", id, n, w.sensitive); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE variables SET is_sensitive = $3, updated_at = now(), updated_by = $4 WHERE "+column+" = $1 AND name = $2", id, n, w.sensitive, byOf(ctx)); err != nil {
 				return err
 			}
 		case had && w.value == nil && !h.keep && text(w.digest) == text(h.digest) && (w.digest == nil) == (h.digest == nil) && w.sensitive == h.sensitive:
 		case had:
-			if _, err := tx.Exec(ctx, "UPDATE variables SET value = $3, value_digest = $4, is_sensitive = $5, updated_at = now() WHERE "+column+" = $1 AND name = $2 AND (value IS DISTINCT FROM $3 OR value_digest IS DISTINCT FROM $4 OR is_sensitive <> $5)",
-				id, n, w.value, w.digest, w.sensitive); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE variables SET value = $3, value_digest = $4, is_sensitive = $5, updated_at = now(), updated_by = $6 WHERE "+column+" = $1 AND name = $2 AND (value IS DISTINCT FROM $3 OR value_digest IS DISTINCT FROM $4 OR is_sensitive <> $5)",
+				id, n, w.value, w.digest, w.sensitive, byOf(ctx)); err != nil {
 				return err
 			}
 		default:
-			if _, err := tx.Exec(ctx, "INSERT INTO variables (variable_id, scope, "+column+", name, value, value_digest, is_sensitive, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now())",
-				db.NewID(), scope, id, n, w.value, w.digest, w.sensitive); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO variables (variable_id, scope, "+column+", name, value, value_digest, is_sensitive, updated_at, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)",
+				db.NewID(), scope, id, n, w.value, w.digest, w.sensitive, byOf(ctx)); err != nil {
 				return err
 			}
 		}

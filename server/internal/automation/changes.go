@@ -291,7 +291,9 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		// Those are compared and set, and nothing else of the fleet's.
 		items := Items(c.Before, c.After)
 		nodes := NamedNodes(c.Before, c.After)
-		err = change(ctx, st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
+		// The values it sets are the asker's: the change names who
+		// approved them.
+		err = change(SetBy(ctx, c.By), st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
 			vr.nodesOwn()
 			cur := View(vr.Clusters[cluster], c.Fleet, nodes)
 			done, moved := weigh(cur, items)

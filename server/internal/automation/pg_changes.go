@@ -166,14 +166,24 @@ func readChanges(ctx context.Context, q db.Querier, raw bool) (changesRecord, bo
 // readRequests reads the runs that wait for approval, or did: the rows of
 // script_runs that have a request's number, oldest first.
 func readRequests(ctx context.Context, q db.Querier, raw bool) ([]WaitingRun, error) {
+	return readRequestsWhere(ctx, q, raw, "")
+}
+
+// readRequestsWhere reads the requests that where picks, a condition on
+// script_runs whose arguments are args; every request when where is "".
+func readRequestsWhere(ctx context.Context, q db.Querier, raw bool, where string, args ...any) ([]WaitingRun, error) {
 	var out []WaitingRun
+	cond := ""
+	if where != "" {
+		cond = " AND (" + where + ")"
+	}
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT script_run_id::text, request_number, cluster_id, cluster_name, script_name, version_number, fleet_key, fleet_name,
 			request_nodes, request_targets, rollout_mode, rollout_size, rollout_stop_after, rollout_timeout_minutes, coalesce(run_profile_id, ''),
 			hooks_before, hooks_after, coalesce(retry_of_number, 0), request_client_key, requested_by, requested_by_user, person_user, person_groups,
 			requested_at, request_method, request_changed, request_note, coalesce(request_state, ''), decided_by, decided_by_user, decided_at,
 			decision_comment, coalesce(started_run_number, 0)
-		FROM script_runs WHERE request_number IS NOT NULL ORDER BY request_number`)
+		FROM script_runs WHERE request_number IS NOT NULL`+cond+` ORDER BY request_number`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -216,13 +226,21 @@ func readRequests(ctx context.Context, q db.Querier, raw bool) ([]WaitingRun, er
 	if len(out) == 0 {
 		return nil, nil
 	}
+	only, of := "", []any{}
+	if where != "" {
+		ids := make([]string, 0, len(at))
+		for id := range at {
+			ids = append(ids, id)
+		}
+		only, of = " AND script_run_id = ANY($1::uuid[])", []any{ids}
+	}
 	var names func(cluster string) map[string]bool
 	if !raw {
 		if names, err = namesIn(ctx, q); err != nil {
 			return nil, err
 		}
 	}
-	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, coalesce(value_digest, value) FROM script_run_values WHERE scope = 'request'")
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, name, coalesce(value_digest, value) FROM script_run_values WHERE scope = 'request'"+only, of...)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +257,7 @@ func readRequests(ctx context.Context, q db.Querier, raw bool) ([]WaitingRun, er
 	}); err != nil {
 		return nil, err
 	}
-	rows, err = q.Query(ctx, "SELECT script_run_id::text, script, version_number, decision, why, decided_by FROM script_run_impacts ORDER BY script_run_id, position")
+	rows, err = q.Query(ctx, "SELECT script_run_id::text, script, version_number, decision, why, decided_by FROM script_run_impacts WHERE true"+only+" ORDER BY script_run_id, position", of...)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +286,24 @@ func writeRequests(ctx context.Context, tx pgx.Tx, old, next []WaitingRun) error
 	}
 	// A request that is no longer kept: its row goes when it never started
 	// a run, and otherwise only what was the request's.
-	gone := `request_number IS NOT NULL AND NOT (request_number = ANY($1))`
+	if err := dropRequests(ctx, tx, `request_number IS NOT NULL AND NOT (request_number = ANY($1))`, numbers); err != nil {
+		return err
+	}
+	for _, w := range next {
+		if b, had := before[w.ID]; had && sameJSON(b, w) {
+			continue
+		}
+		if err := writeRequest(ctx, tx, w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropRequests removes the requests that gone picks, $1 its argument: a
+// request's row goes when it never started a run, and otherwise only
+// what was the request's.
+func dropRequests(ctx context.Context, tx pgx.Tx, gone string, arg any) error {
 	for _, q := range []string{
 		"DELETE FROM script_run_values WHERE scope = 'request' AND script_run_id IN (SELECT script_run_id FROM script_runs WHERE " + gone + ")",
 		"DELETE FROM script_run_impacts WHERE script_run_id IN (SELECT script_run_id FROM script_runs WHERE " + gone + ")",
@@ -278,96 +313,97 @@ func writeRequests(ctx context.Context, tx pgx.Tx, old, next []WaitingRun) error
 			request_changed = '{}', request_note = '', decided_by = NULL, decided_by_user = NULL, decided_at = NULL, decision_comment = '',
 			started_run_number = NULL WHERE ` + gone,
 	} {
-		if _, err := tx.Exec(ctx, q, numbers); err != nil {
+		if _, err := tx.Exec(ctx, q, arg); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// writeRequest writes one request's rows. A request whose run has started
+// shares its row: only the request's own columns are written then.
+func writeRequest(ctx context.Context, tx pgx.Tx, w WaitingRun) error {
 	list := func(s []string) []string {
 		if s == nil {
 			return []string{}
 		}
 		return s
 	}
-	for _, w := range next {
-		if b, had := before[w.ID]; had && sameJSON(b, w) {
-			continue
-		}
-		var id string
-		err := tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE request_number = $1", w.ID).Scan(&id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			// The run it started may be there already, without its request:
-			// copied from a ConfigMap before the requests were.
-			err = nil
-			if w.Run != 0 {
-				err = tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE run_number = $1 AND request_number IS NULL AND cluster_id = $2", w.Run, w.Cluster).Scan(&id)
-				if errors.Is(err, pgx.ErrNoRows) {
-					err = nil
-				}
-			}
-			if err == nil && id == "" {
-				id = db.NewID()
-				_, err = tx.Exec(ctx, "INSERT INTO script_runs (script_run_id, request_number) VALUES ($1, $2)", id, w.ID)
-			}
-		}
-		if err != nil {
-			return err
-		}
-		var by, byUser *string
-		if w.DecidedBy != nil {
-			by, byUser = &w.DecidedBy.Name, &w.DecidedBy.User
-		}
-		var decided *time.Time
-		if w.DecidedAt != nil {
-			decided = timeOrNil(*w.DecidedAt)
-		}
-		var started *int
+	var id string
+	err := tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE request_number = $1", w.ID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The run it started may be there already, without its request:
+		// copied from a ConfigMap before the requests were.
+		err = nil
 		if w.Run != 0 {
-			started = &w.Run
-		}
-		if _, err := tx.Exec(ctx, `UPDATE script_runs SET request_number = $2, request_state = $3, request_client_key = $4, requested_by = $5,
-				requested_by_user = $6, requested_at = $7, request_method = $8, request_nodes = $9, request_targets = $10, person_user = $11,
-				person_groups = $12, request_changed = $13, request_note = $14, decided_by = $15, decided_by_user = $16, decided_at = $17,
-				decision_comment = $18, started_run_number = $19 WHERE script_run_id = $1`,
-			id, w.ID, w.State, w.Request, w.By.Name, w.By.User, timeOrNil(w.At), w.Method, list(w.Nodes), list(w.Targets), w.Person.User,
-			list(w.Person.Groups), list(w.Changed), w.Note, by, byUser, decided, w.Comment, started); err != nil {
-			return err
-		}
-		// What a request shares with its run is the run's once it has started.
-		var config *string
-		if w.Config != "" {
-			config = &w.Config
-		}
-		var retry *int
-		if w.RetryOf != 0 {
-			retry = &w.RetryOf
-		}
-		if _, err := tx.Exec(ctx, `UPDATE script_runs SET state = $2, cluster_id = $3, cluster_name = $4, script_name = $5, version_number = $6,
-				fleet_key = $7, fleet_name = $8, rollout_mode = $9, rollout_size = $10, rollout_stop_after = $11, rollout_timeout_minutes = $12,
-				run_profile_id = $13, hooks_before = $14, hooks_after = $15, retry_of_number = $16,
-				script_version_id = (SELECT v.script_version_id FROM script_versions v JOIN scripts s USING (script_id) WHERE s.name = $5 AND v.version_number = $6),
-				fleet_id = (SELECT f.fleet_id FROM fleets f WHERE coalesce(f.cluster_id, '') = $3 AND f.fleet_key = $7)
-			WHERE script_run_id = $1 AND run_number IS NULL`,
-			id, w.State, w.Cluster, w.ClusterName, w.Script, w.Version, w.Fleet, w.FleetName, w.Rollout.Mode, w.Rollout.Size, w.Rollout.StopAfter,
-			w.Rollout.TimeoutMinutes, config, list(w.Hooks.Before), list(w.Hooks.After), retry); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM script_run_values WHERE script_run_id = $1 AND scope = 'request'", id); err != nil {
-			return err
-		}
-		for name, v := range w.Params {
-			value, digest := columnsOf(v)
-			if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, name, value, value_digest) VALUES ($1, $2, 'request', $3, $4, $5)", db.NewID(), id, name, value, digest); err != nil {
-				return err
+			err = tx.QueryRow(ctx, "SELECT script_run_id::text FROM script_runs WHERE run_number = $1 AND request_number IS NULL AND cluster_id = $2", w.Run, w.Cluster).Scan(&id)
+			if errors.Is(err, pgx.ErrNoRows) {
+				err = nil
 			}
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM script_run_impacts WHERE script_run_id = $1", id); err != nil {
+		if err == nil && id == "" {
+			id = db.NewID()
+			_, err = tx.Exec(ctx, "INSERT INTO script_runs (script_run_id, request_number) VALUES ($1, $2)", id, w.ID)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	var by, byUser *string
+	if w.DecidedBy != nil {
+		by, byUser = &w.DecidedBy.Name, &w.DecidedBy.User
+	}
+	var decided *time.Time
+	if w.DecidedAt != nil {
+		decided = timeOrNil(*w.DecidedAt)
+	}
+	var started *int
+	if w.Run != 0 {
+		started = &w.Run
+	}
+	if _, err := tx.Exec(ctx, `UPDATE script_runs SET request_number = $2, request_state = $3, request_client_key = $4, requested_by = $5,
+			requested_by_user = $6, requested_at = $7, request_method = $8, request_nodes = $9, request_targets = $10, person_user = $11,
+			person_groups = $12, request_changed = $13, request_note = $14, decided_by = $15, decided_by_user = $16, decided_at = $17,
+			decision_comment = $18, started_run_number = $19 WHERE script_run_id = $1`,
+		id, w.ID, w.State, w.Request, w.By.Name, w.By.User, timeOrNil(w.At), w.Method, list(w.Nodes), list(w.Targets), w.Person.User,
+		list(w.Person.Groups), list(w.Changed), w.Note, by, byUser, decided, w.Comment, started); err != nil {
+		return err
+	}
+	// What a request shares with its run is the run's once it has started.
+	var config *string
+	if w.Config != "" {
+		config = &w.Config
+	}
+	var retry *int
+	if w.RetryOf != 0 {
+		retry = &w.RetryOf
+	}
+	if _, err := tx.Exec(ctx, `UPDATE script_runs SET state = $2, cluster_id = $3, cluster_name = $4, script_name = $5, version_number = $6,
+			fleet_key = $7, fleet_name = $8, rollout_mode = $9, rollout_size = $10, rollout_stop_after = $11, rollout_timeout_minutes = $12,
+			run_profile_id = $13, hooks_before = $14, hooks_after = $15, retry_of_number = $16,
+			script_version_id = (SELECT v.script_version_id FROM script_versions v JOIN scripts s USING (script_id) WHERE s.name = $5 AND v.version_number = $6),
+			fleet_id = (SELECT f.fleet_id FROM fleets f WHERE coalesce(f.cluster_id, '') = $3 AND f.fleet_key = $7)
+		WHERE script_run_id = $1 AND run_number IS NULL`,
+		id, w.State, w.Cluster, w.ClusterName, w.Script, w.Version, w.Fleet, w.FleetName, w.Rollout.Mode, w.Rollout.Size, w.Rollout.StopAfter,
+		w.Rollout.TimeoutMinutes, config, list(w.Hooks.Before), list(w.Hooks.After), retry); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM script_run_values WHERE script_run_id = $1 AND scope = 'request'", id); err != nil {
+		return err
+	}
+	for name, v := range w.Params {
+		value, digest := columnsOf(v)
+		if _, err := tx.Exec(ctx, "INSERT INTO script_run_values (script_run_value_id, script_run_id, scope, name, value, value_digest) VALUES ($1, $2, 'request', $3, $4, $5)", db.NewID(), id, name, value, digest); err != nil {
 			return err
 		}
-		for i, im := range w.Impact {
-			if _, err := tx.Exec(ctx, `INSERT INTO script_run_impacts (script_run_id, position, script, version_number, decision, why, decided_by)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, i, im.Script, im.Version, im.Decision, im.Why, im.By); err != nil {
-				return err
-			}
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM script_run_impacts WHERE script_run_id = $1", id); err != nil {
+		return err
+	}
+	for i, im := range w.Impact {
+		if _, err := tx.Exec(ctx, `INSERT INTO script_run_impacts (script_run_id, position, script, version_number, decision, why, decided_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, i, im.Script, im.Version, im.Decision, im.Why, im.By); err != nil {
+			return err
 		}
 	}
 	return nil

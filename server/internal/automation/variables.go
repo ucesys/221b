@@ -381,6 +381,25 @@ func (st *Store) Variables(ctx context.Context, cluster string) (map[string]Flee
 	return out, nil
 }
 
+type byKey struct{}
+
+// SetBy says who a call sets variables for, so that the rows it writes
+// name them (variables.updated_by, DB-87): the person who saves them, or
+// whose change is approved. A call that says no one writes no name.
+func SetBy(ctx context.Context, who Who) context.Context {
+	return context.WithValue(ctx, byKey{}, who)
+}
+
+// byOf is who SetBy said, as a row names them: the name shown, or the
+// user when there is no name.
+func byOf(ctx context.Context) string {
+	who, _ := ctx.Value(byKey{}).(Who)
+	if who.Name != "" {
+		return who.Name
+	}
+	return who.User
+}
+
 // SetVariables sets a fleet's own variables to fp's, and the own values
 // and reboot times of the nodes fp names; a node it does not name keeps
 // its own. All nodes' are replaced whole, every node's own with them.

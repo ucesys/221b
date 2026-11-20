@@ -210,7 +210,46 @@ func sealPastTables(ctx context.Context, tx pgx.Tx, r *ring, s *sealing, only st
 		}
 	}
 	n, err := redactAudit(ctx, tx, s.plain)
-	return changed + n, err
+	if err != nil {
+		return 0, err
+	}
+	m, err := redactOutputs(ctx, tx, s.plain)
+	return changed + n + m, err
+}
+
+// redactOutputs blanks, in the runs' whole outputs (DB-87), the values
+// among plain on each one's cluster, as sealRuns blanks them in the
+// tails. The texts are compared here, so no statement carries a value.
+func redactOutputs(ctx context.Context, tx pgx.Tx, plain map[string]map[string]bool) (int, error) {
+	n := 0
+	for _, cluster := range sortedClusters(plain) {
+		values := plain[cluster]
+		if len(values) == 0 {
+			continue
+		}
+		rows, err := tx.Query(ctx, `SELECT o.script_run_host_id::text, o.output FROM script_run_outputs o JOIN script_run_hosts h USING (script_run_host_id)
+			JOIN script_runs x USING (script_run_id) WHERE x.cluster_id = $1`, cluster)
+		if err != nil {
+			return 0, err
+		}
+		masked := map[string]string{}
+		var id, text string
+		if _, err := pgx.ForEachRow(rows, []any{&id, &text}, func() error {
+			if m := maskPlain(text, values); m != text {
+				masked[id] = m
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+		for id, text := range masked {
+			if _, err := tx.Exec(ctx, "UPDATE script_run_outputs SET output = $2 WHERE script_run_host_id = $1", id, text); err != nil {
+				return 0, err
+			}
+			n++
+		}
+	}
+	return n, nil
 }
 
 func differing[T any](a, b []T) int {
