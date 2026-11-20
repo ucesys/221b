@@ -2,6 +2,7 @@ package clusters
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,7 +39,8 @@ type Store interface {
 	// with every save, so a replica notices what another one changed
 	// (P7-02). The local cluster's saved name is among them.
 	Revisions(ctx context.Context) (map[string]string, error)
-	// Kind names the storage for the logs: "secrets" or "memory".
+	// Kind names the storage for the logs: "secrets", "database" (the
+	// credentials then stay in the Secrets, DB-64) or "memory".
 	Kind() string
 }
 
@@ -164,11 +166,17 @@ func NewSecretStore(cfg *rest.Config, namespace, prefix string, labels map[strin
 	if err != nil {
 		return nil, fmt.Errorf("creating the client for the connection Secrets: %w", err)
 	}
+	return NewSecretStoreOn(cs.CoreV1().Secrets(namespace), namespace, prefix, labels), nil
+}
+
+// NewSecretStoreOn makes a store over the Secrets of a namespace as a
+// client gives them: for a test's cluster that is not there.
+func NewSecretStoreOn(secrets corev1client.SecretInterface, namespace, prefix string, labels map[string]string) *SecretStore {
 	all := map[string]string{LabelComponent: ComponentValue}
 	for k, v := range labels {
 		all[k] = v
 	}
-	return &SecretStore{secrets: cs.CoreV1().Secrets(namespace), namespace: namespace, prefix: prefix, labels: all}, nil
+	return &SecretStore{secrets: secrets, namespace: namespace, prefix: prefix, labels: all}
 }
 
 func (s *SecretStore) Kind() string { return "secrets" }
@@ -205,16 +213,24 @@ func (s *SecretStore) Revisions(ctx context.Context) (map[string]string, error) 
 	}
 	out := make(map[string]string, len(list.Items))
 	for i := range list.Items {
-		sec := &list.Items[i]
-		id := sec.Labels[LabelCluster]
-		if id == "" {
-			id = strings.TrimPrefix(sec.Name, s.prefix+"-cluster-")
-		}
-		if id != "" && sec.Name == s.name(id) {
-			out[id] = sec.ResourceVersion
+		if id := s.idOf(&list.Items[i]); id != "" {
+			out[id] = list.Items[i].ResourceVersion
 		}
 	}
 	return out, nil
+}
+
+// idOf is the connection a Secret is of, by its label or its name; ""
+// for a Secret that carries the label and is not named as a connection's.
+func (s *SecretStore) idOf(sec *corev1.Secret) string {
+	id := sec.Labels[LabelCluster]
+	if id == "" {
+		id = strings.TrimPrefix(sec.Name, s.prefix+"-cluster-")
+	}
+	if id == "" || sec.Name != s.name(id) {
+		return ""
+	}
+	return id
 }
 
 func (s *SecretStore) Get(ctx context.Context, id string) (Spec, Credential, error) {
@@ -320,6 +336,89 @@ func (s *SecretStore) Delete(ctx context.Context, id string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("deleting the connection Secret %s: %w", s.name(id), err)
+	}
+	return nil
+}
+
+// --- With a database (DB-64): the Secret holds the credential alone ---
+//
+// The connection's record is then a row of clusters (PGStore), and what
+// follows reads and writes the credential's keys and nothing else. None
+// of it is given the database.
+
+// all lists the connection Secrets, by name.
+func (s *SecretStore) all(ctx context.Context) ([]corev1.Secret, error) {
+	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	if err != nil {
+		return nil, fmt.Errorf("listing the connection Secrets in %s: %w", s.namespace, err)
+	}
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+	return list.Items, nil
+}
+
+// credential reads a connection's credential from its Secret, and says
+// whether there is a Secret: none is an empty credential, and a Secret
+// that could not be asked for is an error.
+func (s *SecretStore) credential(ctx context.Context, id string) (Credential, bool, error) {
+	sec, err := s.secrets.Get(ctx, s.name(id), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return Credential{}, false, nil
+	}
+	if err != nil {
+		return Credential{}, false, fmt.Errorf("reading the connection Secret %s: %w", s.name(id), err)
+	}
+	return credentialOf(sec.Data), true, nil
+}
+
+// putCredential writes a connection's Secret to hold the credential and
+// nothing else, making it when it is not there. A record a console
+// without the database left in it ("spec.json") goes: the database keeps
+// the connection now. One a newer console wrote is not saved over (P7-03).
+func (s *SecretStore) putCredential(ctx context.Context, id string, c Credential) error {
+	name := s.name(id)
+	existing, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		var old stored
+		if prev := existing.Data[keySpec]; prev != nil && json.Unmarshal(prev, &old) == nil && old.Version > StorageVersion {
+			return fmt.Errorf("the connection Secret %s was written by a newer console (format %d); upgrade this one to change it", name, old.Version)
+		}
+		existing.Data = dataOf(c)
+		if existing.Labels == nil {
+			existing.Labels = map[string]string{}
+		}
+		for k, v := range s.labels {
+			existing.Labels[k] = v
+		}
+		existing.Labels[LabelCluster] = id
+		if _, err := s.secrets.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("updating the connection Secret %s: %w", name, err)
+		}
+		return nil
+	case apierrors.IsNotFound(err):
+		labels := map[string]string{LabelCluster: id}
+		for k, v := range s.labels {
+			labels[k] = v
+		}
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: labels}, Type: corev1.SecretTypeOpaque, Data: dataOf(c)}
+		if _, err := s.secrets.Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("creating the connection Secret %s: %w", name, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("reading the connection Secret %s: %w", name, err)
+	}
+}
+
+// dropSpec takes "spec.json" out of a Secret as it was listed, in one
+// update over the version listed: a Secret written meanwhile is refused
+// by the API server and left for the next start. Every other key and the
+// labels stay.
+func (s *SecretStore) dropSpec(ctx context.Context, sec *corev1.Secret) error {
+	next := sec.DeepCopy()
+	delete(next.Data, keySpec)
+	if _, err := s.secrets.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("taking the record out of the connection Secret %s: %w", sec.Name, err)
 	}
 	return nil
 }

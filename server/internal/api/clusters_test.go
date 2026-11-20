@@ -25,6 +25,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
@@ -73,7 +74,10 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func
 	store.Process()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := clusters.New(clusters.NewMemoryStore(), clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	// In memory, or, when TEST_STORE is "database", rows of a database with
+	// the credentials in Secrets (DB-64): every test of the connections,
+	// the backup's among them, then runs over the database.
+	m := clusters.New(clusterstest.Store(t), clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err := m.SetLocal(ctx, clusters.Spec{Name: "Here", Server: "https://10.0.0.1:6443", Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
 		t.Fatal(err)
 	}

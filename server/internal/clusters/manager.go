@@ -8,14 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 )
@@ -82,6 +86,8 @@ type Manager struct {
 	seen   map[string]string
 	// syncErr is the last sync error said in the log, to say it once.
 	syncErr string
+	// soon asks Run for a sync before its next tick (SyncSoon).
+	soon chan struct{}
 	// settings are the shared settings every store follows.
 	settingsRefresh time.Duration
 	settingsRaw     []byte
@@ -98,7 +104,7 @@ func New(store Store, o Options) *Manager {
 	if o.Refresh <= 0 {
 		o.Refresh = 3 * time.Second
 	}
-	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background()}
+	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background(), soon: make(chan struct{}, 1)}
 	if o.Activity != nil {
 		o.Activity.OnChange(m.setActive)
 	}
@@ -139,7 +145,9 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	}
 	// What was saved for it (a name or description changed in the console)
 	// wins. A store that cannot be read yet (the API server is still coming
-	// up) is not fatal: the installation's name stands until a restart.
+	// up, the database is away) is not fatal: the local cluster never
+	// needs it, the installation's name stands, and Sync takes the saved
+	// one when the store answers.
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 	} else if !errors.Is(err, ErrNotFound) {
@@ -209,6 +217,14 @@ func (m *Manager) load(ctx context.Context) error {
 // with the new spec (Watson's two-person and read-only rules follow it),
 // and one deleted stops. The local cluster's saved name and environment
 // are read again too.
+//
+// A store that cannot be asked (the database or the API server is away)
+// changes nothing here: every running connection keeps running with what
+// it has, and Sync says so with an error. That holds for the whole list
+// and for one connection of it: a connection that could not be read is
+// read again at the next sync, where one that was read and cannot be
+// used (a format this console does not know) is said once and left until
+// it changes.
 func (m *Manager) Sync(ctx context.Context) error {
 	revs, err := m.store.Revisions(ctx)
 	if err != nil {
@@ -216,12 +232,19 @@ func (m *Manager) Sync(ctx context.Context) error {
 	}
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
+	var notAsked []error
 	for id, rev := range revs {
 		if m.seen[id] == rev {
 			continue
 		}
 		spec, cred, err := m.store.Get(ctx, id)
 		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil && NotAsked(err) {
+			// Not marked as seen: marked, the connection would stay as it
+			// is here, or not start at all, until someone changed it.
+			notAsked = append(notAsked, fmt.Errorf("the connection %s could not be read: %w", id, err))
 			continue
 		}
 		// Applied or not, this revision is not read again: an unreadable
@@ -270,7 +293,40 @@ func (m *Manager) Sync(ctx context.Context) error {
 			delete(m.seen, id)
 		}
 	}
-	return nil
+	return errors.Join(notAsked...)
+}
+
+// NotAsked says whether err is a store that could not be asked, rather
+// than a store that answered with something this console cannot use: the
+// database away (db.ErrUnavailable), a time that ran out, or the API
+// server not reached, overloaded or failing. What could not be asked is
+// asked again; what was answered is not, until it changes.
+func NotAsked(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, db.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsServiceUnavailable(err) || apierrors.IsTooManyRequests(err) ||
+			apierrors.IsInternalError(err) || apierrors.IsUnexpectedServerError(err)
+	}
+	// No answer at all: the connection was refused, reset or timed out.
+	var netErr net.Error
+	var urlErr *url.Error
+	return errors.As(err, &netErr) || errors.As(err, &urlErr)
+}
+
+// SyncSoon asks Run for a sync now and not at its next tick: what the
+// store calls when another replica says it saved or removed a connection
+// (db.Subscribe). It never waits.
+func (m *Manager) SyncSoon() {
+	select {
+	case m.soon <- struct{}{}:
+	default:
+	}
 }
 
 // applyLocal takes the local cluster's saved name, environment and
@@ -299,19 +355,20 @@ func (m *Manager) Run(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			err := m.Sync(ctx)
-			msg := ""
+		case <-m.soon:
+		}
+		err := m.Sync(ctx)
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if msg != m.syncErr {
 			if err != nil {
-				msg = err.Error()
+				m.log.Warn("the saved connections could not be read; the running ones keep running", "err", err)
+			} else {
+				m.log.Info("the saved connections can be read again")
 			}
-			if msg != m.syncErr {
-				if err != nil {
-					m.log.Warn("the saved connections could not be read", "err", err)
-				} else {
-					m.log.Info("the saved connections can be read again")
-				}
-				m.syncErr = msg
-			}
+			m.syncErr = msg
 		}
 	}
 }
@@ -755,28 +812,33 @@ func (m *Manager) getSpec(ctx context.Context, id string) (Spec, Credential, err
 	return spec, cred, err
 }
 
-// Remove stops a connection and deletes its Secret (P3-08). The local
-// cluster cannot be removed.
+// Remove deletes a connection with its Secret (P3-08) and stops it. The
+// local cluster cannot be removed. A store that cannot remove it (the
+// database is away) leaves the connection running and listed, so the
+// removal can be asked for again: stopped first, it would be saved and
+// shown nowhere.
 func (m *Manager) Remove(ctx context.Context, id string) error {
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
-	m.mu.Lock()
+	m.mu.RLock()
 	inst, ok := m.instances[id]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.Unlock()
 		return ErrNotFound
 	}
 	if inst.Spec.Local {
-		m.mu.Unlock()
 		return invalid("id", "The cluster the console runs in cannot be removed.")
 	}
-	delete(m.instances, id)
-	if inst.cancel != nil {
-		inst.cancel()
-	}
-	m.mu.Unlock()
 	if err := m.store.Delete(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
+	}
+	m.mu.Lock()
+	if m.instances[id] == inst {
+		delete(m.instances, id)
+	}
+	m.mu.Unlock()
+	if inst.cancel != nil {
+		inst.cancel()
 	}
 	m.log.Info("connection removed", "cluster", id)
 	return nil

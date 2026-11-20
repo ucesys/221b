@@ -113,6 +113,9 @@ type wiring struct {
 	// importClash those named twice (claimImport).
 	importIDs   map[string]bool
 	importClash []string
+	// moveAgainEvery is how often a copy of the connections that failed
+	// at the start is tried again; 0 is the default (a test sets it).
+	moveAgainEvery time.Duration
 
 	// The settings and what is kept beside them (settings.go); stored are
 	// the ConfigMaps whose sizes the metrics show.

@@ -50,8 +50,9 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	// The other clusters (P3-04 to P3-09): their connections live in
 	// Secrets in the console's own namespace when running in a cluster,
-	// otherwise in memory. The cluster the console was started against is
-	// the connection "local".
+	// otherwise in memory; with a database as well, each is a row and its
+	// Secret holds its credential alone (DB-64). The cluster the console
+	// was started against is the connection "local".
 	var connStore clusters.Store = clusters.NewMemoryStore()
 	// The Helm applications (Phase 10) are kept beside the connections.
 	var appStore apps.Store = apps.NewMemoryStore()
@@ -64,7 +65,7 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		connStore = ss
+		connStore = w.connections(ctx, ss)
 		as, err := apps.NewSecretStore(w.restCfg, ns, prefix)
 		if err != nil {
 			return err
@@ -74,6 +75,7 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 		// In memory, with a database or without: the record set's name is
 		// still its own.
 		w.claimImport(apps.ImportID)
+		w.claimImport(clusters.ImportID)
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
 	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: w.activity})
@@ -82,8 +84,91 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 	if err := manager.SetLocal(ctx, localSpec(cfg, w.restCfg, w.mode), w.cluster, w.store); err != nil {
 		return fmt.Errorf("local connection: %w", err)
 	}
+	if _, ok := connStore.(*clusters.PGStore); ok {
+		// What another replica saves or removes is here at once; the sync
+		// every few seconds stays, so nothing depends on the notice.
+		w.database.Subscribe(clusters.Topic, manager.SyncSoon)
+	}
 	w.appStore, w.manager = appStore, manager
 	return nil
+}
+
+// moveAgainEvery is how often a copy of the connections that failed at
+// the start is tried again while the console runs.
+const moveAgainEvery = 30 * time.Second
+
+// connections is where the cluster connections are kept when the console
+// keeps them in Secrets: with a database each is a row of clusters
+// (DB-64) and its Secret holds its credential alone; without one, the
+// Secrets hold all of it, as before. What the Secrets held of the
+// connections ("spec.json") is copied once, and then leaves the Secrets
+// whose connection has a row: no Secret is deleted, no key of a credential
+// is touched, and a Secret whose record could not be copied is left whole.
+//
+// A copy that fails does not stop the start, and the Secrets stay as they
+// were; but the console would then show the local cluster alone until its
+// next start, so the copy is tried again while it runs, and the
+// connections start when it is made (Manager.Run).
+//
+// With a database and the connections in memory (no -connections-secrets)
+// they stay in memory, as the credentials' list and the applications do.
+func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore) clusters.Store {
+	if w.database == nil {
+		w.claimImport(clusters.ImportID)
+		return secrets
+	}
+	log := w.dbLog()
+	const what = "the cluster connections"
+	copy := func(ctx context.Context) (int, error) { return clusters.CopyFromSecrets(ctx, w.database, secrets, log) }
+	drop := func(ctx context.Context) (int, error) { return clusters.DropSpecs(ctx, w.database, secrets, log) }
+	w.moveFromSecrets(ctx, clusters.ImportID, what, copy, drop)
+	connLog := log
+	if w.log != nil {
+		connLog = w.log.With("component", "clusters")
+	}
+	store := clusters.NewPGStore(w.database, secrets, connLog)
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if copied, err := w.database.Imported(cctx, clusters.ImportID); err != nil || !copied {
+		// It failed, the database could not say, or another replica is at
+		// it this moment: this one looks again until the copy is made.
+		every := w.moveAgainEvery
+		if every <= 0 {
+			every = moveAgainEvery
+		}
+		go func() {
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				tctx, cancel := context.WithTimeout(ctx, time.Minute)
+				n, err := copy(tctx)
+				copied, _ := w.database.Imported(tctx, clusters.ImportID)
+				cancel()
+				if err != nil || !copied {
+					continue
+				}
+				log.Info("the cluster connections are in the database now; their credentials stay in their Secrets", "copied_here", n)
+				w.removeCopiedFromSecrets(ctx, clusters.ImportID, what, drop)
+				return
+			}
+		}()
+		return store
+	}
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	if noSecret, noRow, err := store.Unmatched(cctx); err != nil {
+		log.Warn("the connections in the database and their Secrets could not be compared", "err", err)
+	} else if len(noSecret) > 0 || len(noRow) > 0 {
+		log.Warn("the connections in the database and their Secrets do not match: a connection without its Secret has nothing to sign in with until it is edited and given a credential, and a Secret without a connection is kept and never read",
+			"connections_without_secret", noSecret, "secrets_without_connection", noRow)
+	}
+	return store
 }
 
 // applications is where the applications are kept when the console keeps

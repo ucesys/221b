@@ -17,12 +17,14 @@ import (
 
 // Two replicas over one store: what one adds, changes or removes reaches
 // the other at its next sync (P7-02). A change of name, environment or
-// mode keeps the running watches; a new credential restarts them.
-func TestReplicasSyncConnections(t *testing.T) {
+// mode keeps the running watches; a new credential restarts them. Over
+// every store the console keeps its connections in.
+func TestReplicasSyncConnections(t *testing.T) { eachStore(t, testReplicasSyncConnections) }
+
+func testReplicasSyncConnections(t *testing.T, store clusters.Store) {
 	_, other := simServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := clusters.NewMemoryStore()
 	opts := clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true}
 	a, b := clusters.New(store, opts), clusters.New(store, opts)
 	local := clusters.Spec{Name: "here", Env: "other", Server: other.URL, CA: "system", Auth: "incluster", Mode: "read"}
