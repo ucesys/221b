@@ -255,7 +255,7 @@ func run(args []string) error {
 	if err := w.wireSherlock(ctx); err != nil {
 		return err
 	}
-	if err := w.wireCredentials(); err != nil {
+	if err := w.wireCredentials(ctx); err != nil {
 		return err
 	}
 	if err := w.wireHelmRepos(); err != nil {

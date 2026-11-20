@@ -90,6 +90,14 @@ func TestKnowledgeSettingsInTheDatabase(t *testing.T) {
 	if a, e := rowsIn(t, d, "knowledge_source_addresses"), rowsIn(t, d, "source_exclusions"); rowsIn(t, d, "knowledge_sources") != 3 || a != 2 || e != 2 {
 		t.Fatalf("%d addresses, %d exclusions", a, e)
 	}
+	// A source's credential is a key (step 0034): the one named is a row
+	// of credentials, with only its id while the list does not have it,
+	// and a source with no credential names none.
+	var named, kept, none int
+	if err := d.Pool().QueryRow(context.Background(), `SELECT (SELECT count(*) FROM knowledge_sources s JOIN credentials c USING (credential_id) WHERE s.knowledge_source_id = 'infra' AND c.credential_id = 'cred-1'),
+		(SELECT count(*) FROM credentials WHERE is_kept), (SELECT count(*) FROM knowledge_sources WHERE credential_id IS NULL)`).Scan(&named, &kept, &none); err != nil || named != 1 || kept != 0 || none != 2 {
+		t.Fatalf("%d sources joined to their credential, %d credentials kept, %d sources with none: %v", named, kept, none, err)
+	}
 	// One changes, the order changes, one goes.
 	full.Off, full.PinnedCert, full.Excluded = false, nil, full.Excluded[:1]
 	set.Sources = []Source{full, set.Sources[0]}

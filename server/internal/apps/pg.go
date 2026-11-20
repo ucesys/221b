@@ -112,7 +112,9 @@ func writeRepos(ctx context.Context, tx pgx.Tx, old, next repoRecord) error {
 		var cred *string
 		if r.Credential != "" {
 			cred = &r.Credential
-			// Known by its id until the credentials' own records move here.
+			// A row with only its id when the credential's own record is not
+			// in the database (the list kept in memory, or a credential since
+			// removed): the repository still names it.
 			if _, err := tx.Exec(ctx, "INSERT INTO credentials (credential_id) VALUES ($1) ON CONFLICT (credential_id) DO NOTHING", r.Credential); err != nil {
 				return err
 			}

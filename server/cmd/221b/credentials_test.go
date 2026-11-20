@@ -2,11 +2,159 @@ package main
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
+
+// awaySecret is the credentials' Secret, which cannot be read while away.
+type awaySecret struct {
+	*credentials.MemorySecret
+	away bool
+}
+
+func (a *awaySecret) LoadKey(ctx context.Context, key string) ([]byte, string, bool, error) {
+	if a.away {
+		return nil, "", false, errors.New("the API server is away")
+	}
+	return a.MemorySecret.LoadKey(ctx, key)
+}
+
+// DB-60, DB-61 at a start: with a database and the secrets in a Secret,
+// the list is copied into the database once and then leaves the Secret,
+// whose secrets stay; a copy that fails leaves the list there for the
+// next start; a list a console from before the move wrote since is
+// removed and not read; and nothing is removed when the database cannot
+// say the copy was made. Without a database, or with the secrets in
+// memory, the list stays where the secrets are.
+func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.Open(t)
+	mem := &awaySecret{MemorySecret: &credentials.MemorySecret{}}
+	keys := func() []string {
+		t.Helper()
+		k, err := mem.Keys(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(k)
+		return k
+	}
+	names := func(s *credentials.Service) []string {
+		t.Helper()
+		list, err := s.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, c := range list {
+			out = append(out, c.Name)
+		}
+		return out
+	}
+	token := func(s *credentials.Service, name string) credentials.Credential {
+		t.Helper()
+		c, err := s.Create(ctx, credentials.Credential{Name: name, Kind: credentials.KindToken, Endpoint: "https://github.com/ucesys"}, credentials.Secret{Token: "tok-" + name}, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	before := credentials.New(credentials.Options{Secrets: mem})
+	a, b := token(before, "GitHub"), token(before, "Mirror")
+	withList := slices.Sorted(slices.Values([]string{"index", "secret-" + a.ID, "secret-" + b.ID}))
+	if got := keys(); !slices.Equal(got, withList) {
+		t.Fatalf("the Secret before: %v", got)
+	}
+
+	// A start that cannot read the Secret: the console starts, the list
+	// stays in the Secret, and nothing says it was copied.
+	mem.away = true
+	failed := &wiring{database: d}
+	if list := failed.credentialsList(ctx, mem, true); list == nil {
+		t.Fatal("with a database and a Secret the list is the database's")
+	}
+	mem.away = false
+	if copied, err := d.Imported(ctx, credentials.ListImportID); err != nil || copied {
+		t.Fatalf("a copy that failed is recorded (%v): %v", copied, err)
+	}
+	if got := keys(); !slices.Equal(got, withList) {
+		t.Fatalf("a copy that failed changed the Secret: %v", got)
+	}
+
+	// The next start copies, and the list leaves the Secret alone.
+	w := &wiring{database: d}
+	creds := credentials.New(credentials.Options{Secrets: mem, List: w.credentialsList(ctx, mem, true)})
+	if !w.importIDs[credentials.ListImportID] || len(w.importClash) != 0 {
+		t.Fatalf("the copy's name is not claimed: %v %v", w.importIDs, w.importClash)
+	}
+	if got := names(creds); !slices.Equal(got, []string{"GitHub", "Mirror"}) {
+		t.Fatalf("the list in the database: %v", got)
+	}
+	secrets := slices.Sorted(slices.Values([]string{"secret-" + a.ID, "secret-" + b.ID}))
+	if got := keys(); !slices.Equal(got, secrets) {
+		t.Fatalf("the Secret after the copy: %v", got)
+	}
+	if u, err := creds.Resolve(ctx, a.ID, credentials.UseGit, "https://github.com/ucesys/221b"); err != nil || u.Token != "tok-GitHub" {
+		t.Fatalf("a copied credential: %v", err)
+	}
+
+	// A console from before the move writes a list of its own; the next
+	// start removes it and does not read it.
+	late := token(credentials.New(credentials.Options{Secrets: mem}), "Late")
+	again := &wiring{database: d}
+	creds = credentials.New(credentials.Options{Secrets: mem, List: again.credentialsList(ctx, mem, true)})
+	if got := names(creds); !slices.Equal(got, []string{"GitHub", "Mirror"}) {
+		t.Fatalf("a list written since was read: %v", got)
+	}
+	if got := keys(); !slices.Equal(got, slices.Sorted(slices.Values(append(slices.Clone(secrets), "secret-"+late.ID)))) {
+		t.Fatalf("the Secret after the later list was removed: %v", got)
+	}
+
+	// A database that cannot say whether the copy was made removes nothing.
+	token(credentials.New(credentials.Options{Secrets: mem}), "Later still")
+	gone := dbtest.Open(t)
+	gone.Close()
+	removed := false
+	(&wiring{database: gone}).removeCopiedFromSecrets(ctx, credentials.ListImportID, "the credentials' list", func(context.Context) (int, error) {
+		removed = true
+		return 1, nil
+	})
+	(&wiring{database: gone}).credentialsList(ctx, mem, true)
+	if got := keys(); removed || !slices.Contains(got, "index") {
+		t.Fatalf("removed (%v) on a database that did not answer; the Secret: %v", removed, got)
+	}
+
+	// Without a database the list is the Secret's, and with one but the
+	// secrets in memory (no -connections-secrets) it stays in memory with
+	// them: nothing is copied, no row is made, and the credentials work.
+	if list := (&wiring{}).credentialsList(ctx, mem, true); list != nil {
+		t.Fatal("without a database the list is not the Secret's")
+	}
+	d2 := dbtest.Open(t)
+	inMemory := &credentials.MemorySecret{}
+	w2 := &wiring{database: d2}
+	list := w2.credentialsList(ctx, inMemory, false)
+	if list != nil || !w2.importIDs[credentials.ListImportID] {
+		t.Fatalf("with the secrets in memory the list is %v", list)
+	}
+	mine := credentials.New(credentials.Options{Secrets: inMemory, List: list})
+	c := token(mine, "In memory")
+	if u, err := mine.Resolve(ctx, c.ID, credentials.UseGit, "https://github.com/ucesys/221b"); err != nil || u.Token != "tok-In memory" {
+		t.Fatalf("a credential kept in memory: %v", err)
+	}
+	var rows int
+	if err := d2.Pool().QueryRow(ctx, "SELECT count(*) FROM credentials").Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("%d rows of credentials kept in memory: %v", rows, err)
+	}
+	if copied, err := d2.Imported(ctx, credentials.ListImportID); err != nil || copied {
+		t.Fatalf("a list in memory is recorded as copied (%v): %v", copied, err)
+	}
+}
 
 // CR-12 on an install like the owner's: two applications with the same
 // GitHub token for one owner and a Helm repository with a password become

@@ -147,7 +147,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	}
 	rows, err = q.Query(ctx, `SELECT knowledge_source_id, name, kind, is_enabled, base_url, flavor, email, space, url, branch, path, username, repository_name, bucket, prefix, region,
 			endpoint, is_path_style, credentials_kind, auth, depth, page_limit, migrated_from, ca_pem, pinned_cert_sha256, pinned_cert_subject, pinned_cert_issuer,
-			pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, credential_id, is_credential_migrated
+			pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, coalesce(credential_id, ''), is_credential_migrated
 		FROM knowledge_sources ORDER BY position`)
 	if err != nil {
 		return set, false, err
@@ -206,13 +206,22 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 			pin = *s.PinnedCert
 			sha = &pin.SHA256
 		}
+		// Its credential is a key (step 0034): none is null, and one whose
+		// own record is not in the database, a list kept in memory or a
+		// credential since removed, gets a row with only its id, so the
+		// source still names it.
+		var cred *string
+		if s.Credential != "" {
+			cred = &s.Credential
+			b.Queue("INSERT INTO credentials (credential_id) VALUES ($1) ON CONFLICT (credential_id) DO NOTHING", s.Credential)
+		}
 		b.Queue(`INSERT INTO knowledge_sources (knowledge_source_id, position, name, kind, is_enabled, base_url, flavor, email, space, url, branch, path, username, repository_name,
 				bucket, prefix, region, endpoint, is_path_style, credentials_kind, auth, depth, page_limit, migrated_from, ca_pem, pinned_cert_sha256, pinned_cert_subject,
 				pinned_cert_issuer, pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, credential_id, is_credential_migrated)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)`,
 			s.ID, i, s.Name, s.Kind, !s.Off, s.BaseURL, s.Flavor, s.Email, s.Space, s.URL, s.Branch, s.Path, s.Username, s.Repository,
 			s.Bucket, s.Prefix, s.Region, s.Endpoint, s.PathStyle, s.Credentials, s.Auth, s.Depth, s.Pages, pgList(s.MigratedFrom), s.CAPEM, sha, pin.Subject,
-			pin.Issuer, pgAtOrNone(pin.NotAfter), pin.By, pgAtOrNone(pin.At), pgAtOrNone(s.Added), s.AddedBy, s.Credential, s.CredMigrated)
+			pin.Issuer, pgAtOrNone(pin.NotAfter), pin.By, pgAtOrNone(pin.At), pgAtOrNone(s.Added), s.AddedBy, cred, s.CredMigrated)
 		for n, a := range s.Addresses {
 			b.Queue("INSERT INTO knowledge_source_addresses (knowledge_source_id, position, kind, url, space) VALUES ($1, $2, $3, $4, $5)", s.ID, n, a.Kind, a.URL, a.Space)
 		}

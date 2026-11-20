@@ -59,7 +59,7 @@ test-go:
 	cd server && $(GO) test -race ./...
 
 test-go-store: ## Run the tests of the packages whose records have moved with those records in the database TEST_DATABASE names
-	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/ ./internal/cards/ ./internal/fixes/ ./internal/lessons/ ./internal/knowledge/ ./internal/issues/
+	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/ ./internal/cards/ ./internal/fixes/ ./internal/lessons/ ./internal/knowledge/ ./internal/issues/ ./internal/credentials/
 
 test-web: web/node_modules
 	cd web && $(NPM) test

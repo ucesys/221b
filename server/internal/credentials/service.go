@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/certpin"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // SecretStore keeps the credentials: one key each of the Secret
@@ -57,6 +58,17 @@ func (m *MemorySecret) SaveKeyIf(_ context.Context, key string, b []byte, versio
 	m.data[key] = append([]byte(nil), b...)
 	m.version++
 	return nil
+}
+
+// Keys names every key kept, as the Secret's own store does.
+func (m *MemorySecret) Keys(context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.data))
+	for k := range m.data {
+		out = append(out, k)
+	}
+	return out, nil
 }
 
 // DeleteKeyIf removes a key, as the Secret's own store does.
@@ -169,6 +181,10 @@ type index struct {
 type Options struct {
 	// Secrets keeps the credentials; nil is memory.
 	Secrets SecretStore
+	// List keeps the list without secrets when it is not the "index" key
+	// of Secrets: the database's rows (NewPG, DB-60). The secret parts
+	// stay in Secrets either way. Nil is the "index" key.
+	List kv.Backend
 	// HTTP fetches OAuth2 and GitHub App tokens and runs the tests; nil is
 	// one that refuses the console's own pod and node and the clouds'
 	// metadata services. Tests give their own.
@@ -228,6 +244,19 @@ func (s *Service) Register(f UsersFunc) {
 
 func (s *Service) load(ctx context.Context) (index, string, error) {
 	var ix index
+	if s.o.List != nil {
+		b, version, err := s.o.List.LoadKey(ctx, indexKey)
+		if errors.Is(err, kv.ErrNotFound) {
+			return ix, version, nil
+		}
+		if err != nil {
+			return ix, "", fmt.Errorf("reading the credentials: %w", err)
+		}
+		if err := json.Unmarshal(b, &ix); err != nil {
+			return ix, "", fmt.Errorf("the credentials' list cannot be read: %w", err)
+		}
+		return ix, version, nil
+	}
 	b, version, found, err := s.o.Secrets.LoadKey(ctx, indexKey)
 	if err != nil {
 		return ix, "", fmt.Errorf("reading the credentials: %w", err)
@@ -252,10 +281,15 @@ func (s *Service) update(ctx context.Context, f func(*index) error) error {
 			return err
 		}
 		b, _ := json.Marshal(ix)
-		if err := s.fits(ctx, indexKey, len(indexKey)+len(b)); err != nil {
+		if s.o.List != nil {
+			// The list is not in the Secret, and does not count against it.
+			_, err = s.o.List.SaveKey(ctx, indexKey, b, version)
+		} else if err = s.fits(ctx, indexKey, len(indexKey)+len(b)); err == nil {
+			err = s.o.Secrets.SaveKeyIf(ctx, indexKey, b, version)
+		} else {
 			return err
 		}
-		if err := s.o.Secrets.SaveKeyIf(ctx, indexKey, b, version); err != nil {
+		if err != nil {
 			if conflict(err) {
 				continue
 			}
@@ -266,7 +300,12 @@ func (s *Service) update(ctx context.Context, f func(*index) error) error {
 	return errors.New("the credentials kept changing: try again")
 }
 
-func conflict(err error) bool { return err != nil && strings.Contains(err.Error(), "changed") }
+// conflict says a write lost to another writer and is to be tried again
+// over what is kept now: the list's store says so with kv.ErrConflict,
+// the Secret's with a sentence that it changed.
+func conflict(err error) bool {
+	return err != nil && (errors.Is(err, kv.ErrConflict) || strings.Contains(err.Error(), "changed"))
+}
 
 func (s *Service) saveSecret(ctx context.Context, id string, sec Secret) error {
 	raw := []byte{}

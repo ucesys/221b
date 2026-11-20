@@ -335,6 +335,65 @@ func (w *wiring) removeCopiedObjects(ctx context.Context, from kv.Objects, impor
 	}
 }
 
+// --- The same for what is kept in Secrets (DB-61) ---
+//
+// A record set kept in Secrets has a secret part, which stays in its
+// Secret, and the rest, which moves to the database. The copy and the
+// removal therefore differ from a ConfigMap's in one way: only the part
+// that moved is removed, by the record set's own function, and no Secret
+// is ever deleted here.
+
+// moveFromSecrets copies what a record set kept in its Secrets beside the
+// secrets into the database, once, under importID, and then has that part
+// removed from the Secrets. copy runs the one-time copy (it is given
+// nothing to do when the copy is already recorded, db.ImportOnce) and
+// says how many records it copied; remove takes the copied part out of
+// the Secrets and says how many it took out. A copy that fails is logged
+// and removes nothing: the next start tries again.
+func (w *wiring) moveFromSecrets(ctx context.Context, importID, what string, copy, remove func(ctx context.Context) (int, error)) {
+	w.claimImport(importID)
+	if w.database == nil {
+		return
+	}
+	log := w.dbLog()
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	n, err := copy(cctx)
+	cancel()
+	if err != nil {
+		log.Warn("copying a record set from its Secret into the database failed; it stays in the Secret, and the next start tries again", "records", what, "err", err)
+		return
+	}
+	if n > 0 {
+		log.Info("copied a record set from its Secret into the database; the secrets stay in the Secret", "records", what, "count", n)
+	}
+	w.removeCopiedFromSecrets(ctx, importID, what, remove)
+}
+
+// removeCopiedFromSecrets has the part of a record set that moved removed
+// from its Secrets, when the copy recorded under importID is in the
+// database: at the start that copies it, and at any later start that
+// finds it there again (a removal that failed, or what a console from
+// before the move wrote since, which is removed and not read). Nothing is
+// removed when the database cannot say the copy was made.
+func (w *wiring) removeCopiedFromSecrets(ctx context.Context, importID, what string, remove func(ctx context.Context) (int, error)) {
+	if w.database == nil {
+		return
+	}
+	log := w.dbLog()
+	rctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if copied, err := w.database.Imported(rctx, importID); err != nil || !copied {
+		return
+	}
+	n, err := remove(rctx)
+	if err != nil {
+		log.Warn("removing a record set from its Secret after its copy failed; the next start tries again", "records", what, "err", err)
+	}
+	if n > 0 {
+		log.Info("removed a record set from its Secret: the database keeps it, and the secrets stay in the Secret", "records", what, "count", n)
+	}
+}
+
 // dbLog is where what the wiring does with the database is logged.
 func (w *wiring) dbLog() *slog.Logger {
 	if w.log == nil {
