@@ -182,7 +182,16 @@ database_modes() {
     refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
     ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
     refused --set database.mode=bundled --set database.bundled.backup.dailyAt=2am &&
-    refused --set database.mode=bundled --set database.bundled.backup.enabled=false --set database.bundled.restore.fromBackup=true
+    refused --set database.mode=bundled --set database.bundled.backup.enabled=false --set database.bundled.restore.fromBackup=true &&
+    # A restore's time goes to PostgreSQL with its offset in numbers, never
+    # as Z, which it refuses there; a time without a zone is refused here.
+    render k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29Z |
+      grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '"2026-11-20T02:19:29+00:00"' &&
+    render k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29.5-08:00 |
+      grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '"2026-11-20T02:19:29.5-08:00"' &&
+    render k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true | grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '""' &&
+    refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29 &&
+    refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=yesterday
 }
 # SSH to nodes (Phase 11): the toolbox config carries toolbox.ssh.
 ssh_values() {

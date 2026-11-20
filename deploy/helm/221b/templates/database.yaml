@@ -386,8 +386,16 @@ spec:
             {{- if $b.restore.fromBackup }}
             - name: DB_RESTORE
               value: "true"
+            {{- /* PostgreSQL reads recovery_target_time before it knows any
+                   time zone's name, Z among them, and refuses it: Patroni then
+                   starts over and over (the seventh cluster test, F1). The
+                   time goes on with an offset in numbers. */}}
+            {{- $target := $b.restore.targetTime | toString | trim }}
+            {{- if and $target (not (regexMatch "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" $target)) }}
+            {{- fail (printf "database.bundled.restore.targetTime is %q: give the time in quotes as RFC 3339, with a time zone, such as \"2026-11-20T02:19:29Z\" or \"2026-11-20T02:19:29+00:00\"" $target) }}
+            {{- end }}
             - name: DB_RESTORE_TARGET_TIME
-              value: {{ $b.restore.targetTime | quote }}
+              value: {{ regexReplaceAll "Z$" $target "+00:00" | quote }}
             {{- end }}
           ports:
             - name: postgres
