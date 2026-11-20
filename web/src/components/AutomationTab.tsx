@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { fetchAutomation, fetchFleets, fetchRuns, type Group, type AutomationIndex, type Run } from '../api/automation'
+import { fetchAutomation, fetchFleets, fetchHistory, type Group, type AutomationIndex, type HistoryEntry } from '../api/automation'
 import type { Me } from '../api/types'
 import { href, navigate, type Tab } from '../lib/router'
 import { GroupDrawer } from './automation/GroupDrawer'
@@ -21,7 +21,7 @@ export { tally } from './automation/RunsSection'
 export function AutomationTab({ route, onToast, me, now }: TabProps & { me: Me | null }) {
   const section: Tab = route.tab
   const [index, setIndex] = useState<AutomationIndex | null>(null)
-  const [runs, setRuns] = useState<Run[]>([])
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState<string | null | undefined>(undefined) // a name, null for a new script
   const [running, setRunning] = useState<{
@@ -56,15 +56,15 @@ export function AutomationTab({ route, onToast, me, now }: TabProps & { me: Me |
 
   const fetchAll = useCallback(
     (background: boolean) =>
-      Promise.all([fetchAutomation(background), fetchRuns(background)]).then(
+      Promise.all([fetchAutomation(background), fetchHistory(background)]).then(
         ([ix, rs]) => ({ ix, rs, err: '' }),
         (e: unknown) => ({ ix: null, rs: null, err: errText(e) }),
       ),
     [],
   )
-  const apply = useCallback((x: { ix: AutomationIndex | null; rs: Run[] | null; err: string }) => {
+  const apply = useCallback((x: { ix: AutomationIndex | null; rs: HistoryEntry[] | null; err: string }) => {
     if (x.ix) setIndex(x.ix)
-    if (x.rs) setRuns(x.rs)
+    if (x.rs) setHistory(x.rs)
     setErr(x.err)
   }, [])
   const load = useCallback((background = false) => fetchAll(background).then(apply), [fetchAll, apply])
@@ -118,7 +118,7 @@ export function AutomationTab({ route, onToast, me, now }: TabProps & { me: Me |
       )}
       {!index && !err && <p className="tb-hint">Loading…</p>}
       {index && section === 'scripts' && <ScriptsSection index={index} route={route} production={production} now={now} onEdit={setEditing} onRun={(script, dryRun) => setRunning({ script, dryRun })} onOpenRun={setOpenRun} />}
-      {index && section === 'run-history' && <RunsSection runs={runs} now={now} onOpen={setOpenRun} />}
+      {index && section === 'run-history' && <RunsSection entries={history} now={now} onOpen={setOpenRun} />}
       {body}
       {index && section === 'run-profiles' && <RunProfilesSection cluster={route.cluster} onToast={onToast} />}
     </section>

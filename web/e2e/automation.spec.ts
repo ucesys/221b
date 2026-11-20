@@ -747,3 +747,35 @@ test('the bell says what waits for you and opens it in the Inbox; the gear opens
   await page.unroute('**/api/v1/admin/approvals')
   await page.unroute('**/api/v1/aiops/proposals**')
 })
+
+test('Run history lists the run requests with the runs, filtered by state, a rejected one with who and why (AU-24)', async ({ page }) => {
+  const at = new Date().toISOString()
+  const req = (id: number, state: string, more: object = {}) => ({
+    kind: 'request',
+    state,
+    at,
+    request: { id, cluster: 'local', script: 'e2e-requested', version: 1, fleet: '_cluster', targets: ['n1'], params: {}, by: { name: 'Pat' }, at, changed: ['MODE'], impact: [], state, ...more },
+  })
+  let real = 0
+  // The console's own list, which the simulator has no requests in, with two added.
+  await page.route('**/api/v1/automation/history', async (route) => {
+    const res = await route.fetch()
+    real = res.status()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: { entries: [req(9001, 'waiting'), req(9002, 'rejected', { decidedBy: { name: 'Sam' }, comment: 'not this week' }), ...(body.entries ?? [])] } })
+  })
+  try {
+    await page.goto('/#/run-history')
+    const requests = page.getByTestId('run-request-row')
+    await expect(requests).toHaveCount(2)
+    expect(real).toBe(200)
+    await expect(requests.nth(1).getByTestId('run-request-what')).toHaveText('rejected by Sam: not this week')
+    await expect(requests.first().getByTestId('run-request-approval')).toHaveAttribute('href', '#/aiops/inbox/approval/run-local-9001')
+    await page.getByTestId('runs-state').selectOption('rejected')
+    await expect(requests).toHaveCount(1)
+    await expect(requests.first()).toHaveAttribute('data-state', 'rejected')
+    await expect(page.getByTestId('run-row')).toHaveCount(0)
+  } finally {
+    await page.unroute('**/api/v1/automation/history')
+  }
+})

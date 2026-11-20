@@ -48,6 +48,7 @@ func (s *Server) automationRoutes() {
 	s.handle("PUT /api/v1/automation/groups/{name}", "automation-group-save", s.putAutomationGroup)
 	s.handle("DELETE /api/v1/automation/groups/{name}", "automation-group-delete", s.deleteAutomationGroup)
 	s.handle("GET /api/v1/automation/runs", "automation-runs", s.getAutomationRuns)
+	s.handle("GET /api/v1/automation/history", "automation-history", s.getAutomationHistory)
 	s.handle("GET /api/v1/automation/runs/{id}", "automation-run", s.getAutomationRun)
 	s.handle("POST /api/v1/automation/runs/{id}/cancel", "automation-cancel", s.postAutomationCancel)
 	for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {

@@ -148,6 +148,30 @@ let calls: { url: string; method: string; body?: unknown }[] = []
 // FU-05: what weighing a run's own values says, and what a start answers.
 let weigh: unknown = { needsApproval: false, changed: [], impact: [] }
 let started: unknown = null
+// Run History (AU-24): the run, and requests for runs that waited for approval.
+const request = (id: number, state: string, more: object = {}) => ({
+  kind: 'request',
+  state,
+  at: `2026-10-31T09:5${id}:00Z`,
+  request: {
+    id,
+    cluster: 'local',
+    clusterName: 'Here',
+    script: 'ensure-chrony',
+    version: 1,
+    fleet: 'workers',
+    fleetName: 'Workers',
+    targets: ['w1', 'w2'],
+    params: { PACKAGE: '******' },
+    by: { name: 'Pat' },
+    at: `2026-10-31T09:5${id}:00Z`,
+    changed: ['PACKAGE'],
+    impact: [],
+    state: state === 'withdrawn' ? 'rejected' : state,
+    ...more,
+  },
+})
+let history: unknown[] = []
 // The Secrets a secret parameter may name (FU-03): names and keys, never values.
 let secretRefs: unknown = {
   secrets: [
@@ -157,6 +181,7 @@ let secretRefs: unknown = {
 }
 beforeEach(() => {
   calls = []
+  history = [{ kind: 'run', state: run.state, at: run.started, run }]
   Element.prototype.scrollTo = () => {}
   vi.stubGlobal(
     'fetch',
@@ -178,6 +203,7 @@ beforeEach(() => {
       if (url.endsWith('/versions/1/revoke')) return ok(script)
       if (/\/versions\/\d+\/(approve|reject)$/.test(url)) return ok(script)
       if (url === '/api/v1/automation/runs' && method === 'GET') return ok({ runs: [run] })
+      if (url === '/api/v1/automation/history') return ok({ entries: history })
       if (url === '/api/v1/automation/runs' && method === 'POST') return started ? new Response(JSON.stringify(started), { status: 202, headers: { 'Content-Type': 'application/json' } }) : ok({ ...run, id: 8, state: 'running' })
       if (url === '/api/v1/automation/runs/weigh') return ok(weigh)
       if (url.startsWith('/api/v1/automation/runs/'))
@@ -393,6 +419,34 @@ describe('AutomationTab', () => {
     })
     expect((screen.getByTestId('script-name') as HTMLInputElement).value).toBe('reserve-node-resources')
     expect((screen.getByTestId('script-text') as HTMLTextAreaElement).value).toContain('SYSTEM_RESERVED_MEMORY')
+  })
+
+  it('lists the run requests in Run History with the runs, filtered by state: who rejected one and why, a waiting one linked to its approval (AU-24)', async () => {
+    history = [
+      request(4, 'waiting'),
+      request(3, 'rejected', { decidedBy: { name: 'Sam' }, comment: 'not this week' }),
+      request(2, 'withdrawn', { decidedBy: { name: 'Pat' }, comment: 'wrong zone' }),
+      { kind: 'run', state: run.state, at: run.started, run },
+    ]
+    render(<AutomationTab {...props(['runs'])} />)
+    const requests = await screen.findAllByTestId('run-request-row')
+    expect(requests.map((r) => r.getAttribute('data-state'))).toEqual(['waiting', 'rejected', 'withdrawn'])
+    expect(screen.getAllByTestId('run-row')).toHaveLength(1)
+    const rejected = within(requests[1]!).getByTestId('run-request-what')
+    expect(rejected.textContent).toBe('rejected by Sam: not this week')
+    expect(within(requests[2]!).getByTestId('run-request-what').textContent).toBe('withdrawn by Pat: wrong zone')
+    const link = within(requests[0]!).getByTestId('run-request-approval')
+    expect(link.getAttribute('href')).toBe('#/aiops/inbox/approval/run-local-4')
+    expect(requests[0]!.textContent).toContain('waits for approval of PACKAGE')
+    expect(requests[0]!.textContent).toContain('2 nodes')
+    fireEvent.change(screen.getByTestId('runs-state'), { target: { value: 'rejected' } })
+    expect(screen.getAllByTestId('run-request-row').map((r) => r.getAttribute('data-state'))).toEqual(['rejected'])
+    expect(screen.queryByTestId('run-row')).toBeNull()
+    fireEvent.change(screen.getByTestId('runs-state'), { target: { value: 'succeeded' } })
+    expect(screen.queryByTestId('run-request-row')).toBeNull()
+    fireEvent.change(screen.getByTestId('runs-state'), { target: { value: 'expired' } })
+    expect(screen.getByTestId('runs-none').textContent).toBe('Nothing in this state.')
+    expect(calls.some((c) => c.url === '/api/v1/automation/history')).toBe(true)
   })
 
   it("keeps a run's parameters apart from its results", async () => {
