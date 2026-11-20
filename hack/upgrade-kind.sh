@@ -5,25 +5,44 @@
 # acknowledged alert, a cluster connection and a Sherlock key through its
 # own API, then upgraded to this build, rolled back and upgraded again.
 #
-#   IMAGE=ghcr.io/ucesys/221b:ci hack/upgrade-kind.sh v0.6.6
+# This build keeps its records in the bundled database (DB-69), which a
+# release before 0.13 does not have: the upgrade adds it, and the first
+# start copies the records from the ConfigMaps and Secrets into it and
+# removes them there (DB-17, DB-55, DB-61, DB-64). So after the upgrade the
+# records are checked in the database, and the ConfigMap's key is checked
+# gone. Today (DB-55) the console removes the copied keys and leaves the
+# ConfigMap the chart makes; once the console deletes the ConfigMaps after
+# the copy (item A.2 of the handover, decided on November 20), the check
+# after the upgrade is that the ConfigMap is gone, and the rollback finds
+# none until the earlier chart's revision makes it again. The rollback to
+# the release before is the one docs/upgrading.md describes: it starts with
+# the accounts and Sherlock's key, which stay in their Secrets, and with
+# none of the settings, fleets, acknowledgements or connections, which are
+# in the database only; the upgrade again finds them all there.
 #
-# The release's image (ghcr.io/ucesys/221b:0.6.6 for v0.6.6) is pulled
+#   IMAGE=ghcr.io/ucesys/221b:ci DB_IMAGE=ghcr.io/ucesys/221b-postgres:ci hack/upgrade-kind.sh v0.12.1
+#
+# The release's image (ghcr.io/ucesys/221b:0.12.1 for v0.12.1) is pulled
 # unless FROM_IMAGE names one already in the local docker; the release's
-# chart is taken from its git tag. Needs docker, kubectl, helm and git with
-# the tag fetched. Set KEEP=1 to keep the cluster afterwards.
+# chart is taken from its git tag. IMAGE and DB_IMAGE are built when not in
+# the local docker (hack/lib.sh). CLUSTER names the kind cluster
+# (221b-upgrade). Needs docker, kubectl, helm and git with the tag fetched.
+# Set KEEP=1 to keep the cluster afterwards.
 set -euo pipefail
 # shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 FROM_TAG=${1:?usage: hack/upgrade-kind.sh vX.Y.Z}
-IMAGE=${IMAGE:?set IMAGE to the build to upgrade to, already in the local docker}
 FROM_IMAGE=${FROM_IMAGE:-ghcr.io/ucesys/221b:${FROM_TAG#v}}
 MINOR=${MINOR:-1.37}
 CLUSTER=${CLUSTER:-221b-upgrade}
 NS=221b
 RELEASE=k8s-console
 FULLNAME=k8s-console-221b
-URL=http://127.0.0.1:18090
+DBNAME=$FULLNAME-db
+# The port-forward to the console's Service, on the host.
+PF_PORT=${PF_PORT:-18090}
+URL=http://127.0.0.1:$PF_PORT
 ADMIN=admin@corp.example
 # Made on the Users page of the earlier release, so it lives only in the
 # accounts Secret the console writes. A user name has no @: the console
@@ -60,14 +79,16 @@ open_console() {
     [ "$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b --no-headers 2>/dev/null | wc -l)" = "$want" ] && break
     sleep 1
   done
-  kubectl -n "$NS" port-forward "svc/$FULLNAME" 18090:8081 > "$WORK/upgrade-port-forward.log" 2>&1 &
+  kubectl -n "$NS" port-forward "svc/$FULLNAME" "$PF_PORT:8081" > "$WORK/upgrade-port-forward.log" 2>&1 &
   pf=$!
   for _ in $(seq 30); do curl -fs "$URL/readyz" > /dev/null && break; sleep 1; done
   curl -fsS "$URL/readyz"
 }
 
 # What must come through every upgrade and rollback, as JSON with sorted
-# keys: the refresh rate, the fleets and the acknowledged alerts.
+# keys: the refresh rate, the fleets and the acknowledged alerts. A time is
+# kept to the microsecond in the database (timestamptz), to the nanosecond
+# before it: times are compared to the microsecond.
 kept_settings() {
   # Until a replica knows which one leads, it answers 503 (ADR-70): read
   # again for a while after a rollout.
@@ -76,9 +97,17 @@ kept_settings() {
     sleep 1
   done
   python3 -c '
-import json, sys
+import json, re, sys
 s = json.load(sys.stdin)
-print(json.dumps({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}, sort_keys=True))' < "$WORK/upgrade-settings.json"
+def micro(v):
+    if isinstance(v, dict):
+        return {k: micro(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [micro(x) for x in v]
+    if isinstance(v, str):
+        return re.sub(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z$", lambda m: m.group(1) + "." + (m.group(2) or "").ljust(6, "0")[:6] + "Z", v)
+    return v
+print(json.dumps(micro({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}), sort_keys=True))' < "$WORK/upgrade-settings.json"
 }
 
 # The format version of the JSON document on standard input, or 0.
@@ -97,6 +126,7 @@ cleanup() {
       kubectl -n "$NS" describe pods
       kubectl get events -A --sort-by=.lastTimestamp | tail -40
       kubectl -n "$NS" get configmap "$FULLNAME" -o yaml
+      kubectl -n "$NS" logs -l app.kubernetes.io/name=221b-db --tail=100 --all-containers --prefix
       kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=200 --all-containers --prefix
     } > "$WORK/diagnostics.log" 2>&1 || true
     if [ -z "${GITHUB_ACTIONS:-}" ]; then cat "$WORK/diagnostics.log"; fi
@@ -109,6 +139,8 @@ trap cleanup EXIT
 
 step "The chart and image of $FROM_TAG"
 install_kind "$MINOR"
+build_images
+db_values
 FROM_CHART=$WORK/from-chart
 rm -rf "$FROM_CHART"
 mkdir -p "$FROM_CHART"
@@ -121,9 +153,9 @@ endstep
 
 step "Create a kind cluster with Kubernetes $MINOR"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$ROOT/hack/kind.yaml" --wait 120s
+kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$(kind_config)" --wait 120s
 kind load docker-image "$FROM_IMAGE" --name "$CLUSTER"
-kind load docker-image "$IMAGE" --name "$CLUSTER"
+load_images "$CLUSTER"
 endstep
 
 step "helm install $FROM_TAG"
@@ -185,6 +217,13 @@ echo "kept: $before"
 echo "$before" | has '"refreshSeconds": 13'
 echo "$before" | has '"upgrade"'
 echo "$before" | has "$key"
+# Where the release before keeps them: the settings ConfigMap, and the
+# connection's Secret (its record and its credential).
+kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | has '"refreshSeconds":13'
+kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert "spec.json" in d and "token" in d, sorted(d)'
 endstep
 
 # check_kept WHAT: everything given above is still there.
@@ -219,12 +258,46 @@ check_kept() {
   echo "the settings, fleet, acknowledgement, user, connection and Sherlock key came through $1"
 }
 
-# upgrade: the earlier release to this build, reusing its values.
+# upgrade: the earlier release to this build, reusing its values; the
+# chart's defaults add the bundled database, of DB_IMAGE.
 upgrade() {
   helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values \
     --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=Never \
-    --wait --timeout 180s
+    "${DB_VALUES[@]}" \
+    --wait --timeout "$HELM_TIMEOUT"
   open_console
+}
+
+# in_database: the records given to the release before are in this
+# build's database, and gone from where that release kept them.
+in_database() {
+  check_database "$URL" api
+  # Each record set copied is written down once (DB-17).
+  db_sql "$NS" "$DBNAME-0" "select import_id || ' from ' || source || ': ' || record_count from imports order by import_id" | tee "$WORK/upgrade-imports.txt"
+  has -i "configmap" "$WORK/upgrade-imports.txt" || { echo "no record set was copied from a ConfigMap"; exit 1; }
+  # The rows: the settings with their refresh rate, the fleet, the
+  # acknowledged alert and the connection.
+  [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from settings where value::text ~ '\"refreshSeconds\": ?13[,}]'")" -ge 1 ] ||
+    { echo "no settings row holds refreshSeconds 13"; exit 1; }
+  [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from fleets where fleet_key = 'upgrade'")" = 1 ] || { echo "the fleet is not a row"; exit 1; }
+  [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from alert_acks where alert_key = '$key'")" = 1 ] || { echo "the acknowledgement is not a row"; exit 1; }
+  [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from clusters where cluster_id = 'kept' and is_kept")" = 1 ] || { echo "the connection is not a row"; exit 1; }
+  # The copied keys are removed (DB-55): the settings ConfigMap is still
+  # there, made by the chart, without settings.json. (Once the console
+  # deletes the ConfigMaps after the copy, A.2, this is: the ConfigMap is
+  # gone.)
+  kubectl -n "$NS" get configmap "$FULLNAME" -o json | python3 -c '
+import json, sys
+d = json.load(sys.stdin).get("data") or {}
+assert "settings.json" not in d, "settings.json is still in the ConfigMap: " + d["settings.json"][:200]
+print("the settings ConfigMap holds", sorted(d) or "nothing")'
+  # The connection's Secret keeps its credential and not its record (DB-64).
+  kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert "spec.json" not in d and "token" in d, sorted(d)
+print("the connection Secret holds", sorted(d))'
+  echo "the records are in the database, and gone from the ConfigMap and the Secret"
 }
 
 step "helm upgrade from $FROM_TAG to this build"
@@ -232,35 +305,70 @@ start=$(date +%s)
 upgrade
 notice "Upgrade from $FROM_TAG" "Ready $(( $(date +%s) - start ))s after helm upgrade."
 check_kept "the upgrade"
+in_database
 endstep
 
-step "Saved again, the settings and accounts carry their format's version"
+step "Saved again, the settings are a row of the database, and the accounts carry their format's version"
 change -X PUT -d '{"refreshSeconds":13,"timeFormat":{"date":"eu","clock":"24h"}}' "$URL/api/v1/settings" > /dev/null
-v=$(kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | stored_version)
-echo "settings.json: version $v"
-[ "$v" -ge 1 ]
+[ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from settings where value::text ~ '\"clock\": ?\"24h\"'")" -ge 1 ] ||
+  { echo "the time format saved is not in the database"; exit 1; }
+# Nothing is saved in the ConfigMap any more (DB-69).
+[ -z "$(kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}')" ]
 change -X PATCH -d '{"name":"Una Upgraded"}' "$URL/api/v1/admin/users/$USER2" > /dev/null
 v=$(kubectl -n "$NS" get secret "$FULLNAME-users" -o jsonpath='{.data.users\.json}' | base64 -d | stored_version)
 echo "users.json: version $v"
 [ "$v" -ge 1 ]
 endstep
 
-step "helm rollback to $FROM_TAG: it reads what this build saved"
-helm rollback "$RELEASE" 1 -n "$NS" --wait --timeout 180s
+step "helm rollback to $FROM_TAG: the accounts and Sherlock's key, and none of what is in the database (docs/upgrading.md)"
+helm rollback "$RELEASE" 1 -n "$NS" --wait --timeout "$HELM_TIMEOUT"
 open_console
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$FROM_IMAGE" ]
-check_kept "the rollback"
+# The revision before has no database: Helm removes its StatefulSet, and
+# keeps what is kept on purpose, the Secret and the volume, for the
+# upgrade again.
+for _ in $(seq 60); do
+  [ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b-db -o name)" ] && break
+  sleep 2
+done
+[ -z "$(kubectl -n "$NS" get statefulset -o name)" ]
+kubectl -n "$NS" get secret "$DBNAME" -o name
+kubectl -n "$NS" get pvc "data-$DBNAME-0" -o name
+# What stays in Secrets comes through: the accounts (the user made on the
+# Users page signs in, with the name this build gave it) and Sherlock's key.
+signin "$URL" "$USER2"
+api "$URL/api/v1/me" | has "\"username\":\"$USER2\""
+signin "$URL" "$ADMIN"
 api "$URL/api/v1/admin/users" | has 'Una Upgraded'
+for _ in $(seq 30); do
+  api "$URL/api/v1/sherlock/config" > "$WORK/upgrade-sherlock.json" 2>/dev/null && break
+  sleep 1
+done
+grep -q '"set":true' "$WORK/upgrade-sherlock.json"
+# What moved to the database is not there: the settings are the release's
+# defaults, with no fleet and no acknowledgement, and the connection's
+# Secret has no record to read, so the cluster menu has the local cluster
+# alone. Going back means a restore (docs/upgrading.md, 0.13.0).
+rolled=$(kept_settings)
+echo "after the rollback: $rolled"
+if [ "$rolled" = "$before" ] || echo "$rolled" | has '"upgrade"' || echo "$rolled" | has "$key"; then
+  echo "the release before found the records the database holds: $rolled"
+  exit 1
+fi
+[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' "$URL/api/v1/clusters/kept")" = 404 ] ||
+  { echo "the release before found the connection"; exit 1; }
+echo "the rollback has the accounts and Sherlock's key, and not the settings, fleet, acknowledgement or connection, as documented"
 endstep
 
-step "helm upgrade again: what the earlier release did not know is still there"
+step "helm upgrade again: the database has everything, what the earlier release did not know too"
 upgrade
 check_kept "the second upgrade"
+check_database "$URL" api
 api "$URL/api/v1/settings" | python3 -c '
 import json, sys
 s = json.load(sys.stdin)
 assert s.get("timeFormat") == {"date": "eu", "clock": "24h"}, s.get("timeFormat")
-print("the time format, unknown to the earlier release, came through its rollback")'
+print("the time format, unknown to the earlier release, is still in the database after its rollback")'
 api "$URL/api/v1/admin/users" | has 'Una Upgraded'
 notice "Upgrade from $FROM_TAG" "Upgrade, rollback and upgrade again kept every setting, user, connection and key."
 endstep

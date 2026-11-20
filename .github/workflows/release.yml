@@ -2,9 +2,11 @@
 # chart's version and have a section in CHANGELOG.md; the chart is
 # packaged and pushed to oci://ghcr.io/ucesys/charts, and a GitHub release
 # is made with that section as its notes, the chart and the 221b command
-# (TB-20, for macOS, Linux and Windows) attached. The image
-# for the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
-# CI's publish job for the same tag, and this waits for it. The chart is
+# (TB-20, for macOS, Linux and Windows) attached. The images
+# for the tag (ghcr.io/ucesys/221b:0.7.0, and from 0.13.0 the bundled
+# database's ghcr.io/ucesys/221b-postgres:0.13.0, which the chart runs at
+# its appVersion) are built, tested and published by CI's publish job for
+# the same tag, and this waits for both. The chart is
 # signed with cosign, keyless, and has build provenance attested; the 221b
 # command's checksums are signed, and the binaries have build provenance
 # and an SBOM (#79). Nothing published is ever replaced. See
@@ -74,11 +76,21 @@ jobs:
             echo "::error::CHANGELOG.md has no section \"## $version\". Move the Unreleased notes under it (docs/releasing.md)."
             exit 1
           fi
+          # By default the chart runs the two images of its own version,
+          # which CI publishes for this tag.
+          images=$(helm template release-check deploy/helm/221b --set clusterName=release-check |
+            sed -n 's/^ *image: "\{0,1\}\(ghcr\.io\/ucesys\/[^"]*\)"\{0,1\}$/\1/p' | LC_ALL=C sort -u | tr '\n' ' ')
+          if [ "$images" != "ghcr.io/ucesys/221b-postgres:$version ghcr.io/ucesys/221b:$version " ]; then
+            echo "::error::By default the chart runs $images; it must run ghcr.io/ucesys/221b:$version and ghcr.io/ucesys/221b-postgres:$version (values.yaml: image, database.bundled.image)."
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Wait for CI to publish the image
-        # The image exists only when every gate of CI's run for this tag
-        # passed, so nothing names an image that never comes. A failed run
-        # can be rerun within the wait; past it, rerun this job.
+      - name: Wait for CI to publish the images
+        # The images exist only when every gate of CI's run for this tag
+        # passed, so nothing names an image that never comes. The
+        # database's is published after the console's, by the same job:
+        # the chart names both. A failed run can be rerun within the wait;
+        # past it, rerun this job.
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,10 +98,11 @@ jobs:
         run: |
           echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null
           for _ in $(seq 240); do
-            docker manifest inspect "ghcr.io/ucesys/221b:$VERSION" > /dev/null 2>&1 && exit 0
+            docker manifest inspect "ghcr.io/ucesys/221b:$VERSION" > /dev/null 2>&1 &&
+              docker manifest inspect "ghcr.io/ucesys/221b-postgres:$VERSION" > /dev/null 2>&1 && exit 0
             sleep 30
           done
-          echo "::error::ghcr.io/ucesys/221b:$VERSION was not published within two hours: CI's run for this tag has not passed."
+          echo "::error::ghcr.io/ucesys/221b:$VERSION and ghcr.io/ucesys/221b-postgres:$VERSION were not both published within two hours: CI's run for this tag has not passed."
           exit 1
       - name: Package and push the chart
         id: chart
@@ -170,8 +183,8 @@ jobs:
             echo
             echo "The \`221b\` command for port forwards (macOS, Linux, Windows) is attached: rename it to \`221b\` and put it on your PATH."
             echo
-            echo "The image is \`ghcr.io/ucesys/221b:$VERSION\`. Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
+            echo "The images are \`ghcr.io/ucesys/221b:$VERSION\` and the bundled database's \`ghcr.io/ucesys/221b-postgres:$VERSION\`. Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
             echo
-            echo "The image and the chart are signed with cosign, keyless, and carry build provenance (and the image an SBOM); the command's \`SHA256SUMS\` is signed, with its bundle attached. How to check them: [docs/releasing.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/releasing.md#verify-a-release)."
+            echo "The images and the chart are signed with cosign, keyless, and carry build provenance (and the images an SBOM); the command's \`SHA256SUMS\` is signed, with its bundle attached. How to check them: [docs/releasing.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/releasing.md#verify-a-release)."
           } > "$RUNNER_TEMP/release.md"
           gh release create "$TAG" "bin/221b-$VERSION.tgz" bin/cli/* bin/sbom-221b-command.spdx.json --repo "${{ github.repository }}" --title "221B $VERSION" --notes-file "$RUNNER_TEMP/release.md" --verify-tag

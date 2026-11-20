@@ -11,8 +11,8 @@
 
 # A tag here, for builds on a laptop; CI passes it pinned to a digest, from
 # hack/base-images.env, as it does for the console's image.
-ARG BASE_IMAGE=debian:13-slim
-FROM ${BASE_IMAGE}
+ARG DB_BASE_IMAGE=debian:13-slim
+FROM ${DB_BASE_IMAGE}
 
 # One PostgreSQL major version per 221B release line; a new one is a new
 # line, with pg_upgrade (docs/upgrading.md).
@@ -39,6 +39,9 @@ RUN set -eux; \
     # The package would make and start a cluster of its own; Patroni makes it.
     echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf; \
     apt-get update; \
+    # The pinned base's packages, brought up to their security fixes: CI's
+    # scan fails on a high or critical finding that has a fix.
+    apt-get upgrade -y --no-install-recommends; \
     apt-get install -y --no-install-recommends "postgresql-${PG_MAJOR}"; \
     python3 -m venv /opt/patroni; \
     /opt/patroni/bin/pip install --no-cache-dir "patroni[kubernetes,psycopg3]==${PATRONI_VERSION}"; \

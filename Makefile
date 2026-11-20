@@ -6,6 +6,9 @@ IMAGE   ?= ghcr.io/ucesys/221b
 TAG     ?= $(VERSION)
 GO      ?= go
 NPM     ?= npm
+# The PostgreSQL the tests and the simulator's console run against; CI runs
+# it pinned to a digest (hack/base-images.env, POSTGRES_IMAGE).
+POSTGRES_IMAGE ?= postgres:18
 
 # The simulated cluster for dev-sim and e2e-sim.
 SIM_NODES ?= 40
@@ -92,7 +95,7 @@ image-postgres: ## Build the bundled database's image as $(IMAGE)-postgres:$(TAG
 
 test-db: ## Run the Go tests with those that need PostgreSQL, against a throwaway one in Docker, or the one TEST_DATABASE names (host:port)
 	@if [ -z "$$TEST_DATABASE" ]; then \
-	  docker run -d --rm --name 221b-test-db -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:18 > /dev/null; \
+	  docker run -d --rm --name 221b-test-db -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 $(POSTGRES_IMAGE) > /dev/null; \
 	  trap 'docker rm -f 221b-test-db > /dev/null' EXIT; export TEST_DATABASE=127.0.0.1:55432; \
 	  until docker exec 221b-test-db pg_isready -q; do sleep 1; done; \
 	fi; cd server && $(GO) test -race ./...
@@ -109,7 +112,7 @@ SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-
 
 # The console keeps its records in PostgreSQL and does not run without it
 # (DB-69). dev-sim, e2e-sim and screenshots start one in Docker for the run
-# (postgres:18 on 127.0.0.1:$(DEV_DB_PORT), thrown away at the end), unless
+# ($(POSTGRES_IMAGE) on 127.0.0.1:$(DEV_DB_PORT), thrown away at the end), unless
 # DEV_DATABASE names one as host:port that lets the user postgres in
 # without a password; the database DEV_DB_NAME there must be empty, or
 # this console's from an earlier run.
@@ -119,7 +122,7 @@ DEV_DB_NAME ?= postgres
 # Starts the database (sets db, the container to stop, and dbaddr).
 DEV_DB_START = if [ -z "$(DEV_DATABASE)" ]; then \
 	  db=221b-dev-db-$$$$; dbaddr=127.0.0.1:$(DEV_DB_PORT); \
-	  docker run -d --rm --name $$db -e POSTGRES_HOST_AUTH_METHOD=trust -p $$dbaddr:5432 postgres:18 > /dev/null || exit 1; \
+	  docker run -d --rm --name $$db -e POSTGRES_HOST_AUTH_METHOD=trust -p $$dbaddr:5432 $(POSTGRES_IMAGE) > /dev/null || exit 1; \
 	  until docker exec $$db pg_isready -q -h 127.0.0.1; do sleep 1; done; \
 	else db=; dbaddr=$(DEV_DATABASE); fi
 # The container was started with --rm: stopping it removes it.

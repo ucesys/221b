@@ -23,7 +23,7 @@ The image follows the chart: a release's chart runs `ghcr.io/ucesys/221b:<its ve
 
 ## Which upgrades are tested
 
-CI upgrades from each of the **two releases before** the one being built (P7-03), in kind: it installs the earlier release's chart and image, makes a local user on the Users page, saves settings, a fleet and an acknowledged alert, adds a cluster connection and Sherlock's key, then upgrades, checks that everything is there and that the user still signs in, rolls back, checks again, and upgrades once more (`hack/upgrade-kind.sh`). Upgrading from an older release works through the releases in between: from 0.6.5 to 0.9.1, go to 0.7.1 first.
+CI upgrades from each of the **two releases before** the one being built (P7-03), in kind: it installs the earlier release's chart and image, makes a local user on the Users page, saves settings, a fleet and an acknowledged alert, adds a cluster connection and Sherlock's key, then upgrades, checks that everything is there and that the user still signs in, rolls back, checks again, and upgrades once more (`hack/upgrade-kind.sh`). From 0.13.0 the upgrade adds the bundled database: the test also checks that the records are rows of the database, that the settings' key has left the ConfigMap and the connection's record its Secret, and, after the rollback, that the release before has the accounts and Sherlock's key and none of the settings, fleets, acknowledgements or connections (*Going back*, 0.13.0 below); the upgrade again finds them all in the database. Upgrading from an older release works through the releases in between: from 0.6.5 to 0.9.1, go to 0.7.1 first.
 
 ## What is migrated
 

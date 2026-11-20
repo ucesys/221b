@@ -312,6 +312,10 @@ test('every supported change runs once approved, as the approver, and does what 
   // Taints, which fleets give and take (asked after 0.7.1).
   type Tainted = { spec: { taints?: { key: string; value?: string; effect: string }[] } }
   const taints = async () => ((await cluster.getObject<Tainted>(`/api/v1/nodes/${node}`))!.spec.taints ?? []).filter((t) => t.key === 'e2e-watson')
+  // The uncordon above is followed by Kubernetes' node controller taking its
+  // own taint (node.kubernetes.io/unschedulable) off a moment later: a card
+  // that appeared before that would lapse, the node having changed.
+  await expect.poll(async () => ((await cluster.getObject<Tainted>(`/api/v1/nodes/${node}`))!.spec.taints ?? []).some((t) => t.key === 'node.kubernetes.io/unschedulable'), { timeout: 30_000 }).toBe(false)
   try {
     await ok(request, `kubectl taint nodes ${node} e2e-watson=tainted:PreferNoSchedule`)
     expect(await taints()).toEqual([{ key: 'e2e-watson', value: 'tainted', effect: 'PreferNoSchedule' }])

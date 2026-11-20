@@ -4,7 +4,7 @@ How versions are numbered, how a release is cut, and what CI does with it (P7-08
 
 ## Versions
 
-221B follows [semantic versioning](https://semver.org/). The chart's `version` and `appVersion` are always the same, and the image of a release is tagged with it: chart 0.7.0 runs `ghcr.io/ucesys/221b:0.7.0`.
+221B follows [semantic versioning](https://semver.org/). The chart's `version` and `appVersion` are always the same, and the images of a release are tagged with it: chart 0.7.0 runs `ghcr.io/ucesys/221b:0.7.0`, and from 0.13.0 its bundled database runs `ghcr.io/ucesys/221b-postgres` of the same version (`database.bundled.image`, DB-69).
 
 - **Patch** (0.7.1): fixes only. No change to chart values, to stored formats or to what anyone can see or do beyond the fix.
 - **Minor** (0.8.0): new features, and while the major version is 0, changes in behaviour or chart values, each listed in [CHANGELOG.md](../CHANGELOG.md) and in [docs/upgrading.md](upgrading.md). A renamed value keeps working under its old name for at least one minor release.
@@ -27,9 +27,9 @@ Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b56
    git push origin v0.8.0
    ```
 
-5. **CI** (`.github/workflows/ci.yml`) builds the tag, runs every check on that build, including the upgrade from the two releases before it, and publishes the image as `ghcr.io/ucesys/221b:0.8.0`: linux/amd64 is the very image the checks ran on, and linux/arm64, which they cannot run, is built in the publish job from the same pinned base images and scanned. A release is never a prebuilt image. Base images are pinned in `hack/base-images.env`; `hack/pin-base-images.sh` moves them. A build on a laptop follows the tags in the Dockerfile.
-6. **The release workflow** (`.github/workflows/release.yml`) checks that the tag matches the chart's version and that CHANGELOG.md has its section, waits up to two hours for CI to publish that image (so a failed run stops the release; rerun CI's failed jobs within the wait, or this workflow after it), then pushes the chart to `oci://ghcr.io/ucesys/charts/221b:0.8.0`, signs it and attests its provenance, builds, signs and attests the `221b` command, and makes a GitHub release with the section as its notes and the chart, the command, its signed checksums and its SBOM attached. CI's publish job has already signed the image and attested its provenance and SBOM ([Verify a release](#verify-a-release)).
-7. **Check** the release page, verify the signatures once ([Verify a release](#verify-a-release)), then pull the image and install the chart from the registry once (`helm upgrade --install … --version 0.8.0`).
+5. **CI** (`.github/workflows/ci.yml`) builds the tag, runs every check on that build, including the upgrade from the two releases before it, and publishes the images as `ghcr.io/ucesys/221b:0.8.0` and, from 0.13.0, `ghcr.io/ucesys/221b-postgres:0.8.0`: for each, linux/amd64 is the very image the checks ran on, and linux/arm64, which they cannot run, is built in the publish job from the same pinned base images and scanned (the database's under emulation, since its build installs Debian's packages). A release is never a prebuilt image. Both images are scanned with Grype: the console's, distroless, fails on any high or critical finding; the database's, Debian's PostgreSQL, fails on a high or critical finding that has a fix, and lists the others, which Debian marks as not to be fixed or not fixed yet. Base images are pinned in `hack/base-images.env`: those of both Dockerfiles, the BuildKit frontend, and the PostgreSQL the Go tests, the browser tests and the screenshots run against (`POSTGRES_IMAGE`, written into the workflows' services). `hack/pin-base-images.sh` moves them, and `hack/check-base-images.sh`, in the chart job, fails when a tag and its pin disagree or a base image has no pin. A build on a laptop follows the tags in the Dockerfiles and the Makefile.
+6. **The release workflow** (`.github/workflows/release.yml`) checks that the tag matches the chart's version, that the chart runs both images of that version by default, and that CHANGELOG.md has its section, waits up to two hours for CI to publish both images (so a failed run stops the release; rerun CI's failed jobs within the wait, or this workflow after it), then pushes the chart to `oci://ghcr.io/ucesys/charts/221b:0.8.0`, signs it and attests its provenance, builds, signs and attests the `221b` command, and makes a GitHub release with the section as its notes and the chart, the command, its signed checksums and its SBOM attached. CI's publish job has already signed both images and attested their provenance and SBOMs ([Verify a release](#verify-a-release)).
+7. **Check** the release page, verify the signatures once ([Verify a release](#verify-a-release)), then pull the images and install the chart from the registry once (`helm upgrade --install … --version 0.8.0`).
 
 A tag is never moved or deleted once pushed: a mistake is fixed by the next patch release.
 
@@ -49,9 +49,9 @@ Add the 0.7.1 notes to CHANGELOG.md on main too. The previous minor gets high an
 
 ## Verify a release
 
-Every image CI publishes, and a release's chart and `221b` command, are signed with [cosign](https://docs.sigstore.dev/) keyless (P7-05, #79): no key is kept anywhere; the certificate names this repository's workflow and the ref it ran for, and the signature is in Sigstore's public transparency log. The image and the chart also carry SLSA build provenance, and the image an SPDX SBOM, as GitHub attestations kept beside them in the registry. A release's image and chart are never replaced: a rerun keeps what was published and only signs it again.
+Every image CI publishes, the console's and from 0.13.0 the bundled database's, and a release's chart and `221b` command, are signed with [cosign](https://docs.sigstore.dev/) keyless (P7-05, #79): no key is kept anywhere; the certificate names this repository's workflow and the ref it ran for, and the signature is in Sigstore's public transparency log. The images and the chart also carry SLSA build provenance, and each image an SPDX SBOM, as GitHub attestations kept beside them in the registry. A release's images and chart are never replaced: a rerun keeps what was published and only signs it again.
 
-The image (the chart is the same, as `ghcr.io/ucesys/charts/221b:0.12.1`):
+The image (the database's is the same, as `ghcr.io/ucesys/221b-postgres:0.13.0`, and so is the chart, as `ghcr.io/ucesys/charts/221b:0.12.1`):
 
 ```sh
 cosign verify ghcr.io/ucesys/221b:0.12.1 \
