@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -441,8 +442,11 @@ func (s State) WithoutFleetNodes() State {
 // copy, so no replica puts back what another one changed; Run picks up
 // the others' changes.
 type Service struct {
-	storage  Storage
-	log      *slog.Logger
+	storage Storage
+	log     *slog.Logger
+	// quiet keeps the reads' failures while the database is away to one
+	// line (DB-15).
+	quiet    db.Quiet
 	defaults Settings
 	// onChange is told about every change, including the initial load.
 	onChange func(State)
@@ -715,12 +719,15 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 		}
 		return
 	case err != nil:
-		s.log.Warn("cannot read the saved settings", "err", err)
+		// With the database away it fails at every look: said once, and
+		// once when it works again (DB-15).
+		s.quiet.Failed(s.log, "cannot read the saved settings", err)
 		if initial {
 			s.onChange(s.Current())
 		}
 		return
 	}
+	s.quiet.Worked(s.log, "the saved settings are read again")
 	s.mu.Lock()
 	same := (version != "" && version == s.version) || string(b) == string(s.loaded)
 	s.version = version

@@ -74,6 +74,7 @@ Read [docs/upgrading.md](docs/upgrading.md) (0.13.0) first. In short:
 
 ### Fixed
 
+- **The log no longer repeats itself while the database is away** (DB-15; the ninth cluster test logged about 200 lines a minute). The AI configuration's reads, Sherlock's spend, the saved settings, the audit log's saves and each page answered 503 said the same line every few seconds; each now says it once, and once when it works again.
 - **A connection whose Secret is gone names all it lacks** (DB-64; the ninth cluster test). Its page said *the connection has no token*, and a connection with a CA certificate of its own lacks that too; it now says *the connection has no token and no CA certificate*, so both are given again.
 - **An application never installed can be removed** (HA-08; the ninth cluster test). Removing one whose install failed before Helm made a release ran `helm uninstall`, which failed with *release: not found*, and the row and its Secret stayed. An uninstall that finds no release now removes the application's record.
 - **Removing a Mycroft source removes its key from the Secret `<release>-knowledge`** (DB-61; the ninth cluster test). Its credential was emptied, and an empty key stayed. The key goes now; the Secret stays.

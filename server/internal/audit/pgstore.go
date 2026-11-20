@@ -60,14 +60,19 @@ func (s *PGStore) start() {
 		s.stop, s.done = make(chan struct{}), make(chan struct{})
 		go func() {
 			defer close(s.done)
+			var quiet db.Quiet
 			t := time.NewTicker(s.Every)
 			defer t.Stop()
 			for {
 				select {
 				case <-t.C:
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					// With the database away it fails every two seconds:
+					// said once, and once when it works again (DB-15).
 					if err := s.Flush(ctx); err != nil {
-						s.Logger.Warn("saving the audit log failed; the events stay queued", "err", err)
+						quiet.Failed(s.Logger, "saving the audit log failed; the events stay queued", err)
+					} else {
+						quiet.Worked(s.Logger, "the audit log is saved again, with the events queued meanwhile")
 					}
 					cancel()
 				case <-s.stop:

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -60,6 +61,10 @@ type Ledger struct {
 	backend kv.Backend
 	now     func() time.Time
 	log     *slog.Logger
+
+	// quiet keeps the reads' failures while the database is away to one
+	// line (DB-15).
+	quiet db.Quiet
 
 	mu sync.Mutex
 	// saved is what the backend held when last read or written, at readAt.
@@ -276,9 +281,10 @@ func (l *Ledger) refreshLocked(ctx context.Context) {
 	}
 	s, _, err := l.read(ctx)
 	if err != nil {
-		l.log.Warn("reading the Sherlock spend failed", "err", err)
+		l.quiet.Failed(l.log, "reading the Sherlock spend failed", err)
 		return
 	}
+	l.quiet.Worked(l.log, "the Sherlock spend is read again")
 	l.saved, l.readAt = s, now
 }
 

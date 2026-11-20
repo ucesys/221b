@@ -379,6 +379,8 @@ type Server struct {
 
 	reqMu sync.Mutex
 	reqs  map[reqKey]uint64
+	// quiet are the routes that failed for the database being away (DB-15).
+	quiet map[string]*db.Quiet
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
@@ -948,12 +950,37 @@ func (s *Server) observe(route string, h http.HandlerFunc) http.Handler {
 		s.reqMu.Lock()
 		s.reqs[reqKey{route, code}]++
 		s.reqMu.Unlock()
-		if code >= 500 {
+		switch {
+		case code == http.StatusServiceUnavailable && db.MarkedUnavailable(sw.Header()):
+			// The database is away: each route says so once, and once when
+			// it answers again (DB-15), not at every request.
+			s.quietRoute(route, true).Failed(s.opts.Logger, "request failed", db.ErrUnavailable, "method", r.Method, "path", r.URL.Path, "code", code)
+		case code >= 500:
 			s.opts.Logger.Warn("request failed", "method", r.Method, "path", r.URL.Path, "code", code, "duration", time.Since(start))
-		} else {
+		default:
+			if q := s.quietRoute(route, false); q != nil {
+				q.Worked(s.opts.Logger, "requests are answered again", "route", route)
+			}
 			s.opts.Logger.Debug("request", "method", r.Method, "path", r.URL.Path, "code", code, "duration", time.Since(start))
 		}
 	})
+}
+
+// quietRoute is a route's Quiet (DB-15), made with make on its first
+// failure for the database being away; nil for a route that never had
+// one.
+func (s *Server) quietRoute(route string, make bool) *db.Quiet {
+	s.reqMu.Lock()
+	defer s.reqMu.Unlock()
+	q := s.quiet[route]
+	if q == nil && make {
+		if s.quiet == nil {
+			s.quiet = map[string]*db.Quiet{}
+		}
+		q = &db.Quiet{}
+		s.quiet[route] = q
+	}
+	return q
 }
 
 // viewsOf reads the views a request asks for: ?views=nodes,pods. Without
