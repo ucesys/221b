@@ -14,11 +14,13 @@ import (
 )
 
 // The jobs and their runs in the database (Phase 13, DB-42): a job that
-// was changed or added, or that has handled a time or spent, is a row of
-// jobs; a run a row of job_runs with its findings, facts and proposals in
-// tables of their own. The service is unchanged and reaches the rows
-// through db.Doc. The jobs' own settings and the two counters, which are
-// of no row, are settings scopes.
+// was changed or added, or that has spent, is a row of jobs; a run a row
+// of job_runs with its findings, facts and proposals in tables of their
+// own. The service reaches the rows through db.Doc. A scheduled time a
+// job handled is a row of schedule_claims, claimed with db.Claim (DB-80):
+// the newest of a job's claims is the time it last handled. The jobs' own
+// settings and the two counters, which are of no row, are settings
+// scopes.
 
 const (
 	jobsScope = "jobs"
@@ -88,9 +90,47 @@ func saveScope(ctx context.Context, tx pgx.Tx, scope string, v any) error {
 	return err
 }
 
+// JobsPG keeps the jobs in the database: the document the service reads
+// and saves, and the claims of their scheduled times (DB-80).
+type JobsPG struct {
+	*db.Doc[jobsRecord]
+}
+
 // NewJobsPG keeps the jobs in d.
-func NewJobsPG(d *db.DB) *db.Doc[jobsRecord] {
-	return &db.Doc[jobsRecord]{DB: d, Key: JobsKey, Read: readJobs, Write: writeJobs}
+func NewJobsPG(d *db.DB) *JobsPG {
+	return &JobsPG{&db.Doc[jobsRecord]{DB: d, Key: JobsKey, Read: readJobs, Write: writeJobs}}
+}
+
+// keptClaims is how long a job's claims are kept before the newest it
+// made: the record of which replica ran a time, for a while.
+const keptClaims = 7 * 24 * time.Hour
+
+// ClaimSlot claims the job's scheduled time slot for the replica by, and
+// says whether it was first (db.Claim): every replica that leads tries,
+// one insert goes in. A time no later than one the job claimed already is
+// not claimed again. The job's claims older than a week before the time
+// claimed go with it; the newest always stays.
+func (p *JobsPG) ClaimSlot(ctx context.Context, job string, slot time.Time, by string) (bool, error) {
+	claimed := false
+	err := p.DB.Tx(ctx, func(tx pgx.Tx) error {
+		claimed = false
+		// The job's turn, so a later time claimed meanwhile is seen.
+		if err := db.LockName(ctx, tx, "claim/"+job); err != nil {
+			return err
+		}
+		var later bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM schedule_claims WHERE job_id = $1 AND slot_at >= $2)", job, slot.UTC()).Scan(&later); err != nil || later {
+			return err
+		}
+		ok, err := p.DB.Claim(ctx, tx, job, slot, by)
+		if err != nil || !ok {
+			return err
+		}
+		claimed = true
+		_, err = tx.Exec(ctx, "DELETE FROM schedule_claims WHERE job_id = $1 AND slot_at < $2", job, slot.UTC().Add(-keptClaims))
+		return err
+	})
+	return claimed, err
 }
 
 func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
@@ -103,7 +143,7 @@ func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
 	rec.Settings, rec.Next = kept.Settings, kept.Next
 	rows, err := q.Query(ctx, `SELECT job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_at, schedule_days, schedule_every, schedule_cron,
 			schedule_time_zone, event, event_severity, cluster_ids, run_usd::float8, day_usd::float8, is_enabled, skips_overlap, catches_up, set_by, set_at, since_at,
-			is_added, min_priority, handled_at, spend_day, spend_usd, spend_stopped
+			is_added, min_priority, spend_day, spend_usd, spend_stopped
 		FROM jobs`)
 	if err != nil {
 		return rec, false, err
@@ -112,13 +152,13 @@ func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
 	var sp schedule.Spec
 	var has, isKept bool
 	var days, clusters []string
-	var setAt, since, handled *time.Time
+	var setAt, since *time.Time
 	var minPriority *int
 	var day *string
 	var spend daySpend
 	if _, err := pgx.ForEachRow(rows, []any{&j.ID, &isKept, &j.Kind, &j.Name, &j.Task, &has, &sp.Kind, &sp.At, &days, &sp.Every, &sp.Cron, &sp.TimeZone, &j.When.Event,
 		&j.When.Severity, &clusters, &j.Budget.RunUSD, &j.Budget.DayUSD, &j.On, &j.SkipOverlap, &j.CatchUp, &j.SetBy, &setAt, &since, &j.Added, &minPriority,
-		&handled, &day, &spend.USD, &spend.Stopped}, func() error {
+		&day, &spend.USD, &spend.Stopped}, func() error {
 		found = true
 		if isKept {
 			x := j
@@ -137,12 +177,6 @@ func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
 			}
 			rec.Jobs[x.ID] = x
 		}
-		if handled != nil {
-			if rec.Handled == nil {
-				rec.Handled = map[string]time.Time{}
-			}
-			rec.Handled[j.ID] = handled.UTC()
-		}
 		if day != nil {
 			if rec.Spend == nil {
 				rec.Spend = map[string]daySpend{}
@@ -153,23 +187,36 @@ func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
 	}); err != nil {
 		return rec, false, err
 	}
+	// The newest time each job claimed is the time it last handled.
+	rows, err = q.Query(ctx, "SELECT job_id, max(slot_at) FROM schedule_claims GROUP BY job_id")
+	if err != nil {
+		return rec, false, err
+	}
+	var id string
+	var last time.Time
+	if _, err := pgx.ForEachRow(rows, []any{&id, &last}, func() error {
+		found = true
+		if rec.Handled == nil {
+			rec.Handled = map[string]time.Time{}
+		}
+		rec.Handled[id] = last.UTC()
+		return nil
+	}); err != nil {
+		return rec, false, err
+	}
 	return rec, found, nil
 }
 
 // jobRow is everything a row of jobs holds, of one job.
 type jobRow struct {
-	Job     *Job
-	Handled *time.Time
-	Spend   *daySpend
+	Job   *Job
+	Spend *daySpend
 }
 
 func jobRowOf(rec jobsRecord, id string) jobRow {
 	var r jobRow
 	if j, ok := rec.Jobs[id]; ok {
 		r.Job = &j
-	}
-	if t, ok := rec.Handled[id]; ok {
-		r.Handled = at(t)
 	}
 	if s, ok := rec.Spend[id]; ok {
 		r.Spend = &s
@@ -207,7 +254,7 @@ func writeJobs(ctx context.Context, tx pgx.Tx, old, next jobsRecord) error {
 			continue
 		}
 		b.Queue("DELETE FROM jobs WHERE job_id = $1", id)
-		if r.Job == nil && r.Handled == nil && r.Spend == nil {
+		if r.Job == nil && r.Spend == nil {
 			continue
 		}
 		var j Job
@@ -226,11 +273,25 @@ func writeJobs(ctx context.Context, tx pgx.Tx, old, next jobsRecord) error {
 		}
 		b.Queue(`INSERT INTO jobs (job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_at, schedule_days, schedule_every, schedule_cron,
 				schedule_time_zone, event, event_severity, cluster_ids, run_usd, day_usd, is_enabled, skips_overlap, catches_up, set_by, set_at, since_at, is_added,
-				min_priority, handled_at, spend_day, spend_usd, spend_stopped)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)`,
+				min_priority, spend_day, spend_usd, spend_stopped)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)`,
 			id, r.Job != nil, j.Kind, j.Name, j.Task, j.When.Schedule != nil, sp.Kind, sp.At, list(sp.Days), sp.Every, sp.Cron, sp.TimeZone, j.When.Event, j.When.Severity,
 			list(j.Clusters), j.Budget.RunUSD, j.Budget.DayUSD, j.On, j.SkipOverlap, j.CatchUp, j.SetBy, atOrNone(j.SetAt), atOrNone(j.Since), j.Added, j.MinPriority,
-			r.Handled, day, spend.USD, spend.Stopped)
+			day, spend.USD, spend.Stopped)
+	}
+	// The times handled are claims (DB-80): a time newer than the last
+	// claimed is a claim (the copy from the ConfigMap of before), and a
+	// job whose time is forgotten (its schedule restored, the job gone)
+	// loses its claims.
+	for _, id := range order {
+		was, had := old.Handled[id]
+		now, has := next.Handled[id]
+		switch {
+		case has && (!had || now.After(was)):
+			b.Queue(`INSERT INTO schedule_claims (job_id, slot_at, claimed_by) VALUES ($1, $2, '') ON CONFLICT DO NOTHING`, id, now.UTC())
+		case had && !has:
+			b.Queue("DELETE FROM schedule_claims WHERE job_id = $1", id)
+		}
 	}
 	if b.Len() == 0 {
 		return nil

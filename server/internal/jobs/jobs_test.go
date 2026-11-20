@@ -94,7 +94,13 @@ func testStore(t *testing.T) kv.Backend {
 
 func setup(t *testing.T) *world {
 	t.Helper()
-	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: testStore(t), agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
+	return setupWith(t, testStore(t))
+}
+
+// setupWith is a test's world with its jobs kept in b.
+func setupWith(t *testing.T, b kv.Backend) *world {
+	t.Helper()
+	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: b, agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
 	w.s = w.service(w.kv)
 	w.kinds.Register(Kind{ID: "test", Label: "Test job", Agent: "auditor", AgentName: "Auditor", Schedulable: true, Events: []string{EventAlert},
 		Default: When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "02:00"}},
@@ -424,8 +430,10 @@ func TestAlertRepeatsUpdateOneRun(t *testing.T) {
 	}
 }
 
-// The runs are kept by count and by size: the oldest go first.
-func TestRunsAreKeptByCountAndSize(t *testing.T) {
+// The runs are kept by count: the oldest go first. Their bound in bytes
+// was the ConfigMap's (DB-80): a long report is kept whole, and no run
+// goes for it.
+func TestRunsAreKeptByCount(t *testing.T) {
 	w := setup(t)
 	w.s.o.MaxRuns = 5
 	w.agents.text = "Found one.\n\n```json\n{\"findings\": [{\"severity\": \"warning\", \"title\": \"A finding\"}]}\n```"
@@ -446,16 +454,22 @@ func TestRunsAreKeptByCountAndSize(t *testing.T) {
 	if len(list) != 5 || list[4].ID != "run-4" || list[0].ID != "run-8" {
 		t.Fatalf("kept: %+v", list)
 	}
-	// By size.
-	w.s.o.RunsBytes = 4 << 10
-	w.agents.text = strings.Repeat("A long report. ", 200)
-	if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
-		t.Fatal(err)
+	// No bound in bytes.
+	w.agents.text = strings.Repeat("A long report. ", 600)
+	for i := 0; i < 2; i++ {
+		if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
+			t.Fatal(err)
+		}
+		w.s.Wait()
 	}
-	w.s.Wait()
-	raw, _, _ := w.kv.LoadKey(ctx, RunsKey)
-	if len(raw) > 4<<10 {
-		t.Fatalf("the runs take %d bytes", len(raw))
+	list = runs(t, w.s)
+	if len(list) != 5 || list[0].ID != "run-10" {
+		t.Fatalf("kept %d runs, the newest %s", len(list), list[0].ID)
+	}
+	for _, id := range []string{"run-9", "run-10"} {
+		if r, err := w.s.GetRun(ctx, id); err != nil || len(r.Report) < 8000 {
+			t.Fatalf("%s keeps a report of %d: %v", id, len(r.Report), err)
+		}
 	}
 }
 

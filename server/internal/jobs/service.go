@@ -162,9 +162,9 @@ type Options struct {
 	Logger   *slog.Logger
 	// Every is how often the schedules and alerts are looked at; 30 s.
 	Every time.Duration
-	// MaxRuns and RunsBytes bound the runs kept (JB-14).
-	MaxRuns   int
-	RunsBytes int
+	// MaxRuns bounds the runs kept (JB-14). Their bound in bytes was the
+	// ConfigMap's, and went with it (DB-80).
+	MaxRuns int
 	// RunTimeout bounds one run; 30 minutes.
 	RunTimeout time.Duration
 }
@@ -173,6 +173,9 @@ type Options struct {
 type Service struct {
 	o        Options
 	instance string
+	// claims claims the scheduled times where the jobs are kept in the
+	// database (DB-80); nil claims them in the jobs' record.
+	claims Claims
 
 	mu sync.Mutex
 	// sem holds each job's run under way on this replica; queued counts
@@ -220,9 +223,6 @@ func New(o Options) *Service {
 	if o.MaxRuns <= 0 {
 		o.MaxRuns = DefaultMaxRuns
 	}
-	if o.RunsBytes <= 0 {
-		o.RunsBytes = DefaultRunsBytes
-	}
 	if o.RunTimeout <= 0 {
 		o.RunTimeout = 30 * time.Minute
 	}
@@ -232,7 +232,7 @@ func New(o Options) *Service {
 	tag := make([]byte, 6)
 	_, _ = rand.Read(tag)
 	base, cancel := context.WithCancel(context.Background())
-	return &Service{o: o, instance: hex.EncodeToString(tag), sem: map[string]chan struct{}{}, queued: map[string]int{}, active: map[string]*activeRun{}, base: base, cancel: cancel}
+	return &Service{o: o, instance: hex.EncodeToString(tag), claims: claimsIn(o.Backend), sem: map[string]chan struct{}{}, queued: map[string]int{}, active: map[string]*activeRun{}, base: base, cancel: cancel}
 }
 
 // SetAgents gives the service its agents, once the console has them.

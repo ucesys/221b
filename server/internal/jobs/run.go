@@ -756,8 +756,9 @@ func (s *Service) Run(ctx context.Context) {
 // Tick looks once (JB-06): on the leader, each job's scheduled time come
 // within the grace starts a run; one missed by more, or while its last run
 // is still going, is let go and noted. The time is claimed before the run
-// starts, over the version read, so a new leader, or an old one that has
-// not yet seen it lost the Lease, does not run it again. It also watches
+// starts (in schedule_claims with a database, DB-80), so a new leader, or
+// an old one that has not yet seen it lost the Lease, does not run it
+// again. It also watches
 // the alerts and lets go of runs a replica left behind.
 func (s *Service) Tick(ctx context.Context) {
 	if !s.leads() {
@@ -820,17 +821,8 @@ func (s *Service) Tick(ctx context.Context) {
 		case s.busy(j.ID) && j.SkipOverlap:
 			status, why = StatusSkipped, fmt.Sprintf("skipped: the run before %s was still going", due.In(loc).Format("2 Jan 15:04 MST"))
 		}
-		claimed := false
-		if err := s.updateJobs(ctx, func(r *jobsRecord) error {
-			if claimed = r.Handled[j.ID].Before(due); !claimed {
-				return errUnchanged
-			}
-			if r.Handled == nil {
-				r.Handled = map[string]time.Time{}
-			}
-			r.Handled[j.ID] = due.UTC()
-			return nil
-		}); err != nil || !claimed {
+		claimed, err := s.claim(ctx, j.ID, due)
+		if err != nil || !claimed {
 			if err != nil {
 				s.o.Logger.Warn("a job's time cannot be claimed", "job", j.ID, "err", err)
 			}
@@ -847,6 +839,27 @@ func (s *Service) Tick(ctx context.Context) {
 			_, _, _ = s.execute(s.base, j, k, trig, nil, !j.SkipOverlap, nil)
 		}(j, k)
 	}
+}
+
+// claim claims a job's scheduled time, and says whether this replica was
+// first: through schedule_claims in the database (DB-80), else over the
+// version of the jobs' record read.
+func (s *Service) claim(ctx context.Context, job string, due time.Time) (bool, error) {
+	if s.claims != nil {
+		return s.claims.ClaimSlot(ctx, job, due.UTC(), s.instance)
+	}
+	claimed := false
+	err := s.updateJobs(ctx, func(r *jobsRecord) error {
+		if claimed = r.Handled[job].Before(due); !claimed {
+			return errUnchanged
+		}
+		if r.Handled == nil {
+			r.Handled = map[string]time.Time{}
+		}
+		r.Handled[job] = due.UTC()
+		return nil
+	})
+	return claimed, err
 }
 
 // sweep lets go of runs that a replica left under way: past the run's

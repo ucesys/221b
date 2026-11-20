@@ -38,10 +38,6 @@ import (
 // the issue service's investigator is the report triage job's; the
 // backups to S3 show as a job; the agents read as the reader identity.
 
-// runsLimit is the runs key's limit in its ConfigMap, which the runs fit
-// to.
-func runsLimit() int { return layout[objRuns][jobs.RunsKey].Bytes }
-
 // jobsWiring is the jobs and the investigator, with the ConfigMap they are
 // kept in, for the metrics.
 type jobsWiring struct {
@@ -96,9 +92,6 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 		Leads:     leads,
 		Audit:     auditLog,
 		TimeZone:  cfg.JobsTimeZone,
-		// The runs fit a little below their key's limit, so the save that
-		// trims them never meets it.
-		RunsBytes: runsLimit() - 16<<10,
 		Logger:    log.With("component", "jobs"),
 	})
 	w.svc.RegisterBuiltins()

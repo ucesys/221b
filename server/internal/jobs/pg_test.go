@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,12 +70,14 @@ func TestJobsInTheDatabase(t *testing.T) {
 		Next:     1,
 	}
 	saved(t, doc, other, JobsKey, rec)
-	// Every field is a column; a job nobody changed has a row for what is kept of it.
+	// Every field is a column; a job nobody changed has a row for what it
+	// spent, and the times handled are claims (DB-80), with no row of jobs.
 	var zone string
-	var days, unkept int
-	if err := d.Pool().QueryRow(context.Background(), `SELECT schedule_time_zone, cardinality(schedule_days), (SELECT count(*) FROM jobs WHERE NOT is_kept)
-		FROM jobs WHERE job_id = 'audit' AND has_schedule AND min_priority = 2 AND spend_day = '2026-11-03'`).Scan(&zone, &days, &unkept); err != nil || zone != "Europe/Warsaw" || days != 2 || unkept != 2 {
-		t.Fatalf("the audit's row: %q %d, %d not kept: %v", zone, days, unkept, err)
+	var days, unkept, claims int
+	if err := d.Pool().QueryRow(context.Background(), `SELECT schedule_time_zone, cardinality(schedule_days), (SELECT count(*) FROM jobs WHERE NOT is_kept),
+			(SELECT count(*) FROM schedule_claims WHERE (job_id, slot_at) IN (('audit', $1::timestamptz), ('backup', $2::timestamptz)))
+		FROM jobs WHERE job_id = 'audit' AND has_schedule AND min_priority = 2 AND spend_day = '2026-11-03'`, day1.Add(26*time.Hour), day1.Add(3*time.Hour)).Scan(&zone, &days, &unkept, &claims); err != nil || zone != "Europe/Warsaw" || days != 2 || unkept != 1 || claims != 2 {
+		t.Fatalf("the audit's row: %q %d, %d not kept, %d claims: %v", zone, days, unkept, claims, err)
 	}
 	j := rec.Jobs["audit"]
 	j.When, j.MinPriority, j.Clusters = When{Event: EventReport}, nil, nil
@@ -84,8 +87,91 @@ func TestJobsInTheDatabase(t *testing.T) {
 	rec.Spend["report"] = daySpend{Day: "2026-11-04"}
 	rec.Settings, rec.Next = Settings{}, 2
 	saved(t, doc, other, JobsKey, rec)
-	if n := count(t, d, "jobs"); n != 2 {
-		t.Fatalf("jobs has %d rows", n)
+	if n, c := count(t, d, "jobs"), count(t, d, "schedule_claims"); n != 2 || c != 1 {
+		t.Fatalf("jobs has %d rows, schedule_claims %d", n, c)
+	}
+}
+
+// A scheduled time is claimed through schedule_claims (DB-80): with two
+// replicas that both lead, each with its own store on one database, a
+// time runs once; the claim is a row of schedule_claims, which is what
+// the next look reads as the time handled; a later time is claimed in
+// its turn, and a job's claims older than a week before its newest go.
+func TestAScheduledTimeIsClaimedInTheDatabase(t *testing.T) {
+	d := dbtest.Open(t)
+	keyed := func() kv.Backend {
+		return &kv.Keyed{Keys: map[string]kv.Backend{JobsKey: NewJobsPG(d), RunsKey: NewRunsPG(d)}, Rest: &kv.Memory{}}
+	}
+	w := setupWith(t, keyed())
+	other := w.service(keyed())
+	t.Cleanup(other.Stop)
+	if w.s.claims == nil || other.claims == nil {
+		t.Fatal("the services do not claim through the database")
+	}
+	ctx := context.Background()
+	on(t, w.s, "test", Change{})
+	tick := func() {
+		t.Helper()
+		var wg sync.WaitGroup
+		for _, s := range []*Service{w.s, other, w.s, other} {
+			wg.Add(1)
+			go func(s *Service) {
+				defer wg.Done()
+				s.Tick(ctx)
+			}(s)
+		}
+		wg.Wait()
+		w.s.Wait()
+		other.Wait()
+	}
+	w.clock.Set(day1.Add(2*time.Hour + time.Minute))
+	tick()
+	if n := w.runs.Load(); n != 1 {
+		t.Fatalf("the time ran %d times", n)
+	}
+	var slot time.Time
+	var by string
+	if err := d.Pool().QueryRow(ctx, "SELECT slot_at, claimed_by FROM schedule_claims WHERE job_id = 'test'").Scan(&slot, &by); err != nil || !slot.Equal(day1.Add(2*time.Hour)) || by == "" {
+		t.Fatalf("the claim: %v by %q: %v", slot, by, err)
+	}
+	// The same time again: nothing runs.
+	tick()
+	if n := w.runs.Load(); n != 1 {
+		t.Fatalf("the time ran %d times", n)
+	}
+	// Ten days on, each day's time runs once, and a week of claims is kept.
+	for day := 1; day <= 10; day++ {
+		w.clock.Set(day1.Add(time.Duration(day)*24*time.Hour + 2*time.Hour + time.Minute))
+		tick()
+	}
+	if n := w.runs.Load(); n != 11 {
+		t.Fatalf("eleven times ran %d times", n)
+	}
+	if n := count(t, d, "schedule_claims"); n != 8 {
+		t.Fatalf("schedule_claims keeps %d rows", n)
+	}
+}
+
+// The copy from the ConfigMap of before fills schedule_claims with the
+// times the jobs handled, once.
+func TestTheTimesHandledBeforeAreClaims(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.Open(t)
+	cm := &kv.Memory{}
+	raw, _ := json.Marshal(jobsRecord{Handled: map[string]time.Time{"audit": day1.Add(2 * time.Hour)}, Jobs: map[string]Job{"audit": {ID: "audit", Kind: "audit", On: true}}})
+	_, _ = cm.SaveKey(ctx, JobsKey, raw, "")
+	doc := NewJobsPG(d)
+	for i, want := range []bool{true, false} {
+		if copied, err := doc.Import(ctx, cm, "test"); err != nil || copied != want {
+			t.Fatalf("copy %d: %v %v", i, copied, err)
+		}
+	}
+	if n := count(t, d, "schedule_claims"); n != 1 {
+		t.Fatalf("the copy made %d claims", n)
+	}
+	var rec jobsRecord
+	if _, err := loadJSON(ctx, doc, JobsKey, &rec); err != nil || !rec.Handled["audit"].Equal(day1.Add(2*time.Hour)) {
+		t.Fatalf("read back: %+v %v", rec.Handled, err)
 	}
 }
 

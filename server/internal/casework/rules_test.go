@@ -780,14 +780,19 @@ func TestTheAgentsDescriptionIsKeptCF86(t *testing.T) {
 	if f, _ := foundOf(w.rules(t), "other.etcd-slow"); len(f.Descriptions) != maxWhys || f.Descriptions[0].Job != "job-3" {
 		t.Errorf("bounded: %+v", f.Descriptions)
 	}
-	// The record stays within its bytes, however much is found.
+	// The record stays within its count of ids, however much is found;
+	// its bound in bytes was the ConfigMap's (DB-80), so each id kept
+	// keeps its lists.
 	for i := 0; i < 300; i++ {
 		w.routeJob(t, "nightly-audit", why(finding(fmt.Sprintf("other.id-%d", i), "Node/cp-1", strings.Repeat("t", 100)), strings.Repeat("w", 500)))
 	}
 	raw, _, _ := w.store.LoadKey(ctx, FoundKey)
 	var rec foundRecord
-	if err := json.Unmarshal(raw, &rec); err != nil || len(raw) > foundBudget || len(rec.IDs) > maxFound || len(rec.Counted) != w.runs {
+	if err := json.Unmarshal(raw, &rec); err != nil || len(rec.IDs) != maxFound || len(rec.Counted) != w.runs {
 		t.Errorf("the record: %d bytes, %d ids, %d runs counted: %v", len(raw), len(rec.IDs), len(rec.Counted), err)
+	}
+	if st := rec.IDs["other.id-299"]; st == nil || len(st.Whys) == 0 || len(st.Latest) == 0 {
+		t.Errorf("the newest id lost its lists: %+v", st)
 	}
 
 	// A suggestion's reasons, from facts, and the agents' descriptions.
