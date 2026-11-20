@@ -44,6 +44,7 @@ Phase 13: the console's records move from ConfigMaps to PostgreSQL, a domain at 
 
 ### Fixed
 
+- **The clean start's log with a database** names the cases as rows, not as ConfigMaps, and counts the RCAs that went with their cases (an RCA is kept with its case's work and had no line).
 - A clean start now also drops what the runs found under each check, with the runs counted: the runs' ids start again at `run-1` after it, and a run still listed as counted made a new run of that id count nothing. Its log has a line for the agents' proposed changes also when there is none to delete.
 - With a database, a clean start (`cases.cleanStart.token`) left the jobs' runs where they were: it emptied the runs' key of the ConfigMap, which the console no longer read. It empties the runs, and the agents' proposed changes for cases and runs, where the console keeps them.
 - With a database, a page could for a moment show a record with parts of two saves: a job's run with the findings of the save before, a script without its newest version's parameters. A service's records are read in several statements, and a save that landed between two of them showed in the later ones. They are read on one snapshot now. Nothing kept was wrong, and a save made over such a read was already refused.

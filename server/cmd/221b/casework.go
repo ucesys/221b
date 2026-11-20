@@ -212,7 +212,7 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 	// The clean start (CF-23) runs once on the leader, before the cases'
 	// loops start.
 	{
-		st := casework.CleanStores{Cases: w.issueSvc.Cases()}
+		st := casework.CleanStores{Cases: w.issueSvc.Cases(), CasesInDatabase: w.database != nil}
 		if w.issueStored != nil {
 			st.Issues = w.issueBackend
 		}

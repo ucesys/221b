@@ -62,7 +62,7 @@ func TestACleanStartCleansTheDatabasesRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err = objs.Save(ctx, "1", issues.WorkKey, []byte(`{"number":1,"source":{"kind":"report"},"history":[{"at":"2026-11-07T02:00:00Z","what":"opened","by":{"name":"Ann","kind":"person"}}],"updated":"2026-11-07T02:00:00Z"}`), v); err != nil {
+	if v, err = objs.Save(ctx, "1", issues.WorkKey, []byte(`{"number":1,"source":{"kind":"report"},"rca":{"case":"C-1","title":"Down","priority":3,"cause":"c","fix":"f","prevention":"p","by":"Ann","at":"2026-11-07T02:00:00Z"},"history":[{"at":"2026-11-07T02:00:00Z","what":"opened","by":{"name":"Ann","kind":"person"}}],"updated":"2026-11-07T02:00:00Z"}`), v); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = objs.Save(ctx, "1", ChatKey, []byte(`{"cluster":"local","messages":[{"id":1,"role":"user","text":"Why?","at":"2026-11-07T02:00:00Z"}]}`), v); err != nil {
@@ -77,16 +77,39 @@ func TestACleanStartCleansTheDatabasesRows(t *testing.T) {
 			t.Fatal(key, err)
 		}
 	}
-	st := CleanStores{Issues: iss, Cases: objs, Casework: beside, Runs: runs, Cards: proposed, Knowledge: wiki}
-	if res, err := CleanStart(ctx, st, "2026-11-19", false, time.Now(), slogTo(&strings.Builder{}), nil); err != nil || !res.Done {
-		t.Fatalf("clean: %+v %v", res, err)
-	}
 	count := func(q string) (n int) {
 		t.Helper()
 		if err := d.Pool().QueryRow(ctx, q).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
+	}
+	st := CleanStores{Issues: iss, Cases: objs, CasesInDatabase: true, Casework: beside, Runs: runs, Cards: proposed, Knowledge: wiki}
+	if n := count("SELECT count(*) FROM rcas"); n != 1 {
+		t.Fatalf("%d RCAs before the clean start, want the one", n)
+	}
+	var logged strings.Builder
+	res, err := CleanStart(ctx, st, "2026-11-19", false, time.Now(), slogTo(&logged), nil)
+	if err != nil || !res.Done {
+		t.Fatalf("clean: %+v %v", res, err)
+	}
+	// The seventh cluster test's N2: with a database the cases' line does
+	// not speak of ConfigMaps, and the RCAs, which go with their cases,
+	// have a line with their count.
+	var sawCases, sawRCAs bool
+	for _, it := range res.Items {
+		if it.Object == "cases" && it.Key == "" && it.Count == 1 {
+			sawCases = true
+		}
+		if strings.HasPrefix(it.What, "RCAs (") && it.Count == 1 {
+			sawRCAs = true
+		}
+	}
+	if !sawCases || !sawRCAs || strings.Contains(logged.String(), "cases' ConfigMaps") {
+		t.Fatalf("the clean start named the cases %v and the RCAs %v: %+v\n%s", sawCases, sawRCAs, res.Items, logged.String())
+	}
+	if n := count("SELECT count(*) FROM rcas"); n != 0 {
+		t.Fatalf("%d RCAs left", n)
 	}
 	if n := count("SELECT count(*) FROM job_runs") + count("SELECT count(*) FROM findings"); n != 0 {
 		t.Fatalf("%d rows of runs and findings left", n)
