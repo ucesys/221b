@@ -15,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kube/kubetest"
 )
 
 // DB-62, DB-63 at a start: with a database and the connections in
@@ -29,7 +30,7 @@ import (
 func TestTheApplicationsLeaveTheirSecretsAtAStart(t *testing.T) {
 	ctx := context.Background()
 	d := dbtest.Open(t)
-	cs := appstest.Cluster()
+	cs := kubetest.Cluster()
 	secrets := appstest.Secrets(cs)
 	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	app := func(name, values string) apps.Record {

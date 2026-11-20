@@ -25,6 +25,7 @@ import (
 	"github.com/ucesys/221b/server/internal/credentials"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kube/kubetest"
 )
 
 // The applications over the three ways they are kept (Phase 13, DB-62):
@@ -35,7 +36,7 @@ import (
 // without TEST_DATABASE.
 func eachStore(t *testing.T, f func(t *testing.T, s apps.Store)) {
 	t.Run("memory", func(t *testing.T) { f(t, apps.NewMemoryStore()) })
-	t.Run("secrets", func(t *testing.T) { f(t, appstest.Secrets(appstest.Cluster())) })
+	t.Run("secrets", func(t *testing.T) { f(t, appstest.Secrets(kubetest.Cluster())) })
 	t.Run("database", func(t *testing.T) {
 		s, _, _ := appstest.PG(t, nil)
 		f(t, s)
@@ -412,7 +413,7 @@ func TestACommandKeepsItsOwnParameters(t *testing.T) {
 func TestTheApplicationsLeaveTheirSecrets(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := context.Background()
-	cs := appstest.Cluster()
+	cs := kubetest.Cluster()
 	old := appstest.Secrets(cs)
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
@@ -510,7 +511,7 @@ func TestTheApplicationsLeaveTheirSecrets(t *testing.T) {
 func TestARewriteCutShortIsFinishedLater(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := context.Background()
-	cs := appstest.Cluster()
+	cs := kubetest.Cluster()
 	old := appstest.Secrets(cs)
 	for _, name := range []string{"a", "b", "c"} {
 		must(t, old.Save(ctx, shop(name), nil))

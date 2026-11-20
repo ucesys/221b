@@ -27,6 +27,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kube/kubetest"
 )
 
 // eachStore runs a test over every store a console keeps its connections
@@ -34,7 +35,7 @@ import (
 // the Secrets (DB-64), which is skipped when TEST_DATABASE names none.
 func eachStore(t *testing.T, test func(t *testing.T, store clusters.Store)) {
 	t.Run("memory", func(t *testing.T) { test(t, clusters.NewMemoryStore()) })
-	t.Run("secrets", func(t *testing.T) { test(t, clusterstest.Secrets(clusterstest.Cluster())) })
+	t.Run("secrets", func(t *testing.T) { test(t, clusterstest.Secrets(kubetest.Cluster())) })
 	t.Run("database", func(t *testing.T) {
 		s, _, _ := clusterstest.PG(t, nil)
 		test(t, s)

@@ -22,6 +22,7 @@ import (
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kube/kubetest"
 	"github.com/ucesys/221b/server/internal/leader"
 )
 
@@ -39,7 +40,7 @@ func TestTheConnectionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d := dbtest.Open(t)
-	cs := clusterstest.Cluster()
+	cs := kubetest.Cluster()
 	secrets := clusterstest.Secrets(cs)
 	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	conn := func(id, name string) clusters.Spec {

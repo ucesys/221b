@@ -115,15 +115,28 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		return fc.WriteFrame(f)
 	}
 
+	// The session's end closes the tunnel. Its watch is put in place with
+	// the check that the session is live, under one lock, so an end that
+	// comes at any moment after is seen: a watch put in place later, by the
+	// goroutine below, missed an end made before it started, and the CLI
+	// was never told.
+	done := make(chan struct{})
+	v := &Viewer{Out: make(chan []byte), ReadOnly: true, done: done}
 	m.mu.Lock()
 	if s.State != StateLive {
 		m.mu.Unlock()
 		return ErrEnded
 	}
+	s.viewers[v] = struct{}{}
 	s.Forward.CLI, s.Forward.Listen = clip(hello.Host, 120), clip(hello.Listen, 120)
 	s.LastActive = m.opts.Now()
 	m.changedLocked(s)
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(s.viewers, v)
+		m.mu.Unlock()
+	}()
 	fwd, err := m.forwarder(ctx, s)
 	if err != nil {
 		if !errors.Is(err, ErrEnded) {
@@ -138,18 +151,9 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		return err
 	}
 
-	// The session's end closes the tunnel.
+	// Started after the Info frame, so the CLI is told of an end after it
+	// is told what it is connected to.
 	go func() {
-		m.mu.Lock()
-		done := make(chan struct{})
-		v := &Viewer{Out: make(chan []byte), ReadOnly: true, done: done}
-		s.viewers[v] = struct{}{}
-		ended := s.State == StateEnded
-		m.mu.Unlock()
-		if ended {
-			cancel()
-			return
-		}
 		select {
 		case <-done:
 			m.mu.Lock()
@@ -161,9 +165,6 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 			_ = write(tunnel.Frame{Type: tunnel.End, Payload: []byte(note)})
 			cancel()
 		case <-ctx.Done():
-			m.mu.Lock()
-			delete(s.viewers, v)
-			m.mu.Unlock()
 		}
 	}()
 
