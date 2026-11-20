@@ -330,3 +330,49 @@ func (s *SessionStore) Empty(ctx context.Context, key string) (bool, error) {
 	}
 	return false, fmt.Errorf("emptying the session Secret: it kept changing")
 }
+
+// DeleteEmpty deletes this release's session Secrets that hold no data:
+// what the move left of the sessions copied into the database (DB-66),
+// once the copy is recorded, which the caller checks. It is the one case
+// of a Secret deleted because a record set moved (DB-61). A Secret is
+// taken by its labels, app.kubernetes.io/component=session and the
+// release's app.kubernetes.io/instance, and its name; one with data (a
+// session a console from before the move started since) is left until it
+// expires and is emptied, and one written between the list and the delete
+// is left (the delete is held to the version listed). With no instance
+// label given nothing is deleted. It says how many it deleted.
+func (s *SessionStore) DeleteEmpty(ctx context.Context) (int, error) {
+	instance := s.labels["app.kubernetes.io/instance"]
+	if instance == "" {
+		return 0, nil
+	}
+	head := s.prefix + "-session-"
+	opts := metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + sessionComponent + ",app.kubernetes.io/instance=" + instance, Limit: 500}
+	n := 0
+	for {
+		list, err := s.secrets.List(ctx, opts)
+		if err != nil {
+			return n, away(fmt.Errorf("listing the session Secrets: %w", err))
+		}
+		for _, sec := range list.Items {
+			if !strings.HasPrefix(sec.Name, head) || len(sec.Data) > 0 || len(sec.StringData) > 0 ||
+				sec.Labels["app.kubernetes.io/component"] != sessionComponent || sec.Labels["app.kubernetes.io/instance"] != instance {
+				continue
+			}
+			uid, version := sec.UID, sec.ResourceVersion
+			err := s.secrets.Delete(ctx, sec.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &version}})
+			switch {
+			case err == nil:
+				n++
+			case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+				// Gone already, or written since it was listed: left.
+			default:
+				return n, away(fmt.Errorf("deleting an empty session Secret: %w", err))
+			}
+		}
+		if list.Continue == "" {
+			return n, nil
+		}
+		opts.Continue = list.Continue
+	}
+}

@@ -217,6 +217,7 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 type sessionSecrets interface {
 	All(ctx context.Context) (map[string][]byte, error)
 	Empty(ctx context.Context, key string) (bool, error)
+	DeleteEmpty(ctx context.Context) (int, error)
 }
 
 // sessionsInDatabase keeps the sign-in sessions in the database (DB-66),
@@ -245,6 +246,18 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 		}
 		n := 0
 		var first error
+		defer func() {
+			// Then the Secrets left with no data are deleted (answer 1 of the
+			// owner, November 20, 2026): the one exception to DB-61. Only
+			// once the copy is recorded, which is when this runs.
+			gone, err := secrets.DeleteEmpty(ctx)
+			if gone > 0 {
+				w.dbLog().Info("deleted the empty session Secrets the move left: the sessions are rows of the database", "count", gone)
+			}
+			if err != nil {
+				w.dbLog().Warn("deleting the empty session Secrets failed; the next start tries again", "err", err)
+			}
+		}()
 		for _, key := range keys {
 			emptied, err := secrets.Empty(ctx, key)
 			if err != nil {

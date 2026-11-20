@@ -71,7 +71,8 @@ func (l *lockedBuffer) String() string {
 // DB-66 at a start, with the Secrets a console from before the move left:
 // the sessions are copied into the database once, so whoever is signed in
 // stays signed in; an expired one is not copied; each Secret the copy
-// took, or that had expired, is emptied and left, an object with no keys;
+// took, or that had expired, is emptied, and then deleted, since it holds
+// no data (the owner, November 20, 2026, answer 1);
 // a copy that fails leaves every Secret whole and does not stop the
 // start; nothing is emptied when the database cannot say the copy was
 // made; and from then on the console makes no session Secret, and a
@@ -235,13 +236,13 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	}
 	// The emptying is tried again (each minute, startAuth) and now goes
 	// through: every Secret the copy took or that had expired is emptied,
-	// bob's among them although his row is gone, and every object is left.
+	// bob's among them although his row is gone, and then deleted.
 	refusing.empty = nil
 	if done := w.sessionsLeft(ctx); !done || refusing.emptied != 5 {
 		t.Fatalf("the emptying tried again: done %v, %d emptied", done, refusing.emptied)
 	}
-	if all, holding := objects(); !slices.Equal(all, five) || len(holding) != 0 {
-		t.Fatalf("after the emptying: %d Secrets of %d, %d still holding a session", len(all), len(five), len(holding))
+	if all, holding := objects(); len(all) != 0 || len(holding) != 0 {
+		t.Fatalf("after the emptying: %d Secrets of %d left, %d still holding a session", len(all), len(five), len(holding))
 	}
 
 	// From here on the console makes no session Secret and touches none:
@@ -249,7 +250,7 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	dee := s.Start(auth.Session{User: auth.User{Username: "dee"}, Method: "local"})
 	cookies = append(cookies, dee.ID)
 	s.Delete(cy.ID)
-	if all, holding := objects(); !slices.Equal(all, five) || len(holding) != 0 || rows(d) != 2 {
+	if all, holding := objects(); len(all) != 0 || len(holding) != 0 || rows(d) != 2 {
 		t.Fatalf("after a sign-in and a sign-out with the database: %d Secrets, %d holding a session, %d rows", len(all), len(holding), rows(d))
 	}
 
@@ -282,7 +283,7 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	if _, ok := s2.Get(late.ID); ok {
 		t.Fatal("a session started by a console from before the move, after the copy, is taken")
 	}
-	if all, holding := objects(); len(all) != 6 || len(holding) != 1 || w2.sessionsLeft != nil {
+	if all, holding := objects(); len(all) != 1 || len(holding) != 1 || w2.sessionsLeft != nil {
 		t.Fatalf("after a later start: %d Secrets, %d holding a session", len(all), len(holding))
 	}
 	if _, ok := s2.Get(ann.ID); !ok {
