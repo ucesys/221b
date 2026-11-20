@@ -208,3 +208,87 @@ func TestKnowledgeDraftsInTheDatabase(t *testing.T) {
 	}
 	copiedOnce(t, NewDraftsPG(dbtest.Open(t)), doc)
 }
+
+// xminOf is the transaction that last wrote each row a query names, by a
+// key the query gives first: a row whose xmin did not change was not
+// written.
+func xminOf(t *testing.T, d *db.DB, query string, args ...any) map[string]string {
+	t.Helper()
+	rows, err := d.Pool().Query(context.Background(), query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, x string
+		if err := rows.Scan(&k, &x); err != nil {
+			t.Fatal(err)
+		}
+		out[k] = x
+	}
+	return out
+}
+
+// A run keeps its row's id through its life (DB-78, the eighth cluster
+// test's O3): a page approved, the run decided, its diffs dropped. A page
+// approved writes the run's row, that page's row and one approval, and no
+// other row: the run's other page, its decisions and every row of the
+// other run are as they were.
+func TestMycroftRunsKeepTheirIDs(t *testing.T) {
+	d := dbtest.Open(t)
+	b := NewDraftsPG(d)
+	page := func(path string) DraftPage {
+		return DraftPage{Path: path, Title: path, Kind: "page", Diff: "+a\n", Added: 1, State: StateWaiting,
+			Sources: []SourceRef{{Key: "infra/1", Title: "Web runbook"}}, Contradicts: []Contradiction{{Fix: "FX-2", Title: "Move", Cases: 1}}}
+	}
+	run := func(id string, h int) Run {
+		return Run{ID: id, Started: hour(h), By: "knowledge sync", State: StateWaiting, Store: StoreGit, Pages: []DraftPage{page("pages/a.md"), page("pages/b.md")},
+			Decisions: []Decision{{By: "ann", Name: "Ann", At: hour(h), Action: "comment"}}}
+	}
+	doc := draftsDoc{Runs: []Run{run("r1", 1), run("r2", 2)}}
+	keptAs(t, b, DraftsKey, doc)
+	ids := xminOf(t, d, "SELECT run_key, wiki_run_id::text FROM wiki_runs")
+	rowsOf := func() map[string]string {
+		return xminOf(t, d, `SELECT 'run ' || r.run_key, r.xmin::text FROM wiki_runs r
+			UNION ALL SELECT 'page ' || r.run_key || ' ' || c.position, c.xmin::text FROM wiki_changes c JOIN wiki_runs r USING (wiki_run_id)
+			UNION ALL SELECT 'source ' || r.run_key || ' ' || c.change_position, c.xmin::text FROM wiki_change_sources c JOIN wiki_runs r USING (wiki_run_id)
+			UNION ALL SELECT 'contradiction ' || r.run_key || ' ' || c.change_position, c.xmin::text FROM wiki_change_contradictions c JOIN wiki_runs r USING (wiki_run_id)
+			UNION ALL SELECT 'decision ' || r.run_key || ' ' || c.position, c.xmin::text FROM wiki_run_decisions c JOIN wiki_runs r USING (wiki_run_id)`)
+	}
+	was := rowsOf()
+
+	// The first page of r2 is approved: the run is partly done.
+	doc.Runs[1].Pages[0].State, doc.Runs[1].State = StatePublished, StatePartial
+	doc.Runs[1].Pages[0].Approvals = []Approval{{By: "bob", Name: "Bob", At: hour(3)}}
+	keptAs(t, b, DraftsKey, doc)
+	now := rowsOf()
+	for k, x := range was {
+		changed := k == "run r2" || k == "page r2 0"
+		if (now[k] != x) != changed {
+			t.Errorf("%s: written %v, want %v", k, now[k] != x, changed)
+		}
+	}
+	if n := rowsIn(t, d, "wiki_change_approvals"); n != 1 {
+		t.Fatalf("%d approvals", n)
+	}
+
+	// The run is decided, a decision added, and the decided run's diffs go
+	// (fitDrafts): the ids stay.
+	doc.Runs[1].State, doc.Runs[1].Decided = StateDone, hour(4)
+	doc.Runs[1].Decisions = append(doc.Runs[1].Decisions, Decision{By: "bob", Name: "Bob", At: hour(4), Action: "approve"})
+	for i := range doc.Runs[1].Pages {
+		doc.Runs[1].Pages[i].Diff = ""
+	}
+	keptAs(t, b, DraftsKey, doc)
+	// The older run goes, a new one comes.
+	doc.Runs = []Run{doc.Runs[1], run("r3", 5)}
+	keptAs(t, b, DraftsKey, doc)
+	after := xminOf(t, d, "SELECT run_key, wiki_run_id::text FROM wiki_runs")
+	if after["r2"] != ids["r2"] || len(after) != 2 || after["r3"] == "" {
+		t.Fatalf("the runs' ids were %v and are %v", ids, after)
+	}
+	if n := rowsIn(t, d, "wiki_run_decisions"); n != 3 {
+		t.Fatalf("%d decisions", n)
+	}
+}

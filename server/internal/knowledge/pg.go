@@ -30,7 +30,9 @@ import (
 //     wiki_runs with its page changes (wiki_changes, and their sources,
 //     approvals and contradictions) and its decisions; the requests to
 //     retire a page and the corrections are wiki_page_requests and
-//     wiki_corrections.
+//     wiki_corrections. A run keeps its row, and so its key, for as long
+//     as it is kept, and a save writes only the rows of what changed in
+//     it (DB-78).
 
 const (
 	knowledgeScope = "knowledge"
@@ -517,29 +519,120 @@ func readDrafts(ctx context.Context, q db.Querier) (draftsDoc, bool, error) {
 	return d, len(d.Runs)+len(d.Requests)+len(d.Corrections) > 0, nil
 }
 
-func queueRun(b *pgx.Batch, r Run, position int) {
-	id := db.NewID()
+// queueRun queues a new run whole: its row under the key id, and its page
+// changes and decisions.
+func queueRun(b *pgx.Batch, r Run, position int, id string) {
 	b.Queue(`INSERT INTO wiki_runs (wiki_run_id, run_key, position, started_at, started_by, started_by_name, state, store_kind, reported, decided_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, id, r.ID, position, pgAt(r.Started), r.By, r.StartedBy, r.State, r.Store, pgList(r.Reported), pgAtOrNone(r.Decided))
 	for i, p := range r.Pages {
-		b.Queue(`INSERT INTO wiki_changes (wiki_run_id, position, path, title, kind, is_critical, is_new, base_version, diff, added_count, removed_count, is_clipped, state, reason)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`, id, i, p.Path, p.Title, p.Kind, p.Critical, p.New, p.Base, p.Diff, p.Added, p.Removed, p.Clipped, p.State, p.Reason)
-		for n, s := range p.Sources {
-			b.Queue("INSERT INTO wiki_change_sources (wiki_run_id, change_position, position, source_key, title, version, dated_at, url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-				id, i, n, s.Key, s.Title, s.Version, pgAtOrNone(s.Date), s.URL)
-		}
-		for n, a := range p.Approvals {
-			b.Queue("INSERT INTO wiki_change_approvals (wiki_run_id, change_position, position, approved_by, approved_by_name, approved_at) VALUES ($1, $2, $3, $4, $5, $6)",
-				id, i, n, a.By, a.Name, pgAt(a.At))
-		}
-		for n, c := range p.Contradicts {
-			b.Queue("INSERT INTO wiki_change_contradictions (wiki_run_id, change_position, position, fix_key, title, case_count, why) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-				id, i, n, c.Fix, c.Title, c.Cases, c.Why)
-		}
+		queuePage(b, id, i, p)
 	}
 	for i, d := range r.Decisions {
-		b.Queue("INSERT INTO wiki_run_decisions (wiki_run_id, position, decided_by, decided_by_name, decided_at, action, comment, pages) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-			id, i, d.By, d.Name, pgAt(d.At), d.Action, d.Comment, pgList(d.Pages))
+		queueDecision(b, id, i, d)
+	}
+}
+
+// queuePage queues a page change of the run id at place i, with its
+// sources, approvals and contradictions.
+func queuePage(b *pgx.Batch, id string, i int, p DraftPage) {
+	b.Queue(`INSERT INTO wiki_changes (wiki_run_id, position, path, title, kind, is_critical, is_new, base_version, diff, added_count, removed_count, is_clipped, state, reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`, id, i, p.Path, p.Title, p.Kind, p.Critical, p.New, p.Base, p.Diff, p.Added, p.Removed, p.Clipped, p.State, p.Reason)
+	queuePageSources(b, id, i, p.Sources)
+	queuePageApprovals(b, id, i, p.Approvals)
+	queuePageContradictions(b, id, i, p.Contradicts)
+}
+
+func queuePageSources(b *pgx.Batch, id string, i int, sources []SourceRef) {
+	for n, s := range sources {
+		b.Queue("INSERT INTO wiki_change_sources (wiki_run_id, change_position, position, source_key, title, version, dated_at, url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+			id, i, n, s.Key, s.Title, s.Version, pgAtOrNone(s.Date), s.URL)
+	}
+}
+
+func queuePageApprovals(b *pgx.Batch, id string, i int, approvals []Approval) {
+	for n, a := range approvals {
+		b.Queue("INSERT INTO wiki_change_approvals (wiki_run_id, change_position, position, approved_by, approved_by_name, approved_at) VALUES ($1, $2, $3, $4, $5, $6)",
+			id, i, n, a.By, a.Name, pgAt(a.At))
+	}
+}
+
+func queuePageContradictions(b *pgx.Batch, id string, i int, contradicts []Contradiction) {
+	for n, c := range contradicts {
+		b.Queue("INSERT INTO wiki_change_contradictions (wiki_run_id, change_position, position, fix_key, title, case_count, why) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			id, i, n, c.Fix, c.Title, c.Cases, c.Why)
+	}
+}
+
+func queueDecision(b *pgx.Batch, id string, i int, d Decision) {
+	b.Queue("INSERT INTO wiki_run_decisions (wiki_run_id, position, decided_by, decided_by_name, decided_at, action, comment, pages) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+		id, i, d.By, d.Name, pgAt(d.At), d.Action, d.Comment, pgList(d.Pages))
+}
+
+// queueRunChange queues what changes a run that is kept, under its row's
+// key id (DB-78): the run's row is updated in place and keeps its id, and
+// of what hangs from it only what changed is written. A page change is
+// updated in place, its sources, approvals and contradictions written
+// again only when they changed; a decision added at the end is one insert.
+// So deciding a page writes that page's rows and the run's, and no other.
+func queueRunChange(b *pgx.Batch, id string, o, r Run, position int, moved bool) {
+	if o.ID != r.ID || !o.Started.Equal(r.Started) || o.By != r.By || o.StartedBy != r.StartedBy || o.State != r.State || o.Store != r.Store ||
+		!pgSame(o.Reported, r.Reported) || !o.Decided.Equal(r.Decided) {
+		b.Queue(`UPDATE wiki_runs SET position = $2, started_at = $3, started_by = $4, started_by_name = $5, state = $6, store_kind = $7, reported = $8, decided_at = $9
+			WHERE wiki_run_id = $1`, id, position, pgAt(r.Started), r.By, r.StartedBy, r.State, r.Store, pgList(r.Reported), pgAtOrNone(r.Decided))
+	} else if moved {
+		b.Queue("UPDATE wiki_runs SET position = $2 WHERE wiki_run_id = $1", id, position)
+	}
+	for i, p := range r.Pages {
+		if i >= len(o.Pages) {
+			queuePage(b, id, i, p)
+			continue
+		}
+		was := o.Pages[i]
+		if pgSame(was, p) {
+			continue
+		}
+		if was.Path != p.Path || was.Title != p.Title || was.Kind != p.Kind || was.Critical != p.Critical || was.New != p.New || was.Base != p.Base || was.Diff != p.Diff ||
+			was.Added != p.Added || was.Removed != p.Removed || was.Clipped != p.Clipped || was.State != p.State || was.Reason != p.Reason {
+			b.Queue(`UPDATE wiki_changes SET path = $3, title = $4, kind = $5, is_critical = $6, is_new = $7, base_version = $8, diff = $9, added_count = $10, removed_count = $11,
+					is_clipped = $12, state = $13, reason = $14
+				WHERE wiki_run_id = $1 AND position = $2`, id, i, p.Path, p.Title, p.Kind, p.Critical, p.New, p.Base, p.Diff, p.Added, p.Removed, p.Clipped, p.State, p.Reason)
+		}
+		if !pgSame(was.Sources, p.Sources) {
+			b.Queue("DELETE FROM wiki_change_sources WHERE wiki_run_id = $1 AND change_position = $2", id, i)
+			queuePageSources(b, id, i, p.Sources)
+		}
+		switch {
+		case pgSame(was.Approvals, p.Approvals):
+		case len(was.Approvals) < len(p.Approvals) && pgSame(was.Approvals, p.Approvals[:len(was.Approvals)]):
+			// An approval added: one insert.
+			for n := len(was.Approvals); n < len(p.Approvals); n++ {
+				a := p.Approvals[n]
+				b.Queue("INSERT INTO wiki_change_approvals (wiki_run_id, change_position, position, approved_by, approved_by_name, approved_at) VALUES ($1, $2, $3, $4, $5, $6)",
+					id, i, n, a.By, a.Name, pgAt(a.At))
+			}
+		default:
+			b.Queue("DELETE FROM wiki_change_approvals WHERE wiki_run_id = $1 AND change_position = $2", id, i)
+			queuePageApprovals(b, id, i, p.Approvals)
+		}
+		if !pgSame(was.Contradicts, p.Contradicts) {
+			b.Queue("DELETE FROM wiki_change_contradictions WHERE wiki_run_id = $1 AND change_position = $2", id, i)
+			queuePageContradictions(b, id, i, p.Contradicts)
+		}
+	}
+	if len(o.Pages) > len(r.Pages) {
+		b.Queue("DELETE FROM wiki_changes WHERE wiki_run_id = $1 AND position >= $2", id, len(r.Pages))
+	}
+	switch {
+	case pgSame(o.Decisions, r.Decisions):
+	case len(o.Decisions) < len(r.Decisions) && pgSame(o.Decisions, r.Decisions[:len(o.Decisions)]):
+		for n := len(o.Decisions); n < len(r.Decisions); n++ {
+			queueDecision(b, id, n, r.Decisions[n])
+		}
+	default:
+		b.Queue("DELETE FROM wiki_run_decisions WHERE wiki_run_id = $1", id)
+		for n, d := range r.Decisions {
+			queueDecision(b, id, n, d)
+		}
 	}
 }
 
@@ -548,19 +641,33 @@ func writeDrafts(ctx context.Context, tx pgx.Tx, old, next draftsDoc) error {
 	for i, r := range old.Runs {
 		before[r.ID], places[r.ID] = r, i
 	}
+	// The rows there are, by the run's id: a run keeps its own (DB-78).
+	rowOf := map[string]string{}
+	rows, err := tx.Query(ctx, "SELECT run_key, wiki_run_id::text FROM wiki_runs")
+	if err != nil {
+		return err
+	}
+	var key, id string
+	if _, err := pgx.ForEachRow(rows, []any{&key, &id}, func() error { rowOf[key] = id; return nil }); err != nil {
+		return err
+	}
 	b := &pgx.Batch{}
 	kept := make([]string, 0, len(next.Runs))
 	for i, r := range next.Runs {
 		kept = append(kept, r.ID)
-		if o, had := before[r.ID]; had && pgSame(o, r) {
-			if places[r.ID] != i {
-				b.Queue("UPDATE wiki_runs SET position = $2 WHERE run_key = $1", r.ID, i)
-			}
-			continue
+		id, had := rowOf[r.ID]
+		o, was := before[r.ID]
+		switch {
+		case !had:
+			queueRun(b, r, i, db.NewID())
+		case !was:
+			// A row the document did not read: written again whole, under its id.
+			b.Queue("DELETE FROM wiki_changes WHERE wiki_run_id = $1", id)
+			b.Queue("DELETE FROM wiki_run_decisions WHERE wiki_run_id = $1", id)
+			queueRunChange(b, id, Run{}, r, i, true)
+		default:
+			queueRunChange(b, id, o, r, i, places[r.ID] != i)
 		}
-		// Whole: its page changes and decisions go with the row.
-		b.Queue("DELETE FROM wiki_runs WHERE run_key = $1", r.ID)
-		queueRun(b, r, i)
 	}
 	b.Queue("DELETE FROM wiki_runs WHERE NOT (run_key = ANY($1))", kept)
 	// The requests and the corrections are short lists: each is written
