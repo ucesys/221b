@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
@@ -22,8 +21,9 @@ import (
 // the console keeps is kept there, and the console does not run without
 // it. The ConfigMaps a release before 0.13 kept its records in are the
 // one-time copies' source and nothing else: each is read once, at the
-// first start with the database, what was copied is removed from it, and
-// no record is ever saved there (notKept).
+// first start with the database, no record is ever saved there (notKept),
+// and each is deleted whole once every record set it held is in the
+// database (DB-72, removeCopiedSources).
 
 // errNoDatabase is why a console given no database does not start.
 var errNoDatabase = errors.New("the console keeps its records in PostgreSQL and does not run without one (DB-69): name the database with -db-host and the other -db-* flags; the chart does, with database.mode bundled (the default) or external")
@@ -130,8 +130,10 @@ func (w *wiring) databaseGauges() []api.Gauge {
 // notKept is the rest of a store whose record sets are all in the
 // database: a key that no table and no scope keeps. Reading one finds
 // what a release before 0.13 left under it in the copy's source (the
-// clean start deletes such keys), and deleting one deletes it there. A
-// save is refused: nothing is kept outside the database by oversight.
+// clean start reads such keys to count them), and deleting one deletes
+// nothing: the ConfigMap goes whole once its record sets are copied
+// (DB-72), and the console is not granted a ConfigMap's patch. A save is
+// refused: nothing is kept outside the database by oversight.
 type notKept struct{ from kv.Backend }
 
 func (n notKept) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
@@ -145,12 +147,7 @@ func (n notKept) SaveKey(_ context.Context, key string, _ []byte, _ string) (str
 	return "", fmt.Errorf("the console keeps nothing under %q: every record set is kept in the database (DB-69)", key)
 }
 
-func (n notKept) DeleteKey(ctx context.Context, key string) error {
-	if d, ok := n.from.(kv.Deleter); ok {
-		return d.DeleteKey(ctx, key)
-	}
-	return nil
-}
+func (n notKept) DeleteKey(context.Context, string) error { return nil }
 
 // hasSource says whether from holds anything to copy: a ConfigMap that
 // was named, under whatever earlier calls here made of it.
@@ -183,13 +180,15 @@ func notNamed(from kv.Backend) kv.Backend {
 //
 // from is the one-time copy's source and nothing else: the ConfigMap a
 // release before 0.13 kept the documents in (or a store an earlier call
-// here made over it), nil when no ConfigMap is named. What it holds under
-// the keys named is copied once and then removed from it (DB-55). A key
-// that is not named is kept nowhere (notNamed).
+// here made over it), nil when no ConfigMap is named or there. What it
+// holds under the keys named is copied once, and the ConfigMap is deleted
+// once every record set it held is copied (readFrom, DB-72). A key that
+// is not named is kept nowhere (notNamed).
 func (w *wiring) inScopes(ctx context.Context, from kv.Backend, scopes map[string]string) kv.Backend {
 	s := db.NewScopeKV(w.database, scopes)
 	for _, id := range s.ImportIDs() {
 		w.claimImport(id)
+		w.readFrom(from, id, id)
 	}
 	if hasSource(from) {
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -203,11 +202,6 @@ func (w *wiring) inScopes(ctx context.Context, from kv.Backend, scopes map[strin
 			log.Warn("copying settings from their ConfigMap into the database failed; the next start tries again", "err", err)
 		} else if len(copied) > 0 {
 			log.Info("copied settings from their ConfigMap into the database", "keys", copied)
-		}
-		if err == nil {
-			for _, key := range s.ImportIDs() {
-				w.removeCopied(ctx, from, key, key)
-			}
 		}
 	}
 	keys := map[string]kv.Backend{}
@@ -281,7 +275,8 @@ func copyOrder(docs map[string]movedDoc) []string {
 //
 // from is the one-time copy's source and nothing else, as for inScopes:
 // what it holds under the keys named is copied once, in copyOrder, and
-// then removed from it. A key that is not named is kept nowhere (notNamed).
+// the ConfigMap is deleted once every record set it held is copied
+// (readFrom, DB-72). A key that is not named is kept nowhere (notNamed).
 func (w *wiring) inTables(ctx context.Context, from kv.Backend, make func(d *db.DB) map[string]movedDoc) kv.Backend {
 	log := w.dbLog()
 	keys := map[string]kv.Backend{}
@@ -294,6 +289,7 @@ func (w *wiring) inTables(ctx context.Context, from kv.Backend, make func(d *db.
 		if !hasSource(from) {
 			continue
 		}
+		w.readFrom(from, doc.ImportID(), key)
 		if first, ok := copiedAfter[key]; ok && notCopied[first] {
 			// Its rows would have nothing to hang from, and would not be kept.
 			notCopied[key] = true
@@ -311,65 +307,138 @@ func (w *wiring) inTables(ctx context.Context, from kv.Backend, make func(d *db.
 		} else if copied {
 			log.Info("copied records from their ConfigMap into the database", "key", key)
 		}
-		if err == nil {
-			w.removeCopied(ctx, from, doc.ImportID(), key)
-		}
 	}
 	return &kv.Keyed{Keys: keys, Rest: notNamed(from)}
 }
 
-// --- A record set leaves its ConfigMap once it is copied (DB-55) ---
+// --- A ConfigMap of before is deleted once its record sets are copied (DB-55, DB-72) ---
 //
 // Decided by the owner on November 19, 2026, after the sixth cluster test
 // (F1): a ConfigMap kept as it was at the copy let a console from before
 // the move show changes that had since been approved and run as waiting
 // again, and run them a second time. So once a record set's one-time copy
-// is recorded in the database, the console removes it from where it was
-// kept: at the start that copies it, and at any later start that still
-// finds it there (what an earlier build left, or a removal that failed).
-// A record set with no record of a copy is left as it is.
+// is recorded in the database, it leaves where it was kept. On November
+// 20 he decided that the ConfigMaps are then deleted, not left empty
+// (DB-72): every copy names the ConfigMaps it reads and the record set it
+// copies under (readFrom), and once the wiring is done and every copy has
+// run, each ConfigMap whose record sets are all recorded in imports is
+// deleted whole (removeCopiedSources): at the start that copies the last
+// of them, or at a later start that still finds it (one that a copy or a
+// deletion failed for, or one made again empty, which holds nothing to
+// copy). A ConfigMap with a record set that has no record of a copy is
+// left as it is, and the next start tries the copy again. The chart
+// renders a ConfigMap of before only while it is there, with
+// helm.sh/resource-policy keep, so Helm never deletes one first and never
+// makes one again (ADR-167).
 
-// emptied says what a key holds is nothing: what is left of a record set
-// in a store that cannot delete a key.
-func emptied(b []byte) bool {
-	switch strings.TrimSpace(string(b)) {
-	case "", "{}", "null":
-		return true
-	}
-	return false
+// copySource is a ConfigMap a release before 0.13 kept record sets in: a
+// copy's source, which can be deleted whole.
+type copySource interface {
+	kv.Backend
+	Ref() string
+	Remove(ctx context.Context) error
 }
 
-// removeCopied removes keys from the store a record set was kept in, when
-// the copy recorded under importID is in the database. A store that cannot
-// delete a key has it emptied. A failure is logged and does not stop the
-// start: the next one tries again.
-func (w *wiring) removeCopied(ctx context.Context, from kv.Backend, importID string, keys ...string) {
-	if !hasSource(from) {
-		return
-	}
-	log := w.dbLog()
-	rctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	if copied, err := w.database.Imported(rctx, importID); err != nil || !copied {
-		return
-	}
+// sourceUse is a copy's source with the record sets read from it, by the
+// name each is copied under.
+type sourceUse struct {
+	src     copySource
+	imports map[string]bool
+}
+
+// readFrom notes that the record set copied under importID is read from
+// from under keys: every ConfigMap the keys are read from holds it, and is
+// deleted only once its copy is recorded. It is called before the copy,
+// so that a copy that fails keeps its ConfigMap.
+func (w *wiring) readFrom(from kv.Backend, importID string, keys ...string) {
+	w.sourcesMu.Lock()
+	defer w.sourcesMu.Unlock()
 	for _, key := range keys {
-		b, _, err := from.LoadKey(rctx, key)
-		if errors.Is(err, kv.ErrNotFound) || (err == nil && emptied(b)) {
-			continue
+		for _, src := range leavesOf(from, key) {
+			if w.sources == nil {
+				w.sources = map[string]*sourceUse{}
+			}
+			u := w.sources[src.Ref()]
+			if u == nil {
+				u = &sourceUse{src: src, imports: map[string]bool{}}
+				w.sources[src.Ref()] = u
+			}
+			u.imports[importID] = true
 		}
-		if err == nil {
-			if d, ok := from.(kv.Deleter); ok {
-				err = d.DeleteKey(rctx, key)
-			} else {
-				_, err = from.SaveKey(rctx, key, []byte("{}"), "")
+	}
+}
+
+// leavesOf are the ConfigMaps a key is read from through from: through
+// the limits, the routes (a routed key is read where it is routed and,
+// when it is not there, where it was kept before), the keys an earlier
+// call here sent to the database (none) and the rest.
+func leavesOf(from kv.Backend, key string) []copySource {
+	switch b := from.(type) {
+	case nil:
+		return nil
+	case copySource:
+		return []copySource{b}
+	case *kv.Limited:
+		if b == nil {
+			return nil
+		}
+		return leavesOf(b.Backend, key)
+	case *kv.Routed:
+		if r, ok := b.Routes[key]; ok && r != nil {
+			return append(leavesOf(r, key), leavesOf(b.Default, key)...)
+		}
+		return leavesOf(b.Default, key)
+	case *kv.Keyed:
+		if k, ok := b.Keys[key]; ok && k != nil {
+			return nil
+		}
+		return leavesOf(b.Rest, key)
+	case notKept:
+		return leavesOf(b.from, key)
+	case proposalsOfBefore:
+		return append(leavesOf(b.now, key), leavesOf(b.before, key)...)
+	}
+	return nil
+}
+
+// removeCopiedSources deletes each ConfigMap of before whose record sets
+// are all recorded in imports, and says which it keeps and why. A failure
+// is logged and does not stop the console: the next start tries again.
+func (w *wiring) removeCopiedSources(ctx context.Context) {
+	w.sourcesMu.Lock()
+	uses := make([]*sourceUse, 0, len(w.sources))
+	for _, u := range w.sources {
+		uses = append(uses, u)
+	}
+	w.sourcesMu.Unlock()
+	sort.Slice(uses, func(i, j int) bool { return uses[i].src.Ref() < uses[j].src.Ref() })
+	log := w.dbLog()
+	for _, u := range uses {
+		ref := u.src.Ref()
+		ids := make([]string, 0, len(u.imports))
+		for id := range u.imports {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		rctx, cancel := context.WithTimeout(ctx, time.Minute)
+		var waiting []string
+		for _, id := range ids {
+			if copied, err := w.database.Imported(rctx, id); err != nil || !copied {
+				waiting = append(waiting, id)
 			}
 		}
-		if err != nil {
-			log.Warn("removing a record set from its ConfigMap after its copy failed; the next start tries again", "key", key, "err", err)
+		if len(waiting) > 0 {
+			cancel()
+			log.Warn("a ConfigMap of before is kept: record sets it holds are not in the database yet; the next start copies them and deletes it", "configmap", ref, "records", waiting)
 			continue
 		}
-		log.Info("removed a record set from its ConfigMap: the database keeps it", "key", key)
+		err := u.src.Remove(rctx)
+		cancel()
+		if err != nil {
+			log.Warn("deleting a ConfigMap of before after its copy failed; the next start tries again", "configmap", ref, "err", err)
+			continue
+		}
+		log.Info("deleted a ConfigMap of before: the database keeps every record set it held", "configmap", ref, "records", ids)
 	}
 }
 

@@ -76,9 +76,6 @@ func TestStoppingFitsTheTerminationGracePeriod(t *testing.T) {
 	}
 }
 
-// persistent is a storage that outlasts a restart, as the ConfigMap does.
-type persistent struct{ kv.Memory }
-
 // The audit log is kept in the database (Phase 13), and what the
 // ConfigMap held from the release before is copied over once. (The test
 // that it was kept in memory or in the ConfigMap without a database went
@@ -86,7 +83,7 @@ type persistent struct{ kv.Memory }
 func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := t.Context()
-	cm := &persistent{}
+	cm := newOldConfigMap("r-audit", nil)
 	old := audit.NewKVStore(cm, slog.Default())
 	old.Add(audit.Event{Time: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Action: "signin", Outcome: "ok"})
 	if err := old.Close(ctx); err != nil {
@@ -110,15 +107,11 @@ func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// What was copied leaves the ConfigMap (DB-55).
-	for {
-		if _, _, err := cm.LoadKey(ctx, audit.StoreKey); errors.Is(err, kv.ErrNotFound) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the audit log is still in the ConfigMap after its copy")
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The ConfigMap is deleted once the copy, which runs beside the
+	// start, is done (DB-55, DB-72).
+	w.copying.Wait()
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Fatal("the audit log's ConfigMap is still there after its copy")
 	}
 	if err := st.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -128,14 +121,12 @@ func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
 // A service's singleton settings are scopes of its settings table: copied
 // from the ConfigMap once, read and written there from then on. A key no
 // scope or table names is kept nowhere (DB-69): what the ConfigMap holds
-// under it is read and can be deleted, and a save is refused, so nothing
-// is kept in a ConfigMap by oversight.
+// under it is read, a delete of it deletes nothing (the ConfigMap goes
+// whole, DB-72), and a save is refused, so nothing is kept in a ConfigMap
+// by oversight.
 func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	ctx := t.Context()
-	cm := &persistent{}
-	if _, err := cm.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup"]}`), ""); err != nil {
-		t.Fatal(err)
-	}
+	cm := newOldConfigMap("r", map[string]string{"setup.json": `{"dismissed":["backup"]}`})
 	w := &wiring{log: slog.Default(), database: dbtest.Open(t)}
 	b := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
 	got, version, err := b.LoadKey(ctx, "setup.json")
@@ -145,9 +136,10 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	if _, err := b.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup","sso"]}`), version); err != nil {
 		t.Fatal(err)
 	}
-	// Once copied, the settings are gone from the ConfigMap (DB-55).
-	if old, _, err := cm.LoadKey(ctx, "setup.json"); !errors.Is(err, kv.ErrNotFound) {
-		t.Fatalf("the ConfigMap still holds %s: %v", old, err)
+	// Nothing is written to the ConfigMap: it is deleted whole once
+	// everything read from it is copied (DB-72).
+	if old, _, err := cm.LoadKey(ctx, "setup.json"); err != nil || string(old) != `{"dismissed":["backup"]}` {
+		t.Fatalf("the ConfigMap holds %s: %v", old, err)
 	}
 	if _, err := cm.SaveKey(ctx, "left.json", []byte(`1`), ""); err != nil {
 		t.Fatal(err)
@@ -164,13 +156,16 @@ func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
 	if err := b.(kv.Deleter).DeleteKey(ctx, "left.json"); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, err := cm.LoadKey(ctx, "left.json"); !errors.Is(err, kv.ErrNotFound) {
-		t.Fatalf("a key no scope names was not deleted from the ConfigMap: %s %v", v, err)
+	if v, _, err := cm.LoadKey(ctx, "left.json"); err != nil || string(v) != "1" {
+		t.Fatalf("a delete of a key no scope names wrote to the ConfigMap: %s %v", v, err)
 	}
 	// A second start copies nothing over what was saved since.
 	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
 	if got, _, _ := again.LoadKey(ctx, "setup.json"); !strings.Contains(string(got), "sso") {
 		t.Fatalf("a second start reads %s", got)
+	}
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Fatal("the ConfigMap is still there after its copy")
 	}
 }
 

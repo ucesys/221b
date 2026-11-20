@@ -19,6 +19,7 @@ func (w *wiring) wireSessions(ctx context.Context) {
 	// over once.
 	pg := &sessions.PGHistory{DB: w.database, Keep: w.toolboxCfg.History.Keep, Logger: log.With("component", "sessions")}
 	if from := w.settingsSource; hasSource(from) {
+		w.readFrom(from, sessions.HistoryKey, sessions.HistoryKey)
 		kept := &sessions.KVHistory{Backend: from, Key: sessions.HistoryKey, Keep: w.toolboxCfg.History.Keep, MaxBytes: historyMaxBytes, Logger: log.With("component", "sessions")}
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
 		n, err := pg.Import(ictx, kept, "configmap key "+sessions.HistoryKey)
@@ -28,9 +29,6 @@ func (w *wiring) wireSessions(ctx context.Context) {
 			log.Warn("copying the Toolbox's session records from their ConfigMap failed; the next start tries again", "err", err)
 		case n > 0:
 			log.Info("copied the Toolbox's session records from their ConfigMap into the database", "records", n)
-		}
-		if err == nil {
-			w.removeCopied(ctx, from, sessions.HistoryKey, sessions.HistoryKey)
 		}
 	}
 	var history sessions.Archive = pg

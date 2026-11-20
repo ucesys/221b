@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -37,47 +36,42 @@ func restart(title string) cards.Proposal {
 		Actions: []cards.Action{{Kind: cards.KindKubectl, Args: map[string]any{"command": "kubectl rollout restart deployment web -n shop"}}}}
 }
 
-// The proposed changes' ConfigMap is <release>-proposals since CF-104: at
-// start, the records an install kept in <release>-cases are copied over
-// once and the copy is logged, so a card filed before the rename is still
-// there after it; once the new object is in use, nothing more is copied.
-func TestTheProposedChangesOfBeforeAreCopiedOnceCF104(t *testing.T) {
-	ctx := context.Background()
-	before, after := &kv.Memory{}, &kv.Memory{}
+// The proposed changes' ConfigMap is <release>-proposals since CF-104;
+// <release>-cases of before is read in place by the copy into the
+// database, and nothing is written to either ConfigMap (DB-72): a card
+// filed before the rename is copied, and both ConfigMaps are deleted once
+// it is in the database.
+func TestTheProposedChangesOfBeforeAreCopiedIntoTheDatabaseCF104(t *testing.T) {
+	ctx := t.Context()
+	before, after := newOldConfigMap("r-cases", nil), newOldConfigMap("r-proposals", nil)
 	old := cardStoreOn(before)
 	id, err := old.Propose(ctx, restart("Restart shop/web"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logs bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logs, nil))
-	copyProposals(ctx, before, after, "ns/r-cases", "ns/r-proposals", log)
-	if !strings.Contains(logs.String(), "copied once") || !strings.Contains(logs.String(), "from=ns/r-cases") || !strings.Contains(logs.String(), cards.CardsKey) {
-		t.Fatalf("the copy is not logged: %s", logs.String())
+	if c, err := cardStoreOn(proposalsOfBefore{now: after, before: before}).Get(ctx, id); err != nil || c.Title != "Restart shop/web" {
+		t.Fatalf("the card filed before the rename, read through both: %+v %v", c, err)
 	}
-	if c, err := cardStoreOn(after).Get(ctx, id); err != nil || c.Title != "Restart shop/web" {
-		t.Fatalf("the card filed before the rename: %+v %v", c, err)
+	if _, err := (proposalsOfBefore{now: after, before: before}).SaveKey(ctx, cards.CardsKey, []byte("{}"), ""); err == nil {
+		t.Fatal("a save to the ConfigMaps of before was taken")
 	}
-
-	// Both present: nothing is copied again, and what the new object
-	// holds stays as it is.
-	if _, err := old.Propose(ctx, restart("Restart shop/api")); err != nil {
-		t.Fatal(err)
+	d := dbtest.Open(t)
+	w := &wiring{log: slog.Default(), database: d}
+	b := w.inTables(ctx, proposalsOfBefore{now: after, before: before}, func(d *db.DB) map[string]movedDoc {
+		return map[string]movedDoc{cards.StandingKey: cards.NewStandingPG(d), cards.NotifyKey: cards.NewNotifyPG(d), cards.CardsKey: cards.NewCardsPG(d), cards.ChatsKey: cards.NewChatsPG(d)}
+	})
+	if c, err := cardStoreOn(b).Get(ctx, id); err != nil || c.Title != "Restart shop/web" {
+		t.Fatalf("the card in the database: %+v %v", c, err)
 	}
-	logs.Reset()
-	copyProposals(ctx, before, after, "ns/r-cases", "ns/r-proposals", log)
-	if logs.Len() != 0 {
-		t.Fatalf("copied again: %s", logs.String())
-	}
-	list, err := cardStoreOn(after).List(ctx, cards.Filter{})
-	if err != nil || len(list) != 1 || list[0].ID != id {
-		t.Fatalf("the new object's cards: %+v %v", list, err)
+	w.removeCopiedSources(ctx)
+	if !before.isGone() || !after.isGone() {
+		t.Fatalf("after the copy: <release>-cases gone %v, <release>-proposals gone %v", before.isGone(), after.isGone())
 	}
 }
 
-// A copy cut short is finished at the next start, and never overwrites a
-// key the new object holds.
-func TestACopyCutShortIsFinishedCF104(t *testing.T) {
+// A key is read from <release>-proposals, and from the ConfigMap of before
+// only where the new one does not hold it and holds no cards yet.
+func TestTheProposalsOfBeforeAreReadWhereTheNewOneHasNoneCF104(t *testing.T) {
 	ctx := context.Background()
 	before, after := &kv.Memory{}, &kv.Memory{}
 	for _, k := range proposalKeys {
@@ -88,19 +82,31 @@ func TestACopyCutShortIsFinishedCF104(t *testing.T) {
 	if _, err := after.SaveKey(ctx, cards.StandingKey, []byte("new"), ""); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := copyOnce(ctx, before, after, proposalKeys)
-	if err != nil || !slices.Equal(keys, []string{cards.NotifyKey, cards.ChatsKey, cards.CardsKey}) {
-		t.Fatalf("copied %v %v", keys, err)
+	read := func(key string) string {
+		b, _, err := proposalsOfBefore{now: after, before: before}.LoadKey(ctx, key)
+		if err != nil {
+			return err.Error()
+		}
+		return string(b)
 	}
-	if b, _, _ := after.LoadKey(ctx, cards.StandingKey); string(b) != "new" {
-		t.Errorf("the new object's key was overwritten: %q", b)
+	if got := read(cards.StandingKey); got != "new" {
+		t.Errorf("the new object's key: %q", got)
 	}
-	if b, _, _ := after.LoadKey(ctx, cards.CardsKey); string(b) != "old "+cards.CardsKey {
-		t.Errorf("the cards: %q", b)
+	for _, k := range []string{cards.NotifyKey, cards.ChatsKey, cards.CardsKey} {
+		if got := read(k); got != "old "+k {
+			t.Errorf("%s: %q", k, got)
+		}
 	}
-	// Nothing of before: nothing to do.
-	if keys, err := copyOnce(ctx, &kv.Memory{}, &kv.Memory{}, proposalKeys); err != nil || len(keys) != 0 {
-		t.Errorf("from an empty object: %v %v", keys, err)
+	// The new object in use: nothing of before.
+	if _, err := after.SaveKey(ctx, cards.CardsKey, []byte("new cards"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(cards.NotifyKey); got != kv.ErrNotFound.Error() {
+		t.Errorf("read from before with the new object in use: %q", got)
+	}
+	// No new object: everything of before.
+	if b, _, err := (proposalsOfBefore{before: before}).LoadKey(ctx, cards.CardsKey); err != nil || string(b) != "old "+cards.CardsKey {
+		t.Errorf("without <release>-proposals: %q %v", b, err)
 	}
 }
 

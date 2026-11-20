@@ -59,11 +59,11 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 	// syncs' state; nil when the flags name none.
 	var backend kv.Backend
 	var stored, wikiStored *kv.Limited
-	if cfg.KnowledgeConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.KnowledgeConfigMap)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("the knowledge ConfigMap: %w", err)
-		}
+	cm, err := openSource(ctx, restCfg, cfg.KnowledgeConfigMap)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("the knowledge ConfigMap: %w", err)
+	}
+	if cm != nil {
 		stored = limited(cm, objKnowledge, o.log.With("component", "storage"))
 		backend = stored
 	}

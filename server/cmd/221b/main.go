@@ -128,6 +128,13 @@ type wiring struct {
 	// importClash those named twice (claimImport).
 	importIDs   map[string]bool
 	importClash []string
+	// sources are the ConfigMaps of before the copies read, with the
+	// record sets each holds (readFrom), deleted once those are copied
+	// (removeCopiedSources, DB-72); copying is the copies that run beside
+	// the wiring (the audit log's), which the deletion waits for.
+	sourcesMu sync.Mutex
+	sources   map[string]*sourceUse
+	copying   sync.WaitGroup
 	// moveAgainEvery is how often a copy of the connections that failed
 	// at the start is tried again; 0 is the default (a test sets it).
 	moveAgainEvery time.Duration
@@ -344,6 +351,12 @@ func serve(parent context.Context, args []string, h *hooks) error {
 	if len(w.importClash) > 0 {
 		return fmt.Errorf("two record sets would be copied into the database under one name, and the second never would be: %s; give one a name of its own (db.Doc.ImportAs)", strings.Join(w.importClash, ", "))
 	}
+	// The ConfigMaps of before, each deleted once every record set it
+	// held is in the database (DB-72), when every copy has run.
+	go func() {
+		w.copying.Wait()
+		w.removeCopiedSources(ctx)
+	}()
 	if err := w.wireAPI(); err != nil {
 		return err
 	}
@@ -468,9 +481,15 @@ func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Lo
 	st := audit.NewPGStore(w.database, logger)
 	l.SetStore(st)
 	w.inDatabase = append(w.inDatabase, "activity")
+	// What a release before Phase 13 kept in the ConfigMap, once, beside
+	// the rest of the start; the ConfigMap is deleted once it is copied.
+	copies := hasSource(from)
+	if copies {
+		w.readFrom(from, audit.StoreKey, audit.StoreKey)
+		w.copying.Add(1)
+	}
 	go func() {
-		// What a release before Phase 13 kept in the ConfigMap, once.
-		if hasSource(from) {
+		if copies {
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			n, err := st.Import(ictx, &audit.KVStore{Backend: from, Key: audit.StoreKey, Logger: logger}, "configmap key "+audit.StoreKey)
 			cancel()
@@ -480,12 +499,7 @@ func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Lo
 			case n > 0:
 				logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
 			}
-			// What was copied leaves the ConfigMap (DB-55): a console
-			// rolled back writes there again, and that is copied and
-			// removed at the next start with the database.
-			if err == nil {
-				w.removeCopied(ctx, from, audit.StoreKey, audit.StoreKey)
-			}
+			w.copying.Done()
 		}
 		// Retention, once a day on whichever replica gets the lock.
 		t := time.NewTicker(24 * time.Hour)

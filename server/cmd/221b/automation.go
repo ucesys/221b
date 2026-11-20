@@ -13,7 +13,6 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/db"
-	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/toolbox"
@@ -32,32 +31,34 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 	if cfg.Automation {
 		// The copy's source and nothing else: the ConfigMap a release
 		// before 0.13 kept the scripts in, and the one it kept the runs and
-		// the nodes' facts in when the chart names one. A ConfigMap that
-		// is named and cannot be read stops the start: a copy must not be
-		// taken for made when its source was not there.
+		// the nodes' facts in when the chart names one; each nil when it
+		// is not there (DB-72: deleted once copied). A ConfigMap that is
+		// there and cannot be read stops the start: a copy must not be
+		// taken for made when its source could not be read.
 		var from kv.Backend
-		if cfg.AutomationConfigMap != "" {
-			cm, err := kube.NewConfigMapStorage(w.restCfg, cfg.AutomationConfigMap)
-			if err != nil {
-				return fmt.Errorf("automation's ConfigMap: %w", err)
-			}
+		cm, err := openSource(ctx, w.restCfg, cfg.AutomationConfigMap)
+		if err != nil {
+			return fmt.Errorf("automation's ConfigMap: %w", err)
+		}
+		runs, err := openSource(ctx, w.restCfg, cfg.AutomationRunsConfigMap)
+		if err != nil {
+			return fmt.Errorf("automation's runs: %w", err)
+		}
+		var scripts kv.Backend = &kv.Memory{}
+		if cm != nil {
 			l := limited(cm, objAutomation, log.With("component", "storage"))
-			from, w.stored = l, append(w.stored, l)
-			if cfg.AutomationRunsConfigMap != "" {
-				runs, err := openConfigMap(ctx, w.restCfg, cfg.AutomationRunsConfigMap)
-				if err != nil {
-					return fmt.Errorf("automation's runs: %w", err)
-				}
-				rl := limited(runs, objAutomationRuns, log.With("component", "storage"))
-				w.stored = append(w.stored, rl)
-				// The runs and the facts are copied from wherever they
-				// were kept: their own ConfigMap when there is one.
-				routes := map[string]kv.Backend{}
-				for _, k := range automation.RunsKeys {
-					routes[k] = rl
-				}
-				from = &kv.Routed{Default: l, Routes: routes}
+			scripts, from, w.stored = l, l, append(w.stored, l)
+		}
+		if runs != nil {
+			rl := limited(runs, objAutomationRuns, log.With("component", "storage"))
+			w.stored = append(w.stored, rl)
+			// The runs and the facts are copied from wherever they were
+			// kept: their own ConfigMap when there is one.
+			routes := map[string]kv.Backend{}
+			for _, k := range automation.RunsKeys {
+				routes[k] = rl
 			}
+			from = &kv.Routed{Default: scripts, Routes: routes}
 		}
 		outDir := ""
 		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {

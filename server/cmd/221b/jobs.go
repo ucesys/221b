@@ -67,11 +67,11 @@ type jobsWiring struct {
 func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, leads func() bool, moved func(kv.Backend) kv.Backend, log *slog.Logger) (*jobsWiring, error) {
 	w := &jobsWiring{}
 	var backend kv.Backend
-	if cfg.RunsConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.RunsConfigMap)
-		if err != nil {
-			return nil, fmt.Errorf("the jobs' ConfigMap: %w", err)
-		}
+	cm, err := openSource(ctx, restCfg, cfg.RunsConfigMap)
+	if err != nil {
+		return nil, fmt.Errorf("the jobs' ConfigMap: %w", err)
+	}
+	if cm != nil {
 		w.stored = limited(cm, objRuns, log.With("component", "storage"))
 		backend = w.stored
 	}

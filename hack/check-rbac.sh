@@ -2,9 +2,10 @@
 # Checks that a ServiceAccount can read what the tabs show (nodes, pods and
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
 # stats, from Phase 4 roles, bindings and the policy kinds, and from Phase
-# 8 volumes, storage classes and volume attachments), patch and
-# update its own settings ConfigMap, write ConfigMaps in its own namespace
-# (one per case, ADR-128), hold its replicas' Lease (P7-02),
+# 8 volumes, storage classes and volume attachments), read and delete the
+# ConfigMaps of its own namespace (those a release before 0.13 kept its
+# records in, and one per case, which the console deletes once copied:
+# DB-72), patch the temporary wiki store's, hold its replicas' Lease (P7-02),
 # manage the Secrets of its own namespace (the connections to other
 # clusters, P3-04), and nothing else
 # (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
@@ -82,9 +83,14 @@ for kind in nodes.metrics.k8s.io pods.metrics.k8s.io; do
   expect no watch "$kind" --all-namespaces
 done
 expect yes get nodes --subresource=proxy
+# The ConfigMaps of before 0.13 (DB-72): read and deleted, never written;
+# the temporary wiki store's is the one ConfigMap it patches.
 expect yes get "configmaps/$NAME" -n "$NS"
-expect yes patch "configmaps/$NAME" -n "$NS"
-expect yes update "configmaps/$NAME" -n "$NS"
+expect yes delete "configmaps/$NAME" -n "$NS"
+expect no patch "configmaps/$NAME" -n "$NS"
+expect no update "configmaps/$NAME" -n "$NS"
+expect yes get "configmaps/$NAME-wiki" -n "$NS"
+expect yes patch "configmaps/$NAME-wiki" -n "$NS"
 # The replicas' election (P7-02): the one Lease, in its own namespace.
 expect yes create leases.coordination.k8s.io -n "$NS"
 expect yes update "leases.coordination.k8s.io/$NAME-leader" -n "$NS"
@@ -126,11 +132,12 @@ expect no impersonate serviceaccounts
 expect no impersonate uids
 expect no impersonate userextras.authentication.k8s.io
 # The kubelets' endpoints are read-only through the proxy. ConfigMaps are
-# written in the console's own namespace only: each case is one it makes
-# and deletes, <release>-case-<n>, and names made at run time cannot be
-# listed in resourceNames (ADR-128). Elsewhere none is (below).
+# deleted in the console's own namespace only: each case's of before 0.13,
+# <release>-case-<n>, whose name cannot be listed in resourceNames
+# (ADR-128); none is made (DB-72). Elsewhere none is touched (below).
 expect no create nodes --subresource=proxy
-expect yes create configmaps -n "$NS"
+expect no create configmaps -n "$NS"
+expect yes list configmaps -n "$NS"
 expect yes delete "configmaps/$NAME-case-1" -n "$NS"
 expect no create configmaps -n default
 expect no patch configmaps/kube-root-ca.crt -n kube-system
@@ -171,25 +178,24 @@ for ns in default kube-system "$NS"; do
   echo "$list"
   extra=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/ {print $1}' | grep -v -E "$allowed" || true)
   if [ "$ns" = "$NS" ]; then
-    if ! echo "$list" | grep -E "^configmaps +\[\] +\[$NAME\] +\[get list watch patch update\]" > /dev/null; then
-      failed "the settings ConfigMap is not listed as get, list, watch, patch and update by name in $ns"
+    if ! echo "$list" | grep -E "^configmaps +\[\] +\[$NAME-wiki\] +\[get patch\]" > /dev/null; then
+      failed "the temporary wiki store's ConfigMap is not listed as get and patch by name in $ns"
     fi
     if ! echo "$list" | grep -E "^leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\]" > /dev/null; then
       failed "the replicas' Lease is not listed as get and update by name in $ns"
     fi
   fi
-  # Every granted verb list is read-only, except the console's own
-  # ConfigMaps' (the settings, the audit log, the session records and
-  # Automation's two; in its own namespace also Phase 12's and every
-  # ConfigMap, for the cases, ADR-128),
-  # the self-reviews every identity may create and, in the console's own
-  # namespace, the connection Secrets.
-  # The reviews of people's access are created, with sign-in on.
-  own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs)?\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
+  # Every granted verb list is read-only, except, in the console's own
+  # namespace, the deletion of ConfigMaps (those of before 0.13 and each
+  # case's, DB-72; the listing merges it with the ClusterRole's reads), the
+  # temporary wiki store's ConfigMap, the connection Secrets and the
+  # Lease; the self-reviews every identity may create; and the reviews of
+  # people's access, created with sign-in on.
+  own_writes="^(selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
   if [ "$ns" = "$NS" ]; then
     # The Lease: created when none exists (the listing may merge the
     # create with the ClusterRole's reads), then only this one renewed.
-    own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs|-ai|-knowledge|-wiki|-runs|-issues|-proposals|-cases|-casework)?\]|configmaps +\[\] +\[\] +\[get list watch create update patch delete\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
+    own_writes="^(configmaps +\[\] +\[$NAME-wiki\] +\[get patch\]|configmaps +\[\] +\[\] +\[get list watch delete\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
   fi
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
     # The Role's writes merge with the ClusterRole's reads in the listing:

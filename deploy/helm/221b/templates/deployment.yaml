@@ -179,6 +179,10 @@ spec:
             - name: DB_POLL_INTERVAL
               value: {{ .Values.database.pollInterval | quote }}
             {{- end }}
+            # The ConfigMaps a release before 0.13 kept its records in: the
+            # one-time copies' source only, named whether or not the chart
+            # renders them (DB-72, configmap.yaml); the console deletes each
+            # once copied.
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: AUDIT_CONFIGMAP

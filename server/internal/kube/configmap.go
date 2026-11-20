@@ -187,6 +187,24 @@ func (c *ConfigMapStorage) DeleteKey(ctx context.Context, key string) error {
 	return nil
 }
 
+// Remove deletes the ConfigMap whole (DB-72): a ConfigMap a release before
+// 0.13 kept records in, once the database holds every record set it held.
+// One that is gone already is not an error.
+func (c *ConfigMapStorage) Remove(ctx context.Context) error {
+	err := c.rest.Delete().Namespace(c.namespace).Resource("configmaps").Name(c.name).Do(ctx).Error()
+	switch {
+	case err == nil || apierrors.IsNotFound(err):
+		return nil
+	case apierrors.IsForbidden(err):
+		return fmt.Errorf("not allowed to delete the ConfigMap %s; check the Role the chart installs", c.Ref())
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return fmt.Errorf("deleting the ConfigMap %s: %s", c.Ref(), status.Status().Message)
+	}
+	return fmt.Errorf("deleting the ConfigMap %s: %s", c.Ref(), unreachable(err))
+}
+
 // tooLarge says the API server refused an object for its size.
 func tooLarge(err error) bool {
 	return apierrors.IsRequestEntityTooLargeError(err) || (apierrors.IsInvalid(err) && strings.Contains(err.Error(), "1048576"))

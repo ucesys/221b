@@ -52,11 +52,11 @@ func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, ma
 		}
 		cases = objs
 	}
-	if cfg.IssuesConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.IssuesConfigMap)
-		if err != nil {
-			return nil, nil, fmt.Errorf("the issue service's ConfigMap: %w", err)
-		}
+	cm, err := openSource(ctx, restCfg, cfg.IssuesConfigMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the issue service's ConfigMap: %w", err)
+	}
+	if cm != nil {
 		stored = limited(cm, objIssues, log.With("component", "storage"))
 		backend = stored
 	}
@@ -153,6 +153,9 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 		// wait for the documents' copy for the same reason.
 		setCopied := true
 		if hasSource(b) {
+			for key := range set.Members {
+				w.readFrom(b, set.ImportID(), key)
+			}
 			ictx, cancel := context.WithTimeout(ctx, time.Minute)
 			copied, err := set.Import(ictx, b, "configmap")
 			cancel()
@@ -162,11 +165,6 @@ func (w *wiring) casesInDatabase(ctx context.Context) func(kv.Backend, kv.Object
 			}
 			for _, key := range copied {
 				log.Info("copied records from their ConfigMap into the database", "key", key)
-			}
-			if err == nil {
-				for key := range set.Members {
-					w.removeCopied(ctx, b, set.ImportID(), key)
-				}
 			}
 		}
 		if objs != nil && setCopied {

@@ -76,13 +76,20 @@ type simCluster struct {
 // prefix to its keys).
 func newSimCluster(t *testing.T, preload map[string]map[string]string) *simCluster {
 	t.Helper()
+	return newSimClusterWith(t, preload, nil)
+}
+
+// newSimClusterWith is newSimCluster with ConfigMaps of its own beside the
+// chart's.
+func newSimClusterWith(t *testing.T, preload map[string]map[string]string, objects []sim.SeedObject) *simCluster {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 3, Pods: 12, SettingsConfigMap: simNamespace + "/" + simRelease,
 		Preload: func(name string) (map[string]map[string]string, []sim.SeedObject) {
 			out := map[string]map[string]string{}
 			for suffix, data := range preload {
 				out[name+suffix] = data
 			}
-			return out, nil
+			return out, objects
 		}})
 	c := &simCluster{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

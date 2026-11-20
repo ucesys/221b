@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -188,9 +189,11 @@ func limited(cm *kube.ConfigMapStorage, obj string, log *slog.Logger) *kv.Limite
 	return &kv.Limited{Backend: cm, Name: cm.Ref(), Limits: limits(obj), Logger: log}
 }
 
-// openConfigMap opens a ConfigMap the chart makes, trying for a while: a
-// name given that cannot be read stops the console rather than leave a
-// replica keeping records somewhere its peers do not look.
+// openConfigMap opens a ConfigMap the console keeps something in, trying
+// for a while: a name given that cannot be read stops the console rather
+// than leave a replica keeping it somewhere its peers do not look. Since
+// DB-69 that is the temporary wiki store's alone (-wiki-configmap); the
+// ConfigMaps of before are opened by openSource.
 func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
 	cm, err := kube.NewConfigMapStorage(cfg, ref)
 	if err != nil {
@@ -210,31 +213,82 @@ func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.Con
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap, -automation-runs-configmap, -issues-configmap, -proposals-configmap, -runs-configmap, -knowledge-configmap, -wiki-configmap and -casework-configmap against the chart)", err)
+		return nil, fmt.Errorf("%w (check -wiki-configmap against the chart)", err)
 	}
 	return cm, nil
 }
 
-// settingsBackend is the settings ConfigMap with the audit log and the
-// session records routed to ConfigMaps of their own when named.
-func settingsBackend(ctx context.Context, cfg *rest.Config, settingsCM *kube.ConfigMapStorage, auditRef, sessionsRef string, log *slog.Logger) (kv.Backend, storedObjects, error) {
-	base := limited(settingsCM, objSettings, log)
-	objects := storedObjects{base}
+// openSource opens a ConfigMap a release before 0.13 kept records in, the
+// one-time copies' source (DB-72). One that is not there is nil: it was
+// never made (an installation that started at 0.13), or the console
+// deleted it once the database held what it held, and there is nothing to
+// copy from it. Any other failure to read it is tried for a while and then
+// stops the console: a copy must not be taken for made when its source
+// could not be read.
+func openSource(ctx context.Context, cfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
+	if ref == "" {
+		return nil, nil
+	}
+	cm, err := kube.NewConfigMapStorage(cfg, ref)
+	if err != nil {
+		return nil, err
+	}
+	for try := 0; ; try++ {
+		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, version, lerr := cm.LoadKey(pctx, "-")
+		cancel()
+		switch {
+		case version != "":
+			return cm, nil
+		case errors.Is(lerr, kv.ErrNotFound):
+			return nil, nil
+		}
+		if try == 4 {
+			return nil, fmt.Errorf("the ConfigMap %s, which a release before 0.13 kept records in, cannot be read to copy them into the database: %w", cm.Ref(), lerr)
+		}
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// settingsBackend is the copies' source of the settings and what was kept
+// beside them: the settings ConfigMap, with the audit log and the session
+// records routed to ConfigMaps of their own when named, each nil when it
+// is not there (openSource). Nil when none is.
+func settingsBackend(ctx context.Context, cfg *rest.Config, settingsRef, auditRef, sessionsRef string, log *slog.Logger) (kv.Backend, storedObjects, error) {
+	var objects storedObjects
+	var base kv.Backend
+	settingsCM, err := openSource(ctx, cfg, settingsRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	if settingsCM != nil {
+		l := limited(settingsCM, objSettings, log)
+		base, objects = l, append(objects, l)
+	}
 	routes := map[string]kv.Backend{}
 	for _, o := range []struct{ ref, obj, key string }{{auditRef, objAudit, audit.StoreKey}, {sessionsRef, objSessions, sessions.HistoryKey}} {
-		if o.ref == "" {
-			continue
-		}
-		cm, err := openConfigMap(ctx, cfg, o.ref)
+		cm, err := openSource(ctx, cfg, o.ref)
 		if err != nil {
 			return nil, nil, err
+		}
+		if cm == nil {
+			continue
 		}
 		l := limited(cm, o.obj, log)
 		objects = append(objects, l)
 		routes[o.key] = l
 	}
-	if len(routes) == 0 {
+	switch {
+	case len(routes) == 0:
 		return base, objects, nil
+	case base == nil:
+		// The audit log or the session records in their own ConfigMap,
+		// and no settings ConfigMap: nothing else to read.
+		base = &kv.Memory{}
 	}
 	return &kv.Routed{Default: base, Routes: routes}, objects, nil
 }

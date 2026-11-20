@@ -6,9 +6,8 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
@@ -19,15 +18,65 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
-// keysOnly is a store that cannot delete a key.
-type keysOnly struct{ m *kv.Memory }
-
-func (k keysOnly) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
-	return k.m.LoadKey(ctx, key)
+// oldConfigMap is a ConfigMap of before in a test: its keys, its name,
+// and a delete of the whole object, which a test can make fail. Once
+// deleted it holds nothing; made again, it holds what is saved after.
+type oldConfigMap struct {
+	name    string
+	mu      sync.Mutex
+	keys    *kv.Memory
+	gone    bool
+	refuse  error
+	removed int
 }
 
-func (k keysOnly) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
-	return k.m.SaveKey(ctx, key, b, version)
+func newOldConfigMap(name string, keys map[string]string) *oldConfigMap {
+	c := &oldConfigMap{name: name, keys: &kv.Memory{}}
+	for k, v := range keys {
+		_, _ = c.keys.SaveKey(context.Background(), k, []byte(v), "")
+	}
+	return c
+}
+
+func (c *oldConfigMap) Ref() string { return "221b/" + c.name }
+
+func (c *oldConfigMap) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gone {
+		return nil, "", kv.ErrNotFound
+	}
+	return c.keys.LoadKey(ctx, key)
+}
+
+func (c *oldConfigMap) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.keys.SaveKey(ctx, key, b, version)
+}
+
+func (c *oldConfigMap) Remove(context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refuse != nil {
+		return c.refuse
+	}
+	c.gone, c.keys = true, &kv.Memory{}
+	c.removed++
+	return nil
+}
+
+// madeAgain is the ConfigMap as Helm would make it again, empty.
+func (c *oldConfigMap) madeAgain() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gone, c.keys = false, &kv.Memory{}
+}
+
+func (c *oldConfigMap) isGone() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gone
 }
 
 const oneFix = `{"next":2,"items":[{"id":"FX-1","title":"Raise the limit","status":"active","cases":[{"case":"C-1","at":"2026-11-07T02:00:00Z"}],"created":"2026-11-07T02:00:00Z","updated":"2026-11-07T02:00:00Z","createdBy":"bob","updatedBy":"bob"}]}`
@@ -42,76 +91,103 @@ func fixRows(t *testing.T, d *db.DB) (n int) {
 
 func fixesIn(d *db.DB) map[string]movedDoc { return map[string]movedDoc{fixes.Key: fixes.NewPG(d)} }
 
-// A record set leaves its ConfigMap once its copy is recorded (DB-55):
-// the key is deleted, or emptied in a store that cannot delete; a copy
-// that fails leaves the ConfigMap as it was; what an earlier build copied
-// and left is removed at the next start, and the database's records are
-// not touched by it; another key of the ConfigMap stays.
-func TestACopiedRecordSetLeavesItsConfigMap(t *testing.T) {
+// A ConfigMap of before is deleted whole once every record set it held is
+// recorded in imports (DB-55, DB-72): a key no record set reads goes with
+// it; a copy that fails leaves it, with every key, for the next start, and
+// a record set copied from it by another call keeps it too until both are
+// copied; a deletion that fails is tried at the next start; one that Helm
+// made again empty holds nothing to copy and is deleted again, and the
+// database's records are not touched by it.
+func TestAConfigMapOfBeforeIsDeletedOnceItsRecordSetsAreCopied(t *testing.T) {
 	ctx := t.Context()
-	// Copied and deleted.
+	// Copied and deleted, with a key no record set reads.
 	d := dbtest.Open(t)
 	w := &wiring{log: slog.Default(), database: d}
-	cm := &persistent{}
-	_, _ = cm.SaveKey(ctx, fixes.Key, []byte(oneFix), "")
-	_, _ = cm.SaveKey(ctx, "other.json", []byte(`{"kept":true}`), "")
+	cm := newOldConfigMap("r-casework", map[string]string{fixes.Key: oneFix, "other.json": `{"kept":true}`})
 	w.inTables(ctx, cm, fixesIn)
-	if _, _, err := cm.LoadKey(ctx, fixes.Key); !errors.Is(err, kv.ErrNotFound) || fixRows(t, d) != 1 {
-		t.Fatalf("after the copy the ConfigMap's key: %v; %d fixes in the database", err, fixRows(t, d))
+	if cm.isGone() || fixRows(t, d) != 1 {
+		t.Fatalf("before the wiring is done: gone %v, %d fixes", cm.isGone(), fixRows(t, d))
 	}
-	if b, _, err := cm.LoadKey(ctx, "other.json"); err != nil || string(b) != `{"kept":true}` {
-		t.Fatalf("another key: %s %v", b, err)
+	w.removeCopiedSources(ctx)
+	if !cm.isGone() || fixRows(t, d) != 1 {
+		t.Fatalf("after the copy: gone %v, %d fixes in the database", cm.isGone(), fixRows(t, d))
 	}
-	// A store that cannot delete a key has it emptied, and is left alone after.
+
+	// Two calls read one ConfigMap (the settings' scopes and tables do):
+	// one copy fails, and the ConfigMap stays whole, the copied key too.
 	d2 := dbtest.Open(t)
 	w2 := &wiring{log: slog.Default(), database: d2}
-	plain := keysOnly{&kv.Memory{}}
-	_, _ = plain.SaveKey(ctx, fixes.Key, []byte(oneFix), "")
-	w2.inTables(ctx, plain, fixesIn)
-	b, version, err := plain.LoadKey(ctx, fixes.Key)
-	if err != nil || string(b) != "{}" || fixRows(t, d2) != 1 {
-		t.Fatalf("a store that cannot delete holds %s: %v; %d fixes", b, err, fixRows(t, d2))
+	both := newOldConfigMap("r", map[string]string{"setup.json": `{"dismissed":["backup"]}`, fixes.Key: oneFix})
+	b := w2.inScopes(ctx, both, map[string]string{"setup.json": "setup"})
+	w2.inTables(ctx, b, func(d *db.DB) map[string]movedDoc { return map[string]movedDoc{fixes.Key: uncopied{fixes.NewPG(d)}} })
+	w2.removeCopiedSources(ctx)
+	if both.isGone() {
+		t.Fatal("a ConfigMap was deleted with a record set in it not copied")
 	}
-	w2.inTables(ctx, plain, fixesIn)
-	if _, again, _ := plain.LoadKey(ctx, fixes.Key); again != version || fixRows(t, d2) != 1 {
-		t.Fatal("an emptied key was written again, or the fixes changed")
+	for _, key := range []string{"setup.json", fixes.Key} {
+		if _, _, err := both.LoadKey(ctx, key); err != nil {
+			t.Fatalf("%s left the ConfigMap: %v", key, err)
+		}
 	}
-	// A copy that fails leaves the ConfigMap as it was, and records nothing.
-	d3 := dbtest.Open(t)
-	w3 := &wiring{log: slog.Default(), database: d3}
-	bad := &persistent{}
-	_, _ = bad.SaveKey(ctx, "refused.json", []byte(`{"n":1}`), "")
-	w3.inTables(ctx, bad, func(d *db.DB) map[string]movedDoc {
-		return map[string]movedDoc{"refused.json": &db.Doc[map[string]int]{DB: d, Key: "refused.json",
-			Read: func(context.Context, db.Querier) (map[string]int, bool, error) { return nil, false, nil },
-			Write: func(context.Context, pgx.Tx, map[string]int, map[string]int) error {
-				return errors.New("the rows cannot be written")
-			}}}
-	})
-	if got, _, err := bad.LoadKey(ctx, "refused.json"); err != nil || string(got) != `{"n":1}` {
-		t.Fatalf("after a copy that failed the ConfigMap holds %s: %v", got, err)
-	}
-	if copied, _ := d3.Imported(ctx, "refused.json"); copied {
+	if copied, _ := d2.Imported(ctx, fixes.Key); copied {
 		t.Fatal("a copy that failed was recorded")
 	}
-	// What an earlier build copied and left is removed at the next start;
-	// the database's records, changed since, are as they were.
-	d4 := dbtest.Open(t)
-	left := &persistent{}
-	_, _ = left.SaveKey(ctx, fixes.Key, []byte(oneFix), "")
-	if copied, err := fixes.NewPG(d4).Import(ctx, left, "configmap"); err != nil || !copied {
-		t.Fatalf("the earlier build's copy: %v %v", copied, err)
+	// The next start copies the rest, and deletes it.
+	w3 := &wiring{log: slog.Default(), database: d2}
+	w3.inTables(ctx, w3.inScopes(ctx, both, map[string]string{"setup.json": "setup"}), fixesIn)
+	w3.removeCopiedSources(ctx)
+	if !both.isGone() || fixRows(t, d2) != 1 {
+		t.Fatalf("at the next start: gone %v, %d fixes", both.isGone(), fixRows(t, d2))
 	}
-	if _, err := d4.Pool().Exec(ctx, "UPDATE fixes SET title = 'Changed since'"); err != nil {
+
+	// A deletion that fails leaves it, and the next start deletes it.
+	d4 := dbtest.Open(t)
+	refusing := newOldConfigMap("r-runs", map[string]string{fixes.Key: oneFix})
+	refusing.refuse = errors.New("not allowed")
+	w4 := &wiring{log: slog.Default(), database: d4}
+	w4.inTables(ctx, refusing, fixesIn)
+	w4.removeCopiedSources(ctx)
+	if refusing.isGone() {
+		t.Fatal("deleted though the deletion failed")
+	}
+	refusing.refuse = nil
+	w5 := &wiring{log: slog.Default(), database: d4}
+	w5.inTables(ctx, refusing, fixesIn)
+	w5.removeCopiedSources(ctx)
+	if !refusing.isGone() || fixRows(t, d4) != 1 {
+		t.Fatalf("at the next start: gone %v, %d fixes", refusing.isGone(), fixRows(t, d4))
+	}
+
+	// Made again empty, as Helm would make one it still renders: nothing
+	// to copy, deleted again; the database's records, changed since, are
+	// as they were.
+	if _, err := d.Pool().Exec(ctx, "UPDATE fixes SET title = 'Changed since'"); err != nil {
 		t.Fatal(err)
 	}
-	(&wiring{log: slog.Default(), database: d4}).inTables(ctx, left, fixesIn)
+	cm.madeAgain()
+	w6 := &wiring{log: slog.Default(), database: d}
+	w6.inTables(ctx, cm, fixesIn)
+	w6.removeCopiedSources(ctx)
 	var title string
-	if err := d4.Pool().QueryRow(ctx, "SELECT title FROM fixes").Scan(&title); err != nil || title != "Changed since" {
+	if err := d.Pool().QueryRow(ctx, "SELECT title FROM fixes").Scan(&title); err != nil || title != "Changed since" {
 		t.Fatalf("the database's fix reads %q: %v", title, err)
 	}
-	if _, _, err := left.LoadKey(ctx, fixes.Key); !errors.Is(err, kv.ErrNotFound) {
-		t.Fatalf("what the earlier build left is still there: %v", err)
+	if !cm.isGone() || cm.removed != 2 {
+		t.Fatalf("one made again: gone %v, deleted %d times", cm.isGone(), cm.removed)
+	}
+
+	// A routed key is read where it is routed and where it was kept
+	// before: both hold it.
+	d7 := dbtest.Open(t)
+	settingsCM, auditCM := newOldConfigMap("r", nil), newOldConfigMap("r-audit", nil)
+	w7 := &wiring{log: slog.Default(), database: d7}
+	w7.readFrom(&kv.Routed{Default: &kv.Limited{Backend: settingsCM}, Routes: map[string]kv.Backend{"audit.json": auditCM}}, "audit.json", "audit.json")
+	w7.removeCopiedSources(ctx)
+	if settingsCM.isGone() || auditCM.isGone() {
+		t.Fatal("deleted with the audit log not copied")
+	}
+	if got := w7.sources; len(got) != 2 || !got["221b/r"].imports["audit.json"] || !got["221b/r-audit"].imports["audit.json"] {
+		t.Fatalf("the sources noted: %v", got)
 	}
 }
 
@@ -129,9 +205,9 @@ func (uncopied) Import(context.Context, kv.Backend, string) (bool, error) {
 
 // The proposed changes are copied into the database before their
 // conversations with Sherlock, whose rows hang from the changes' (DB-57):
-// both are then kept and both leave the ConfigMap. When the changes' copy
+// both are then kept and the ConfigMap is deleted. When the changes' copy
 // fails, the conversations are not copied to rows that would not be kept:
-// they stay in the ConfigMap for the next start.
+// they stay in the ConfigMap, which is kept, for the next start.
 func TestTheChangesAreCopiedBeforeTheirConversations(t *testing.T) {
 	ctx := t.Context()
 	rows := func(d *db.DB) (chats, messages int) {
@@ -149,30 +225,26 @@ func TestTheChangesAreCopiedBeforeTheirConversations(t *testing.T) {
 		t.Fatalf("copied in the order %v", order)
 	}
 	d := dbtest.Open(t)
-	cm := &persistent{}
-	_, _ = cm.SaveKey(ctx, cards.CardsKey, []byte(oneCard), "")
-	_, _ = cm.SaveKey(ctx, cards.ChatsKey, []byte(oneChat), "")
-	(&wiring{log: slog.Default(), database: d}).inTables(ctx, cm, cardsIn)
+	cm := newOldConfigMap("r-proposals", map[string]string{cards.CardsKey: oneCard, cards.ChatsKey: oneChat})
+	w := &wiring{log: slog.Default(), database: d}
+	w.inTables(ctx, cm, cardsIn)
 	if chats, messages := rows(d); chats != 1 || messages != 2 {
 		t.Fatalf("copied %d conversations of PC-1 with %d messages", chats, messages)
 	}
-	for _, key := range []string{cards.CardsKey, cards.ChatsKey} {
-		if _, _, err := cm.LoadKey(ctx, key); !errors.Is(err, kv.ErrNotFound) {
-			t.Errorf("%s is still in the ConfigMap: %v", key, err)
-		}
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Error("the ConfigMap is still there after both copies")
 	}
 	// The changes' copy fails: their conversations wait in the ConfigMap.
 	d2 := dbtest.Open(t)
-	cm2 := &persistent{}
-	_, _ = cm2.SaveKey(ctx, cards.CardsKey, []byte(oneCard), "")
-	_, _ = cm2.SaveKey(ctx, cards.ChatsKey, []byte(oneChat), "")
+	cm2 := newOldConfigMap("r-proposals", map[string]string{cards.CardsKey: oneCard, cards.ChatsKey: oneChat})
 	w2 := &wiring{log: slog.Default(), database: d2}
 	w2.inTables(ctx, cm2, func(d *db.DB) map[string]movedDoc {
 		docs := cardsIn(d)
 		docs[cards.CardsKey] = uncopied{docs[cards.CardsKey]}
 		return docs
 	})
-	if got, _, err := cm2.LoadKey(ctx, cards.ChatsKey); err != nil || string(got) != oneChat {
+	w2.removeCopiedSources(ctx)
+	if got, _, err := cm2.LoadKey(ctx, cards.ChatsKey); err != nil || string(got) != oneChat || cm2.isGone() {
 		t.Fatalf("after the changes' copy failed the conversations' key holds %s: %v", got, err)
 	}
 	if copied, _ := d2.Imported(ctx, cards.ChatsKey); copied {
@@ -186,39 +258,34 @@ func TestTheChangesAreCopiedBeforeTheirConversations(t *testing.T) {
 }
 
 // The cases leave their ConfigMaps once copied, each ConfigMap whole, and
-// the issue service's three documents their keys; with no record of a
-// copy, they stay.
+// so does the issue service's ConfigMap once its three documents are
+// copied (DB-55, DB-72), with a key no record set reads; with no record of
+// a copy, they stay.
 func TestTheCasesLeaveTheirConfigMapsOnceCopied(t *testing.T) {
 	ctx := t.Context()
 	objs := &kv.MemoryObjects{}
 	_, _ = objs.Save(ctx, "1", issues.CaseKey, []byte(`{"number":1,"reporter":{"id":"ann"},"status":"new","created":"2026-11-07T02:00:00Z","updated":"2026-11-07T02:00:00Z","statusAt":"2026-11-07T02:00:00Z","priority":3,"lastReporter":"2026-11-07T02:00:00Z"}`), "")
-	cm := &persistent{}
-	_, _ = cm.SaveKey(ctx, issues.IndexKey, []byte(`{"next":2,"cases":[{"number":1,"status":"new","priority":3}]}`), "")
-	_, _ = cm.SaveKey(ctx, issues.KnownKey, []byte(`{"next":1,"known":[]}`), "")
-	_, _ = cm.SaveKey(ctx, "issues-reports.json", []byte(`{"next":1}`), "")
+	cm := newOldConfigMap("r-issues", map[string]string{issues.IndexKey: `{"next":2,"cases":[{"number":1,"status":"new","priority":3}]}`, issues.KnownKey: `{"next":1,"known":[]}`, "issues-reports.json": `{"next":1}`})
 	d := dbtest.Open(t)
 	w := &wiring{log: slog.Default(), database: d}
 	// No record of a copy: nothing is removed.
 	w.removeCopiedObjects(ctx, objs, issues.CasesImportID)
-	w.removeCopied(ctx, cm, issues.NewSetPG(d).ImportID(), issues.IndexKey, issues.KnownKey)
+	w.readFrom(cm, issues.NewSetPG(d).ImportID(), issues.IndexKey, issues.KnownKey)
+	w.removeCopiedSources(ctx)
 	if names, _ := objs.List(ctx); len(names) != 1 {
 		t.Fatal("a case's ConfigMap was removed with no copy recorded")
 	}
-	if _, _, err := cm.LoadKey(ctx, issues.IndexKey); err != nil {
+	if _, _, err := cm.LoadKey(ctx, issues.IndexKey); err != nil || cm.isGone() {
 		t.Fatalf("the index was removed with no copy recorded: %v", err)
 	}
 	// The copy, as the wiring makes it.
+	w = &wiring{log: slog.Default(), database: d}
 	b, cases := w.casesInDatabase(ctx)(cm, kv.Objects(wrapped{objs}))
 	if names, _ := objs.List(ctx); len(names) != 0 {
 		t.Fatalf("the cases' ConfigMaps left after the copy: %v", names)
 	}
-	for _, key := range []string{issues.IndexKey, issues.KnownKey} {
-		if _, _, err := cm.LoadKey(ctx, key); !errors.Is(err, kv.ErrNotFound) {
-			t.Fatalf("%s is still in the ConfigMap: %v", key, err)
-		}
-	}
-	if _, _, err := cm.LoadKey(ctx, "issues-reports.json"); err != nil {
-		t.Fatalf("a key that is not copied was removed: %v", err)
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Fatal("the issue service's ConfigMap is still there after the copy")
 	}
 	if keys, _, err := cases.Load(ctx, "1"); err != nil || len(keys[issues.CaseKey]) == 0 {
 		t.Fatalf("the case in the database: %v", err)

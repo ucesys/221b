@@ -1,67 +1,31 @@
 {{- if ne (include "b221.shared" .) "only" }}
-# The console's settings, which the Settings dialog changes for everyone:
-# the refresh rate, as settings.json. The chart creates the ConfigMap
-# empty and never writes its data, so helm upgrade keeps what was saved
-# and helm uninstall removes it.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-# The audit log the Audit log page reads, and the toolbox's session
-# records, each in a ConfigMap of its own so that neither presses on the
-# settings' 1 MiB (#46). Created empty, like the one above; the console
-# moves them out of the settings' on its first save.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-audit
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-sessions
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-# The AI agents (Phase 12): providers, agents, their instructions and
-# versions, test cases and pilots. Created empty, like the ones above; the
-# console writes its keys, and helm upgrade keeps them. Credentials are
-# never here: each provider's is in a Secret of its own.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-ai
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-# Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): its sources, the wiki's
-# drafts waiting for review and the syncs' status (a key
-# knowledge-publisher.json from before 0.12.1 is no longer read). Created
-# empty, like the ones above;
-# credentials are never here, but in the Secret <release>-knowledge.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-knowledge
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
+{{- /*
+The ConfigMaps a release before 0.13 kept its records in (DB-72, ADR-167):
+the settings, the audit log, the Toolbox's session records, the AI
+agents, Mycroft's knowledge, Automation's scripts and runs, the issue
+service, the proposed changes (<release>-proposals, and <release>-cases
+of before CF-104), the jobs and the case work. The console copies each
+into the database at its first start and deletes it once every record
+set it held is there. Each is rendered only while it is in the cluster,
+empty and with helm.sh/resource-policy keep, so that helm upgrade from
+0.12 keeps it for the copy and never makes it again after; see
+b221.copySource. A release that starts at 0.13 has none.
+*/}}
+{{- $automation := ne (toString (dig "enabled" true (.Values.automation | default dict))) "false" }}
+{{- range $suffix := list "" "-audit" "-sessions" "-ai" "-knowledge" "-issues" "-proposals" "-cases" "-runs" "-casework" }}
+{{- include "b221.copySource" (list $ $suffix true) }}
+{{- end }}
+{{- range $suffix := list "-automation" "-automation-runs" }}
+{{- include "b221.copySource" (list $ $suffix $automation) }}
+{{- end }}
 {{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
 ---
 # The temporary wiki store (CF-57): Mycroft's wiki itself, in one key,
 # while Administration › AI › Knowledge names no store, so the wiki can be tried
 # without a repository or a bucket. At most 900 KiB; it will be removed:
 # move the wiki to Git or S3 before relying on it. Created empty; the
-# console writes its key, and helm upgrade keeps it.
+# console writes its key, and helm upgrade keeps it. It is a store of the
+# wiki's pages, not a record set, and is not deleted (DB-72).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -73,7 +37,7 @@ metadata:
 ---
 # The agents' baseline house instructions, from agents.<agent>.instructions,
 # one file each. The chart owns this one; the console only reads it, at
-# start.
+# start. Configuration, not a record set: it stays (DB-72).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -85,97 +49,4 @@ metadata:
 data:
   {{- . | nindent 2 }}
 {{- end }}
-{{- end }}
-{{- if and (ne (include "b221.shared" .) "only") (ne (toString (dig "enabled" true (.Values.automation | default dict))) "false") }}
----
-# Automation's scripts, fleet parameters and runs (Phase 11 part 2,
-# ADR-73), in a ConfigMap of their own so they never press on the
-# settings' 1 MiB. Created empty; the console writes its keys, and helm
-# upgrade keeps them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-automation
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-# Automation's runs and the nodes' facts, apart from the scripts so neither
-# presses on the other's 1 MiB. Created empty, like the one above.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-automation-runs
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
-{{- end }}
-{{- if ne (include "b221.shared" .) "only" }}
----
-# The issue service's reports, known issues, services and settings (Phase
-# 12, docs/issues.md), in a ConfigMap of their own. Created empty; the
-# console writes its keys, and helm upgrade keeps them. Since the reports
-# became cases (Phase 12, wave 5), every case is kept here, so it is made
-# whether or not issues.enabled offers the report page.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-issues
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
-{{- end }}
-{{- if ne (include "b221.shared" .) "only" }}
----
-# The agents' proposed changes as durable Watson cards, the standing
-# approvals and the notification settings (Phase 12, ADR-99, CF-104), in a
-# ConfigMap of their own. Created empty; the console writes its keys, and
-# helm upgrade keeps them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-proposals
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
----
-# Where builds before CF-104 kept the proposed changes. Kept so that helm
-# upgrade does not delete it before the console has copied its records
-# into <release>-proposals once at start (docs/upgrading.md); the console
-# no longer writes it, and a later release drops it.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-cases
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
-{{- end }}
-{{- if ne (include "b221.shared" .) "only" }}
----
-# --- Jobs (Phase 12) ---
-# The jobs that start an agent on their own, their runs and findings
-# (Cases › Jobs and Runs, ADR-91), in a ConfigMap of their own. Created
-# empty; the console writes its keys, and helm upgrade keeps them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-runs
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
-{{- end }}
-{{- if ne (include "b221.shared" .) "only" }}
----
-# --- Case work (Phase 12) ---
-# The cases of Cases › Cases (CW-13, ADR-105), in a ConfigMap of their
-# own. Created empty; the console writes its keys, and helm upgrade keeps
-# them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-casework
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
 {{- end }}

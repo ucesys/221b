@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,15 +30,13 @@ import (
 
 type cardsOptions struct {
 	// wrap routes the keys the database keeps to it.
-	wrap func(kv.Backend) kv.Backend
-	// inDatabase says the cards were copied into the database.
-	inDatabase func() bool
-	auditLog   *audit.Log
-	manager    *clusters.Manager
-	shared     *settings.Service
-	agents     *ai.Service
-	leads      func() bool
-	log        *slog.Logger
+	wrap     func(kv.Backend) kv.Backend
+	auditLog *audit.Log
+	manager  *clusters.Manager
+	shared   *settings.Service
+	agents   *ai.Service
+	leads    func() bool
+	log      *slog.Logger
 }
 
 // cardLimits are what the cards fit their records to: the limits of the
@@ -51,22 +50,31 @@ func cardLimits() cards.Limits {
 // database; the channels' addresses in the Secret <release>-cases beside
 // the connections. <release>-proposals, when the chart names it, is the
 // one-time copy's source and nothing else: where a release before 0.13
-// kept the cards. It is returned too, for the metrics of its size.
+// kept the cards, read with <release>-cases of before CF-104
+// (proposalsOfBefore). It is returned too, for the metrics of its size.
 func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o cardsOptions) (*cards.Store, *kv.Limited, error) {
 	var backend kv.Backend
 	var stored *kv.Limited
 	if cfg.ProposalsConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.ProposalsConfigMap)
+		cm, err := openSource(ctx, restCfg, cfg.ProposalsConfigMap)
 		if err != nil {
 			return nil, nil, fmt.Errorf("the proposed changes' ConfigMap: %w", err)
 		}
-		// Not once the cards are in the database: they left this ConfigMap
-		// then (DB-55), and must not come back from the one of before.
-		if o.inDatabase == nil || !o.inDatabase() {
-			copyProposalsOfBefore(ctx, restCfg, cm, o.log)
+		before, err := openProposalsOfBefore(ctx, restCfg, cfg.ProposalsConfigMap)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the proposed changes' ConfigMap of before CF-104: %w", err)
 		}
-		stored = limited(cm, objProposals, o.log.With("component", "storage"))
-		backend = stored
+		var now kv.Backend
+		if cm != nil {
+			stored = limited(cm, objProposals, o.log.With("component", "storage"))
+			now = stored
+		}
+		switch {
+		case before != nil:
+			backend = proposalsOfBefore{now: now, before: before}
+		case now != nil:
+			backend = now
+		}
 	}
 	var secrets cards.SecretStore
 	if cfg.ConnectionsSecrets != "" {
@@ -124,8 +132,8 @@ func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o c
 
 // --- The ConfigMap's new name (CF-104) ---
 
-// proposalKeys are the keys of the proposed changes' ConfigMap, the cards
-// last: once they are in the new object, its copy is done.
+// proposalKeys are the keys of the proposed changes' ConfigMap; once the
+// cards are in <release>-proposals, the one of before is not read.
 var proposalKeys = []string{cards.StandingKey, cards.NotifyKey, cards.ChatsKey, cards.CardsKey}
 
 // oldProposalsRef is the name the proposed changes' ConfigMap had before
@@ -139,76 +147,46 @@ func oldProposalsRef(ref string) string {
 	return base + "-cases"
 }
 
-// copyProposalsOfBefore copies, once, the records an install kept in
-// <release>-cases before the ConfigMap was <release>-proposals, so a test
-// install keeps its cards. Not being able to is logged and does not stop
-// the console: it starts with what the new object holds.
-func copyProposalsOfBefore(ctx context.Context, restCfg *rest.Config, to *kube.ConfigMapStorage, log *slog.Logger) {
-	ref := oldProposalsRef(to.Ref())
-	if ref == "" {
-		return
-	}
-	from, err := kube.NewConfigMapStorage(restCfg, ref)
+// openProposalsOfBefore opens <release>-cases, where a build before
+// CF-104 kept the proposed changes, as a copy's source beside
+// <release>-proposals (openSource: nil when it is not there).
+func openProposalsOfBefore(ctx context.Context, restCfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
+	now, err := kube.NewConfigMapStorage(restCfg, ref)
 	if err != nil {
-		log.Warn("could not copy the agents' proposed changes from the ConfigMap of before", "from", ref, "to", to.Ref(), "err", err)
-		return
-	}
-	copyProposals(ctx, from, to, ref, to.Ref(), log)
-}
-
-// copyProposals is copyProposalsOfBefore once both objects are open.
-func copyProposals(ctx context.Context, from, to kv.Backend, fromRef, toRef string, log *slog.Logger) {
-	keys, err := copyOnce(ctx, from, to, proposalKeys)
-	if len(keys) > 0 {
-		log.Info("the agents' proposed changes were copied once from the ConfigMap of before", "from", fromRef, "to", toRef, "keys", keys)
-	}
-	if err != nil {
-		log.Warn("could not copy the agents' proposed changes from the ConfigMap of before", "from", fromRef, "to", toRef, "err", err)
-	}
-}
-
-// copyOnce copies keys from an object of before into the one that
-// replaces it, unless the new one holds the last key already: the copy
-// is done, or the new object is in use. It copies a key only where the
-// new object does not hold it, each save on the version just read, so a
-// copy cut short is finished at the next start and two replicas starting
-// together copy once between them. It returns the keys it copied.
-func copyOnce(ctx context.Context, from, to kv.Backend, keys []string) ([]string, error) {
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	if _, _, err := to.LoadKey(ctx, keys[len(keys)-1]); !errors.Is(err, kv.ErrNotFound) {
 		return nil, err
 	}
-	var copied []string
-	for _, k := range keys {
-		b, _, err := from.LoadKey(ctx, k)
-		if errors.Is(err, kv.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return copied, err
-		}
-		for try := 0; ; try++ {
-			_, version, err := to.LoadKey(ctx, k)
-			if err == nil {
-				// Written meanwhile, by another replica's copy or a first record.
-				break
-			}
-			if !errors.Is(err, kv.ErrNotFound) {
-				return copied, err
-			}
-			_, err = to.SaveKey(ctx, k, b, version)
-			if err == nil {
-				copied = append(copied, k)
-				break
-			}
-			if !errors.Is(err, kv.ErrConflict) || try == 4 {
-				return copied, err
-			}
-		}
+	old := oldProposalsRef(now.Ref())
+	if old == "" {
+		return nil, nil
 	}
-	return copied, nil
+	return openSource(ctx, restCfg, old)
+}
+
+// proposalsOfBefore is the proposed changes' copy source when
+// <release>-cases of before CF-104 is still there: a key is read from
+// <release>-proposals, and from <release>-cases where <release>-proposals
+// does not hold it and holds no cards yet (the new object was not in use).
+// Builds before 0.13 copied the keys from one ConfigMap into the other at
+// start; this reads them in place, so nothing is written to a ConfigMap
+// (DB-72), and both are deleted once the cards are in the database.
+type proposalsOfBefore struct{ now, before kv.Backend }
+
+func (p proposalsOfBefore) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if p.now == nil {
+		return p.before.LoadKey(ctx, key)
+	}
+	b, version, err := p.now.LoadKey(ctx, key)
+	if !errors.Is(err, kv.ErrNotFound) || !slices.Contains(proposalKeys, key) {
+		return b, version, err
+	}
+	if _, _, cerr := p.now.LoadKey(ctx, cards.CardsKey); !errors.Is(cerr, kv.ErrNotFound) {
+		return b, version, err
+	}
+	return p.before.LoadKey(ctx, key)
+}
+
+func (proposalsOfBefore) SaveKey(_ context.Context, key string, _ []byte, _ string) (string, error) {
+	return "", fmt.Errorf("the console keeps nothing under %q in a ConfigMap: every record set is kept in the database (DB-69)", key)
 }
 
 // --- end of the ConfigMap's new name.
@@ -250,9 +228,6 @@ func (w *wiring) wireCards(ctx context.Context) error {
 				cards.CardsKey: cards.NewCardsPG(d), cards.ChatsKey: cards.NewChatsPG(d)}
 		})
 		return w.cardsBackend
-	}, inDatabase: func() bool {
-		copied, _ := w.database.Imported(ctx, cards.CardsKey)
-		return copied
 	}, auditLog: w.auditLog, manager: w.manager, shared: w.shared, agents: w.aiSvc.Service, leads: w.elector.IsLeader, log: log.With("component", "cards")})
 	if err != nil {
 		return err

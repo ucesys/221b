@@ -318,18 +318,17 @@ host_ports() {
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
 automation_configmap() {
-  # On by default: a ConfigMap of its own, named in the env and in the
-  # settings Role; off, neither.
+  # On by default: a ConfigMap of before 0.13, named in the env; off,
+  # neither (copy_sources: in a cluster, rendered while it is there).
   local off
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-automation$' &&
-    grep -A1 'name: AUTOMATION_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-automation"' &&
-    grep -q '"k8s-console-221b-automation"' "$out" || return 1
+    grep -A1 'name: AUTOMATION_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-automation"' || return 1
   off=$(render k8s-console --set clusterName=ci --set automation.enabled=false)
   ! grep -q 'k8s-console-221b-automation' <<<"$off" && grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
 }
 issues_values() {
-  # On by default (Phase 12): a ConfigMap of its own, named in the env and
-  # in the settings Role, and who reports and triages; reporter groups and
+  # On by default (Phase 12): a ConfigMap of before 0.13, named in the
+  # env, and who reports and triages; reporter groups and
   # local reporter groups reach the auth file and bind nothing; off, the
   # report page is off and the ConfigMap stays, for the cases (wave 5).
   local off reporters
@@ -339,7 +338,7 @@ issues_values() {
     grep -A1 'name: ISSUES_OPERATOR_ROLES' "$out" | has '"superAdmin,admin"' || return 1
   off=$(render k8s-console --set clusterName=ci --set issues.enabled=false)
   sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-issues$' && grep -A1 'name: ISSUES_CONFIGMAP' <<<"$off" | has '"consoles/k8s-console-221b-issues"' &&
-    grep -q '"k8s-console-221b-issues"' <<<"$off" && grep -A1 'name: ISSUES$' <<<"$off" | has '"false"' || return 1
+    grep -A1 'name: ISSUES$' <<<"$off" | has '"false"' || return 1
   reporters=$(render k8s-console --set clusterName=ci --set 'issues.reporterGroups[0]=staff' \
     --set 'auth.local.groups[0].name=helpdesk' --set 'auth.local.groups[0].role=reporter')
   has '"reporterGroups": \[' <<<"$reporters" && has '"role": "reporter"' <<<"$reporters" && ! grep -q 'RoleBinding.*helpdesk\|221b-reporter-' <<<"$reporters" || return 1
@@ -370,11 +369,11 @@ ai_configmaps() {
     [ "$(grep 'checksum/agents' <<<"$with")" != "$(grep 'checksum/agents' "$out")" ] &&
     ! render k8s-console --set clusterName=ci --set agents.watson.instructions=x > /dev/null 2>&1
 }
-# The agents' proposed changes (Phase 12): their records in a ConfigMap of
-# their own, <release>-proposals since CF-104, named in the env and the
-# Role, approved by cases.approverRoles. <release>-cases, where builds
-# before kept them, is still made, for the console's one copy at start,
-# and no longer named in the env or the Role.
+# The agents' proposed changes (Phase 12): their ConfigMap of before 0.13,
+# <release>-proposals since CF-104, named in the env, approved by
+# cases.approverRoles. <release>-cases, where builds before CF-104 kept
+# them, is rendered by the same rule (copy_sources) and read beside it by
+# the copy; it is not named in the env.
 cases_values() {
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-proposals$' &&
     sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-cases$' &&
@@ -384,37 +383,86 @@ cases_values() {
   grep -A1 'name: CASES_APPROVER_ROLES' <<<"$(render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=viewer')" | has '"viewer"' &&
     ! render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=reporter' >/dev/null 2>&1
 }
-# --- Jobs (Phase 12): their records in a ConfigMap of their own, named in
-# the env and the Role; the time zone of new schedules only when set.
+# --- Jobs (Phase 12): their ConfigMap of before 0.13, named in the env;
+# the time zone of new schedules only when set.
 jobs_configmap() {
   local with
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-runs$' &&
     grep -A1 'name: RUNS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-runs"' &&
-    grep -q '"k8s-console-221b-runs"' "$out" && ! grep -q 'name: JOBS_TIME_ZONE' "$out" || return 1
+    ! grep -q 'name: JOBS_TIME_ZONE' "$out" || return 1
   with=$(render k8s-console --set clusterName=ci --set jobs.timeZone=Europe/Berlin)
   grep -A1 'name: JOBS_TIME_ZONE' <<<"$with" | has '"Europe/Berlin"'
 }
-# --- Case work (Phase 12): the cases in a ConfigMap of their own, named
-# in the env and the Role.
+# --- Case work (Phase 12): its ConfigMap of before 0.13, named in the env.
 casework_configmap() {
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-casework$' &&
-    grep -A1 'name: CASEWORK_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-casework"' &&
-    grep -q '"k8s-console-221b-casework"' "$out"
+    grep -A1 'name: CASEWORK_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-casework"'
 }
-# --- One flow for findings and cases (Phase 12, wave 6): each case is a
-# ConfigMap the console makes, <release>-case-<n>, named by a prefix and
-# the release in the env; the Role grants ConfigMaps in the namespace only
-# (a Role, never the ClusterRole), without resourceNames, since the names
-# do not exist yet; the clean start's token and dry run reach the env.
+# --- One flow for findings and cases (Phase 12, wave 6): each case was a
+# ConfigMap, <release>-case-<n>, named by a prefix and the release in the
+# env; the Role grants reading and deleting ConfigMaps in the namespace
+# only (a Role, never the ClusterRole), without resourceNames, since the
+# names are not known; the clean start's token and dry run reach the env.
 case_configmaps() {
   grep -A1 'name: CASE_CONFIGMAPS' "$out" | has '"consoles/k8s-console-221b-case-"' &&
     grep -A1 'name: CASE_INSTANCE' "$out" | has '"k8s-console"' &&
-    settings_role | grep -B2 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resources: \["configmaps"\]' &&
-    ! settings_role | grep -A1 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resourceNames' &&
+    settings_role | grep -B1 'verbs: \["get", "list", "delete"\]' | has 'resources: \["configmaps"\]' &&
     grep -A1 'name: CASES_CLEAN_START_TOKEN' "$out" | has 'value: ""' &&
     grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$out" | has '"false"' &&
     grep -A1 'name: CASES_CLEAN_START_TOKEN' "$WORK/chart-clean.yaml" | has '"2026-11-07"' &&
     grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$WORK/chart-clean.yaml" | has '"true"'
+}
+# The ConfigMaps of before 0.13 (DB-72, ADR-167). Where the chart cannot
+# see the cluster (helm template), every one is rendered as 0.12 did, but
+# empty and with helm.sh/resource-policy keep, so nothing applying the
+# output deletes one before the console copied it. In a cluster (lookup,
+# here read from values in a copy of the chart) only those still there
+# are rendered, so Helm keeps them for the copy and never makes one again
+# once the console deleted it; Automation's while there, whatever
+# automation.enabled says. The configuration ConfigMaps and the wiki's
+# are rendered as before, without keep. The env names every ConfigMap of
+# before either way.
+COPY_SOURCES='k8s-console-221b k8s-console-221b-ai k8s-console-221b-audit k8s-console-221b-automation k8s-console-221b-automation-runs k8s-console-221b-cases k8s-console-221b-casework k8s-console-221b-issues k8s-console-221b-knowledge k8s-console-221b-proposals k8s-console-221b-runs k8s-console-221b-sessions'
+# The ConfigMaps rendered, one line each: the name, keep or -, data or -.
+configmaps() {
+  python3 -c '
+import sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get("kind") == "ConfigMap":
+        m = d["metadata"]
+        keep = (m.get("annotations") or {}).get("helm.sh/resource-policy") == "keep"
+        print(m["name"], "keep" if keep else "-", "data" if d.get("data") else "-")' | sort
+}
+copy_sources() {
+  local c=$WORK/copy-chart blind seen audit auto_off auto_there n
+  rm -rf "$c" && cp -r "$CHART" "$c" &&
+    sed -i -e 's#lookup "v1" "Namespace" "" "kube-system"#((.Values.copyTest | default dict).seen | default dict)#' \
+      -e 's#lookup "v1" "ConfigMap" $.Release.Namespace $name#(get (($.Values.copyTest | default dict).present | default dict) $name)#' "$c/templates/_helpers.tpl" &&
+    [ "$(grep -c 'copyTest' "$c/templates/_helpers.tpl")" = 2 ] || return 1
+  rendered() { helm template k8s-console "$c" --namespace consoles --set clusterName=ci "$@"; }
+  local sees='copyTest.seen={"metadata":{"name":"kube-system"}}'
+  blind=$(configmaps < "$out")
+  for n in $COPY_SOURCES; do grep -qx "$n keep -" <<<"$blind" || return 1; done
+  for n in agents wiki; do grep -qx "k8s-console-221b-$n - -" <<<"$blind" || return 1; done
+  for n in auth-config toolbox; do grep -qx "k8s-console-221b-$n - data" <<<"$blind" || return 1; done
+  [ "$(grep -c ' keep ' <<<"$blind")" = 12 ] &&
+    # Every template that makes one goes through the rule.
+    [ "$(grep -c 'include "b221.copySource"' "$CHART/templates/configmap.yaml")" = 2 ] || return 1
+  # In a cluster that holds none (installed at 0.13, or copied and
+  # deleted): none rendered, and the env still names each.
+  seen=$(rendered --set-json "$sees")
+  [ "$(configmaps <<<"$seen" | grep -c ' keep ')" = 0 ] && configmaps <<<"$seen" | grep -qx 'k8s-console-221b-wiki - -' &&
+    configmaps <<<"$seen" | grep -qx 'k8s-console-221b-agents - -' || return 1
+  for n in SETTINGS AUDIT SESSIONS AI KNOWLEDGE AUTOMATION AUTOMATION_RUNS ISSUES PROPOSALS RUNS CASEWORK; do
+    grep -A1 "name: ${n}_CONFIGMAP\$" <<<"$seen" | has '"consoles/k8s-console-221b' || return 1
+  done
+  # One still there (a 0.12 release, or a copy that failed): that one.
+  audit=$(rendered --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-audit":{"metadata":{"name":"k8s-console-221b-audit"}}}' | configmaps | grep ' keep ')
+  [ "$audit" = 'k8s-console-221b-audit keep -' ] || return 1
+  # Automation off: not rendered blind, and rendered while it is there.
+  auto_off=$(rendered --set automation.enabled=false | configmaps)
+  auto_there=$(rendered --set automation.enabled=false --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-automation":{"metadata":{"name":"k8s-console-221b-automation"}}}' | configmaps | grep ' keep ')
+  ! grep -q 'automation' <<<"$auto_off" && [ "$auto_there" = 'k8s-console-221b-automation keep -' ]
 }
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | has '^  name: k8s-console-221b-auth$'; }
 kinds() {
@@ -478,7 +526,8 @@ hardened() { grep -q 'runAsNonRoot: true' "$out" && grep -q 'readOnlyRootFilesys
 # The ClusterRole reads the kinds the tabs show (from Phase 8 volumes,
 # storage classes and volume attachments too), pod logs, metrics and the
 # kubelets' stats, and Secrets only when asked to; the Role patches the
-# settings ConfigMap, by name, and nothing else.
+# temporary wiki store's ConfigMap, by name, and no other ConfigMap, and
+# reads and deletes the ConfigMaps of before 0.13 (DB-72).
 cluster_role() { sed -n '/^kind: ClusterRole$/,/^---/p' "${1:-$out}"; }
 settings_role() { sed -n '/^kind: Role$/,/^---/p' "$out"; }
 # Every resource the ClusterRole names, as group/resource, sorted.
@@ -535,9 +584,10 @@ sherlock_key() {
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-ai", "k8s-console-221b-knowledge", "k8s-console-221b-wiki", "k8s-console-221b-runs", "k8s-console-221b-automation", "k8s-console-221b-automation-runs", "k8s-console-221b-issues", "k8s-console-221b-proposals", "k8s-console-221b-cases", "k8s-console-221b-casework"\]' &&
-    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create","list","get","update","patch","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
-    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 4 ]
+  settings_role | grep -A1 'resourceNames: \["k8s-console-221b-wiki"\]' | has 'verbs: \["get", "patch"\]' &&
+    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] verbs:["get","list","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ] &&
+    ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-knowledge-nowiki.yaml" | has 'k8s-console-221b-wiki\|"patch"'
 }
 # The connections to other clusters: Secrets in the release namespace, by
 # default; in memory on request, and then nothing is granted on Secrets.
@@ -754,7 +804,7 @@ check "the ClusterRole's verbs are read-only, but for the access reviews" read_o
 check "with sign-in it impersonates people and reviews their access; without, neither" impersonation
 check "pod logs are only read" log_verbs
 check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
-check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only
+check "it patches only the temporary wiki store's ConfigMap, reads and deletes the ConfigMaps of before 0.13, and writes the connection Secrets, in its namespace" settings_only
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "the backups' key Secret is named in the Role and only read" backup_key
 check "a session made while the session store is away lasts auth.outageSession; its key's Secret is the console's to make" outage_session
@@ -805,14 +855,15 @@ check "the network policy lets the console reach the backups' S3 endpoint only a
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
 check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
-check "Automation's ConfigMap of before 0.13, the one-time copy's source, is rendered, named in the env and the Role; off, neither" automation_configmap
+check "Automation's ConfigMap of before 0.13, the one-time copy's source, is rendered where the cluster cannot be seen and named in the env; off, neither" automation_configmap
 check "the AI agents' ConfigMap of before 0.13, the one-time copy's source, is rendered, and their baselines come from values, mounted" ai_configmaps
-check "the issue service's ConfigMap of before 0.13, the one-time copy's source, is named in the env and the Role, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
+check "the issue service's ConfigMap of before 0.13, the one-time copy's source, is named in the env, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
 check "the report page's address reaches the console from issues.reportURL, and none is set by default" issues_report_url
 check "Mycroft's knowledge has its ConfigMap of before 0.13, the one-time copy's source, its local copy in an emptyDir, and reaches its sources only at knowledge.egressCIDRs" knowledge_values
-check "the temporary wiki store has a ConfigMap of its own, named in the env and the Role, and none when knowledge.configMapStore.enabled is false" wiki_configmap
-check "the jobs' ConfigMap of before 0.13, the one-time copy's source, is named in the env and the Role; the time zone of new schedules when set" jobs_configmap
-check "the cases' ConfigMap of before 0.13, the one-time copy's source, is named in the env and the Role" casework_configmap
-check "each case's ConfigMap of before 0.13, which the copy reads and deletes, is granted by the Role without names, with the clean start's values in the env" case_configmaps
-check "the agents' proposed changes' ConfigMap of before 0.13, <release>-proposals, the one-time copy's source, is named in the env and the Role, with who approves them; <release>-cases stays, readable, for the copy at start" cases_values
+check "the temporary wiki store has a ConfigMap of its own, named in the env and patched by the Role, and none when knowledge.configMapStore.enabled is false" wiki_configmap
+check "the jobs' ConfigMap of before 0.13, the one-time copy's source, is named in the env; the time zone of new schedules when set" jobs_configmap
+check "the cases' ConfigMap of before 0.13, the one-time copy's source, is named in the env" casework_configmap
+check "each case's ConfigMap of before 0.13, which the copy reads and deletes, is read and deleted by the Role without names, with the clean start's values in the env" case_configmaps
+check "the ConfigMaps of before 0.13: rendered while they are there, empty and kept by helm upgrade, all of them where the cluster cannot be seen; none made again once deleted; the configuration ConfigMaps as before" copy_sources
+check "the agents' proposed changes' ConfigMap of before 0.13, <release>-proposals, the one-time copy's source, is named in the env, with who approves them; <release>-cases is read beside it by the copy" cases_values
 exit "$fail"

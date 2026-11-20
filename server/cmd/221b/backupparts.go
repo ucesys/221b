@@ -338,6 +338,7 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 	// copy's source, read for nothing else) is copied over once.
 	pg := backup.NewPGRepo(w.database)
 	if from := w.settingsSource; hasSource(from) {
+		w.readFrom(from, backup.SettingsKey, backup.SettingsKey, backup.StatusKey)
 		ictx, cancel := context.WithTimeout(ctx, time.Minute)
 		copied, err := pg.Import(ictx, backup.NewKVRepo(from), "configmap key "+backup.SettingsKey)
 		cancel()
@@ -347,7 +348,6 @@ func (w *wiring) wireBackups(ctx context.Context) error {
 		if copied {
 			log.Info("copied the backups' settings and runs from their ConfigMap into the database")
 		}
-		w.removeCopied(ctx, from, backup.SettingsKey, backup.SettingsKey, backup.StatusKey)
 	}
 	var backupRepo backup.Repo = pg
 	w.inDatabase = append(w.inDatabase, "backups")

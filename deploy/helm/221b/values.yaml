@@ -477,10 +477,10 @@ cases:
   # in a ConfigMap of its own, <release>-case-<n> (labels
   # app.kubernetes.io/instance=<release> and 221b.io/case=<n>), which the
   # first start with the database copies and deletes. So the console's
-  # Role still grants list, get and delete (with create, update and patch,
-  # until the next release) on ConfigMaps in its namespace: Kubernetes
-  # cannot grant by a name it does not know, and the console lists only
-  # those with its labels. Keep the console in a namespace of its own.
+  # Role still grants list, get and delete on ConfigMaps in its namespace
+  # (DB-72): Kubernetes cannot grant by a name it does not know, and the
+  # console lists only those with its labels. Keep the console in a
+  # namespace of its own.
   #
   # The clean start: 0.12.0 changed what a case and a finding are, without
   # a migration. Set token to any new text (the date, say) and the leader
@@ -913,9 +913,9 @@ rbac:
   # secrets.read is on. With sign-in it may impersonate any user name
   # (Kubernetes cannot narrow that by rule, so the server alone decides
   # which name it sends; guard its token), only the groups listed in auth,
-  # and create access reviews. A Role on its own ConfigMaps (read once
-  # for the copy into the database, and the temporary wiki store) and
-  # Secrets. It has no right on roles or
+  # and create access reviews. A Role on the ConfigMaps of before 0.13
+  # (read once for the copy into the database, then deleted: DB-72), the
+  # temporary wiki store's ConfigMap and its Secrets. It has no right on roles or
   # bindings, and no other writes, except Watson's with sign-in off and
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true

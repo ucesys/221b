@@ -9,7 +9,6 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
-	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -24,17 +23,10 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// The copies' source and nothing else: the settings ConfigMap of a
 	// release before 0.13, with the audit log and the session records in
 	// ConfigMaps of their own when the chart names them (#46). Nil when
-	// -settings-configmap names none.
-	var from kv.Backend
-	var stored storedObjects
-	if cfg.SettingsConfigMap != "" {
-		cm, err := kube.NewConfigMapStorage(w.restCfg, cfg.SettingsConfigMap)
-		if err != nil {
-			return err
-		}
-		if from, stored, err = settingsBackend(ctx, w.restCfg, cm, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage")); err != nil {
-			return err
-		}
+	// the flags name none or none is there (DB-72: deleted once copied).
+	from, stored, err := settingsBackend(ctx, w.restCfg, cfg.SettingsConfigMap, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage"))
+	if err != nil {
+		return err
 	}
 	// Getting started's dismissed steps (GS-04) are a scope of the
 	// database's settings (Phase 13).

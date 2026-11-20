@@ -165,6 +165,54 @@ file from before has no agents block; a key that is no agent is refused.
 {{- end }}
 
 
+{{/*
+--- The ConfigMaps of before (DB-72, ADR-167) ---
+
+A release before 0.13 kept its records in ConfigMaps this chart made. The
+console copies them into the database at its first start and then deletes
+each one whose record sets are all copied. Helm must never delete one
+first: a ConfigMap the chart stops rendering is deleted by helm upgrade
+unless the live object carries helm.sh/resource-policy keep, and 0.12
+made them without it. So this release renders each one while it is in
+the cluster, with keep, which the upgrade from 0.12 adds to it before the
+console starts; once the console has deleted it, nothing renders it, and
+Helm neither deletes it nor makes it again (a keep on the live object, or
+no object, is all Helm's deletion looks at). Where the chart cannot see
+the cluster (helm template, a dry run on the client, a GitOps tool that
+renders with helm template) it renders every one, as 0.12 did, with keep,
+so that whatever applies the output deletes none first; such a tool makes
+one again, empty, after the console deleted it, and the console deletes
+it again at its next start (docs/upgrading.md).
+
+b221.clusterSeen is "true" when lookup sees the cluster, as in _roles.tpl.
+b221.copySource renders one, given (list . suffix on), where on says
+whether the console reads it at all (Automation's, with automation.enabled):
+in the cluster it is rendered while it is there whatever on says.
+*/}}
+{{- define "b221.clusterSeen" -}}
+{{- if lookup "v1" "Namespace" "" "kube-system" -}}true{{- end -}}
+{{- end -}}
+
+{{- define "b221.copySource" -}}
+{{- $ := index . 0 -}}
+{{- $name := printf "%s%s" (include "b221.fullname" $) (index . 1) -}}
+{{- $there := lookup "v1" "ConfigMap" $.Release.Namespace $name -}}
+{{- if or $there (and (ne (include "b221.clusterSeen" $) "true") (index . 2)) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "b221.labels" $ | nindent 4 }}
+  annotations:
+    # Kept by helm upgrade until the console has copied it into the
+    # database and deleted it (DB-72).
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end -}}
+
 {{/* --- The database (Phase 13) --- */}}
 
 {{/* bundled or external (DB-69); bundled when nothing says. Values kept
