@@ -99,7 +99,9 @@ type backupCredential struct {
 }
 
 // backupApp is an application's record; RepoToken is its repository
-// token, sealed, or the placeholder.
+// token, sealed, or the placeholder. The values file, each parameter and
+// each command's parameter are sealed in place, as secrets are (X-01,
+// DB-62): a file from before 0.13 has them in clear.
 type backupApp struct {
 	apps.Record
 	RepoToken string `json:"repoToken,omitempty"`
@@ -314,7 +316,7 @@ func (s *Server) registerBackupParts() {
 			}
 		}})
 	r.Register(backup.Part{Name: "apps", Label: "Helm applications", Order: 40,
-		How: "are added or replaced: source, values, parameters, commands; a repository token of before 0.12.1 comes back when the backup's key opens it and this console has none, and moves to a credential at the next start; a credential is named by id. One this console would refuse is left out and named",
+		How: "are added or replaced: source, values, parameters, commands; the values file, the parameters and the commands' parameters are sealed with the backup's key, and an application whose key this console does not have is left as it is here, or not added, and listed; a repository token of before 0.12.1 comes back when the backup's key opens it and this console has none, and moves to a credential at the next start; a credential is named by id. One this console would refuse is left out and named",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			if s.opts.Apps == nil {
 				return nil, nil
@@ -325,7 +327,7 @@ func (s *Server) registerBackupParts() {
 			}
 			var out []backupApp
 			for _, rec := range recs {
-				a := backupApp{Record: rec}
+				a := backupApp{Record: sealApp(rec, env)}
 				// A record that names its credential (CR-11) carries no
 				// token: the credentials' part holds the secret.
 				if rec.CredMigrated {
@@ -779,7 +781,16 @@ func (s *Server) restoreApps(ctx context.Context, list []backupApp, env *backup.
 	}
 	n := 0
 	for _, a := range list {
-		rec := a.Record
+		rec, ok := openApp(a.Record, env)
+		if !ok {
+			// Sealed with a key this console does not have, or written
+			// without one: the application is not restored half, with
+			// no values, for an upgrade to deploy it so; one here is
+			// left as it is.
+			note("application %s/%s is not restored: its values and parameters are sealed with a key this console does not have", rec.Namespace, rec.Name)
+			env.SetAgain(fmt.Sprintf("the values and parameters of the application %s/%s", rec.Namespace, rec.Name), "Applications › Helm › Add application (or restore with the backup's key)")
+			continue
+		}
 		if s.opts.Clusters != nil {
 			if _, ok := s.opts.Clusters.Summary(rec.Cluster); !ok {
 				note("application %s/%s: no connection %q here; add the connection first", rec.Namespace, rec.Name, rec.Cluster)
@@ -1463,4 +1474,66 @@ func openVariables(fp automation.FleetVariables, env *backup.Env, fleet, cluster
 		}
 	}
 	return out
+}
+
+// sealApp is an application's record as a backup writes it: the values
+// file, each parameter and each command's parameter sealed with the
+// install's key, or the placeholder without one (X-01). The names stay
+// with the sealed parameters only as part of what is sealed.
+func sealApp(rec apps.Record, env *backup.Env) apps.Record {
+	each := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, p := range in {
+			out[i] = env.Seal(p)
+		}
+		return out
+	}
+	rec.Values = env.Seal(rec.Values)
+	rec.Params = each(rec.Params)
+	if rec.Commands != nil {
+		cmds := make([]apps.Command, len(rec.Commands))
+		for i, c := range rec.Commands {
+			c.Params = each(c.Params)
+			cmds[i] = c
+		}
+		rec.Commands = cmds
+	}
+	return rec
+}
+
+// openApp is an application's record from a backup with its values,
+// parameters and commands' parameters opened: false when any of them is
+// the placeholder or sealed with a key this install does not have. A file
+// from before 0.13 holds them in clear, and they are taken as they are.
+func openApp(rec apps.Record, env *backup.Env) (apps.Record, bool) {
+	ok := true
+	one := func(v string) string {
+		plain, opened := env.Unseal(v)
+		ok = ok && opened
+		return plain
+	}
+	each := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, p := range in {
+			out[i] = one(p)
+		}
+		return out
+	}
+	rec.Values = one(rec.Values)
+	rec.Params = each(rec.Params)
+	if rec.Commands != nil {
+		cmds := make([]apps.Command, len(rec.Commands))
+		for i, c := range rec.Commands {
+			c.Params = each(c.Params)
+			cmds[i] = c
+		}
+		rec.Commands = cmds
+	}
+	return rec, ok
 }

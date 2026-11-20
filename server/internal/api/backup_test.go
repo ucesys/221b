@@ -98,9 +98,17 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if f.Settings == nil || f.Settings.RefreshSeconds != 7 {
 		t.Fatalf("the settings: %+v", f.Settings)
 	}
-	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].RepoToken != clusters.Placeholder || f.Apps[0].Values != "replicas: 2" || len(f.Apps[0].Commands) != 1 {
+	// Without a key the values and the commands' parameters are the
+	// placeholder, as every secret is (X-01).
+	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].RepoToken != clusters.Placeholder || f.Apps[0].Values != backup.Placeholder || len(f.Apps[0].Commands) != 1 || f.Apps[0].Commands[0].Params[0] != backup.Placeholder {
 		t.Fatalf("the applications: %+v", f.Apps)
 	}
+	if strings.Contains(body, "replicas: 2") || strings.Contains(body, "replicas=5") {
+		t.Fatalf("the backup holds the application's values:\n%s", body)
+	}
+	// What follows restores a file from before 0.13, which held them in
+	// clear: it restores as it did.
+	f.Apps[0].Values, f.Apps[0].Commands[0].Params = "replicas: 2", []string{"replicas=5"}
 	var spend sherlock.Spend
 	_ = json.Unmarshal(f.SherlockSpend, &spend)
 	if len(f.ToolboxSessions) != 1 || f.ToolboxSessions[0].ID != "s1" || spend.MonthUSD != 9 {

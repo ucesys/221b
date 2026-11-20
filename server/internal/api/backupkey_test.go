@@ -8,12 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
 
 const (
@@ -199,5 +202,83 @@ func TestAUserComesBackWithTheirPassword(t *testing.T) {
 		if listed := hasSecret(out.Secrets, "the password of the user carl", "Administration › Auth › Users › carl › Set password"); listed == tc.same {
 			t.Fatalf("key %s: secrets %+v", tc.key[:4], out.Secrets)
 		}
+	}
+}
+
+// X-01, item 27 of the handover: an application's values file, its
+// parameters and its commands' parameters travel sealed with the install's
+// key. None is in the file in clear; a console with the same key takes
+// them back into the application's Secret (set.json) and no row; one with
+// another key does not restore the application half, and lists it.
+func TestAnApplicationsValuesTravelSealed(t *testing.T) {
+	ctx := context.Background()
+	const values, param, cmdParam = "password: MARKVALUES31", "db.pass=MARKPARAM31", "admin.pass=MARKCOMMAND31"
+	store := appstest.Store(t)
+	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Backup, o.Apps = keyed(testKeyA), store
+	})
+	rec := apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://github.com/example/shop", Ref: "main", RefKind: apps.RefBranch}, Values: values, Params: []string{param}, Commands: []apps.Command{{Name: "rotate", Params: []string{cmdParam}}}}
+	if err := store.Save(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the backup: %s", resp.Status)
+	}
+	body = unzip(t, body)
+	for _, leak := range []string{"MARKVALUES31", "MARKPARAM31", "MARKCOMMAND31"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("the backup holds %q in clear:\n%s", leak, body)
+		}
+	}
+	var f backupFile
+	if err := json.Unmarshal([]byte(body), &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Apps) != 1 || !backup.SealedValue(f.Apps[0].Values) || !backup.SealedValue(f.Apps[0].Params[0]) || !backup.SealedValue(f.Apps[0].Commands[0].Params[0]) || f.Apps[0].Commands[0].Name != "rotate" {
+		t.Fatalf("the application in the file: %+v", f.Apps)
+	}
+
+	// The same key: back in the application's Secret, in no row.
+	store2, d, cs := appstest.PG(t, nil)
+	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Backup, o.Apps = keyed(testKeyA), store2
+	})
+	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"apps": true}})
+	resp, out := send(t, c2, http.MethodPost, srv2.URL+"/api/v1/admin/restore", string(in))
+	var rep restoreReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil || resp.StatusCode != http.StatusOK || rep.Restored["apps"] != 1 || len(rep.Secrets) != 0 {
+		t.Fatalf("the restore: %s %s", resp.Status, out)
+	}
+	got, _, err := store2.Get(ctx, clusters.LocalID, "web", "shop")
+	if err != nil || got.Values != values || len(got.Params) != 1 || got.Params[0] != param || len(got.Commands) != 1 || got.Commands[0].Params[0] != cmdParam {
+		t.Fatalf("the application after the restore: %+v %v", got, err)
+	}
+	sec, err := cs.CoreV1().Secrets(appstest.Namespace).Get(ctx, appstest.SecretName(clusters.LocalID, "web", "shop"), metav1.GetOptions{})
+	if err != nil || !strings.Contains(string(sec.Data["set.json"]), "MARKVALUES31") || !strings.Contains(string(sec.Data["set.json"]), "MARKCOMMAND31") {
+		t.Fatalf("the application's Secret: %v", err)
+	}
+	for _, m := range []string{"MARKVALUES31", "MARKPARAM31", "MARKCOMMAND31"} {
+		if held := dbtest.Holding(t, d, m); len(held) > 0 {
+			t.Fatalf("%s is in the database: %v", m, held)
+		}
+	}
+
+	// Another key: asked first, then not restored, and listed.
+	store3 := appstest.Store(t)
+	srv3, c3, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Backup, o.Apps = keyed(testKeyB), store3
+	})
+	in, _ = json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"apps": true}, WithoutSecrets: true})
+	resp, out = send(t, c3, http.MethodPost, srv3.URL+"/api/v1/admin/restore", string(in))
+	rep = restoreReport{}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("another key: %s %s", resp.Status, out)
+	}
+	if rep.Restored["apps"] != 0 || !hasSecret(rep.Secrets, "the values and parameters of the application web/shop", "Applications › Helm › Add application (or restore with the backup's key)") || !strings.Contains(strings.Join(rep.Notes, "\n"), "web/shop is not restored") {
+		t.Fatalf("another key: restored %+v, secrets %+v, notes %v", rep.Restored, rep.Secrets, rep.Notes)
+	}
+	if _, _, err := store3.Get(ctx, clusters.LocalID, "web", "shop"); err == nil {
+		t.Fatal("an application restored with values it could not open")
 	}
 }
