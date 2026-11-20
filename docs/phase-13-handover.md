@@ -6,7 +6,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 
 - **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
-- **The owner answered the night's questions on November 20**: see *Decided by the owner on November 20, after the night*. In short: **a console does not start without its database** (`database.startWithoutIt` is off unless set, since the commit of that section; not seen in a cluster); three things are decided and **not built** (empty session Secrets deleted, the sessions from before a rollback ended by the console, an application's values and parameters sealed in the backup file and a saved command's parameters masked in the audit log and the log); the bell stays as it is. They are the first thing under *What to do next*. The two Claude docs were brought up to date the same day, and copies are in `docs/design/`. Later that morning he decided that the start without the database is **deleted** and that **the Inbox counts everything in it**; see *Decided by the owner on November 20, later in the morning*.
+- **The owner answered the night's questions on November 20**: see *Decided by the owner on November 20, after the night*. In short: **a console does not start without its database** (`database.startWithoutIt` is off unless set, since the commit of that section; not seen in a cluster); three things are decided and **not built** (empty session Secrets deleted, the sessions from before a rollback ended by the console, an application's values and parameters sealed in the backup file and a saved command's parameters masked in the audit log and the log); the bell stays as it is. They are in item 0 of *What to do next*, which since 09:41 holds every item of *Changes put off* as one iteration, with `database.mode: none` removed (default `bundled`, one member) and the ConfigMaps deleted after the copy: see *Decided by the owner on November 20 at 09:41*. The two Claude docs were brought up to date the same day, and copies are in `docs/design/`. Later that morning he decided that the start without the database is **deleted** and that **the Inbox counts everything in it**; see *Decided by the owner on November 20, later in the morning*.
 - **Every record set kept in a ConfigMap is in the database** when one is configured: Activity log, Approvals, Inventory, Platform's ConfigMap-kept records, Automation, AI configuration, Jobs, Changes, Knowledge and Cases. Iteration A is done. **Iteration B is done too** (November 20): of what is kept in Secrets, the part that is not secret is in the database, and every secret stays in its Secret (DB-59 to DB-66, steps `0034` to `0037`). Without a database (`database.mode=none`, the default) nothing changes for an installation.
 - **Ten cluster tests have run**, the tenth on `4f153c5a` (the fixes of the ninth and a console started without its database): its findings are under *The night of November 20*. The ninth ran on `c86ed30a` (schema 37, iteration B): see *The ninth test*. The eighth ran on `c509f8ce` (schema 33): see *The eighth test*. The seventh ran on `9750780` (schema 31). It saw every record set that was kept in a ConfigMap read the same from the database, the ConfigMaps emptied and the cases' own deleted, an older console find nothing waiting, three members, and a restore to a point in time. Its one finding of weight (a restore's time given as `…Z`) is fixed in the chart and not seen in a cluster; the rest is in the table under that test. The release there is at Helm revision 3 (its history started again with the uninstall of the restore): bundled, three members, schema 31, one console replica. Step `0032` has not been in a cluster.
 - **A record set is removed from its ConfigMap once it is copied** (the owner's decision of November 19; DB-55, done). The database is then the only copy: going back to a console without it means a restore, and the cluster session must save the ConfigMaps to a file before the next upgrade. A restore in place to the newest point ran once and worked; a restore to a point in time has not run.
@@ -384,6 +384,19 @@ Recorded by the coding session in the Claude app, which changed no code for them
 3. **The two Claude docs are in the repository**, under `docs/design/`: `data-model-domains.md` and `storage-deployment.md`, with their diagrams in `docs/design/images/`, exported on November 20. They are copies: the Claude docs are where they are edited, and each copy says so at its top. Export them again when a doc changes.
 4. **A sensitive variable's value is not recorded in the database** (the owner, at 09:38). Today it is plain text in `variables.value`, as it was in the Automation ConfigMap, masked only on the pages and in a run's output, and likely also in `variable_change_items.old_value` and `new_value` and in `script_run_values` (check each line by line). From now: the value is kept in a Secret, as an application's values are (row, then Secret, then commit; the row keeps the name, the scope and `is_sensitive`); a variable change and a run record that a sensitive value was set or used, never the value; the audit log and the log never carry it; the backup file seals it (X-01). A new schema step and the start that follows move the values already in the table into Secrets and clear them from every table, including the change items and run values of the past; a value that cannot be moved is left and named in the log, as the other copies do. Item 39 is decided by this.
 
+## Decided by the owner on November 20 at 09:41: the database is the only store, and everything put off is in this iteration
+
+1. **`database.mode: none` is removed.** The console no longer runs with its records in ConfigMaps: "we don't need an ability to run with configmaps". The modes are `bundled` and `external`, and the default is **`bundled` with one member** (`ha: false`). To build:
+   - The chart has no `none`. A release that had none, or a 0.12 release, upgrades to a bundled database, and the copies run at the first start, as for any upgrade. The mode guard lets an installation without a database get one; it still refuses `bundled` to `external` and back without `allowModeChange`.
+   - The ConfigMap backends of the record sets go. A ConfigMap is only read by the one-time copy at a start, which must stay while a release from before can be upgraded. The in-memory stores stay where tests and the simulator use them. Say how the simulator and `make dev` get a database.
+   - `-settings-configmap`, `-automation-configmap` and the other ConfigMap flags go from the console and the chart, or become the copy's source only.
+   - DB-01, DB-02, DB-55, `docs/database.md`, `docs/upgrading.md`, the README, the chart's README and values comments, `hack/check-chart.sh` and the kind scripts follow. Item 12 of *Changes put off* is decided by this.
+   - The default needs the image: `221b-postgres` is built, scanned, signed and published by CI and the release job beside the console's image (item 21). Edit `ci.yml` and `release.yml`; do not run CI.
+2. **After the migration the ConfigMaps are deleted**, not left empty. Once every record set a ConfigMap held is recorded in `imports`, the console deletes that ConfigMap (today DB-55 removes its keys and deletes only the cases' own ConfigMaps). The chart stops making them and the Role stops granting them.
+   - **Hazard: Helm must never delete one first.** The chart makes most of these ConfigMaps (`templates/configmap.yaml`). A chart that stops rendering them has Helm delete them at the upgrade, before the new console has copied them, and their records are lost. Design the release order so this cannot happen. For example, the release that copies keeps rendering them with `helm.sh/resource-policy: keep` and an empty data section that Helm does not overwrite, and a later release drops the templates. Or keep the templates and stop at the console's own delete. Test it with an upgrade from 0.12 in kind and in the cluster.
+   - Configuration ConfigMaps are not record sets and stay: the auth config, the Toolbox's. Secrets are not deleted, apart from the empty session Secrets (answer 1 above).
+3. **Every item of *Changes put off* is in this iteration**, with the decisions above. *What to do next*, item 0, lists the order. Items that are questions (8, the Lease; 13, `jsonb`) are answered in code or closed with the reason in the decisions table. Item 15 is the owner's own reading.
+
 ## Changes put off
 
 One list, kept at the owner's request, of what the decisions above leave to be changed later. Each line says what, and what it waits for. Add to it in the commit that makes such a decision; strike a line through when it is done.
@@ -445,18 +458,48 @@ One list, kept at the owner's request, of what the decisions above leave to be c
 
 ## What to do next, in order
 
-### 0. Build what the owner decided on November 20
+### 0. This iteration (the owner, November 20): everything decided, and everything put off
 
-From *Decided by the owner on November 20, after the night*; each with its test, its requirement and its line in `docs/upgrading.md` or `docs/database.md`.
+In this order; each with its tests, its requirement and its lines in the docs. Commit and push as each part is done.
 
-- **Delete the session Secrets that hold no data** once the sessions' copy is recorded (answer 1; DB-61 and DB-66 change).
-- **End the stored sessions from before a rollback** at the roll forward (answer 2).
-- **Seal an application's values file, parameters and commands' parameters in the backup file** (answer 3; item 27), reading a backup file of before that has them in clear.
-- **Mask a saved command's parameters in the audit log and the console's log** (answer 3; item 34).
-- **Delete the start without the database** (*later in the morning*, item 1).
-- **Count everything in the Inbox** (*later in the morning*, item 2).
-- **Keep sensitive variables' values out of the database** (*later in the morning*, item 4).
-- **See in a cluster**: all of the above, a console that does not start without its database, and the last fix of the night (a value and its sensitive mark as one thing, `1e4770e`).
+**A. The database is the only store.**
+1. `database.mode: none` removed; default `bundled`, `ha: false`; the ConfigMap backends go (*09:41*, item 1).
+2. ConfigMaps deleted after the copy, with no upgrade path on which Helm deletes one first (*09:41*, item 2).
+3. The start without the database deleted (*later in the morning*, item 1; items 36, 38).
+4. CI and release build, scan, sign and publish `221b-postgres`; `hack/base-images.env` pins its bases; the licence step accepts the new Go modules; database variants of `e2e-kind.sh`, `ha-kind.sh` and `upgrade-kind.sh`, which become the only variants (item 21). Edit, do not run, CI.
+
+**B. Secrets.**
+5. A sensitive variable's value never in the database (*later in the morning*, item 4; item 39).
+6. The backup file seals an application's values, parameters and commands' parameters (answer 3; item 27).
+7. A saved command's parameters masked in the audit log and the log (answer 3; item 34).
+8. Empty session Secrets deleted after the copy (answer 1).
+9. The sessions from before a rollback ended at the roll forward (answer 2).
+10. Credentials: a repository of their own; a way to remove a secret no credential names; the *(restored)* wording (item 28).
+
+**C. What people see.**
+11. The Inbox counts everything in it (*later in the morning*, item 2).
+12. With the database away: a banner (DB-15), the Inbox not saying nothing is pending, `/me` and `/settings` of the issue service answering 503 (item 37).
+13. An audit whose identity cannot read the cluster says so (item 16).
+14. The ninth test's leftovers (item 35); the seventh test's N3, N4, N5 (items 22, 23, 24); the eighth test's N2 (item 25).
+15. One page of all runs, the rejected ones among them (item 17).
+
+**D. The schema and the repositories.**
+16. Repositories in place of `db.Doc` where a record set is still one document: Changes (item 1), Cases with the list as a query (item 3), AI configuration (item 4), Jobs with `schedule_claims` through `db.Claim` and the ConfigMap's byte limits gone (item 5), Automation's runs as one repository and a run's whole output (item 6), Mycroft's runs keeping their ids (item 26).
+17. `approval_request_id` filled where an approval is asked, or the columns dropped (items 1, 4, 7, 32).
+18. Keys in place of ids as text once rows keep their ids (item 9); a connection's save held to `clusters.version`, `applications.fleet_key` a key (item 29).
+19. Item 32: every column nothing writes either filled or dropped, the unique constraints the code relies on declared, the names that mislead renamed, each in new steps.
+20. The Lease (item 8) and `json` to `jsonb` (item 13): answer them, in code or in the decisions table.
+
+**E. Docs and tests.**
+21. An ADR for a record split between a row and a Secret; one shared test package for `appstest.Cluster()` and `clusterstest` (item 30). The table and domain counts in ADR-162 and the requirements' introduction (item 33). `TestTunnelForwardsConnections` made steady (item 31).
+
+**F. The external database and the backups.**
+22. `iamAuth` for RDS and Cloud SQL (item 19).
+23. The backup container's script as a small program, with a schedule that is more than a time of day (item 20).
+
+**G. Cluster tests** of A to F, as the parts land, in namespace `221b-github`. The first one: an upgrade from a release without a database to the bundled default, every ConfigMap copied and then deleted, none deleted by Helm first. Save the namespace's ConfigMaps and Secrets to a file outside the repository, mode 600, before each upgrade.
+
+**The owner's own**: item 15, reading the decisions table through before a release.
 
 ### 1. Verify and ship what is here
 
