@@ -34,71 +34,41 @@ type Config struct {
 	// Refresh is how often browsers are updated and metrics-server read,
 	// until someone changes it in the console's Settings.
 	Refresh time.Duration
-	// SettingsConfigMap is the "namespace/name" of the ConfigMap a release
-	// before 0.13 kept the settings in. Like every ConfigMap flag below but
-	// WikiConfigMap, it names the one-time copy's source and nothing else
-	// (DB-69): the console reads it once, at a start, copies what it holds
-	// into the database and removes what was copied; it keeps nothing
-	// there. Empty: nothing to copy.
-	SettingsConfigMap string
+	// ReleaseNamespace and ReleaseFullname name the Helm release that runs
+	// the console: its namespace (the pod's own, from the downward API)
+	// and the chart's fullname, which every object the chart makes is
+	// named after. The ConfigMaps a release before 0.13 kept its records
+	// in, the one-time copies' source and nothing else (DB-69, DB-72), are
+	// always <namespace>/<fullname>-<what> (<fullname> for the settings,
+	// <fullname>-case-<n> for each case), worked out from these two in one
+	// place (sourceRef in cmd/221b) since November 21, 2026, when the
+	// owner dropped the flags that named each. Both empty: nothing to copy
+	// (a console run by hand).
+	ReleaseNamespace string
+	ReleaseFullname  string
 	// Database is the PostgreSQL the console keeps its records in (Phase
 	// 13, DB-01): the chart's bundled one or one the operator runs. It is
 	// the only store (DB-69): a console with no host does not start.
 	Database db.Config
 	// Automation turns Automation on (Phase 11 part 2, ADR-73); it runs
-	// only where SSH is on too. AutomationConfigMap is the "namespace/name"
-	// of the ConfigMap a release before 0.13 kept its records in: the
-	// copy's source.
-	Automation          bool
-	AutomationConfigMap string
-	// AuditConfigMap, SessionsConfigMap and AutomationRunsConfigMap are
-	// where a release before 0.13 kept the audit log, the toolbox's session
-	// records and Automation's runs, in ConfigMaps of their own (#46): the
-	// copy's source; empty: with the settings or the scripts. A name given
-	// must exist.
-	AuditConfigMap          string
-	SessionsConfigMap       string
-	AutomationRunsConfigMap string
-	// AIConfigMap is the "namespace/name" of the ConfigMap the AI agents
-	// were kept in before 0.13 (Phase 12): providers, agents, their
-	// instructions, test cases and pilots; the copy's source. AgentsDir holds the
-	// chart's baseline house instructions, a file <agent>.md each.
-	AIConfigMap string
-	AgentsDir   string
-	// Issues turns the issue service on (Phase 12, docs/issues.md);
-	// IssuesConfigMap is the "namespace/name" of the ConfigMap it kept its
-	// records in before 0.13: the copy's source. IssuesReportRoles and
-	// IssuesOperatorRoles are which of the four roles may report problems
-	// and which triage them.
+	// only where SSH is on too.
+	Automation bool
+	// AgentsDir holds the chart's baseline house instructions for the AI
+	// agents, a file <agent>.md each.
+	AgentsDir string
+	// Issues turns the issue service on (Phase 12, docs/issues.md).
+	// IssuesReportRoles and IssuesOperatorRoles are which of the four
+	// roles may report problems and which triage them.
 	Issues              bool
-	IssuesConfigMap     string
 	IssuesReportRoles   []string
 	IssuesOperatorRoles []string
 	// IssuesReportURL is the report page's address other pages link to
 	// (issues.reportURL, 0.12.1); empty is /report on the console.
 	IssuesReportURL string
 	// --- Watson cards (Phase 12, ADR-99) ---
-	// ProposalsConfigMap is the "namespace/name" of the ConfigMap the
-	// agents' proposed changes, the standing approvals and the notification
-	// settings are kept in (<release>-proposals; <release>-cases before
-	// CF-104) before 0.13: the copy's source. CasesApproverRoles are the roles
-	// that may approve proposed changes, besides a SuperAdmin.
-	ProposalsConfigMap string
+	// CasesApproverRoles are the roles that may approve proposed changes,
+	// besides a SuperAdmin.
 	CasesApproverRoles []string
-	// --- Case work (Phase 12, CW-13) ---
-	// CaseworkConfigMap is the "namespace/name" of the ConfigMap the cases'
-	// settings and the exceptions were kept in before 0.13: the copy's
-	// source.
-	CaseworkConfigMap string
-	// --- One flow for findings and cases (Phase 12, wave 6, CF-20, CF-23) ---
-	// CaseConfigMaps is "namespace/prefix" of the ConfigMaps a console
-	// before 0.13 made, one per case (<release>-case-<n>): the copy's
-	// source, each deleted once copied (DB-55); labelled
-	// app.kubernetes.io/instance=CaseInstance; empty is derived from
-	// IssuesConfigMap ("<ns>/<name without -issues>-case-", instance the
-	// name without -issues).
-	CaseConfigMaps string
-	CaseInstance   string
 	// SelfRelease is "namespace/name" of the Helm release that runs this
 	// console in its own cluster: Watson's cards for it say the console
 	// depends on it, and one that removes its values is refused (asked
@@ -110,18 +80,12 @@ type Config struct {
 	CleanStartToken  string
 	CleanStartDryRun bool
 	// --- Jobs (Phase 12) ---
-	// RunsConfigMap is the "namespace/name" of the ConfigMap the jobs,
-	// their runs and findings were kept in before 0.13: the copy's source.
 	// JobsTimeZone is the time zone a new schedule starts in; empty is UTC.
-	RunsConfigMap string
-	JobsTimeZone  string
+	JobsTimeZone string
 	// --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
-	// KnowledgeConfigMap is the "namespace/name" of the ConfigMap Mycroft's
-	// sources and drafts were kept in before 0.13: the copy's source.
 	// KnowledgeDir is where the wiki's local copy and the
 	// source repositories are kept on the pod's disk; KnowledgeRefreshGit
 	// and KnowledgeRefreshS3 how often the local copy is read again.
-	KnowledgeConfigMap  string
 	KnowledgeDir        string
 	KnowledgeRefreshGit time.Duration
 	KnowledgeRefreshS3  time.Duration
@@ -282,36 +246,27 @@ func Parse(args []string) (Config, error) {
 	fs.IntVar(&c.Database.MaxConns, "db-max-connections", envInt("DB_MAX_CONNECTIONS", 10), "most connections this replica opens to the database")
 	fs.StringVar(&c.Database.ListenerHost, "db-listener-host", env("DB_LISTENER_HOST", ""), "direct address of the database for the listener and the locks, when -db-host is a pooler in transaction mode (empty: -db-host)")
 	fs.DurationVar(&c.Database.Poll, "db-poll-interval", envDuration("DB_POLL_INTERVAL", db.DefaultPoll), "how often a replica looks for changes other replicas made, besides being told")
-	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the settings in, copied into the database once and read for nothing else (empty: nothing to copy)")
+	// The release that runs the console, which names every ConfigMap of
+	// before (DB-72): the chart passes its namespace and fullname.
+	fs.StringVar(&c.ReleaseNamespace, "release-namespace", env("POD_NAMESPACE", ""), "namespace of the Helm release that runs the console, its own (the chart passes the pod's); with -release-fullname it names the ConfigMaps a release before 0.13 kept its records in, <namespace>/<fullname>-<what>, copied into the database once and deleted (empty: nothing to copy)")
+	fs.StringVar(&c.ReleaseFullname, "release-fullname", env("RELEASE_FULLNAME", ""), "the chart's fullname of the release that runs the console, which the objects the chart made are named after (empty: nothing to copy)")
 	fs.BoolVar(&c.Automation, "automation", envBool("AUTOMATION", true), "offer Automation: scripts run on paired nodes over SSH (needs the toolbox's SSH on)")
-	fs.StringVar(&c.AutomationConfigMap, "automation-configmap", env("AUTOMATION_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept Automation's scripts, parameters and runs in, copied into the database once (empty: nothing to copy)")
-	fs.StringVar(&c.AuditConfigMap, "audit-configmap", env("AUDIT_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the audit log in, copied into the database once (empty: with the settings)")
-	fs.StringVar(&c.SessionsConfigMap, "sessions-configmap", env("SESSIONS_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the toolbox's session records in, copied into the database once (empty: with the settings)")
-	fs.StringVar(&c.AutomationRunsConfigMap, "automation-runs-configmap", env("AUTOMATION_RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept Automation's runs and nodes' facts in, copied into the database once (empty: with its scripts)")
-	fs.StringVar(&c.AIConfigMap, "ai-configmap", env("AI_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the AI agents, their instructions and test cases in, copied into the database once (empty: nothing to copy)")
 	fs.StringVar(&c.AgentsDir, "agents-dir", env("AGENTS_DIR", ""), "directory of the chart's baseline house instructions for the AI agents, one <agent>.md each (empty: none)")
 	fs.BoolVar(&c.Issues, "issues", envBool("ISSUES", true), "offer the issue service: the report page at /report and its API at /api/issues/v1/")
-	fs.StringVar(&c.IssuesConfigMap, "issues-configmap", env("ISSUES_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the issue service's reports, known issues, services and settings in, copied into the database once (empty: nothing to copy)")
 	// --- Knowledge (Phase 12) ---
-	fs.StringVar(&c.KnowledgeConfigMap, "knowledge-configmap", env("KNOWLEDGE_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept Mycroft's sources and drafts in, copied into the database once (empty: nothing to copy)")
 	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Administration › AI › Knowledge names no store (empty: no such store; it will be removed)")
 	fs.StringVar(&c.KnowledgeDir, "knowledge-dir", env("KNOWLEDGE_DIR", ""), "directory for the wiki's local copy and the source repositories (empty: a temporary directory)")
 	fs.DurationVar(&c.KnowledgeRefreshGit, "knowledge-refresh-git", envDuration("KNOWLEDGE_REFRESH_GIT", 15*time.Minute), "how often the wiki's local copy is read again from a git repository, besides each push")
 	fs.DurationVar(&c.KnowledgeRefreshS3, "knowledge-refresh-s3", envDuration("KNOWLEDGE_REFRESH_S3", 5*time.Minute), "how often the wiki's local copy is read again from an S3 bucket")
-	fs.StringVar(&c.RunsConfigMap, "runs-configmap", env("RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the jobs, their runs and findings in, copied into the database once (empty: nothing to copy)")
 	fs.StringVar(&c.JobsTimeZone, "jobs-time-zone", env("JOBS_TIME_ZONE", ""), "the IANA time zone a job's schedule starts in, such as Europe/Berlin (empty: UTC)")
 	reportRoles := fs.String("issues-report-roles", env("ISSUES_REPORT_ROLES", "superAdmin,superViewer,admin,viewer"), "comma-separated roles that may report problems; the Reporter role always may")
 	fs.StringVar(&c.IssuesReportURL, "issues-report-url", env("ISSUES_REPORT_URL", ""), "the report page's address other pages link to: a path on the console or an http or https address (empty: /report on this console)")
 	operatorRoles := fs.String("issues-operator-roles", env("ISSUES_OPERATOR_ROLES", "superAdmin,admin"), "comma-separated roles that see every report and triage them")
 	// --- Watson cards (Phase 12) ---
-	fs.StringVar(&c.ProposalsConfigMap, "proposals-configmap", env("PROPOSALS_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the agents' proposed changes, standing approvals and notification settings in, copied into the database once (empty: nothing to copy)")
 	approverRoles := fs.String("cases-approver-roles", env("CASES_APPROVER_ROLES", "superAdmin,admin"), "comma-separated roles that may approve the agents' proposals; a SuperAdmin always may")
 	// --- end of Watson cards.
 	// --- Case work (Phase 12) ---
-	fs.StringVar(&c.CaseworkConfigMap, "casework-configmap", env("CASEWORK_CONFIGMAP", ""), "namespace/name of the ConfigMap a release before 0.13 kept the cases' settings and exceptions in, copied into the database once (empty: nothing to copy)")
 	// --- One flow for findings and cases (Phase 12, wave 6) ---
-	fs.StringVar(&c.CaseConfigMaps, "case-configmaps", env("CASE_CONFIGMAPS", ""), "namespace/prefix of the ConfigMaps a release before 0.13 made, one per case, copied into the database once and deleted (empty: from -issues-configmap, <name without -issues>-case-)")
-	fs.StringVar(&c.CaseInstance, "case-instance", env("CASE_INSTANCE", ""), "the app.kubernetes.io/instance label of the cases' ConfigMaps (empty: the issues ConfigMap's name without -issues)")
 	fs.StringVar(&c.SelfRelease, "self-release", env("SELF_RELEASE", ""), "namespace/name of the Helm release that runs this console in its own cluster, which Watson's cards warn about (empty: not known)")
 	fs.StringVar(&c.CleanStartToken, "cases-clean-start-token", env("CASES_CLEAN_START_TOKEN", ""), "a token that, set and not yet done, deletes the Cases area's records once at start (cases, known issues, runs and findings, agents' proposals, Mycroft's pages)")
 	fs.BoolVar(&c.CleanStartDryRun, "cases-clean-start-dry-run", envBool("CASES_CLEAN_START_DRY_RUN", false), "with -cases-clean-start-token, only log what the clean start would delete")
@@ -390,17 +345,6 @@ func Parse(args []string) (Config, error) {
 	c.IssuesReportRoles = splitList(*reportRoles)
 	c.IssuesOperatorRoles = splitList(*operatorRoles)
 	c.CasesApproverRoles = splitList(*approverRoles)
-	// --- One flow for findings and cases (Phase 12, wave 6) ---
-	if c.CaseConfigMaps == "" && c.IssuesConfigMap != "" {
-		ns, name, ok := strings.Cut(c.IssuesConfigMap, "/")
-		if ok && strings.HasSuffix(name, "-issues") {
-			base := strings.TrimSuffix(name, "-issues")
-			c.CaseConfigMaps = ns + "/" + base + "-case-"
-			if c.CaseInstance == "" {
-				c.CaseInstance = base
-			}
-		}
-	}
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
@@ -420,6 +364,9 @@ func splitList(s string) []string {
 
 func (c Config) validate() error {
 	var errs []error
+	if (c.ReleaseNamespace == "") != (c.ReleaseFullname == "") || strings.Contains(c.ReleaseNamespace, "/") || strings.Contains(c.ReleaseFullname, "/") {
+		errs = append(errs, fmt.Errorf("-release-namespace and -release-fullname name the release that runs the console together, each without a /: got %q and %q", c.ReleaseNamespace, c.ReleaseFullname))
+	}
 	if err := c.Database.Validate(); err != nil {
 		errs = append(errs, err)
 	}

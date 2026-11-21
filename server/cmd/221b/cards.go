@@ -55,12 +55,12 @@ func cardLimits() cards.Limits {
 func openCards(ctx context.Context, cfg config.Config, restCfg *rest.Config, o cardsOptions) (*cards.Store, *kv.Limited, error) {
 	var backend kv.Backend
 	var stored *kv.Limited
-	if cfg.ProposalsConfigMap != "" {
-		cm, err := openSource(ctx, restCfg, cfg.ProposalsConfigMap)
+	if ref := sourceRef(cfg, objProposals); ref != "" {
+		cm, err := openSource(ctx, restCfg, ref)
 		if err != nil {
 			return nil, nil, fmt.Errorf("the proposed changes' ConfigMap: %w", err)
 		}
-		before, err := openProposalsOfBefore(ctx, restCfg, cfg.ProposalsConfigMap)
+		before, err := openProposalsOfBefore(ctx, restCfg, ref)
 		if err != nil {
 			return nil, nil, fmt.Errorf("the proposed changes' ConfigMap of before CF-104: %w", err)
 		}

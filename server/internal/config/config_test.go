@@ -14,7 +14,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != ":8080" || c.ClusterName != "prod" || c.Refresh != 3*time.Second || c.HealthInterval != 10*time.Second || c.LogFormat != "json" || !c.KubeletStats || c.SettingsConfigMap != "" {
+	if c.Listen != ":8080" || c.ClusterName != "prod" || c.Refresh != 3*time.Second || c.HealthInterval != 10*time.Second || c.LogFormat != "json" || !c.KubeletStats || c.ReleaseNamespace != "" || c.ReleaseFullname != "" {
 		t.Fatalf("defaults %+v", c)
 	}
 }
@@ -24,13 +24,14 @@ func TestEnvironment(t *testing.T) {
 	t.Setenv("LISTEN", ":9090")
 	t.Setenv("REFRESH", "30")
 	t.Setenv("KUBELET_STATS", "false")
-	t.Setenv("SETTINGS_CONFIGMAP", "consoles/k8s-console-221b")
+	t.Setenv("POD_NAMESPACE", "consoles")
+	t.Setenv("RELEASE_FULLNAME", "k8s-console-221b")
 	t.Setenv("HEALTH_INTERVAL", "5s")
 	c, err := Parse(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.Refresh != 30*time.Second || c.HealthInterval != 5*time.Second || c.KubeletStats || c.SettingsConfigMap != "consoles/k8s-console-221b" {
+	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.Refresh != 30*time.Second || c.HealthInterval != 5*time.Second || c.KubeletStats || c.ReleaseNamespace != "consoles" || c.ReleaseFullname != "k8s-console-221b" {
 		t.Fatalf("env %+v", c)
 	}
 	// Flags win over the environment.
@@ -190,6 +191,27 @@ func TestSessionOutage(t *testing.T) {
 	for _, bad := range []string{"0", "30s", "-5m", "25h"} {
 		if _, err := Parse([]string{"-session-outage", bad}); err == nil || !strings.Contains(err.Error(), "-session-outage") {
 			t.Errorf("-session-outage %s: %v", bad, err)
+		}
+	}
+}
+
+// The ConfigMaps of before are named after the release, and no flag names
+// one (decided by the owner on November 21, 2026): the flags that did are
+// refused, and the release's namespace and fullname go together.
+func TestTheReleaseNamesTheConfigMapsOfBefore(t *testing.T) {
+	for _, gone := range []string{"-settings-configmap", "-audit-configmap", "-sessions-configmap", "-automation-configmap", "-automation-runs-configmap",
+		"-ai-configmap", "-issues-configmap", "-knowledge-configmap", "-runs-configmap", "-proposals-configmap", "-casework-configmap", "-case-configmaps", "-case-instance"} {
+		if _, err := Parse([]string{"-cluster-name", "prod", gone, "consoles/k8s-console-221b"}); err == nil {
+			t.Errorf("%s is still a flag", gone)
+		}
+	}
+	c, err := Parse([]string{"-cluster-name", "prod", "-release-namespace", "consoles", "-release-fullname", "k8s-console-221b"})
+	if err != nil || c.ReleaseNamespace != "consoles" || c.ReleaseFullname != "k8s-console-221b" {
+		t.Fatalf("the release: %+v, %v", c, err)
+	}
+	for _, args := range [][]string{{"-release-namespace", "consoles"}, {"-release-fullname", "k8s-console-221b"}, {"-release-namespace", "a/b", "-release-fullname", "c"}} {
+		if _, err := Parse(append([]string{"-cluster-name", "prod"}, args...)); err == nil {
+			t.Errorf("%v is taken", args)
 		}
 	}
 }

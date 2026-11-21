@@ -47,7 +47,7 @@ type aiService struct {
 func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secretRef string, o aiOptions) (aiService, error) {
 	var out aiService
 	var backend kv.Backend
-	cm, err := openSource(ctx, restCfg, cfg.AIConfigMap)
+	cm, err := openSource(ctx, restCfg, sourceRef(cfg, objAI))
 	if err != nil {
 		return out, fmt.Errorf("the AI agents' ConfigMap: %w", err)
 	}

@@ -44,11 +44,11 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 		// there and cannot be read stops the start: a copy must not be
 		// taken for made when its source could not be read.
 		var from kv.Backend
-		cm, err := openSource(ctx, w.restCfg, cfg.AutomationConfigMap)
+		cm, err := openSource(ctx, w.restCfg, sourceRef(cfg, objAutomation))
 		if err != nil {
 			return fmt.Errorf("automation's ConfigMap: %w", err)
 		}
-		runs, err := openSource(ctx, w.restCfg, cfg.AutomationRunsConfigMap)
+		runs, err := openSource(ctx, w.restCfg, sourceRef(cfg, objAutomationRuns))
 		if err != nil {
 			return fmt.Errorf("automation's runs: %w", err)
 		}

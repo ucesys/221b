@@ -70,7 +70,7 @@ PY
 curl -fsS -X PATCH -H 'Content-Type: application/merge-patch+json' --data @"$WORK/eval-settings.json" \
   "http://127.0.0.1:$SIM_PORT/api/v1/namespaces/221b/configmaps/k8s-console-221b" > /dev/null
 SHERLOCK_API_KEY=$key bin/221b -api-server "http://127.0.0.1:$SIM_PORT" -cluster-name eval -listen "127.0.0.1:$PORT" -log-format text -sherlock-api-url "$api" \
-  -settings-configmap 221b/k8s-console-221b \
+  -release-namespace 221b -release-fullname k8s-console-221b \
   -db-host "${dbaddr%:*}" -db-port "${dbaddr##*:}" -db-user postgres -db-name "${DEV_DB_NAME:-postgres}" -db-sslmode disable \
   > "$WORK/eval-audit.log" 2> "$WORK/eval-console.log" &
 console=$!

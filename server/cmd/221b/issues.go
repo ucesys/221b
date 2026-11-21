@@ -45,14 +45,14 @@ func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, ma
 	var backend kv.Backend
 	var cases kv.Objects
 	var stored *kv.Limited
-	if cfg.CaseConfigMaps != "" {
-		objs, err := kube.NewConfigMapObjects(restCfg, cfg.CaseConfigMaps, cfg.CaseInstance, "221b.io/case")
+	if prefix, instance := caseSources(cfg); prefix != "" {
+		objs, err := kube.NewConfigMapObjects(restCfg, prefix, instance, "221b.io/case")
 		if err != nil {
 			return nil, nil, err
 		}
 		cases = objs
 	}
-	cm, err := openSource(ctx, restCfg, cfg.IssuesConfigMap)
+	cm, err := openSource(ctx, restCfg, sourceRef(cfg, objIssues))
 	if err != nil {
 		return nil, nil, fmt.Errorf("the issue service's ConfigMap: %w", err)
 	}

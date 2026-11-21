@@ -266,10 +266,7 @@ func (c *simCluster) start(t *testing.T, o consoleOptions) *console {
 	ref := simNamespace + "/" + simRelease
 	args := []string{"-api-server", c.url, "-cluster-name", "simulated", "-listen", "127.0.0.1:0", "-log-format", "text", "-health-interval", "2s",
 		"-auth-mode", "local", "-local-users", localUsers(t),
-		"-settings-configmap", ref, "-connections-secrets", ref, "-audit-configmap", ref + "-audit", "-sessions-configmap", ref + "-sessions",
-		"-automation-configmap", ref + "-automation", "-automation-runs-configmap", ref + "-automation-runs", "-ai-configmap", ref + "-ai",
-		"-issues-configmap", ref + "-issues", "-runs-configmap", ref + "-runs", "-proposals-configmap", ref + "-proposals",
-		"-knowledge-configmap", ref + "-knowledge", "-wiki-configmap", ref + "-wiki", "-casework-configmap", ref + "-casework"}
+		"-release-namespace", simNamespace, "-release-fullname", simRelease, "-connections-secrets", ref, "-wiki-configmap", ref + "-wiki"}
 	if d := o.database; d != nil {
 		args = append(args, "-db-host", d.Host, "-db-port", strconv.Itoa(d.Port), "-db-name", d.Name, "-db-user", d.User, "-db-sslmode", d.SSLMode, "-db-poll-interval", "200ms")
 		if d.PasswordFile != "" {

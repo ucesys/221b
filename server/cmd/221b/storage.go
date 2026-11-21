@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/rest"
@@ -17,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
+	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -167,6 +169,39 @@ var layout = map[string]map[string]kv.Limit{
 		casework.OldWorkKey: {},
 		lessons.RCAsKey:     {},
 	},
+}
+
+// sourceRef is the "namespace/name" of the ConfigMap of before that held
+// obj's record sets: <fullname>-<obj> in the release's namespace, and
+// <fullname> for the settings. It is the one place the copies' sources are
+// named (decided by the owner on November 21, 2026: no flag names one).
+// Empty when the release is not known (a console run by hand): nothing to
+// copy.
+func sourceRef(cfg config.Config, obj string) string {
+	if cfg.ReleaseNamespace == "" || cfg.ReleaseFullname == "" {
+		return ""
+	}
+	name := cfg.ReleaseFullname
+	if obj != objSettings {
+		name += "-" + obj
+	}
+	return cfg.ReleaseNamespace + "/" + name
+}
+
+// caseSources are the cases' own ConfigMaps of before (Phase 12, wave 6,
+// CF-20): "namespace/prefix" of their names, <fullname>-case-<n>, and the
+// app.kubernetes.io/instance label a console before 0.13 gave them, the
+// Helm release's name (that of -self-release, which the chart passes),
+// else the fullname. Empty when the release is not known.
+func caseSources(cfg config.Config) (prefix, instance string) {
+	if cfg.ReleaseNamespace == "" || cfg.ReleaseFullname == "" {
+		return "", ""
+	}
+	instance = cfg.ReleaseFullname
+	if ns, name, ok := strings.Cut(cfg.SelfRelease, "/"); ok && ns == cfg.ReleaseNamespace && name != "" {
+		instance = name
+	}
+	return cfg.ReleaseNamespace + "/" + cfg.ReleaseFullname + "-case-", instance
 }
 
 // limits are an object's limits, leaving out the keys it holds only until

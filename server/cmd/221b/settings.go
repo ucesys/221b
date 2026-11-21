@@ -24,7 +24,7 @@ func (w *wiring) wireSettings(ctx context.Context) error {
 	// release before 0.13, with the audit log and the session records in
 	// ConfigMaps of their own when the chart names them (#46). Nil when
 	// the flags name none or none is there (DB-72: deleted once copied).
-	from, stored, err := settingsBackend(ctx, w.restCfg, cfg.SettingsConfigMap, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage"))
+	from, stored, err := settingsBackend(ctx, w.restCfg, sourceRef(cfg, objSettings), sourceRef(cfg, objAudit), sourceRef(cfg, objSessions), log.With("component", "storage"))
 	if err != nil {
 		return err
 	}

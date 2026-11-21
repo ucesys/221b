@@ -40,7 +40,7 @@ import (
 func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, js *jobs.Service, iss *issues.Service, auditLog *audit.Log, leads func() bool, log *slog.Logger, wrap func(kv.Backend) kv.Backend) (*casework.Service, *kv.Limited, error) {
 	var backend kv.Backend
 	var stored *kv.Limited
-	cm, err := openSource(ctx, restCfg, cfg.CaseworkConfigMap)
+	cm, err := openSource(ctx, restCfg, sourceRef(cfg, objCasework))
 	if err != nil {
 		return nil, nil, fmt.Errorf("the cases' ConfigMap: %w", err)
 	}

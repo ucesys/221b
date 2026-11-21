@@ -248,8 +248,8 @@ rules:
     resourceNames: [{{ printf "%s-wiki" (include "b221.fullname" .) | quote }}]
     verbs: ["get", "patch"]
   {{- end }}
-  # The ConfigMaps a release before 0.13 kept its records in, named by the
-  # flags, and each case's own, <release>-case-<n>, labelled
+  # The ConfigMaps a release before 0.13 kept its records in, named after the
+  # release (<fullname>-<what>), and each case's own, <release>-case-<n>, labelled
   # app.kubernetes.io/instance and 221b.io/case: read by the one-time
   # copies and deleted once the database holds what they held (DB-55,
   # DB-72). resourceNames cannot name the cases' ConfigMaps, which are
