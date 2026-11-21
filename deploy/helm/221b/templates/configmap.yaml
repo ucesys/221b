@@ -11,12 +11,8 @@ empty and with helm.sh/resource-policy keep, so that helm upgrade from
 0.12 keeps it for the copy and never makes it again after; see
 b221.copySource. A release that starts at 0.13 has none.
 */}}
-{{- $automation := ne (toString (dig "enabled" true (.Values.automation | default dict))) "false" }}
-{{- range $suffix := list "" "-audit" "-sessions" "-ai" "-knowledge" "-issues" "-proposals" "-cases" "-runs" "-casework" }}
-{{- include "b221.copySource" (list $ $suffix true) }}
-{{- end }}
-{{- range $suffix := list "-automation" "-automation-runs" }}
-{{- include "b221.copySource" (list $ $suffix $automation) }}
+{{- range $suffix := list "" "-audit" "-sessions" "-ai" "-knowledge" "-automation" "-automation-runs" "-issues" "-proposals" "-cases" "-runs" "-casework" }}
+{{- include "b221.copySource" (list $ $suffix) }}
 {{- end }}
 {{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
 ---

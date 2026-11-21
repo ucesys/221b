@@ -20,7 +20,15 @@ import (
 
 // Automation (Phase 11 part 2, ADR-73).
 
-// wireAutomation opens Automation when the chart turns it on.
+// wireAutomation copies Automation's records of before into the
+// database, and opens Automation when the chart turns it on.
+//
+// The copy runs whether or not Automation is on (decided by the owner on
+// November 21, 2026): every ConfigMap of before is copied and deleted at
+// the first start with the database, so a release upgraded with
+// automation.enabled false keeps its scripts, runs and facts in the
+// database, shown once Automation is turned on, and is left with no
+// ConfigMap of before.
 func (w *wiring) wireAutomation(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	// Automation (Phase 11 part 2, ADR-73): scripts run over SSH to
@@ -28,7 +36,7 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 	// Runs live on the leader, like Watson's commands.
 	var autoEngine *automation.Engine
 	var autoStore *automation.Store
-	if cfg.Automation {
+	{
 		// The copy's source and nothing else: the ConfigMap a release
 		// before 0.13 kept the scripts in, and the one it kept the runs and
 		// the nodes' facts in when the chart names one; each nil when it
@@ -60,10 +68,6 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 			}
 			from = &kv.Routed{Default: scripts, Routes: routes}
 		}
-		outDir := ""
-		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
-			outDir = w.toolboxCfg.TranscriptDir
-		}
 		// Where the sensitive values are kept is said before anything is
 		// copied into the tables: a ConfigMap's variables copied now hide
 		// their sensitive values in the same Secrets as every later save.
@@ -84,8 +88,19 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 		}), nil)
 		// The runs and the run requests through their repository (DB-87).
 		autoStore.KeepRunsIn(w.database)
-		w.inDatabase = append(w.inDatabase, "automation")
 		w.sensitiveValues(ctx, autoStore, sens)
+		if !cfg.Automation {
+			// Off: the records are copied (above) and kept, and nothing
+			// offers them until Automation is turned on.
+			autoStore = nil
+		}
+	}
+	if autoStore != nil {
+		w.inDatabase = append(w.inDatabase, "automation")
+		outDir := ""
+		if w.toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
+			outDir = w.toolboxCfg.TranscriptDir
+		}
 		autoEngine = automation.NewEngine(automation.Options{
 			Node: func(cluster, node string) (automation.NodeState, bool) {
 				_, client, ok := w.manager.Lookup(cluster)

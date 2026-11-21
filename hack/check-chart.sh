@@ -346,12 +346,15 @@ host_ports() {
 # replicas' proxy token is a Secret of its own, always there.
 automation_configmap() {
   # On by default: a ConfigMap of before 0.13, named in the env; off,
-  # neither (copy_sources: in a cluster, rendered while it is there).
+  # the same, since it is copied and deleted whatever is on (November
+  # 21, 2026), and Automation is off.
   local off
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-automation$' &&
     grep -A1 'name: AUTOMATION_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-automation"' || return 1
   off=$(render k8s-console --set clusterName=ci --set automation.enabled=false)
-  ! grep -q 'k8s-console-221b-automation' <<<"$off" && grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
+  sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-automation$' &&
+    grep -A1 'name: AUTOMATION_CONFIGMAP' <<<"$off" | has '"consoles/k8s-console-221b-automation"' &&
+    grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
 }
 issues_values() {
   # On by default (Phase 12): a ConfigMap of before 0.13, named in the
@@ -445,7 +448,7 @@ case_configmaps() {
 # output deletes one before the console copied it. In a cluster (lookup,
 # here read from values in a copy of the chart) only those still there
 # are rendered, so Helm keeps them for the copy and never makes one again
-# once the console deleted it; Automation's while there, whatever
+# once the console deleted it; Automation's too, whatever
 # automation.enabled says. The configuration ConfigMaps and the wiki's
 # are rendered as before, without keep. The env names every ConfigMap of
 # before either way.
@@ -474,7 +477,7 @@ copy_sources() {
   for n in auth-config toolbox; do grep -qx "k8s-console-221b-$n - data" <<<"$blind" || return 1; done
   [ "$(grep -c ' keep ' <<<"$blind")" = 12 ] &&
     # Every template that makes one goes through the rule.
-    [ "$(grep -c 'include "b221.copySource"' "$CHART/templates/configmap.yaml")" = 2 ] || return 1
+    [ "$(grep -c 'include "b221.copySource"' "$CHART/templates/configmap.yaml")" = 1 ] || return 1
   # In a cluster that holds none (installed at 0.13, or copied and
   # deleted): none rendered, and the env still names each.
   seen=$(rendered --set-json "$sees")
@@ -486,10 +489,12 @@ copy_sources() {
   # One still there (a 0.12 release, or a copy that failed): that one.
   audit=$(rendered --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-audit":{"metadata":{"name":"k8s-console-221b-audit"}}}' | configmaps | grep ' keep ')
   [ "$audit" = 'k8s-console-221b-audit keep -' ] || return 1
-  # Automation off: not rendered blind, and rendered while it is there.
+  # Automation off: rendered blind as every other, and in a cluster
+  # while it is there; copied and deleted all the same (November 21).
   auto_off=$(rendered --set automation.enabled=false | configmaps)
   auto_there=$(rendered --set automation.enabled=false --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-automation":{"metadata":{"name":"k8s-console-221b-automation"}}}' | configmaps | grep ' keep ')
-  ! grep -q 'automation' <<<"$auto_off" && [ "$auto_there" = 'k8s-console-221b-automation keep -' ]
+  grep -qx 'k8s-console-221b-automation keep -' <<<"$auto_off" && grep -qx 'k8s-console-221b-automation-runs keep -' <<<"$auto_off" &&
+    [ "$auto_there" = 'k8s-console-221b-automation keep -' ]
 }
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | has '^  name: k8s-console-221b-auth$'; }
 kinds() {

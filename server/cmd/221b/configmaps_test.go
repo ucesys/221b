@@ -200,3 +200,63 @@ func TestAnUpgradeLeavesNoConfigMapOfBefore(t *testing.T) {
 		t.Fatalf("a start with no ConfigMap of before: %v\n%s", third.stopped(time.Second), third.logs.String())
 	}
 }
+
+// Automation turned off at the upgrade (decided by the owner on November
+// 21, 2026): its ConfigMaps of before are copied into the database and
+// deleted all the same, as every other, and nothing offers the records
+// until Automation is turned on, when they are there.
+func TestAutomationOffStillCopiesItsConfigMapsOfBefore(t *testing.T) {
+	direct := dbtest.Config(t)
+	c := newSimCluster(t, map[string]map[string]string{
+		"-automation":      {"groups.json": `[{"name":"markGroupA1","desc":"Monthly"}]`},
+		"-automation-runs": {"facts.json": `{"local/node-1":{"cluster":"local","node":"node-1","at":"2026-11-01T09:00:00Z","facts":{"os":"markFactA2"}}}`},
+	})
+	auto := []string{simRelease + "-automation", simRelease + "-automation-runs"}
+	left := func() []string {
+		var out []string
+		for _, name := range c.configMapNames(t) {
+			if slices.Contains(auto, name) {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	if got := left(); len(got) != 2 {
+		t.Fatalf("the cluster starts with %v", got)
+	}
+	off := c.start(t, consoleOptions{database: &direct, args: []string{"-automation=false"}})
+	if off.url == "" {
+		t.Fatalf("the console did not start: %v\n%s", off.stopped(time.Second), off.logs.String())
+	}
+	for deadline := time.Now().Add(time.Minute); len(left()) > 0; time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("Automation's ConfigMaps of before are left a minute after a start with it off: %v\n%s", left(), off.logs.String())
+		}
+	}
+	settled(t, c, direct)
+	d := dbtest.OpenConfig(t, direct)
+	for _, mark := range []string{"markGroupA1", "markFactA2"} {
+		if held := dbtest.Holding(t, d, mark); len(held) == 0 {
+			t.Errorf("%q is in no table after a start with Automation off:\n%s", mark, off.logs.String())
+		}
+	}
+	b := browser()
+	off.signIn(b)
+	if code, body, _ := off.get(b, "/api/v1/automation"); code != http.StatusNotFound {
+		t.Errorf("with Automation off, GET /api/v1/automation answers %d: %s", code, body)
+	}
+	if err := off.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	on := c.start(t, consoleOptions{database: &direct})
+	if on.url == "" {
+		t.Fatalf("the console did not start with Automation on: %v\n%s", on.stopped(time.Second), on.logs.String())
+	}
+	b = browser()
+	on.signIn(b)
+	code, body, _ := on.get(b, "/api/v1/automation")
+	if code != http.StatusOK || !strings.Contains(body, "markGroupA1") {
+		t.Fatalf("with Automation turned on, the copied group is not there: %d %s", code, body)
+	}
+}

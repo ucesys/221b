@@ -185,9 +185,9 @@ one again, empty, after the console deleted it, and the console deletes
 it again at its next start (docs/upgrading.md).
 
 b221.clusterSeen is "true" when lookup sees the cluster, as in _roles.tpl.
-b221.copySource renders one, given (list . suffix on), where on says
-whether the console reads it at all (Automation's, with automation.enabled):
-in the cluster it is rendered while it is there whatever on says.
+b221.copySource renders one, given (list . suffix). Every one is copied
+and deleted whatever is turned on (Automation's with automation.enabled
+false too, decided on November 21, 2026).
 */}}
 {{- define "b221.clusterSeen" -}}
 {{- if lookup "v1" "Namespace" "" "kube-system" -}}true{{- end -}}
@@ -197,7 +197,7 @@ in the cluster it is rendered while it is there whatever on says.
 {{- $ := index . 0 -}}
 {{- $name := printf "%s%s" (include "b221.fullname" $) (index . 1) -}}
 {{- $there := lookup "v1" "ConfigMap" $.Release.Namespace $name -}}
-{{- if or $there (and (ne (include "b221.clusterSeen" $) "true") (index . 2)) }}
+{{- if or $there (ne (include "b221.clusterSeen" $) "true") }}
 ---
 apiVersion: v1
 kind: ConfigMap

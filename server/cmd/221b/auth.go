@@ -162,37 +162,45 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 	// session that outlived a restart would be of an account that did
 	// not.
 	inDatabase := false
-	if cfg.ConnectionsSecrets != "" && w.authCfg.Mode != auth.ModeNone {
+	if cfg.ConnectionsSecrets != "" {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		// The copy's source and nothing else: the session Secrets of a
 		// release before 0.13 are read once more, for the copy, and
 		// emptied; they are not watched, and none is made from here on.
+		// They are copied with sign-in off too (decided by the owner on
+		// November 21, 2026: what a release before kept is copied and
+		// leaves where it was whatever is on), and then nothing reads the
+		// rows until sign-in is turned on.
 		before, err := kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
-		w.authCfg.SessionStore = w.sessionsInDatabase(ctx, before)
-		inDatabase = true
-		// The key that signs a session made while the session store is
-		// away (DB-65): the Secret <release>-session-key, made here at
-		// start when there is none, as the backups' key is, and read again
-		// when a signature does not verify, so a key put back by hand
-		// reaches every replica. Never logged. Without Secrets the key is
-		// this process's own.
-		name := prefix + auth.SessionKeySecretSuffix
-		ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
-		if err != nil {
-			return fmt.Errorf("the session key's Secret: %w", err)
+		store := w.sessionsInDatabase(ctx, before)
+		if w.authCfg.Mode != auth.ModeNone {
+			w.authCfg.SessionStore = store
+			w.inDatabase = append(w.inDatabase, "identity")
+			inDatabase = true
+			// The key that signs a session made while the session store is
+			// away (DB-65): the Secret <release>-session-key, made here at
+			// start when there is none, as the backups' key is, and read again
+			// when a signature does not verify, so a key put back by hand
+			// reaches every replica. Never logged. Without Secrets the key is
+			// this process's own.
+			name := prefix + auth.SessionKeySecretSuffix
+			ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
+			if err != nil {
+				return fmt.Errorf("the session key's Secret: %w", err)
+			}
+			key := auth.NewSessionKey(ks, nil)
+			kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := key.Ensure(kctx); err != nil {
+				log.Warn("the session key is not ready: until it is, a sign-in made while the session store is away is known to this replica only", "secret", ns+"/"+name, "err", err)
+			} else {
+				log.Info("session key ready", "secret", ns+"/"+name)
+			}
+			cancel()
+			w.authCfg.SessionKey = key
 		}
-		key := auth.NewSessionKey(ks, nil)
-		kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := key.Ensure(kctx); err != nil {
-			log.Warn("the session key is not ready: until it is, a sign-in made while the session store is away is known to this replica only", "secret", ns+"/"+name, "err", err)
-		} else {
-			log.Info("session key ready", "secret", ns+"/"+name)
-		}
-		cancel()
-		w.authCfg.SessionKey = key
 	} else {
 		w.claimImport(auth.SessionsImportID)
 	}
@@ -307,7 +315,6 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 			return !failed
 		}
 	}
-	w.inDatabase = append(w.inDatabase, "identity")
 	return auth.NewPGSessions(w.database, nil)
 }
 

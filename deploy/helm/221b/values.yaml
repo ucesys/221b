@@ -406,8 +406,9 @@ automation:
   # them on a fleet's nodes over SSH. It runs nothing unless
   # toolbox.ssh.enabled is on too, since it reaches nodes only through
   # their SSH pairings. Its records are kept in the database
-  # (<release>-automation is where a release before 0.13 kept them, copied
-  # once).
+  # (<release>-automation and -automation-runs are where a release before
+  # 0.13 kept them, copied once and deleted at the first start, with this
+  # off too: turned on later, they are there).
   enabled: true
   # runIdentities are the service accounts, by name, that Kubernetes scripts
   # and hooks may run as. Each adds impersonate on that name to the console's

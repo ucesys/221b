@@ -172,7 +172,7 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 		if _, ok := store.(*auth.PGSessions); !ok {
 			t.Fatalf("with a database the sessions are kept in %T", store)
 		}
-		if !w.importIDs[auth.SessionsImportID] || len(w.importClash) != 0 || !slices.Contains(w.inDatabase, "identity") {
+		if !w.importIDs[auth.SessionsImportID] || len(w.importClash) != 0 {
 			t.Fatalf("the copy's name %v (clash %v), the domains %v", w.importIDs, w.importClash, w.inDatabase)
 		}
 		s := auth.NewSessions(8*time.Hour, 7*24*time.Hour, nil)
@@ -363,9 +363,19 @@ func TestWhereTheSessionsAreKept(t *testing.T) {
 	if _, ok := w.authSvc.Sessions().Get(sess.ID); !ok || rows() != before {
 		t.Fatalf("a session kept in memory: found %v, %d rows more", ok, rows()-before)
 	}
-	// Sign-in off: nobody signs in, and nothing is kept anywhere.
-	w = wire(d, "221b/k8s-console-221b", auth.ModeNone)
+	// Sign-in off: nobody signs in, and nothing is kept anywhere; the
+	// session Secrets of before are copied all the same (decided by the
+	// owner on November 21, 2026), here a copy that cannot read them.
+	var logs bytes.Buffer
+	w = &wiring{cfg: config.Config{ConnectionsSecrets: "221b/k8s-console-221b"}, log: slog.New(slog.NewTextHandler(&logs, nil)), auditLog: audit.New(audit.Options{Out: &bytes.Buffer{}}),
+		restCfg: nowhere, database: d, authCfg: auth.Config{Mode: auth.ModeNone}}
+	if err := w.wireAuth(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if w.authCfg.SessionStore != nil || slices.Contains(w.inDatabase, "identity") {
 		t.Fatalf("with sign-in off: the store %T, the domains %v", w.authCfg.SessionStore, w.inDatabase)
+	}
+	if !w.importIDs[auth.SessionsImportID] || !strings.Contains(logs.String(), "copying a record set from its Secret into the database failed") {
+		t.Fatalf("with sign-in off the session Secrets were not copied: the names claimed %v; the log:\n%s", w.importIDs, logs.String())
 	}
 }
