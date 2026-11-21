@@ -928,9 +928,10 @@ func (s *Service) sweep(ctx context.Context) {
 		return nil
 	})
 	if err != nil {
-		s.o.Logger.Warn("the runs cannot be swept", "err", err)
+		s.sweepQuiet.Failed(s.o.Logger, "the runs cannot be swept", err)
 		return
 	}
+	s.sweepQuiet.Worked(s.o.Logger, "the runs are swept again")
 	for _, r := range gone {
 		s.record(audit.Event{Action: ActionRun, Who: audit.Who{Subject: "221b", Name: "job " + r.Job}, Target: r.Job, Outcome: audit.OutcomeFailed, Detail: r.ID + " " + r.Label + ": " + r.Note})
 	}

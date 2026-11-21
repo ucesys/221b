@@ -104,6 +104,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Cases: a message added writes its row and the case's row once (DB-88)` | F3: one update of `cases` a save; the work saved only when it changed; the work's tables diffed row by row; a new event one insert. |
 | `Jobs: a run's budget holds within its agent's calls and hand-overs (JB-10)` | F1, a fault since 0.12.0: a meter counts every model call of a run's chain, hand-overs included, and starts no call once the run's or the day's budget is spent; a run passes its budget by at most one call. |
 | `Database away: Getting started, the jobs, the hosts and three sweeps say it once (DB-15)` | N1: `db.Quiet` on six more repeating warnings; `TestTheLogSaysAnOutageOnce` lists them. |
+| `The thirteenth cluster test's nits: the runs' sweep says an outage once, the history names the approving request (DB-15, AI-32)` | N3: `db.Quiet` on *the runs cannot be swept* (`TestTheSweepSaysAnOutageOnce`, failing without it); N2: a history entry carries `request`, the History dialog says *approved in request N*. N1 is by design (below). |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).
@@ -267,6 +268,24 @@ Not run: a script run on a node (no SSH on either release), so a sensitive value
 | N3, N4 | Float noise in the AI page's month spend; the eleventh test's N4 again. | Item 40. |
 
 The fixes of F1 to F3 have Go tests, each failing without its fix, and have not been in a cluster. The test release's troubleshooter now runs the test's one-line draft as its live instructions (the earlier text is in its versions).
+
+**The thirteenth test, on November 21**, on commit `8f8959a9` (code as `72a6b010`; item 0b; report: `~/phase-13-findings-13.md` on `rke2cp1`, logs in `~/p13-14`). It spent 0.063 USD of the 1 USD it was given. Before it, the troubleshooter's instructions were put back to the chart's baseline through the console (a draft with no house text, asked for by p13-admin as request 3 and approved by p13-second: version 2), since the versions held only the twelfth test's draft and before it the troubleshooter ran the baseline; on the old image that approval still lost its key (F2), as expected. The ConfigMaps, the Secrets and a dump of the database were saved before the upgrade (`~/p13-14/pre*`, mode 600). Revision 26 to 27 (`p13-8f8959a`): schema 49, no step run, every table's count the same but one audit event. All four fixes held in the cluster:
+
+| Fix | What the cluster showed |
+| --- | --- |
+| `5150db59` (DB-81, DB-91) | A draft approved by the other SuperAdmin became version 3 in its own row, with `request_number` 4 and request 4's key; the baseline put back the same way is version 4 with request 5. The asker's own approval is refused (403). |
+| `75ac19b4` (JB-10) | The nightly audit with a 0.05 USD run budget ended `budget` at 0.063 USD after one model call (within one call of the budget); the job then put back as it was (off). |
+| `02d3ab54` (DB-88) | An internal note on C-13: one `case_messages` insert, one `cases` update; the work, its events and every other message untouched (same `xmin`). |
+| `72a6b010` (DB-15) | The database away for 240 seconds: each of the six warnings and each *read again* once (the twelfth test: Getting started 13 times in 63 seconds); the console stayed up, both sessions signed in. |
+
+| # | Found | Done |
+| --- | --- | --- |
+| N1 | A note on a case also moves the `settings` row `docset/issues`. | **By design**: since DB-87 the issue index is a query over the cases' rows, and the save writes no row of it; the row is the set's counter, which must move because the case's line changed (its `updated`, `lastAt`): other replicas' caches and the conflict check read it. |
+| N2 | The history page did not say which request approved a version. | **Fixed**: `request` on each entry and each version whole; the dialog says *approved in request N* (AI-32). |
+| N3 | With the database away, *the runs cannot be swept* repeated once a minute. | **Fixed**: once, and *the runs are swept again* once (DB-15). |
+| O1–O4 | The database's members restarted after the console was up at the upgrade (two short outages, each said once); the members' logs clean; a run past its budget still finished its agent's tool calls in flight (12 seconds of reads, no AI spend); the leader at the start was `db-1` (switched back to `db-0`). | Nothing to do; O3 is how the meter works (it starts no model call once spent). |
+
+Not run: the hand-over part of the budget (a run big enough to hand over costs more than the test's budget; the commit's tests cover it) and DB-88 on conversations (the fix is the cases'; every conversation message calls the model).
 
 **To see in a cluster next:**
 

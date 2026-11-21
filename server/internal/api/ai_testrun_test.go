@@ -119,6 +119,20 @@ func TestADraftApprovedKeepsItsRowAndItsRequest(t *testing.T) {
 	if v.Live != 1 || v.Draft != nil || len(v.Versions) == 0 || v.Versions[0].Request != waiting.Request.ID {
 		t.Fatalf("%+v", v)
 	}
+	// The history names the request too, in the list and whole (the
+	// thirteenth cluster test's N2).
+	var h struct {
+		Entries []ai.HistoryEntry `json:"entries"`
+	}
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/history", "", 200, &h)
+	if len(h.Entries) == 0 || h.Entries[0].N != 1 || h.Entries[0].Request != waiting.Request.ID {
+		t.Fatalf("the history does not name request %d: %+v", waiting.Request.ID, h.Entries)
+	}
+	var item ai.HistoryText
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/history/live/1", "", 200, &item)
+	if item.Request != waiting.Request.ID {
+		t.Fatalf("version 1 whole does not name request %d: %+v", waiting.Request.ID, item.HistoryEntry)
+	}
 }
 
 // The test dialog reads a run's progress while it is in flight and stops

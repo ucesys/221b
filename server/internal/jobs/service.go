@@ -189,6 +189,9 @@ type Service struct {
 	// quiet keeps the jobs' reads at every look quiet while the database
 	// is away (DB-15).
 	quiet db.Quiet
+	// sweepQuiet does the same for the sweep of the runs a replica left
+	// under way, once a minute (the thirteenth cluster test's N3).
+	sweepQuiet db.Quiet
 	// claims claims the scheduled times where the jobs are kept in the
 	// database (DB-80); nil claims them in the jobs' record.
 	claims Claims
