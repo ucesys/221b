@@ -276,6 +276,9 @@ func serve(parent context.Context, args []string, h *hooks) error {
 	// the rest are done, so the start's order is all that changes. A
 	// database that does not answer within the wait ends the start: a
 	// console does not start without its database (DB-02).
+	if w.cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
 	if err := w.wireDatabase(ctx); err != nil {
 		return err
 	}

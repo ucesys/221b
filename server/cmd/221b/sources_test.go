@@ -13,7 +13,7 @@ import (
 func TestTheConfigMapsOfBeforeAreNamedAfterTheRelease(t *testing.T) {
 	cfg := config.Config{ReleaseNamespace: "consoles", ReleaseFullname: "k8s-console-221b", SelfRelease: "consoles/k8s-console"}
 	objs := map[string]string{"": objSettings, "-audit": objAudit, "-sessions": objSessions, "-ai": objAI, "-knowledge": objKnowledge, "-automation": objAutomation,
-		"-automation-runs": objAutomationRuns, "-issues": objIssues, "-proposals": objProposals, "-runs": objRuns, "-casework": objCasework}
+		"-automation-runs": objAutomationRuns, "-issues": objIssues, "-proposals": objProposals, "-runs": objRuns, "-casework": objCasework, "-wiki": objWiki}
 	for _, suffix := range recordSetConfigMaps {
 		if suffix == "-cases" {
 			// The proposed changes of before CF-104, read beside -proposals.

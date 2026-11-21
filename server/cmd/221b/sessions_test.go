@@ -311,7 +311,7 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 
 // Where the sessions are kept, by what the console is given (DB-66):
 // with Secrets, the database, and the Secrets are read once for the copy
-// and not watched; without Secrets (connections.store: memory, a console
+// and not watched; without Secrets (a console
 // run by hand), memory, and the copy's name is claimed all the same. A
 // console always has its database (DB-69): the case of Secrets without
 // one, which kept the sessions in Secrets, is gone with it.
@@ -353,15 +353,11 @@ func TestWhereTheSessionsAreKept(t *testing.T) {
 		t.Fatalf("a copy that could not read the Secrets is recorded (%v): %v", copied, err)
 	}
 
-	// No Secrets: memory.
-	w = wire(d, "", auth.ModeLocal)
-	if w.authCfg.SessionStore != nil || slices.Contains(w.inDatabase, "identity") || !w.importIDs[auth.SessionsImportID] || len(w.importClash) != 0 {
-		t.Fatalf("without Secrets: the store %T, the domains %v, the names claimed %v", w.authCfg.SessionStore, w.inDatabase, w.importIDs)
-	}
-	before := rows()
-	sess = w.authSvc.Sessions().Start(auth.Session{User: auth.User{Username: "bob"}, Method: "local"})
-	if _, ok := w.authSvc.Sessions().Get(sess.ID); !ok || rows() != before {
-		t.Fatalf("a session kept in memory: found %v, %d rows more", ok, rows()-before)
+	// No Secrets: no start (DB-97), nothing kept in memory.
+	nw := &wiring{cfg: config.Config{}, log: slog.New(slog.DiscardHandler), auditLog: audit.New(audit.Options{Out: &bytes.Buffer{}}),
+		restCfg: nowhere, database: d, authCfg: auth.Config{Mode: auth.ModeLocal, SetupToken: "s3cret"}}
+	if err := nw.wireAuth(ctx); !errors.Is(err, errNoRelease) || nw.authSvc != nil {
+		t.Fatalf("without Secrets the sessions are kept somewhere: %v", err)
 	}
 	// Sign-in off: nobody signs in, and nothing is kept anywhere; the
 	// session Secrets of before are copied all the same (decided by the

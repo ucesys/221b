@@ -295,7 +295,7 @@ in_database() {
   echo "ConfigMaps of the release left: $(echo "$left" | tr '\n' ' ')"
   for cm in $left; do
     case "$cm" in
-      "$FULLNAME"-agents | "$FULLNAME"-auth-config | "$FULLNAME"-toolbox | "$FULLNAME"-wiki | "$DBNAME"-*) ;;
+      "$FULLNAME"-agents | "$FULLNAME"-auth-config | "$FULLNAME"-toolbox | "$DBNAME"-*) ;;
       *) echo "a ConfigMap of before is still there: $cm"; exit 1 ;;
     esac
   done

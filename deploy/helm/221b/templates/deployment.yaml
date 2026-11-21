@@ -13,9 +13,6 @@
 {{- if not (has (toString .Values.antiAffinity) (list "" "soft" "hard")) }}
 {{- fail (printf "antiAffinity must be soft, hard or empty, not %q" (toString .Values.antiAffinity)) }}
 {{- end }}
-{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.connections.store "memory") }}
-{{- fail "replicaCount above 1 needs connections.store=secrets: the replicas share sign-ins, accounts and connections through Secrets" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -109,8 +106,10 @@ spec:
                   fieldPath: status.podIP
             # The release that runs the console: its namespace and the
             # chart's fullname, which name every ConfigMap a release before
-            # 0.13 kept its records in, <fullname>-<what> (DB-72). The
-            # console copies each once into the database and deletes it.
+            # 0.13 kept its records in, <fullname>-<what> (DB-72), and the
+            # Secrets it keeps secrets in, <fullname>-cluster-<id> and the
+            # others beside (DB-97). The console copies each ConfigMap once
+            # into the database and deletes it.
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -205,12 +204,6 @@ spec:
             # Mycroft's knowledge (Phase 12): the wiki's local copy in an
             # emptyDir.
             {{- $knowledge := .Values.knowledge | default dict }}
-            {{- if ne (toString (dig "configMapStore" "enabled" true $knowledge)) "false" }}
-            # The temporary wiki store (CF-57), while Administration › AI › Knowledge
-            # names no store.
-            - name: WIKI_CONFIGMAP
-              value: {{ printf "%s/%s-wiki" .Release.Namespace (include "b221.fullname" .) | quote }}
-            {{- end }}
             - name: KNOWLEDGE_DIR
               value: /var/lib/221b/knowledge
             - name: KNOWLEDGE_REFRESH_GIT
@@ -255,12 +248,6 @@ spec:
             - name: CASES_CLEAN_START_DRY_RUN
               value: {{ .dryRun | default false | quote }}
             {{- end }}
-            {{- if eq .Values.connections.store "secrets" }}
-            # The connections to other clusters, one Secret each, named
-            # after the release: <release>-cluster-<id>.
-            - name: CONNECTIONS_SECRETS
-              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
-            {{- end }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
             # Whether Secrets are read at all (key names and sizes, TLS
@@ -287,10 +274,6 @@ spec:
             {{- with (dig "timeZone" "" (.Values.jobs | default dict)) }}
             - name: JOBS_TIME_ZONE
               value: {{ . | quote }}
-            {{- end }}
-            {{- if eq .Values.connections.store "secrets" }}
-            - name: SHERLOCK_SECRET
-              value: {{ printf "%s/%s-sherlock" .Release.Namespace (include "b221.fullname" .) | quote }}
             {{- end }}
             {{- with .Values.sherlock.existingSecret }}
             - name: SHERLOCK_API_KEY

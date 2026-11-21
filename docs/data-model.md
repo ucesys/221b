@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL: 126 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0049`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
+What 221B keeps in PostgreSQL: 129 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0050`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
 
 ## How to read it
 
@@ -32,7 +32,7 @@ A column's words in parentheses say what its name does not: a type where it matt
 - **Ledgers are only added to.** `audit_events` and `ai_spend` are inserted and read, never updated (a trigger refuses it), so writers at once never collide. Retention deletes.
 - **True singletons are JSON rows of `settings`,** read whole and written rarely, each over its version; so are the counters and flags that are of no row.
 - **Secrets stay in Kubernetes.** The secret part of a credential, an application's values file and parameters, a connection's credential and the value of a sensitive Automation variable (DB-71) stay in Kubernetes Secrets, and the tables hold the rest. No column holds a secret, the value of a secret script parameter is in no row, and a sensitive variable's value is in a row only as its keyed digest. A Secret's name follows from the row's id; `notification_channels.secret_ref` is the one column that names a Secret's key.
-- **Bodies stay where they are.** Wiki pages remain in Git or S3 and Toolbox transcripts on their volume.
+- **Bodies stay where they are.** Wiki pages remain in Git or S3 where a SuperAdmin chose one, and Toolbox transcripts on their volume. A wiki kept nowhere else is kept in the database (`wiki_files`, step `0050`, DB-96), each file's body in a `bytea` column: a store of the wiki's files, read and written whole by path.
 
 ## Foundation tier
 
@@ -306,7 +306,7 @@ A message's parts are one JSON value by decision: a chat is read and written who
 
 ### Knowledge
 
-What outlives the cases it came from: the fixes that worked, the accepted exceptions and the known issues; and Mycroft's side, the sources it reads, its syncs, and the wiki page changes that wait for review. The wiki's pages themselves stay in Git or S3. Schema: `0011_knowledge.sql`, `0029_knowledge_fixes_exceptions.sql` (fixes and exceptions), `0030_knowledge.sql` (sources, syncs and page changes), `0031_cases.sql` (known issues) and `0034_credentials.sql` (a source's credential).
+What outlives the cases it came from: the fixes that worked, the accepted exceptions and the known issues; and Mycroft's side, the sources it reads, its syncs, and the wiki page changes that wait for review. The wiki's pages themselves stay in Git or S3, or in the wiki's store in the database while no repository or bucket is named. Schema: `0011_knowledge.sql`, `0029_knowledge_fixes_exceptions.sql` (fixes and exceptions), `0030_knowledge.sql` (sources, syncs and page changes), `0031_cases.sql` (known issues), `0034_credentials.sql` (a source's credential) and `0050_wiki_store.sql` (the wiki's store).
 
 #### The wiki
 
@@ -320,6 +320,16 @@ What outlives the cases it came from: the fixes that worked, the accepted except
 | `wiki_run_decisions` | What people decided on a run: who, when, which pages. | `wiki_run_id` PK FK → `wiki_runs`, `position` PK, `decided_by`, `decided_by_name`, `decided_at`, `action`, `comment`, `pages` (text array: the pages' paths) |
 | `wiki_page_requests` | The requests to retire a wiki page or make it active again, which a second person approves. | `wiki_page_request_id` PK, `request_key` (the id the console gives it; unique), `position` (its place in the list), `action`, `path` (the page's path in the wiki), `title`, `reason`, `requested_by`, `requested_by_name`, `requested_at`, `state`, `decided_by`, `decided_by_name`, `decided_at`, `comment` |
 | `wiki_corrections` | The corrections people sent with This is outdated, and what became of each. | `wiki_correction_id` PK, `correction_key` (the id the console gives it; unique), `position` (its place in the list), `path`, `title`, `sent_by`, `sent_by_name`, `sent_at`, `state`, `run_key` ≈ `wiki_runs` (the run that rewrote the page for it), `note` |
+
+#### The wiki's store
+
+| Table | Holds | Columns |
+| --- | --- | --- |
+| `wiki_files` | The wiki's files, while Administration › AI › Knowledge names no Git repository or S3 bucket (DB-96): the pages, the manifest and the sources' excerpts. | `wiki_file_id` PK, `path` (the file's path in the wiki; unique), `body` (`bytea`), `version` (text: new at every write, a copied file's the ConfigMap's; a change made over another version is a conflict), `updated_at` |
+| `wiki_stages` | The runs whose page changes wait for review in that store. | `wiki_stage_id` PK, `run_key` ≈ `wiki_runs` (the run, by the id the console gives it; unique), `staged_at` |
+| `wiki_staged_files` | A staged run's pages, each until it is published or the run discarded. | `wiki_stage_id` PK FK → `wiki_stages`, `path` PK, `body` (`bytea`) |
+
+The store holds 256 MiB at most, the files and the staged pages together; a write past it is refused whole, and one that makes the store smaller always goes through. A write takes one lock for the store, so a version checked is the one written over. A run is staged by its key, not keyed to `wiki_runs`: a run is staged before its row is saved, and its row may go first. The first start copies the ConfigMap `<release>-wiki` of the temporary store of before (CF-57) in once, recorded as `wiki-store` in `imports`.
 
 #### Sources and syncs
 
@@ -366,7 +376,7 @@ Two tables are the database's own and belong to no domain: the steps applied, an
 
 ## Every foreign key
 
-The 115 foreign keys of the schema, by the table that holds them. `CASCADE`: the row goes with the row it points at. `SET NULL`: the key is emptied and the row stays. `RESTRICT`: the row pointed at cannot be deleted while it is pointed at.
+The 116 foreign keys of the schema, by the table that holds them. `CASCADE`: the row goes with the row it points at. `SET NULL`: the key is emptied and the row stays. `RESTRICT`: the row pointed at cannot be deleted while it is pointed at.
 
 | From | Columns | To | On delete |
 | --- | --- | --- | --- |
@@ -474,6 +484,7 @@ The 115 foreign keys of the schema, by the table that holds them. `CASCADE`: the
 | `wiki_change_approvals` | `wiki_run_id`, `change_position` | `wiki_changes` (`wiki_run_id`, `position`) | `CASCADE` |
 | `wiki_change_contradictions` | `wiki_run_id`, `change_position` | `wiki_changes` (`wiki_run_id`, `position`) | `CASCADE` |
 | `wiki_run_decisions` | `wiki_run_id` | `wiki_runs` (`wiki_run_id`) | `CASCADE` |
+| `wiki_staged_files` | `wiki_stage_id` | `wiki_stages` (`wiki_stage_id`) | `CASCADE` |
 | `knowledge_sources` | `credential_id` | `credentials` (`credential_id`) | `SET NULL` |
 | `knowledge_source_addresses` | `knowledge_source_id` | `knowledge_sources` (`knowledge_source_id`) | `CASCADE` |
 | `source_exclusions` | `knowledge_source_id` | `knowledge_sources` (`knowledge_source_id`) | `CASCADE` |

@@ -89,16 +89,15 @@ type Config struct {
 	KnowledgeDir        string
 	KnowledgeRefreshGit time.Duration
 	KnowledgeRefreshS3  time.Duration
-	// WikiConfigMap is the "namespace/name" of the ConfigMap the temporary
-	// wiki store keeps the wiki in (CF-57), used while Administration › AI ›
-	// Knowledge names no store; empty leaves that store out. It is a place
-	// the wiki's pages are kept, like a repository, and not a record set of
-	// the console's: the console still writes it.
-	WikiConfigMap string
 	// --- end of Watson cards.
 	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
-	// cluster connections added in the console are kept in, one Secret
-	// <prefix>-cluster-<id> each. Empty keeps them in memory until a restart.
+	// console keeps secrets in: each cluster connection's credential, one
+	// Secret <prefix>-cluster-<id> each, the applications' values, the
+	// credentials' secrets and the other Secrets beside them, whose records
+	// are rows of the database. It is worked out from the release,
+	// <namespace>/<fullname> (DB-97): since November 21, 2026 nothing is
+	// kept in memory in their place, and a console not given the release
+	// does not start (errNoRelease).
 	ConnectionsSecrets string
 	// SherlockAPIURL is the Claude API's address (Phase 5); a test points
 	// it at a fake.
@@ -254,7 +253,6 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.AgentsDir, "agents-dir", env("AGENTS_DIR", ""), "directory of the chart's baseline house instructions for the AI agents, one <agent>.md each (empty: none)")
 	fs.BoolVar(&c.Issues, "issues", envBool("ISSUES", true), "offer the issue service: the report page at /report and its API at /api/issues/v1/")
 	// --- Knowledge (Phase 12) ---
-	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Administration › AI › Knowledge names no store (empty: no such store; it will be removed)")
 	fs.StringVar(&c.KnowledgeDir, "knowledge-dir", env("KNOWLEDGE_DIR", ""), "directory for the wiki's local copy and the source repositories (empty: a temporary directory)")
 	fs.DurationVar(&c.KnowledgeRefreshGit, "knowledge-refresh-git", envDuration("KNOWLEDGE_REFRESH_GIT", 15*time.Minute), "how often the wiki's local copy is read again from a git repository, besides each push")
 	fs.DurationVar(&c.KnowledgeRefreshS3, "knowledge-refresh-s3", envDuration("KNOWLEDGE_REFRESH_S3", 5*time.Minute), "how often the wiki's local copy is read again from an S3 bucket")
@@ -270,7 +268,6 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SelfRelease, "self-release", env("SELF_RELEASE", ""), "namespace/name of the Helm release that runs this console in its own cluster, which Watson's cards warn about (empty: not known)")
 	fs.StringVar(&c.CleanStartToken, "cases-clean-start-token", env("CASES_CLEAN_START_TOKEN", ""), "a token that, set and not yet done, deletes the Cases area's records once at start (cases, known issues, runs and findings, agents' proposals, Mycroft's pages)")
 	fs.BoolVar(&c.CleanStartDryRun, "cases-clean-start-dry-run", envBool("CASES_CLEAN_START_DRY_RUN", false), "with -cases-clean-start-token, only log what the clean start would delete")
-	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets the console keeps secrets in: each cluster connection's credential, one <prefix>-cluster-<id> each, with the applications' values and the credentials beside them; their records are rows of the database (empty: no Secrets, and the connections, applications, credentials and sign-in sessions are kept in memory, lost on restart)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
 	fs.BoolVar(&c.SecretsReveal, "secrets-reveal", envBool("SECRETS_REVEAL", false), "let Admins and SuperAdmins see a Secret's values, one key at a time, audited (needs -secrets-read); off, values can only be written")
@@ -283,7 +280,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.AnonymousRole, "anonymous-role", env("ANONYMOUS_ROLE", "viewer"), "with sign-in off, the role everyone gets: viewer or admin; SSH, Automation and Secret values stay off")
 	fs.StringVar(&c.ToolboxConfigFile, "toolbox-config", env("TOOLBOX_CONFIG_FILE", ""), "a JSON file with the toolbox values: tools, images and limits (the chart renders it)")
 	fs.StringVar(&c.AuthConfigFile, "auth-config", env("AUTH_CONFIG_FILE", ""), "a JSON file with the roles' groups, the local groups and the LDAP server (the chart renders it)")
-	fs.StringVar(&c.UsersSecret, "users-secret", env("USERS_SECRET", ""), "namespace/name of the Secret to keep users created in the console in (empty: with -connections-secrets, <prefix>-users there; else in memory, lost on restart)")
+	fs.StringVar(&c.UsersSecret, "users-secret", env("USERS_SECRET", ""), "namespace/name of the Secret to keep users created in the console in (empty: <release-fullname>-users in the release's namespace)")
 	c.SetupToken = os.Getenv("SETUP_TOKEN")
 	c.LDAPBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", env("OIDC_ISSUER", ""), "the OIDC provider's issuer URL")
@@ -345,6 +342,9 @@ func Parse(args []string) (Config, error) {
 	c.IssuesReportRoles = splitList(*reportRoles)
 	c.IssuesOperatorRoles = splitList(*operatorRoles)
 	c.CasesApproverRoles = splitList(*approverRoles)
+	if c.ReleaseNamespace != "" && c.ReleaseFullname != "" {
+		c.ConnectionsSecrets = c.ReleaseNamespace + "/" + c.ReleaseFullname
+	}
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}

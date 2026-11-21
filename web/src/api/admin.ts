@@ -158,7 +158,7 @@ export interface UsersResponse {
   ldap?: LdapState
   /** Whether local users can be created here: local mode, not LDAP (RB-28, RB-46). */
   canCreate: boolean
-  /** Whether local users are kept after a restart (connections.store); false warns (RB-46). */
+  /** Whether local users are kept after a restart (in the Secret <release>-users, always in a cluster since DB-97); false warns (RB-46). */
   persistent: boolean
 }
 

@@ -26,6 +26,12 @@ import (
 // and each is deleted whole once every record set it held is in the
 // database (DB-72, removeCopiedSources).
 
+// errNoRelease is why a console not told its release does not start
+// (DB-97): the connections, the applications, the credentials and the
+// sign-in sessions keep their secrets in Secrets named after the release,
+// and nothing is kept in memory in their place.
+var errNoRelease = errors.New("the console keeps its secrets in Secrets of its namespace, named after the release, and does not run without them (DB-97): give -release-namespace and -release-fullname; the chart does")
+
 // errNoDatabase is why a console given no database does not start.
 var errNoDatabase = errors.New("the console keeps its records in PostgreSQL and does not run without one (DB-69): name the database with -db-host and the other -db-* flags; the chart does, with database.mode bundled (the default) or external")
 

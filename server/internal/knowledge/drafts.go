@@ -320,7 +320,7 @@ func (s *Service) Approve(ctx context.Context, c Caller, id string) (Run, error)
 		if !r.open() {
 			return invalid("run %s was decided already", id)
 		}
-		if r.Store != store.Kind() {
+		if !sameStore(r.Store, store.Kind()) {
 			return invalid("run %s was staged in the %s store, not the one the wiki is kept in now; reject it and sync again", id, r.Store)
 		}
 		gained, heldNow := false, false

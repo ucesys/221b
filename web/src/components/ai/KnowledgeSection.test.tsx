@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CONFIGMAP_STORE_LABEL, type KnowledgeView } from '../../api/knowledge'
+import { DATABASE_STORE_LABEL, type KnowledgeView } from '../../api/knowledge'
 import { idFrom, KnowledgeSection } from './KnowledgeSection'
 
 function view(over: Partial<KnowledgeView> = {}): KnowledgeView {
@@ -215,15 +215,18 @@ describe('Administration › AI › Knowledge', () => {
     expect((await screen.findByTestId('knowledge-no-store')).textContent).toContain('before Mycroft reads the sources')
   })
 
-  // --- The temporary ConfigMap store (CF-57) ---
-  it('shows the temporary ConfigMap store as selected while none is saved, labelled so, and moves the wiki out of it', async () => {
-    current = view({ settings: { ...view().settings, store: { kind: 'configmap' } }, storeCreds: { token: false, accessKey: false }, configMapStore: true })
+  // --- The wiki's store in the database (DB-96) ---
+  it('shows the database store as selected while none is saved, says the wiki is kept in the database, and moves the wiki out of it', async () => {
+    current = view({ settings: { ...view().settings, store: { kind: 'database' } }, storeCreds: { token: false, accessKey: false }, databaseStore: true })
     render(<KnowledgeSection />)
-    expect((await screen.findByTestId('knowledge-configmap-store')).textContent).toContain(CONFIGMAP_STORE_LABEL)
-    expect(CONFIGMAP_STORE_LABEL).toBe('ConfigMap (temporary, for testing — will be removed; move to Git or S3 before relying on it)')
+    const said = await screen.findByTestId('knowledge-database-store')
+    expect(said.textContent).toContain('The wiki is kept in the console’s database')
+    expect(said.textContent).toContain('256 MiB')
+    expect(DATABASE_STORE_LABEL).toBe('The console’s database')
+    expect(screen.getByTestId('knowledge-store').textContent).not.toMatch(/ConfigMap|temporary/)
     expect(screen.queryByTestId('knowledge-no-store')).toBeNull()
-    expect(screen.getByTestId('knowledge-store-configmap').getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByTestId('knowledge-store-configmap-label').textContent).toBe(CONFIGMAP_STORE_LABEL)
+    expect(screen.getByTestId('knowledge-store-database').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('knowledge-store-database-label').textContent).toBe(DATABASE_STORE_LABEL)
     expect(screen.queryByTestId('knowledge-store-move')).toBeNull()
     fireEvent.click(screen.getByTestId('knowledge-store-git'))
     fireEvent.change(screen.getByTestId('knowledge-store-url'), { target: { value: 'https://git.example.com/ops/wiki.git' } })
@@ -235,11 +238,11 @@ describe('Administration › AI › Knowledge', () => {
     })
   })
 
-  it('offers no ConfigMap store where the chart made none', async () => {
+  it('offers no database store where the console keeps none', async () => {
     render(<KnowledgeSection />)
     expect(await screen.findByTestId('knowledge-store-git')).toBeTruthy()
-    expect(screen.queryByTestId('knowledge-store-configmap')).toBeNull()
-    expect(screen.queryByTestId('knowledge-configmap-store')).toBeNull()
+    expect(screen.queryByTestId('knowledge-store-database')).toBeNull()
+    expect(screen.queryByTestId('knowledge-database-store')).toBeNull()
   })
 
   // --- A bucket of documents (KN-25) ---

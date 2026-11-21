@@ -241,13 +241,6 @@ metadata:
   labels:
     {{- include "b221.labels" . | nindent 4 }}
 rules:
-  {{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
-  # The temporary wiki store (CF-57), the one ConfigMap the console writes.
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: [{{ printf "%s-wiki" (include "b221.fullname" .) | quote }}]
-    verbs: ["get", "patch"]
-  {{- end }}
   # The ConfigMaps a release before 0.13 kept its records in, named after the
   # release (<fullname>-<what>), and each case's own, <release>-case-<n>, labelled
   # app.kubernetes.io/instance and 221b.io/case: read by the one-time
@@ -255,7 +248,8 @@ rules:
   # DB-72). resourceNames cannot name the cases' ConfigMaps, which are
   # listed by their labels, so this grants get, list and delete on the
   # ConfigMaps of this namespace; the console deletes no other ConfigMap
-  # than those, and creates, patches and updates none but the wiki's.
+  # than those (the temporary wiki store's of before, <release>-wiki,
+  # among them: DB-96), and creates, patches and updates none.
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "delete"]
@@ -268,13 +262,11 @@ rules:
     resources: ["leases"]
     resourceNames: [{{ printf "%s-leader" (include "b221.fullname" .) | quote }}]
     verbs: ["get", "update"]
-  {{- if eq .Values.connections.store "secrets" }}
   # The backups' key (ADR-137): the Secret <release>-backup-key, which the
   # console makes at start when there is none (its create is the rule
   # below: Kubernetes cannot name what a create makes) and from then on
   # only reads. The console never changes or deletes it, and it outlives
-  # the release (helm.sh/resource-policy: keep). With connections in
-  # memory there is no key, and backups hold placeholders.
+  # the release (helm.sh/resource-policy: keep).
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: [{{ printf "%s-backup-key" (include "b221.fullname" .) | quote }}]
@@ -282,9 +274,6 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
-  {{- else if ne .Values.connections.store "memory" }}
-  {{- fail "connections.store must be secrets or memory" }}
-  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

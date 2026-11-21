@@ -165,16 +165,14 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 
 // sensitiveStore is where Automation keeps its sensitive values (DB-71):
 // the Secrets of the console's namespace, beside the connections' and the
-// applications', one a cluster; in memory when the connections are (the
-// simulator, a console run by hand), as the other record sets split
-// between a row and a Secret are.
+// applications', one a cluster; never in memory (DB-97).
 func (w *wiring) sensitiveStore() (automation.SensitiveStore, error) {
 	if w.cfg.ConnectionsSecrets == "" {
-		return automation.NewMemorySensitive(), nil
+		return nil, errNoRelease
 	}
 	ns, prefix, ok := strings.Cut(w.cfg.ConnectionsSecrets, "/")
 	if !ok || ns == "" || prefix == "" {
-		return nil, fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", w.cfg.ConnectionsSecrets)
+		return nil, fmt.Errorf("the release's Secrets must be namespace/prefix, got %q", w.cfg.ConnectionsSecrets)
 	}
 	return automation.NewSecretSensitive(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 }

@@ -19,15 +19,17 @@ import (
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
 // wireCredentials opens the credentials: their secrets in the Secret
-// <release>-credentials when the console may keep Secrets, with their
-// list in the database (DB-60); in memory, both, without the Secret. The
+// <release>-credentials, with their list in the database (DB-60); never
+// in memory (DB-97). The
 // applications, the Helm repositories and Mycroft's sources say which
 // ones they use (Used by): the API registers the first two, the knowledge
 // the last.
 func (w *wiring) wireCredentials(ctx context.Context) error {
-	var secrets credentials.SecretStore = &credentials.MemorySecret{}
-	inSecret := w.cfg.ConnectionsSecrets != ""
-	if inSecret {
+	if w.cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	var secrets credentials.SecretStore
+	{
 		ns, prefix, _ := strings.Cut(w.cfg.ConnectionsSecrets, "/")
 		sk, err := kube.NewSecretKey(w.restCfg, ns, prefix+"-credentials", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "credentials", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
@@ -35,7 +37,7 @@ func (w *wiring) wireCredentials(ctx context.Context) error {
 		}
 		secrets = sk
 	}
-	w.creds = credentials.New(credentials.Options{Secrets: secrets, Repo: w.credentialsList(ctx, secrets, inSecret), Logger: w.log.With("component", "credentials")})
+	w.creds = credentials.New(credentials.Options{Secrets: secrets, Repo: w.credentialsList(ctx, secrets), Logger: w.log.With("component", "credentials")})
 	return nil
 }
 
@@ -44,15 +46,8 @@ func (w *wiring) wireCredentials(ctx context.Context) error {
 // a release before 0.13 held under "index" is copied once and then leaves
 // it (DB-61); the secrets stay there, untouched.
 //
-// With the secrets in memory (no -connections-secrets: a console run by
-// hand, connections.store: memory) the list stays in memory too, and nil
-// is returned: a list that outlived the secrets it names would show, after
-// a restart, credentials that no use could send.
-func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore, inSecret bool) credentials.Repo {
-	if !inSecret {
-		w.claimImport(credentials.ListImportID)
-		return nil
-	}
+// The secrets are always in their Secret (DB-97).
+func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore) credentials.Repo {
 	w.moveFromSecrets(ctx, credentials.ListImportID, "the credentials' list",
 		func(ctx context.Context) (int, error) { return credentials.CopyList(ctx, w.database, secrets) },
 		func(ctx context.Context) (int, error) {

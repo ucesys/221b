@@ -5,20 +5,19 @@
 # 8 volumes, storage classes and volume attachments), read and delete the
 # ConfigMaps of its own namespace (those a release before 0.13 kept its
 # records in, and one per case, which the console deletes once copied:
-# DB-72), patch the temporary wiki store's, hold its replicas' Lease (P7-02),
+# DB-72; the temporary wiki store's among them since DB-96), hold its replicas' Lease (P7-02),
 # manage the Secrets of its own namespace (the connections to other
 # clusters, P3-04), and nothing else
 # (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
 # was installed with secrets.read (the default); with --no-secrets the
-# script expects the API server to refuse them. With --memory the chart
-# was installed with connections.store=memory and nothing is granted on
-# the namespace's Secrets. With sign-in on (the default) it may read as
+# script expects the API server to refuse them. The namespace's Secrets
+# are always granted (connections.store is gone, DB-97). With sign-in on (the default) it may read as
 # the signed-in people: impersonate users and the groups listed in values, and create
 # SubjectAccessReviews about them (P3-02); with --no-signin the chart was
 # installed with auth.mode=none and neither is granted. Every
 # authenticated identity can also review its own access and read
 # discovery and version URLs; those are allowed.
-#   hack/check-rbac.sh [--no-secrets] [--memory] [--no-signin] system:serviceaccount:221b:k8s-console-221b
+#   hack/check-rbac.sh [--no-secrets] [--no-signin] system:serviceaccount:221b:k8s-console-221b
 set -euo pipefail
 secrets=yes
 connections=yes
@@ -26,7 +25,6 @@ people=yes
 while [ $# -gt 1 ]; do
   case $1 in
     --no-secrets) secrets=no ;;
-    --memory) connections=no ;;
     --no-signin) people=no ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
@@ -84,13 +82,13 @@ for kind in nodes.metrics.k8s.io pods.metrics.k8s.io; do
 done
 expect yes get nodes --subresource=proxy
 # The ConfigMaps of before 0.13 (DB-72): read and deleted, never written;
-# the temporary wiki store's is the one ConfigMap it patches.
+# it patches none, the temporary wiki store's of before too (DB-96).
 expect yes get "configmaps/$NAME" -n "$NS"
 expect yes delete "configmaps/$NAME" -n "$NS"
 expect no patch "configmaps/$NAME" -n "$NS"
 expect no update "configmaps/$NAME" -n "$NS"
 expect yes get "configmaps/$NAME-wiki" -n "$NS"
-expect yes patch "configmaps/$NAME-wiki" -n "$NS"
+expect no patch "configmaps/$NAME-wiki" -n "$NS"
 # The replicas' election (P7-02): the one Lease, in its own namespace.
 expect yes create leases.coordination.k8s.io -n "$NS"
 expect yes update "leases.coordination.k8s.io/$NAME-leader" -n "$NS"
@@ -178,8 +176,8 @@ for ns in default kube-system "$NS"; do
   echo "$list"
   extra=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/ {print $1}' | grep -v -E "$allowed" || true)
   if [ "$ns" = "$NS" ]; then
-    if ! echo "$list" | grep -E "^configmaps +\[\] +\[$NAME-wiki\] +\[get patch\]" > /dev/null; then
-      failed "the temporary wiki store's ConfigMap is not listed as get and patch by name in $ns"
+    if echo "$list" | grep -E "^configmaps +\[\] +\[$NAME-wiki\]" > /dev/null; then
+      failed "the temporary wiki store's ConfigMap is still granted by name in $ns"
     fi
     if ! echo "$list" | grep -E "^leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\]" > /dev/null; then
       failed "the replicas' Lease is not listed as get and update by name in $ns"
@@ -188,14 +186,14 @@ for ns in default kube-system "$NS"; do
   # Every granted verb list is read-only, except, in the console's own
   # namespace, the deletion of ConfigMaps (those of before 0.13 and each
   # case's, DB-72; the listing merges it with the ClusterRole's reads), the
-  # temporary wiki store's ConfigMap, the connection Secrets and the
+  # connection Secrets and the
   # Lease; the self-reviews every identity may create; and the reviews of
   # people's access, created with sign-in on.
   own_writes="^(selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
   if [ "$ns" = "$NS" ]; then
     # The Lease: created when none exists (the listing may merge the
     # create with the ClusterRole's reads), then only this one renewed.
-    own_writes="^(configmaps +\[\] +\[$NAME-wiki\] +\[get patch\]|configmaps +\[\] +\[\] +\[get list watch delete\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
+    own_writes="^(configmaps +\[\] +\[\] +\[get list watch delete\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
   fi
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
     # The Role's writes merge with the ClusterRole's reads in the listing:

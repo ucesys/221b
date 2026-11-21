@@ -152,17 +152,17 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 		}
 		w.authCfg.Accounts = auth.SecretBackend(sk, usersKey)
 	} else if localAccounts {
-		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
+		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -release-namespace and -release-fullname, to keep them in a Secret")
 	}
 	// Sign-ins are kept where every replica knows them and a restart keeps
-	// them (P7-02) when running in a cluster: rows of the database
-	// (DB-66). Otherwise (no -connections-secrets: a console run by hand,
-	// connections.store: memory) they are kept in memory, as the accounts
-	// made in the console and the key that signs a session are there: a
-	// session that outlived a restart would be of an account that did
-	// not.
+	// them (P7-02): rows of the database (DB-66). Nothing is kept in
+	// memory in their place (DB-97): a console not told its release does
+	// not start.
 	inDatabase := false
-	if cfg.ConnectionsSecrets != "" {
+	if cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	{
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		// The copy's source and nothing else: the session Secrets of a
 		// release before 0.13 are read once more, for the copy, and
@@ -201,8 +201,6 @@ func (w *wiring) wireAuth(ctx context.Context) error {
 			cancel()
 			w.authCfg.SessionKey = key
 		}
-	} else {
-		w.claimImport(auth.SessionsImportID)
 	}
 	// What waits for a second SuperAdmin (review item 14), kept beside the
 	// settings once their storage is open.

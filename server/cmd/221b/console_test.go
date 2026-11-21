@@ -263,10 +263,9 @@ func localUsers(t *testing.T) string {
 // before it listened has an empty url and its error in done.
 func (c *simCluster) start(t *testing.T, o consoleOptions) *console {
 	t.Helper()
-	ref := simNamespace + "/" + simRelease
 	args := []string{"-api-server", c.url, "-cluster-name", "simulated", "-listen", "127.0.0.1:0", "-log-format", "text", "-health-interval", "2s",
 		"-auth-mode", "local", "-local-users", localUsers(t),
-		"-release-namespace", simNamespace, "-release-fullname", simRelease, "-connections-secrets", ref, "-wiki-configmap", ref + "-wiki"}
+		"-release-namespace", simNamespace, "-release-fullname", simRelease}
 	if d := o.database; d != nil {
 		args = append(args, "-db-host", d.Host, "-db-port", strconv.Itoa(d.Port), "-db-name", d.Name, "-db-user", d.User, "-db-sslmode", d.SSLMode, "-db-poll-interval", "200ms")
 		if d.PasswordFile != "" {
@@ -543,6 +542,20 @@ func TestAConsoleGivenNoDatabaseDoesNotStart(t *testing.T) {
 // untouched, nothing is written to the cluster, and no table is made. The
 // first half needs no test database: an address nothing listens at is a
 // database that is away.
+// A console not told its release does not start (DB-97): its secrets
+// would have no Secrets, and nothing is kept in memory in their place.
+func TestAConsoleNotToldItsReleaseDoesNotStart(t *testing.T) {
+	direct := dbtest.Config(t)
+	c := newSimCluster(t, nil)
+	con := c.start(t, consoleOptions{database: &direct, args: []string{"-release-namespace", "", "-release-fullname", ""}})
+	if con.url != "" {
+		t.Fatal("a console with no release listens")
+	}
+	if err := con.stopped(time.Minute); !errors.Is(err, errNoRelease) {
+		t.Fatalf("it stopped with %v", err)
+	}
+}
+
 func TestAConsoleNeverStartsWithoutItsDatabase(t *testing.T) {
 	for _, hang := range []bool{false, true} {
 		name := "the database refuses connections"

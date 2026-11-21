@@ -4,31 +4,16 @@ The ConfigMaps a release before 0.13 kept its records in (DB-72, ADR-167):
 the settings, the audit log, the Toolbox's session records, the AI
 agents, Mycroft's knowledge, Automation's scripts and runs, the issue
 service, the proposed changes (<release>-proposals, and <release>-cases
-of before CF-104), the jobs and the case work. The console copies each
+of before CF-104), the jobs, the case work, and the temporary wiki store
+(<release>-wiki, CF-57, whose wiki the database keeps since DB-96). The console copies each
 into the database at its first start and deletes it once every record
 set it held is there. Each is rendered only while it is in the cluster,
 empty and with helm.sh/resource-policy keep, so that helm upgrade from
 0.12 keeps it for the copy and never makes it again after; see
 b221.copySource. A release that starts at 0.13 has none.
 */}}
-{{- range $suffix := list "" "-audit" "-sessions" "-ai" "-knowledge" "-automation" "-automation-runs" "-issues" "-proposals" "-cases" "-runs" "-casework" }}
+{{- range $suffix := list "" "-audit" "-sessions" "-ai" "-knowledge" "-automation" "-automation-runs" "-issues" "-proposals" "-cases" "-runs" "-casework" "-wiki" }}
 {{- include "b221.copySource" (list $ $suffix) }}
-{{- end }}
-{{- if ne (toString (dig "configMapStore" "enabled" true (.Values.knowledge | default dict))) "false" }}
----
-# The temporary wiki store (CF-57): Mycroft's wiki itself, in one key,
-# while Administration › AI › Knowledge names no store, so the wiki can be tried
-# without a repository or a bucket. At most 900 KiB; it will be removed:
-# move the wiki to Git or S3 before relying on it. Created empty; the
-# console writes its key, and helm upgrade keeps it. It is a store of the
-# wiki's pages, not a record set, and is not deleted (DB-72).
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "b221.fullname" . }}-wiki
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "b221.labels" . | nindent 4 }}
 {{- end }}
 ---
 # The agents' baseline house instructions, from agents.<agent>.instructions,

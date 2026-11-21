@@ -48,8 +48,8 @@ allowedHosts: []
 
 # Replicas (P7-02). One is enough for most clusters; two or more keep the
 # console up while a node drains or a pod is replaced. The replicas share
-# sign-ins, settings, accounts and connections through Kubernetes (so
-# connections.store must be secrets), and elect one, through a Lease, to
+# sign-ins, settings, accounts and connections through the database and
+# the release's Secrets, and elect one, through a Lease, to
 # run Sherlock and Watson, whose conversations and approval cards live in
 # its memory; the others pass those requests to it. Losing a replica costs
 # its viewers a reconnect; losing the leader also loses open Sherlock
@@ -227,7 +227,7 @@ auth:
     # docker run --rm -i <image> hash-password.
     # Or name an existing Secret holding the list under the key users.yaml.
     # Accounts made in the console are kept in a Secret of this namespace
-    # (with connections.store secrets); these stay read-only there.
+    # (<release>-users); these stay read-only there.
     users: []
     #  - email: ops@corp.example
     #    name: Ops
@@ -246,8 +246,8 @@ auth:
   sessionIdle: 8h
   sessionMax: 168h
   # How long a session lasts that was made while the session store could
-  # not be written (DB-65). The sessions are kept in the database (with
-  # connections.store: secrets; DB-66), so that is the database being
+  # not be written (DB-65). The sessions are kept in the database
+  # (DB-66), so that is the database being
   # away. Such a session is
   # kept in its cookie, signed with a key the console makes at its first
   # start in the Secret <release>-session-key, so every replica can check
@@ -300,20 +300,17 @@ ingress:
 # Other clusters (P3-04 to P3-09). An administrator adds them in the
 # console; each connection is a row of the database, and its credential a
 # Secret in the release namespace, named <release>-cluster-<id>; the
-# console's Role may manage Secrets there (and only there). store: memory
-# keeps the connections in memory instead, with the applications, the
-# credentials and the sign-in sessions, whose records would outlive their
-# secrets, losing them on restart, and grants nothing on Secrets; every
-# other record is in the database either way.
-connections:
-  store: secrets
+# console's Role may manage Secrets there (and only there). The
+# applications, the credentials and the sign-in sessions are rows of the
+# database too, with their secrets in Secrets beside. connections.store is
+# gone (DB-97): nothing is kept in memory in their place, and a values
+# file that still sets connections.store: memory is refused.
 
 sherlock:
   # Sherlock answers questions about a cluster through the Claude API
   # (Phase 5). It is off for every cluster until an administrator turns it
   # on in Settings and gives it an API key, which the console keeps in a
-  # Secret of its own namespace (<release>-sherlock) with connections.store
-  # secrets, otherwise in memory until a restart. Nothing is sent to the
+  # Secret of its own namespace (<release>-sherlock). Nothing is sent to the
   # API for a cluster where it is off.
   apiURL: https://api.anthropic.com
   # Another model API, or an enterprise gateway in front of one. Empty is
@@ -388,7 +385,7 @@ secrets:
   # the Namespaces tab lists no Secrets, the YAML view refuses them, the
   # Helm tab is hidden and the Networks tab doesn't check certificates.
   # Two grants stay: the console's Role on the Secrets of its own namespace
-  # (its connections, unless connections.store is memory), and SuperAdmin,
+  # (its connections' credentials and the other secrets), and SuperAdmin,
   # whose definitions both read every Secret (make people SuperViewers to
   # withhold Secrets).
   read: true
@@ -501,7 +498,7 @@ cases:
   # Standing approvals and notification channels (a generic webhook, Slack
   # and Microsoft Teams incoming webhooks) are set at run time in
   # Administration › Settings › Watson; each channel's address is kept in
-  # the Secret <release>-cases with connections.store secrets. With
+  # the Secret <release>-cases. With
   # networkPolicy.enabled, sherlock.egress opens HTTPS to any address,
   # which covers Slack and Teams; otherwise list the webhooks' addresses
   # under networkPolicy.outboundCIDRs and their ports under outboundPorts.
@@ -721,15 +718,13 @@ backup:
   # Scheduled backups to S3 (Phase 12, ADR-81): set up on Administration ›
   # Backup, where a SuperAdmin names the bucket, the schedule, retention
   # and encryption. The access key and the passphrase are kept in the
-  # Secret <release>-backup with connections.store secrets (in memory
-  # otherwise); or the console signs with the ServiceAccount's own AWS
+  # Secret <release>-backup; or the console signs with the ServiceAccount's own AWS
   # identity (serviceAccount.annotations for IRSA, or EKS Pod Identity).
   #
   # Every backup, downloaded or sent to S3, carries the console's secrets
   # sealed with the install's backup key (ADR-137): 256 random bits the
   # console makes at its first start in the Secret <release>-backup-key
-  # (with connections.store secrets; in memory there is no key, and a
-  # backup holds placeholders). The Secret is kept when the release is
+  # The Secret is kept when the release is
   # uninstalled (it is not the chart's, and is annotated
   # helm.sh/resource-policy: keep), so a reinstall in the same
   # namespace reads the old backups. The console never shows the key: a
@@ -755,8 +750,7 @@ knowledge:
   # documents, and what the console knows), and the wiki it keeps in a git
   # repository or an S3 bucket. Its records are in the database
   # (<release>-knowledge held them before 0.13, and is copied once), every
-  # credential in the Secret <release>-knowledge
-  # (with connections.store secrets). A live source (Administration › AI › Knowledge,
+  # credential in the Secret <release>-knowledge. A live source (Administration › AI › Knowledge,
   # mode Live) is never copied: its pages are fetched when an agent
   # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
   #
@@ -782,24 +776,19 @@ knowledge:
   refresh:
     git: 15m
     s3: 5m
-  # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
-  # the wiki while Administration › AI › Knowledge names no store, so Mycroft's wiki
-  # can be tried without a repository or a bucket. Administration › AI › Knowledge
-  # shows it as "ConfigMap (temporary, for testing — will be removed; move
-  # to Git or S3 before relying on it)". It holds at most 900 KiB, and a
-  # write past that is refused; it will be removed, so move the wiki to
-  # Git or S3 there (Move the wiki here) before relying on it. false makes
-  # no such ConfigMap: the wiki is kept nowhere until a store is chosen.
-  configMapStore:
-    enabled: true
+  # While Administration › AI › Knowledge names no Git repository or S3
+  # bucket, the wiki is kept in the console's database (DB-96), 256 MiB at
+  # most (pages, excerpts and the changes waiting for review together); a
+  # write past that is refused whole. The temporary ConfigMap store of
+  # before (<release>-wiki, CF-57) is copied in once and deleted, and
+  # knowledge.configMapStore is gone.
 
 # --- Helm repositories (Phase 12, wave 5, ADR-123 to ADR-125) ---
 helmRepositories:
   # Applications install charts from git, and from the Helm repositories
   # and OCI registries a SuperAdmin lists in Settings › Applications. The
   # list is kept in the database; each password or token in the
-  # Secret <release>-helm-repositories (with connections.store secrets),
-  # which the console writes.
+  # Secret <release>-helm-repositories, which the console writes.
   #
   # The repositories' and registries' addresses, as CIDRs (the hosts the
   # charts' archives and a registry's token service are on too). Listed,

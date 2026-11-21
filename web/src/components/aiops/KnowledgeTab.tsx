@@ -28,7 +28,7 @@
 // that fold, each showing its first PAGE_ROWS pages until asked for all.
 // The full-text search of the pages, the sources and the records is the
 // one at the top of Mycroft (MycroftSearch.tsx, KN-35). A wiki kept in
-// the ConfigMap store says when that store is nearly full (KN-37).
+// the database store says when that store is nearly full (KN-37).
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
 import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, wikiHref, type DraftRun, type PageView as PageData, type WikiPage, type WikiState } from '../../api/knowledge'

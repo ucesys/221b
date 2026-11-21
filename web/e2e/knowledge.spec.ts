@@ -1,6 +1,6 @@
 // Mycroft's knowledge (Phase 12, KN-01 to KN-18): Administration › AI › Knowledge
-// lists the sources and keeps the wiki in the temporary ConfigMap store
-// until another is chosen (CF-57), saying it is temporary;
+// lists the sources and keeps the wiki in the console's database until
+// another store is chosen (DB-96), saying so;
 // a source names a credential of Administration › Credentials (0.12.1, CR-11),
 // whose token never comes back from any endpoint; the
 // webhook refuses a call without its token; and Administration › AI › Issues has no
@@ -29,7 +29,7 @@ async function credential(page: Page, data: Record<string, unknown>): Promise<st
   return ((await r.json()) as { id: string }).id
 }
 
-test('Administration › AI › Knowledge takes a source whose token never comes back, and keeps the wiki in the temporary ConfigMap store by default', async ({ page }) => {
+test('Administration › AI › Knowledge takes a source whose token never comes back, and keeps the wiki in the database by default', async ({ page }) => {
   await page.goto('/#/admin/ai/knowledge')
   const section = page.getByTestId('knowledge-section')
   await expect(section).toBeVisible({ timeout: 20_000 })
@@ -41,9 +41,9 @@ test('Administration › AI › Knowledge takes a source whose token never comes
   // The fixes proven in cases, there from the start, offered by the
   // housekeeping for a runbook (KN-34).
   await expect(section.locator('[data-testid=knowledge-source][data-source=fixes]')).toContainText('offered by the housekeeping for a runbook')
-  // The temporary ConfigMap store is the default (CF-57), and says so.
-  await expect(page.getByTestId('knowledge-configmap-store')).toContainText('temporary, for testing — will be removed; move to Git or S3 before relying on it')
-  await expect(page.getByTestId('knowledge-store-configmap')).toHaveAttribute('aria-pressed', 'true')
+  // The database store is the default (DB-96), and says so.
+  await expect(page.getByTestId('knowledge-database-store')).toContainText('The wiki is kept in the console’s database')
+  await expect(page.getByTestId('knowledge-store-database')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('knowledge-no-store')).toHaveCount(0)
 
   const credId = await credential(page, { name: 'E2E Confluence', kind: 'token', endpoint: 'https://e2e.atlassian.net', sendAs: { method: 'basic', username: 'e2e@example.com' }, secret: { token: TOKEN } })
@@ -143,13 +143,13 @@ test('Administration › AI › Knowledge takes a live source, listed as Live, n
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
 
-test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA is part of its case); the Wiki is kept in the default ConfigMap store', async ({ page }) => {
+test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA is part of its case); the Wiki is kept in the database by default', async ({ page }) => {
   await page.goto('/#/aiops/mycroft')
   const tab = page.getByTestId('mycroft-tab')
   await expect(tab).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('mycroft-sub-wiki')).toHaveAttribute('aria-pressed', 'true')
   // The bug of the deployed console: "Loading…" for good. The wiki is
-  // kept in the temporary ConfigMap store by default (CF-57): no banner
+  // kept in the database by default (DB-96): no banner
   // asks for a store, and Add is open.
   await expect(page.getByTestId('knowledge-pages')).not.toContainText('Loading…', { timeout: 15_000 })
   await expect(page.getByTestId('wiki-no-store')).toHaveCount(0)

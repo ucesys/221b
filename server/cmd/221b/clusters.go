@@ -50,18 +50,19 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	// The other clusters (P3-04 to P3-09): each connection is a row of the
 	// database, and its credential is a Secret in the console's own
-	// namespace (DB-64). Without -connections-secrets the console may keep
-	// no Secret, so a connection has nowhere to keep its credential and
-	// is kept in memory, whole, until a restart (connections.store:
-	// memory). The cluster the console was started against is the
-	// connection "local".
-	var connStore clusters.Store = clusters.NewMemoryStore()
+	// namespace (DB-64), named after the release; nothing is kept in
+	// memory in their place (DB-97). The cluster the console was started
+	// against is the connection "local".
+	var connStore clusters.Store
 	// The Helm applications (Phase 10) are kept beside the connections.
-	var appStore apps.Store = apps.NewMemoryStore()
-	if cfg.ConnectionsSecrets != "" {
+	var appStore apps.Store
+	if cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	{
 		ns, prefix, ok := strings.Cut(cfg.ConnectionsSecrets, "/")
 		if !ok || ns == "" || prefix == "" {
-			return fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
+			return fmt.Errorf("the release's Secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
 		}
 		ss, err := clusters.NewSecretStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
@@ -73,11 +74,6 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 			return err
 		}
 		appStore = w.applications(ctx, as)
-	} else {
-		// In memory: the record set's name is still its own.
-		w.claimImport(apps.ImportID)
-		w.claimImport(clusters.ImportID)
-		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
 	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: w.activity})
 	// SetLocal runs the local cluster's watches, pollers and store as the
@@ -110,9 +106,7 @@ const moveAgainEvery = 30 * time.Second
 // were; but the console would then show the local cluster alone until its
 // next start, so the copy is tried again while it runs, and the
 // connections start when it is made (Manager.Run).
-//
-// With the connections in memory (no -connections-secrets) they stay in
-// memory, as the credentials' list and the applications do.
+
 func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore) clusters.Store {
 	log := w.dbLog()
 	const what = "the cluster connections"
@@ -175,11 +169,7 @@ func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore)
 // and the Secrets are then rewritten to hold the secret part alone
 // (DB-63): no Secret is deleted, and one whose record could not be copied
 // is left whole.
-//
-// With the connections in memory (no -connections-secrets: a console run
-// by hand, connections.store: memory) the applications stay in memory
-// too, as the credentials' list does: rows that outlived the values they
-// are deployed with would be applications nobody could deploy.
+
 func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) apps.Store {
 	log := w.dbLog()
 	w.moveFromSecrets(ctx, apps.ImportID, "the applications",

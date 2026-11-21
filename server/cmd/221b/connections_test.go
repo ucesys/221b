@@ -16,7 +16,6 @@ import (
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
 	"github.com/ucesys/221b/server/internal/config"
@@ -189,26 +188,24 @@ func TestTheConnectionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	}
 }
 
-// With a database and the connections in memory (no -connections-secrets:
-// the simulator, a console run by hand) the connections and the
-// applications stay in memory, and their copies' names are still claimed.
-func TestConnectionsInMemoryStayInMemoryWithADatabase(t *testing.T) {
+// Nothing is kept in memory in the Secrets' place (DB-97): without the
+// release, which names the Secrets, the connections and the applications,
+// the credentials, the sign-in sessions and Automation's sensitive values
+// have nowhere to go, and each refuses rather than keep them in memory.
+func TestNothingIsKeptInMemoryWithoutTheSecretsDB96(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := &wiring{cfg: config.Config{ClusterName: "here"}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), restCfg: &rest.Config{Host: "http://127.0.0.1:1"}, mode: kube.ModeURL, activity: leader.NewActivity(true), database: dbtest.Open(t)}
-	if err := w.wireClusters(ctx); err != nil {
-		t.Fatal(err)
+	if err := w.wireClusters(ctx); !errors.Is(err, errNoRelease) || w.manager != nil {
+		t.Fatalf("the connections without Secrets: %v", err)
 	}
-	if kind := w.manager.Store().Kind(); kind != "memory" {
-		t.Fatalf("the connections are kept in %s", kind)
+	if err := w.wireCredentials(ctx); !errors.Is(err, errNoRelease) || w.creds != nil {
+		t.Fatalf("the credentials without Secrets: %v", err)
 	}
-	if _, ok := w.appStore.(*apps.MemoryStore); !ok {
-		t.Fatalf("the applications are kept in %T", w.appStore)
+	if err := w.wireAuth(ctx); !errors.Is(err, errNoRelease) {
+		t.Fatalf("the sessions without Secrets: %v", err)
 	}
-	if !w.importIDs[clusters.ImportID] || !w.importIDs[apps.ImportID] || len(w.importClash) != 0 {
-		t.Fatalf("the copies' names: %v, clashing %v", w.importIDs, w.importClash)
-	}
-	if inst, ok := w.manager.Get(clusters.LocalID); !ok || inst.Spec.Name != "here" {
-		t.Fatalf("the local cluster: %+v", inst)
+	if _, err := w.sensitiveStore(); !errors.Is(err, errNoRelease) {
+		t.Fatalf("the sensitive values without Secrets: %v", err)
 	}
 }

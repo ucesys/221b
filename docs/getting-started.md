@@ -69,7 +69,7 @@ kubectl -n <namespace> create secret generic <release>-backup-key --from-literal
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-A restore whose secrets were sealed with another key asks *Restore the rest without the secrets?* first. With `connections.store=memory` there is no key, and backups hold a placeholder for each secret, as before.
+A restore whose secrets were sealed with another key asks *Restore the rest without the secrets?* first.
 
 ## Sherlock's setup skill
 

@@ -18,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
+	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/sim"
@@ -25,7 +26,9 @@ import (
 
 // The ConfigMaps of a release before 0.13 that hold record sets, by their
 // suffix after the release's name (the chart's templates/configmap.yaml).
-var recordSetConfigMaps = []string{"", "-audit", "-sessions", "-ai", "-knowledge", "-automation", "-automation-runs", "-issues", "-proposals", "-cases", "-runs", "-casework"}
+// The temporary wiki store's, -wiki, is one since the wiki moved into the
+// database (DB-96).
+var recordSetConfigMaps = []string{"", "-audit", "-sessions", "-ai", "-knowledge", "-automation", "-automation-runs", "-issues", "-proposals", "-cases", "-runs", "-casework", "-wiki"}
 
 // beforeConfigMaps fills every ConfigMap of before with a record set, each
 // holding a text that is nowhere else, and returns the ConfigMaps' data and
@@ -67,7 +70,8 @@ func beforeConfigMaps(t *testing.T) (map[string]map[string]string, []string) {
 			"-cases":           {},
 			"-runs":            {"jobs.json": `{"jobs":{"nightly-audit":{"id":"nightly-audit","kind":"nightly-audit","name":"markJobQ9","when":{"schedule":{"kind":"daily","at":"01:00"}},"budget":{"runUSD":3},"on":true}}}`},
 			"-casework":        {fixes.Key: oneFix},
-		}, []string{"markSetupQ1", "markAuditQ2", "markSessionQ3", "markAIQ4", "markKnowQ5", "markGroupQ6", "markFactQ7", "markKnownQ8",
+			"-wiki":            {knowledge.WikiKey: `{"seq":1,"files":{"pages/system/db.md":{"body":"markWikiQ11","version":"c1"}}}`},
+		}, []string{"markWikiQ11", "markSetupQ1", "markAuditQ2", "markSessionQ3", "markAIQ4", "markKnowQ5", "markGroupQ6", "markFactQ7", "markKnownQ8",
 			"Restart shop/web", "It cannot sign in.", "markJobQ9", "Raise the limit", "markCaseQ10"}
 }
 
@@ -89,9 +93,9 @@ func (c *simCluster) configMapNames(t *testing.T) []string {
 // An upgrade from a release before 0.13 (DB-55, DB-72): with a record set
 // in every ConfigMap of before and a case in its own, the first start
 // copies every record into the database and deletes every ConfigMap of
-// before and the case's, and no other; the configuration ConfigMaps (the
-// agents' baselines, the sign-in's, the Toolbox's) and the temporary wiki
-// store's stay. A ConfigMap made again empty, as a chart that still
+// before and the case's, the temporary wiki store's among them (DB-96),
+// and no other; the configuration ConfigMaps (the agents' baselines, the
+// sign-in's, the Toolbox's) stay. A ConfigMap made again empty, as a chart that still
 // rendered it would make it, holds nothing to copy and is deleted again at
 // the next start, and the database's records are as they were.
 func TestAnUpgradeLeavesNoConfigMapOfBefore(t *testing.T) {
@@ -110,7 +114,7 @@ func TestAnUpgradeLeavesNoConfigMapOfBefore(t *testing.T) {
 		before = append(before, simRelease+suffix)
 	}
 	before = append(before, simRelease+"-case-1")
-	stays := []string{simRelease + "-agents", simRelease + "-auth-config", simRelease + "-toolbox", simRelease + "-wiki"}
+	stays := []string{simRelease + "-agents", simRelease + "-auth-config", simRelease + "-toolbox"}
 	if got := c.configMapNames(t); len(got) != len(before)+len(stays) {
 		t.Fatalf("the cluster starts with %v", got)
 	}

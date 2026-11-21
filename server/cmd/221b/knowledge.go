@@ -48,20 +48,53 @@ type knowledgeOptions struct {
 	log      *slog.Logger
 	// wrap routes the keys the database keeps to it.
 	wrap func(kv.Backend) kv.Backend
+	// wiki is the wiki's store in the database (DB-96); nil keeps the wiki
+	// nowhere until a store is chosen (a test).
+	wiki *knowledge.DBStore
 }
 
-// openKnowledge builds the knowledge service. It
-// returns the ConfigMaps too, the knowledge's and the temporary wiki
-// store's, for the metrics of their size.
-func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config, o knowledgeOptions) (*knowledge.Service, *kv.Limited, *kv.Limited, error) {
+// copyWiki copies the wiki the temporary ConfigMap store of a release
+// before 0.13 kept in <release>-wiki (CF-57) into the wiki's store in the
+// database, once, recorded as knowledge.WikiImportID; the ConfigMap is
+// then deleted with the other ConfigMaps of before (DB-72, DB-96). A
+// ConfigMap that is there and cannot be read stops the start, as every
+// other copy's source does; a copy that fails is logged, keeps the
+// ConfigMap, and is tried again at the next start.
+func (w *wiring) copyWiki(ctx context.Context, store *knowledge.DBStore) error {
+	w.claimImport(knowledge.WikiImportID)
+	cm, err := openSource(ctx, w.restCfg, sourceRef(w.cfg, objWiki))
+	if err != nil {
+		return fmt.Errorf("the wiki's ConfigMap of before: %w", err)
+	}
+	if cm == nil {
+		return nil
+	}
+	w.readFrom(cm, knowledge.WikiImportID, knowledge.WikiKey)
+	ictx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	n, ran, err := store.Import(ictx, cm, "configmap "+cm.Ref())
+	cancel()
+	log := w.dbLog()
+	switch {
+	case err != nil:
+		w.noteNotCopied(knowledge.WikiKey)
+		log.Warn("copying the wiki from the temporary ConfigMap store into the database failed; the next start tries again", "configmap", cm.Ref(), "err", err)
+	case ran:
+		log.Info("copied the wiki from the temporary ConfigMap store into the database", "configmap", cm.Ref(), "files_and_runs", n)
+	}
+	return nil
+}
+
+// openKnowledge builds the knowledge service. It returns the knowledge
+// ConfigMap of before too, for the metrics of its size.
+func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config, o knowledgeOptions) (*knowledge.Service, *kv.Limited, error) {
 	// The one-time copy's source and nothing else: <release>-knowledge,
 	// where a release before 0.13 kept the sources, the drafts and the
 	// syncs' state; nil when the flags name none.
 	var backend kv.Backend
-	var stored, wikiStored *kv.Limited
+	var stored *kv.Limited
 	cm, err := openSource(ctx, restCfg, sourceRef(cfg, objKnowledge))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("the knowledge ConfigMap: %w", err)
+		return nil, nil, fmt.Errorf("the knowledge ConfigMap: %w", err)
 	}
 	if cm != nil {
 		stored = limited(cm, objKnowledge, o.log.With("component", "storage"))
@@ -80,23 +113,9 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		sk, err := kube.NewSecretKey(restCfg, ns, prefix+"-knowledge", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "knowledge", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("the knowledge Secret: %w", err)
+			return nil, nil, fmt.Errorf("the knowledge Secret: %w", err)
 		}
 		secrets = sk
-	}
-	// The temporary wiki store (CF-57): the wiki in <release>-wiki while
-	// Administration › AI › Knowledge names no store. It is a place the
-	// wiki's pages can be kept, like a repository or a bucket, and not a
-	// record set of the console's: the one ConfigMap the console still
-	// writes (DB-69).
-	var wiki kv.Backend
-	if cfg.WikiConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.WikiConfigMap)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("the wiki ConfigMap: %w", err)
-		}
-		wikiStored = limited(cm, objWiki, o.log.With("component", "storage"))
-		wiki = wikiStored
 	}
 	record := func(e audit.Event) { o.auditLog.Record(e) }
 	l := layout[objKnowledge]
@@ -104,13 +123,13 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		Backend: backend, Secrets: secrets, Credentials: o.creds, Dir: cfg.KnowledgeDir, Model: o.model, Console: o.console, Proposer: o.proposer,
 		Limits: knowledge.Limits{SettingsBytes: l[knowledge.SettingsKey].Bytes, DraftsBytes: l[knowledge.DraftsKey].Bytes, StatusBytes: l[knowledge.StatusKey].Bytes},
 		Leads:  o.leads, Audit: record, RefreshGit: cfg.KnowledgeRefreshGit, RefreshS3: cfg.KnowledgeRefreshS3,
-		Logger:        o.log.With("component", "knowledge"),
-		WikiConfigMap: wiki, WikiBytes: layout[objWiki][knowledge.WikiKey].Bytes,
+		Logger:    o.log.With("component", "knowledge"),
+		WikiStore: o.wiki,
 		// Mycroft's first import (Phase 12, GS-11): a source is read once
 		// it is added.
 		ReadNew: true,
 	})
-	return svc, stored, wikiStored, nil
+	return svc, stored, nil
 }
 
 // mycroftModel is how Mycroft is asked: Sherlock's engine, saying what
@@ -784,7 +803,14 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	var knowledgeStored *kv.Limited
 	// Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
 	// wiki's local copy and index on every replica.
-	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
+	// The wiki's store in the database (DB-96), where the wiki is kept
+	// while Administration › AI › Knowledge names no Git repository or S3
+	// bucket, with what the temporary ConfigMap store of before held.
+	wikiStore := knowledge.NewDBStore(w.database, 0)
+	if err := w.copyWiki(ctx, wikiStore); err != nil {
+		return err
+	}
+	svc, l, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{wiki: wikiStore, auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
 		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log,
 		wrap: func(b kv.Backend) kv.Backend {
 			// Mycroft's sources, the syncs' state and the runs of page
@@ -801,9 +827,6 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	}
 	if l != nil {
 		w.stored = append(w.stored, l)
-	}
-	if wl != nil {
-		w.stored = append(w.stored, wl)
 	}
 	knowledgeStored = l
 	w.knowledgeSvc = svc

@@ -47,7 +47,7 @@ func (w *wiring) wireSSH(ctx context.Context) error {
 		}
 		caStore, console = sk, nodessh.ConsoleName(ns, prefix)
 	} else {
-		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
+		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (give -release-namespace and -release-fullname to keep it in a Secret)")
 	}
 	// Hosts outside Kubernetes (Phase 12) are kept beside the pairings and
 	// shown on their cluster's Nodes tab as they are read or written.

@@ -152,9 +152,10 @@ DEV_DB_FLAGS = -db-host $${dbaddr%:*} -db-port $${dbaddr\#\#*:} -db-user postgre
 
 # The records are in that database; the connections' credentials and the
 # other secrets are Secrets of the simulated cluster, in the namespace
-# 221b (P3-07), and so is the temporary wiki store's ConfigMap. No
-# ConfigMap of a release before 0.13 is named: there is nothing to copy.
-SIM_STORE = -connections-secrets 221b/k8s-console-221b -wiki-configmap 221b/k8s-console-221b-wiki
+# 221b (P3-07), named after the release the console is told it is
+# (DB-97). The simulator serves the ConfigMaps of a release before 0.13,
+# empty: the first start copies nothing from them and deletes them.
+SIM_STORE = -release-namespace 221b -release-fullname k8s-console-221b
 
 # Sherlock (Phase 5) talks to the simulator's fake Claude API; an
 # administrator turns it on in Settings with any key of the right shape.

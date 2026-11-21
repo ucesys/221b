@@ -124,11 +124,13 @@ func TestGettingStartedHasRoomInTheSettings(t *testing.T) {
 	}
 }
 
-// The temporary wiki store (CF-57) has a ConfigMap of its own, bounded to
-// what the store refuses past, so its own words come first.
-func TestTheWikiStoreIsBoundedInItsOwnConfigMap(t *testing.T) {
-	l := limits(objWiki)
-	if len(l) != 1 || l[knowledge.WikiKey].Bytes != knowledge.DefaultWikiBytes || knowledge.DefaultWikiBytes != 900<<10 {
-		t.Fatalf("the wiki's ConfigMap: %+v", l)
+// The wiki is kept in no ConfigMap (DB-96): the temporary store's of
+// before has no room of its own, and the database store's bound is said.
+func TestTheWikiHasNoConfigMapStore(t *testing.T) {
+	if l := limits(objWiki); len(l) != 0 {
+		t.Fatalf("the wiki's ConfigMap of before has room: %+v", l)
+	}
+	if knowledge.DefaultWikiStoreBytes != 256<<20 {
+		t.Fatalf("the wiki's store in the database holds %d bytes", knowledge.DefaultWikiStoreBytes)
 	}
 }

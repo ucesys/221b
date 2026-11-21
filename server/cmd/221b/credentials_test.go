@@ -92,7 +92,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 	// stays in the Secret, and nothing says it was copied.
 	mem.away = true
 	failed := &wiring{database: d}
-	if list := failed.credentialsList(ctx, mem, true); list == nil {
+	if list := failed.credentialsList(ctx, mem); list == nil {
 		t.Fatal("with a database and a Secret the list is the database's")
 	}
 	mem.away = false
@@ -105,7 +105,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 
 	// The next start copies, and the list leaves the Secret alone.
 	w := &wiring{database: d}
-	creds := credentials.New(credentials.Options{Secrets: mem, Repo: w.credentialsList(ctx, mem, true)})
+	creds := credentials.New(credentials.Options{Secrets: mem, Repo: w.credentialsList(ctx, mem)})
 	if !w.importIDs[credentials.ListImportID] || len(w.importClash) != 0 {
 		t.Fatalf("the copy's name is not claimed: %v %v", w.importIDs, w.importClash)
 	}
@@ -126,7 +126,7 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 	late := token(older, "Late")
 	asBefore(older)
 	again := &wiring{database: d}
-	creds = credentials.New(credentials.Options{Secrets: mem, Repo: again.credentialsList(ctx, mem, true)})
+	creds = credentials.New(credentials.Options{Secrets: mem, Repo: again.credentialsList(ctx, mem)})
 	if got := names(creds); !slices.Equal(got, []string{"GitHub", "Mirror"}) {
 		t.Fatalf("a list written since was read: %v", got)
 	}
@@ -145,32 +145,9 @@ func TestTheCredentialsListLeavesItsSecretAtAStart(t *testing.T) {
 		removed = true
 		return 1, nil
 	})
-	(&wiring{database: gone}).credentialsList(ctx, mem, true)
+	(&wiring{database: gone}).credentialsList(ctx, mem)
 	if got := keys(); removed || !slices.Contains(got, "index") {
 		t.Fatalf("removed (%v) on a database that did not answer; the Secret: %v", removed, got)
-	}
-
-	// With the secrets in memory (no -connections-secrets) the list stays
-	// in memory with them: nothing is copied, no row is made, and the
-	// credentials work.
-	d2 := dbtest.Open(t)
-	inMemory := &credentials.MemorySecret{}
-	w2 := &wiring{database: d2}
-	list := w2.credentialsList(ctx, inMemory, false)
-	if list != nil || !w2.importIDs[credentials.ListImportID] {
-		t.Fatalf("with the secrets in memory the list is %v", list)
-	}
-	mine := credentials.New(credentials.Options{Secrets: inMemory, Repo: list})
-	c := token(mine, "In memory")
-	if u, err := mine.Resolve(ctx, c.ID, credentials.UseGit, "https://github.com/ucesys/221b"); err != nil || u.Token != "tok-In memory" {
-		t.Fatalf("a credential kept in memory: %v", err)
-	}
-	var rows int
-	if err := d2.Pool().QueryRow(ctx, "SELECT count(*) FROM credentials").Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("%d rows of credentials kept in memory: %v", rows, err)
-	}
-	if copied, err := d2.Imported(ctx, credentials.ListImportID); err != nil || copied {
-		t.Fatalf("a list in memory is recorded as copied (%v): %v", copied, err)
 	}
 }
 

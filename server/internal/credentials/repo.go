@@ -46,8 +46,8 @@ func errTaken(name string) error { return invalid("there is a credential named %
 
 // --- In memory ---
 
-// MemoryRepo keeps the list until the server restarts: the console whose
-// secrets are in memory (connections.store: memory), and the tests.
+// MemoryRepo keeps the list in memory, for the tests (the console keeps
+// it in the database since DB-97).
 type MemoryRepo struct {
 	mu   sync.Mutex
 	list []Credential

@@ -365,10 +365,10 @@ echo "the Sherlock key survived the upgrade, was never served, and its Secret is
 kill "$pf"
 endstep
 
-step "secrets.read=false grants nothing on Secrets, lists none and hides the Helm tab (P2-10); connections.store=memory grants nothing in its namespace either"
-helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set secrets.read=false --set connections.store=memory --wait --timeout "$HELM_TIMEOUT"
+step "secrets.read=false grants nothing on Secrets outside its namespace, lists none and hides the Helm tab (P2-10)"
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set secrets.read=false --wait --timeout "$HELM_TIMEOUT"
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=120s
-"$ROOT/hack/check-rbac.sh" --no-secrets --memory "$SA"
+"$ROOT/hack/check-rbac.sh" --no-secrets "$SA"
 # The pod of the previous revision answers while it terminates, so wait
 # until the new one is the only pod before forwarding to the Service.
 for _ in $(seq 60); do

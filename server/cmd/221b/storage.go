@@ -62,8 +62,8 @@ const (
 	// start's marker, and the accepted exceptions (package lessons); the
 	// cases, with their RCAs, are ConfigMaps of their own (wave 6).
 	objCasework = "casework"
-	// objWiki is the temporary wiki store's (CF-57): the wiki itself, in
-	// one key, while Administration › AI › Knowledge names no store.
+	// objWiki is the temporary wiki store's of before (CF-57): the wiki
+	// itself, in one key, copied into the database's wiki store (DB-96).
 	objWiki = "wiki"
 	// objectBudget is what the keys of one ConfigMap may add up to, below
 	// its 1 MiB with room for the object's own fields.
@@ -145,10 +145,6 @@ var layout = map[string]map[string]kv.Limit{
 		knowledge.DraftsKey:   {Bytes: knowledge.DefaultDraftsBytes, Hint: "approve or reject the wiki's waiting changes"},
 		knowledge.StatusKey:   {Bytes: knowledge.DefaultStatusBytes},
 	},
-	// --- The temporary wiki store (CF-57) ---
-	objWiki: {
-		knowledge.WikiKey: {Bytes: knowledge.DefaultWikiBytes, Hint: "move the wiki to Git or S3 in Administration › AI › Knowledge"},
-	},
 	// --- Case work (Phase 12) ---
 	objCasework: {
 		casework.SettingsKey: {Bytes: casework.DefaultSettingsBytes},
@@ -222,35 +218,6 @@ type storedObjects []*kv.Limited
 // limited wraps a ConfigMap with its object's limits.
 func limited(cm *kube.ConfigMapStorage, obj string, log *slog.Logger) *kv.Limited {
 	return &kv.Limited{Backend: cm, Name: cm.Ref(), Limits: limits(obj), Logger: log}
-}
-
-// openConfigMap opens a ConfigMap the console keeps something in, trying
-// for a while: a name given that cannot be read stops the console rather
-// than leave a replica keeping it somewhere its peers do not look. Since
-// DB-69 that is the temporary wiki store's alone (-wiki-configmap); the
-// ConfigMaps of before are opened by openSource.
-func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
-	cm, err := kube.NewConfigMapStorage(cfg, ref)
-	if err != nil {
-		return nil, err
-	}
-	for try := 0; ; try++ {
-		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = cm.Exists(pctx)
-		cancel()
-		if err == nil || try == 4 {
-			break
-		}
-		select {
-		case <-time.After(2 * time.Second):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w (check -wiki-configmap against the chart)", err)
-	}
-	return cm, nil
 }
 
 // openSource opens a ConfigMap a release before 0.13 kept records in, the

@@ -293,7 +293,7 @@ func (s *Server) setupSignIn(_ context.Context, _ setupRecord) (bool, string) {
 		}
 	}
 	if added > 0 && !acc.Persistent() {
-		return false, plural(len(list), "local user", "local users") + fmt.Sprintf(", %d of them added in the console and kept in memory: they are lost when it restarts. Name a Secret to keep them in (-users-secret, or -connections-secrets).", added)
+		return false, plural(len(list), "local user", "local users") + fmt.Sprintf(", %d of them added in the console and kept in memory: they are lost when it restarts. Name a Secret to keep them in (-users-secret, or the release: -release-namespace and -release-fullname).", added)
 	}
 	return len(list) > 0, plural(len(list), "local user", "local users") + "."
 }
