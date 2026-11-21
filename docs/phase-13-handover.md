@@ -540,7 +540,7 @@ What 0.13 leaves for 0.14, gathered on November 21 from ADR-167, the decisions t
 11. Credentials' writes held to a `version` column in place of a row lock, if a second editor is ever expected.
 
 **The database and its image**
-12. The database's image on Wolfi, if the comparison in 0.13 shows it is better and the owner agrees; otherwise its arm64 build off emulation.
+12. The database's image on Wolfi, if the comparison in 0.13 shows it is better and the owner agrees: the release job builds the base with `apko`, writes the lock file, pushes the locked package set to `ghcr.io/ucesys/221b-postgres-packages:<release>` with an index signed by the release's own key (a new release secret, the owner's to create) and signs it with cosign; a patch release of an old line rebuilds from that copy. Otherwise the Debian image's arm64 build off emulation.
 13. `database.bundled.image.tag` following `image.tag`.
 14. `backup.dailyAt` removed, `backup.schedule` alone (DB-84 keeps both in 0.13).
 15. The Lease looked at again: what the leader alone does (informers, the Toolbox's tunnels, Watson's and Sherlock's work in flight, the passes behind `IsLeader`) and whether standbys can serve reads.
@@ -668,7 +668,12 @@ In this order; each with its tests, its requirement and its lines in the docs. C
 
 1. **A thirteenth cluster test** of the twelfth test's fixes (`5150db59`, `02d3ab54`, `75ac19b4`, `72a6b010`): a job's run stops at its budget, approving a draft keeps its approval link, adding a message writes only the message.
 2. **The troubleshooter's live instructions back** in `221b-github`: its live version is the twelfth test's one-line draft; put the last real version back live through the console (its version history has it).
-3. **A Wolfi variant of `221b-postgres`** built beside the Debian one (`cgr.dev/chainguard/wolfi-base`, `apk add` of `postgresql-18`, `patroni`, `wal-g`, all in Wolfi), both scanned the same way, and the variant run once in a kind cluster through a failover and a restore. Report the counts and what differs (Patroni's and WAL-G's versions follow Wolfi's; Wolfi keeps a version only six months after a newer one). The default does not change without the owner's word.
+3. **A Wolfi variant of `221b-postgres`** built beside the Debian one, decided with the owner on November 21:
+   - **No Chainguard registry.** The base is built with `apko` straight from `packages.wolfi.dev` (Apache-2.0 packages), not `FROM cgr.dev/chainguard/wolfi-base`, so only the packages' own licences and Wolfi's apply, not Chainguard's registry terms or its latest-only free tier. The image carries no Chainguard branding and its labels say it is built from Wolfi packages, with what 221B added marked as ours (Chainguard's trademark policy). The Dockerfile starts `FROM` that base by digest and adds the scripts and the backup program.
+   - **Versions.** A normal build pins only the majors (`postgresql-18`, `patroni`, `wal-g`) and takes Wolfi's current packages; `apko` writes a lock file of the exact versions taken, committed beside the build.
+   - **Our own copy of the packages** (Wolfi deletes a version six months after a newer one): the locked `.apk` files, for amd64 and arm64, with an index of them signed by a key of our own, pushed to `ghcr.io/ucesys/221b-postgres-packages:<release>` as an OCI artifact (`oras`) and signed with cosign like the images. A rebuild of an old release reads its packages from there by digest and trusts only our key. For this test the key is a throwaway one, never committed; the release key is the owner's to create (0.14 list, item 12).
+   - **Compare** both images scanned the same way (high and critical, with and without a fix), their sizes, the versions of PostgreSQL, Patroni and WAL-G, what the scripts had to change, and the package set's size. Run the variant in kind through a switchover, a failover, a base backup and a restore to a point in time, and one rebuild from the GHCR copy alone with `packages.wolfi.dev` unreachable.
+   - The default stays Debian until the owner decides.
 4. **The owner's housekeeping on rke2cp1**: the Secret and database dumps under `~/p13-8` to `~/p13-13` deleted; `fs.inotify.max_user_instances=512` made to persist or set back.
 
 ### 1. Verify and ship what is here
