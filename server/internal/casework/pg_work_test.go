@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/issues"
@@ -146,5 +148,77 @@ func TestTheWorkAndTheChatOfACaseInTheDatabase(t *testing.T) {
 	if err := d.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM cases) + (SELECT count(*) FROM case_work) + (SELECT count(*) FROM case_events) + (SELECT count(*) FROM case_drafts)
 		+ (SELECT count(*) FROM case_commands) + (SELECT count(*) FROM rcas) + (SELECT count(*) FROM chats) + (SELECT count(*) FROM chat_messages)`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d rows left of cases that are gone: %v", n, err)
+	}
+}
+
+// A message added to a case writes the message's row and the case's row
+// once, and nothing of the work on it that did not change (DB-88; the
+// twelfth cluster test's F3: each message also deleted and inserted the
+// case's row of case_work and every event of it, and updated the case's
+// row four times). Every write to the four tables is counted by a
+// trigger, in the test's own database.
+func TestAMessageAddedWritesOnlyWhatChanged(t *testing.T) {
+	t.Setenv("TEST_STORE", "database")
+	w := setup(t)
+	ctx := context.Background()
+	d := w.objects.(*issues.CasesPG).DB
+	if _, err := d.Pool().Exec(ctx, `CREATE TABLE t_writes (tbl text NOT NULL, op text NOT NULL);
+		CREATE FUNCTION t_count() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO t_writes VALUES (TG_TABLE_NAME, TG_OP); RETURN NULL; END $$;
+		CREATE TRIGGER t_cases AFTER INSERT OR UPDATE OR DELETE ON cases FOR EACH ROW EXECUTE FUNCTION t_count();
+		CREATE TRIGGER t_work AFTER INSERT OR UPDATE OR DELETE ON case_work FOR EACH ROW EXECUTE FUNCTION t_count();
+		CREATE TRIGGER t_events AFTER INSERT OR UPDATE OR DELETE ON case_events FOR EACH ROW EXECUTE FUNCTION t_count();
+		CREATE TRIGGER t_messages AFTER INSERT OR UPDATE OR DELETE ON case_messages FOR EACH ROW EXECUTE FUNCTION t_count();`); err != nil {
+		t.Fatal(err)
+	}
+	writes := func() map[string]int {
+		t.Helper()
+		out := map[string]int{}
+		rows, err := d.Pool().Query(ctx, "DELETE FROM t_writes RETURNING tbl || ' ' || op")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				t.Fatal(err)
+			}
+			out[k]++
+		}
+		return out
+	}
+	rec, err := w.iss.Submit(ctx, rita, issues.Submission{Text: "The shop shows an error\nsince this morning"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprintf("C-%d", rec.Report.Number)
+	// A reply moves the new case In progress, which its history says: the
+	// event is one insert, the work's row one update.
+	if _, err := w.svc.Say(ctx, id, Message{Text: "Looking at it."}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	var events int
+	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM case_events").Scan(&events); err != nil || events == 0 {
+		t.Fatalf("the case has %d events: %v", events, err)
+	}
+	writes()
+	w.now = w.now.Add(time.Minute)
+	if _, err := w.svc.Say(ctx, id, Message{Text: "Still looking.", Internal: true}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := writes(), map[string]int{"case_messages INSERT": 1, "cases UPDATE": 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("a note added wrote %v; want %v", got, want)
+	}
+	if _, err := w.svc.Say(ctx, id, Message{Text: "Which page?", Ask: true}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	got := writes()
+	for k := range got {
+		if k == "case_work DELETE" || k == "case_work INSERT" || k == "case_events DELETE" || k == "case_events UPDATE" {
+			t.Errorf("a question asked wrote %v", got)
+		}
+	}
+	if got["case_events INSERT"] != 1 || got["case_work UPDATE"] != 1 || got["case_messages INSERT"] != 1 {
+		t.Errorf("a question asked, which changes the status: %v", got)
 	}
 }

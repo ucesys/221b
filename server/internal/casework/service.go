@@ -2,6 +2,7 @@ package casework
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -978,8 +979,12 @@ func (s *Service) noteSent(ctx context.Context, n int, e Event, parts ...string)
 	s.noteAs(ctx, n, e, true, parts...)
 }
 
+// noteAs adds e to the work on case n. Work it leaves as it was is not
+// saved (DB-88): a note added to a case whose draft held nothing of it
+// is the message's row alone.
 func (s *Service) noteAs(ctx context.Context, n int, e Event, onlyDrafted bool, parts ...string) {
 	err := s.updateWork(ctx, n, func(w *Work) error {
+		before, _ := json.Marshal(w)
 		now := s.now()
 		line := e
 		drafted := clearSent(w, e.By, now, parts...)
@@ -988,6 +993,9 @@ func (s *Service) noteAs(ctx context.Context, n int, e Event, onlyDrafted bool, 
 		}
 		if line.What != "" && (!onlyDrafted || drafted != "") {
 			addEvent(w, line)
+		}
+		if after, _ := json.Marshal(w); string(after) == string(before) {
+			return errUnchanged
 		}
 		w.Updated = now
 		return nil

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -531,7 +532,9 @@ func sameValues(a, b []any) bool {
 
 // writeCase changes a case's row and what hangs from it to hold c,
 // touching only its own rows, and of those only what changed: a message
-// added is one row inserted (DB-88).
+// added is one row inserted (DB-88). The case's row is updated once, with
+// its service's key and the object's version moved on (the twelfth
+// cluster test's F3: three updates a save).
 func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	row := caseToRow(c)
 	was, err := readMessages(ctx, tx, id)
@@ -555,10 +558,11 @@ func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 			b.Queue("INSERT INTO case_links (case_id, kind, position, linked_case_id, linked_case_number) VALUES ($2, $3, $4, "+sqlCaseOf+", $1)", l.number, id, l.kind, l.position)
 		}
 	}
-	n := len(db.Columns(&row))
-	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(n+1)), " WHERE ", ", is_case_kept = true WHERE ", 1), append(db.Fields(&row), id)...)
 	// Its service's key, beside the service's id, while the service has a row.
-	b.Queue("UPDATE cases SET service_id = (SELECT s.service_id FROM services s WHERE s.service_id = cases.service_key) WHERE case_id = $1", id)
+	cols := db.Columns(&row)
+	service := "$" + strconv.Itoa(slices.Index(cols, "service_key")+1)
+	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(len(cols)+1)), " WHERE ",
+		", is_case_kept = true, service_id = (SELECT s.service_id FROM services s WHERE s.service_id = "+service+"), version = version + 1 WHERE ", 1), append(db.Fields(&row), id)...)
 	for i := range c.Messages {
 		now := messageValues(&c.Messages[i])
 		if i < len(was) {
@@ -709,6 +713,7 @@ func (s *CasesPG) Save(ctx context.Context, name, key string, b []byte, version 
 			}
 		}
 		if key == CaseKey {
+			// The case's own row moves the version on as it is written.
 			var c Case
 			if err := json.Unmarshal(b, &c); err != nil {
 				return err
@@ -716,11 +721,14 @@ func (s *CasesPG) Save(ctx context.Context, name, key string, b []byte, version 
 			if err := writeCase(ctx, tx, id, &c); err != nil {
 				return err
 			}
-		} else if err := part.Write(ctx, tx, id, name, b); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, "UPDATE cases SET version = version + 1 WHERE case_id = $1 RETURNING version", id).Scan(&v); err != nil {
-			return err
+			v++
+		} else {
+			if err := part.Write(ctx, tx, id, name, b); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, "UPDATE cases SET version = version + 1 WHERE case_id = $1 RETURNING version", id).Scan(&v); err != nil {
+				return err
+			}
 		}
 		out = strconv.FormatInt(v, 10)
 		return nil
