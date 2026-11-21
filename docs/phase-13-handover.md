@@ -452,6 +452,22 @@ The Claude docs *221B storage deployment design* and *221B data model: domains a
 
 Nothing waits for the owner now but the questions at the end of that list.
 
+## The iteration of November 20 and 21 (item 0): where it stands
+
+Done by the session that writes the code and tests it in the cluster, from the owner's list (item 0 of *What to do next*, parts A to G). **Every part of A to F is built and pushed, and two cluster tests (the eleventh and the twelfth) ran in `221b-github`.** Nothing is merged; no pull request, no release, and CI has not run (the workflows were edited, not run).
+
+- **A. The database is the only store**: A.3 `a25817d5` (the start without the database deleted; DB-67 and ADR-166 withdrawn), A.1 `44111c24` (DB-69: no `none`, bundled with one member by default), A.2 `44ce6e25` (DB-72, ADR-167: the ConfigMaps of before deleted once copied; Helm never deletes one first), A.4 `a2218298` (CI and the release build, scan, sign and publish `221b-postgres`; the kind scripts run with the database).
+- **B. Secrets**: B.5 (DB-71, step `0038`: a sensitive variable's value never in the database), B.6 (BK-15: the backup file seals an application's values), B.7 (DB-74: a command's parameters masked in the audit log and the log), B.8 and B.9 (DB-66: empty session Secrets deleted; the sessions of before a rollback ended at the roll forward), B.10 (DB-75: credentials' repository).
+- **C. What people see**: C.11 (the Inbox counts everything in it), C.12 (DB-15: a banner, `?` counts, 503 by the error), C.13 (JB-23), C.14 (the cluster tests' leftovers), C.15 (AU-24: one page of all runs).
+- **D. The schema and the repositories**: D.16 (DB-78 to DB-81, DB-87 to DB-89: repositories for Changes, Jobs' claims, AI configuration, Mycroft's runs, Automation's runs, Cases with the list as a query), D.17 (DB-91), D.18 (DB-90, DB-92), D.19 (DB-90, DB-93), D.20 (the Lease stays; parts stay `json`).
+- **E and F**: ADR-168, one shared fake cluster, the counts, the tunnel race fixed (E.21); `iamAuth` for RDS and Cloud SQL (F.22, DB-83, not run against a cloud); the backup container as a Go program on a cron schedule (F.23, DB-84).
+- **G. Cluster tests**: the eleventh (on `061a9e9d`): a release with no database (0.12.1, a second release `p13-g`) upgraded to the bundled default with every record copied, no ConfigMap deleted by Helm before the copy, the ConfigMaps of before then deleted by the console, no secret in the database, the logs or the backup; and `221b-github` from schema 37 to 42. The twelfth (on `518fc456`): `221b-github` from 42 to 49 with the case lists the same field by field. Their findings are fixed (see each test's section), **except** these, put off: the copy from 0.12.1 drops two times (item 40); the settings' `changedAt` at a restart; small log and float nits.
+- **Not seen in a cluster**: the twelfth test's fixes (`5150db59`, `02d3ab54`, `75ac19b4`, `72a6b010`); a node's script output with a sensitive value masked (no SSH in the test release); `iamAuth`; the backup program's schedule; CI.
+- **Schema**: steps `0001` to `0049`, 126 tables; every step has its line in `steps.sum` and the data model page lists every table, column and key (DB-68). The branches of this iteration wrote steps apart and were joined with their numbers made to run without a gap before anything was pushed; no pushed step was ever edited.
+- **The test release** (`221b-github`): Helm revision 25, console and database `p13-518fc45`, bundled, `ha: true`, `db-0` the leader, schema 49, one console replica pinned to `rke2cp1`, the two local test accounts in its values, the agents' jobs off. Its troubleshooter runs the twelfth test's one-line draft as its live instructions.
+- **Decisions taken for the owner** are the rows of *Decisions made for the owner to confirm* from "The simulator, `make dev` and the e2e run on a real PostgreSQL" on.
+- **Spent on AI in the cluster tests**: 0.13 USD (the eleventh) and 1.64 USD (the twelfth, over its 1 USD: the run budget that did not hold, its F1, now fixed).
+
 ## Decided by the owner on November 20, after the night
 
 The night's session left four questions and a list of decisions taken for the owner. He answered on the morning of November 20, 2026. The first three are **decided and not built**; they are the first thing under *What to do next*.
