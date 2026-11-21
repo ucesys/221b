@@ -4,6 +4,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 
 ## Start here
 
+- **November 21**: the owner confirmed eight decisions of the iteration (*Confirmed by the owner on November 21*) and asked for *The 0.14 to-do list*. What is left for 0.13 is item 0b of *What to do next*.
 - **The branch is `phase-13-store`**, pushed. Nothing is merged, there is no pull request and no release, and CI has not run on it.
 - **The owner's rules for this work:** push to `phase-13-store` only; no merge, pull request, release or CI run until he says so; every commit signed off. The session that tests in his cluster builds, deploys and tests, and changes nothing in the repository: it writes findings to a file, which he passes on.
 - **The owner answered the night's questions on November 20**: see *Decided by the owner on November 20, after the night*. In short: **a console does not start without its database** (`database.startWithoutIt` is off unless set, since the commit of that section; not seen in a cluster); three things are decided and **not built** (empty session Secrets deleted, the sessions from before a rollback ended by the console, an application's values and parameters sealed in the backup file and a saved command's parameters masked in the audit log and the log); the bell stays as it is. They are in item 0 of *What to do next*, which since 09:41 holds every item of *Changes put off* as one iteration, with `database.mode: none` removed (default `bundled`, one member) and the ConfigMaps deleted after the copy: see *Decided by the owner on November 20 at 09:41*. The two Claude docs were brought up to date the same day, and copies are in `docs/design/`. Later that morning he decided that the start without the database is **deleted** and that **the Inbox counts everything in it**; see *Decided by the owner on November 20, later in the morning*.
@@ -502,6 +503,62 @@ Recorded by the coding session in the Claude app, which changed no code for them
    - Configuration ConfigMaps are not record sets and stay: the auth config, the Toolbox's. Secrets are not deleted, apart from the empty session Secrets (answer 1 above).
 3. **Every item of *Changes put off* is in this iteration**, with the decisions above. *What to do next*, item 0, lists the order. Items that are questions (8, the Lease; 13, `jsonb`) are answered in code or closed with the reason in the decisions table. Item 15 is the owner's own reading.
 
+## Confirmed by the owner on November 21
+
+The owner read the iteration's report (head `06fc077`) and confirmed these decisions taken for him, as written in *Decisions made for the owner to confirm*:
+
+- Sensitive variables: one Secret a cluster, values under an HMAC digest, a name sensitive on one fleet is sensitive on its cluster, the value back in its row when the mark is taken off.
+- Masking rewrote the past Watson and Automation audit events.
+- The sign of a rollback is a session started more than 10 minutes after the copy; `DELETE FROM auth_sessions` stays documented for what it misses.
+- The database's image fails its scan only on a fixable high or critical finding. He asked whether a better image exists: a variant on Wolfi is to be built and compared (*What to do next*, item 0b).
+- A job's run stops before a model call once its budget is spent, and its cost includes its hand-overs.
+- Duplicates under the new unique keys are renamed, not deleted.
+- The Lease stays in 0.13.0.
+- The ConfigMap templates stay in 0.13 and are dropped in 0.14 (ADR-167).
+
+The other rows from "The simulator, `make dev` and the e2e run on a real PostgreSQL" on are still his to read (item 15 of *Changes put off*).
+
+## The 0.14 to-do list
+
+What 0.13 leaves for 0.14, gathered on November 21 from ADR-167, the decisions table, item 40 and the code to-do list. Nothing here is started.
+
+**The copies from before, and the last ConfigMaps**
+1. Drop the twelve ConfigMap templates (`b221.copySource`) and refuse an upgrade, with a `fail` in a template, while `lookup` finds any of them or a ConfigMap labelled `221b.io/case`: a 0.12 release goes through 0.13 first (ADR-167). Release notes for GitOps users, where `lookup` sees nothing.
+2. Remove the one-time copy code with them: the ConfigMap flags, `openSource`, `proposalsOfBefore`, the cases' objects, `readFrom`, `removeCopiedSources`, and the Role's rule on ConfigMaps.
+3. The wiki's store in a ConfigMap (`-wiki-configmap`) moves to the database or goes; then no record is kept in a ConfigMap at all.
+4. `connections.store: memory` and the copies from Secrets of before (the sessions, the credentials' list, the applications, the connections): keep only what a 0.13 release still needs.
+
+**Repositories still to write** (the decisions table: no repository yet)
+5. Mycroft's drafts, the jobs and their runs, and the case work, which still save whole documents.
+6. Automation's runs without the documents' advisory lock, once nothing reads them whole.
+7. A job's run keeping its row's id through a save, so that an exception's and a case's finding, run and job become keys.
+8. `cases.service_key` removed now that `service_id` is the key; `line_title`, `involved` and a case's `version` looked at again with the list as a query.
+
+**Secrets and sign-in**
+9. The case drawer's `case.command` masked like everything Watson records.
+10. A surer sign of a rollback than a session started 10 minutes after the copy, or a step in the roll forward that ends the sessions.
+11. Credentials' writes held to a `version` column in place of a row lock, if a second editor is ever expected.
+
+**The database and its image**
+12. The database's image on Wolfi, if the comparison in 0.13 shows it is better and the owner agrees; otherwise its arm64 build off emulation.
+13. `database.bundled.image.tag` following `image.tag`.
+14. `backup.dailyAt` removed, `backup.schedule` alone (DB-84 keeps both in 0.13).
+15. The Lease looked at again: what the leader alone does (informers, the Toolbox's tunnels, Watson's and Sherlock's work in flight, the passes behind `IsLeader`) and whether standbys can serve reads.
+16. `chat_messages.parts` to `jsonb` only if something asks for a chat by its parts.
+
+**Inventory and runs** (the code to-do list agreed on November 18, items 1 to 10)
+17. Host labels gone from the browser (`HostDialog.tsx`, `HostPanel.tsx`).
+18. Runs and fleets with no cluster: a list fleet or a host whose cluster is gone shows under every cluster, and a run may target it.
+19. Removing a cluster: selector fleets deleted, list fleets and outside hosts kept with no cluster, each node deleted or kept as a host by the administrator's choice; `PGStore.Delete` deletes the row.
+20. Network facts (`net`, `time`, `lldp`), `maxFacts`, the optional privileged facts, what the console measures, rack suggestions and drift, the new validation rules, `node_facts` for the Troubleshooter and the Auditor (items 4 to 10).
+
+**Small things**
+21. Item 40: the copy from 0.12.1 dropping the users' `lastSignIn` and the settings' `changedAt` (moot once the copies go, unless 0.14 still reads 0.12); the settings' `changedAt` lost at a restart; `""` for a cluster an audit could not read; a failed SubjectAccessReview logged on every home page; float noise in the month's spend.
+22. 64 KiB of a run's output a host for the newest 200 runs: the owner to say if more is wanted.
+
+**Not testable in the test release, to see somewhere that has them**
+23. A node script's output with a sensitive value masked (needs SSH to a host), `iamAuth` against RDS and Cloud SQL, the backup program's cron schedule over days, and CI's first run.
+
 ## Changes put off
 
 One list, kept at the owner's request, of what the decisions above leave to be changed later. Each line says what, and what it waits for. Add to it in the commit that makes such a decision; strike a line through when it is done.
@@ -606,6 +663,13 @@ In this order; each with its tests, its requirement and its lines in the docs. C
 **G. Cluster tests** of A to F, as the parts land, in namespace `221b-github`. The first one: an upgrade from a release without a database to the bundled default, every ConfigMap copied and then deleted, none deleted by Helm first. Save the namespace's ConfigMaps and Secrets to a file outside the repository, mode 600, before each upgrade.
 
 **The owner's own**: item 15, reading the decisions table through before a release.
+
+### 0b. Left for 0.13 (November 21)
+
+1. **A thirteenth cluster test** of the twelfth test's fixes (`5150db59`, `02d3ab54`, `75ac19b4`, `72a6b010`): a job's run stops at its budget, approving a draft keeps its approval link, adding a message writes only the message.
+2. **The troubleshooter's live instructions back** in `221b-github`: its live version is the twelfth test's one-line draft; put the last real version back live through the console (its version history has it).
+3. **A Wolfi variant of `221b-postgres`** built beside the Debian one (`cgr.dev/chainguard/wolfi-base`, `apk add` of `postgresql-18`, `patroni`, `wal-g`, all in Wolfi), both scanned the same way, and the variant run once in a kind cluster through a failover and a restore. Report the counts and what differs (Patroni's and WAL-G's versions follow Wolfi's; Wolfi keeps a version only six months after a newer one). The default does not change without the owner's word.
+4. **The owner's housekeeping on rke2cp1**: the Secret and database dumps under `~/p13-8` to `~/p13-13` deleted; `fs.inotify.max_user_instances=512` made to persist or set back.
 
 ### 1. Verify and ship what is here
 
