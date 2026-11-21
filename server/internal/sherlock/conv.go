@@ -466,9 +466,24 @@ type Question struct {
 	// with them. Never for a reporter's question (the report triage);
 	// false gives none.
 	Exceptions bool
+	// Meter, when set, counts every model call of a run on its own, the
+	// agents it hands work to included, and stops the run before a call
+	// once it says so (a job's budget, JB-10).
+	Meter Meter
 
 	// agent is the agent resolved, for its prompt.
 	agent *Agent
+}
+
+// Meter counts what a run on its own spends and says when it must stop:
+// a job's run gives one, so that its budget holds within the agent's
+// rounds and its hand-overs, not only between the run's calls (JB-10).
+type Meter interface {
+	// Spend counts one model call that ended: its input tokens (cache
+	// included), its output tokens and its cost.
+	Spend(in, out int, usd float64)
+	// Stop says why no other model call may start; nil while one may.
+	Stop() error
 }
 
 // MaxQuestion bounds a question, in characters.

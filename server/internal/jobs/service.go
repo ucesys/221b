@@ -49,6 +49,18 @@ type AgentRequest struct {
 	// ForReporters says the answer reaches reporters (Kind.ForReporters):
 	// the agent is given no accepted exception (KN-32).
 	ForReporters bool
+	// Meter is the run's: the runner counts each model call on it as the
+	// call ends, the agents the agent hands work to included, and starts
+	// no call once it says stop (JB-10). A runner that does not is
+	// counted by the result's cost when it ends.
+	Meter Meter
+}
+
+// Meter counts a run's model calls as they end and says when the run's
+// or the day's budget is spent (JB-10).
+type Meter interface {
+	Spend(in, out int, usd float64)
+	Stop() error
 }
 
 // AgentResult is what an agent's call came to.

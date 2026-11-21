@@ -576,6 +576,12 @@ func (s *Service) handOver(ctx context.Context, from *Agent, q Question, r *run,
 		r.chain.stop = err
 		return refuse("Not asked: " + err.Error())
 	}
+	if q.Meter != nil {
+		if err := q.Meter.Stop(); err != nil {
+			r.chain.stop = err
+			return refuse("Not asked: " + err.Error())
+		}
+	}
 	if r.chain.depth() >= MaxHandOverDepth {
 		return refuse(fmt.Sprintf("Not asked: a question is handed on at most %d times. Finish with what you have.", MaxHandOverDepth))
 	}
@@ -739,6 +745,15 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 			out.Err = err
 			return out
 		}
+		// A job's run stops before a call once its budget is spent, in a
+		// hand-over too (JB-10).
+		if q.Meter != nil {
+			if err := q.Meter.Stop(); err != nil {
+				r.chain.stop = err
+				out.Err = err
+				return out
+			}
+		}
 		if round >= s.opts.MaxRounds {
 			out.Err = errors.New("too many tool rounds")
 			return out
@@ -759,6 +774,9 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 		out.CostUSD += used
 		if used > 0 || round == 0 {
 			s.opts.Ledger.AddFor(context.Background(), a.ID, a.Provider, used, round == 0)
+		}
+		if q.Meter != nil {
+			q.Meter.Spend(resp.Usage.Prompt(), resp.Usage.OutputTokens, used)
 		}
 		if err != nil {
 			if ctx.Err() != nil {

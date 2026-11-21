@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -458,6 +459,72 @@ func TestAHandOverChainStopsAtABudget(t *testing.T) {
 	res = w.run(t, Sherlock, "[[chain auditor]]")
 	if !errors.As(res.Err, &capErr) || res.Hands[0].Status != "refused" {
 		t.Fatalf("asked over its cap: %v %+v", res.Err, res.Hands)
+	}
+}
+
+// testMeter counts a run's model calls and stops it at limit (none at 0).
+type testMeter struct {
+	mu    sync.Mutex
+	limit float64
+	calls int
+	usd   float64
+}
+
+var errMeterSpent = errors.New("the run's budget is spent")
+
+func (m *testMeter) Spend(_, _ int, usd float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	m.usd += usd
+}
+
+func (m *testMeter) Stop() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.limit > 0 && m.usd >= m.limit {
+		return errMeterSpent
+	}
+	return nil
+}
+
+// A run on its own with a meter (a job's, JB-10) counts every model call
+// of its chain on the meter, the hand-overs' too (the twelfth cluster
+// test's F1: the Change planner's calls for a nightly audit were not
+// counted on the run), and starts no call once the meter says stop: not
+// a round of the agent's, not a hand-over.
+func TestARunsMeterCountsItsChainAndStopsIt(t *testing.T) {
+	w := setup(t, nil)
+	run := func(m *testMeter) sherlock.RunResult {
+		t.Helper()
+		q := sherlock.Question{Key: sherlock.Key{Cluster: "local"}, Cluster: "local", Meter: m}
+		a, err := w.ai.Agent(Sherlock, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.engine.RunAgent(context.Background(), a, q, "[[chain troubleshooter,auditor]]")
+	}
+	before := w.engine.Ledger().Now(context.Background()).DayUSD
+	m := &testMeter{}
+	res := run(m)
+	spent := w.engine.Ledger().Now(context.Background()).DayUSD - before
+	// Sherlock's two calls, the Troubleshooter's two, the Auditor's one.
+	if res.Err != nil || m.calls != 5 || math.Abs(m.usd-spent) > 1e-9 || m.usd <= res.CostUSD {
+		t.Fatalf("the meter counted %d calls, $%v; the chain spent $%v, Sherlock's own $%v: %v", m.calls, m.usd, spent, res.CostUSD, res.Err)
+	}
+	// A limit the first call passes: the hand-over it asks for is refused,
+	// and Sherlock stops before its next round.
+	m = &testMeter{limit: 1e-9}
+	res = run(m)
+	if !errors.Is(res.Err, errMeterSpent) || m.calls != 1 || len(res.Hands) != 0 {
+		t.Fatalf("past its budget the run made %d calls, %d hand-overs: %v", m.calls, len(res.Hands), res.Err)
+	}
+	// A limit the hand-over's first call passes: the Troubleshooter stops
+	// before its next round, and Sherlock with it.
+	m = &testMeter{limit: 1.5 * res.CostUSD}
+	res = run(m)
+	if !errors.Is(res.Err, errMeterSpent) || m.calls != 2 || len(res.Hands) != 1 || res.Hands[0].Status != "failed" {
+		t.Fatalf("past its budget in a hand-over the run made %d calls: %v %+v", m.calls, res.Err, res.Hands)
 	}
 }
 

@@ -301,6 +301,9 @@ func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentR
 		// exceptions; the report triage's answer reaches the reporter,
 		// who does not (KN-32).
 		Exceptions: !req.ForReporters,
+		// The run's budget holds within the agent's rounds and its
+		// hand-overs (JB-10).
+		Meter: req.Meter,
 	}
 	agent, err := a.ai.Agent(req.Agent, q)
 	if err != nil {

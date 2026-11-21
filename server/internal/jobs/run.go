@@ -74,10 +74,36 @@ func (e *RunEnv) budgetErr() error {
 	return nil
 }
 
+// runMeter counts one Ask's model calls on its run as each ends (JB-10):
+// the asked agent's rounds and those of every agent it hands work to.
+type runMeter struct {
+	e *RunEnv
+	// counted says the runner counted a call here.
+	counted bool
+}
+
+func (m *runMeter) Spend(in, out int, usd float64) {
+	m.e.mu.Lock()
+	defer m.e.mu.Unlock()
+	m.e.cost += usd
+	m.e.tokens.In += in
+	m.e.tokens.Out += out
+	m.counted = true
+}
+
+func (m *runMeter) Stop() error {
+	m.e.mu.Lock()
+	defer m.e.mu.Unlock()
+	return m.e.budgetErr()
+}
+
 // Ask runs the job's agent on a cluster with a task, as the reader
-// identity, and counts what it spent. It refuses once the run's or the
-// day's budget is spent (JB-10): a call under way is not cut short, so a
-// run can pass its budget by what its last call cost.
+// identity, and counts what it spent. No model call starts once the
+// run's or the day's budget is spent (JB-10): the agent's rounds, and
+// the agents it hands work to, are counted on the run as each call ends,
+// and the next call is refused, in a hand-over too. A call under way is
+// not cut short, so a run passes its budget by at most what one call
+// cost: the run's calls are made one at a time.
 func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, error) {
 	e.mu.Lock()
 	err := e.budgetErr()
@@ -91,11 +117,16 @@ func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, er
 	if e.Kind.Agent == "" {
 		return AgentResult{}, errors.New("this job has no agent")
 	}
-	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings, ForReporters: e.Kind.ForReporters})
+	m := &runMeter{e: e}
+	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings,
+		ForReporters: e.Kind.ForReporters, Meter: m})
 	e.mu.Lock()
-	e.cost += res.CostUSD
-	e.tokens.In += res.Tokens.In
-	e.tokens.Out += res.Tokens.Out
+	if !m.counted {
+		// A runner that counts nothing on the meter is counted when it ends.
+		e.cost += res.CostUSD
+		e.tokens.In += res.Tokens.In
+		e.tokens.Out += res.Tokens.Out
+	}
 	if res.Model != "" {
 		e.model = res.Model
 	}
