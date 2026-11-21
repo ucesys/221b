@@ -578,7 +578,21 @@ The owner read the iteration's report (head `06fc077`) and confirmed these decis
 - The Lease stays in 0.13.0.
 - The ConfigMap templates stay in 0.13 and are dropped in 0.14 (ADR-167).
 
-The other rows from "The simulator, `make dev` and the e2e run on a real PostgreSQL" on are still his to read (item 15 of *Changes put off*).
+The other rows from "The simulator, `make dev` and the e2e run on a real PostgreSQL" on were read the same evening (below).
+
+## Confirmed by the owner on November 21, in the evening
+
+After the report of item 0b (head `910a7fb2`):
+
+- **The Wolfi image becomes the default in 0.13**, and the Debian image is dropped, not kept as a fallback. Before the switch, an existing database is upgraded from the Debian image to Wolfi in `221b-github` and checked (locale, indexes, switchover, failover, backups).
+- **Our package copy is signed with a key pair made by each release job**: the public key travels inside the package artifact, which the workflow signs keylessly with cosign; a rebuild checks that identity and then trusts the key inside. No long-lived key, no release secret (this replaces the owner-made key of item 12 of the 0.14 list).
+- WAL-G stays WAL-G's own release binary (Wolfi's has no libsodium). amd64 and arm64 are published. The image's size (535 MB, against Debian's 388) is accepted. The release workflow's tools are pinned to releases at least two weeks old.
+- The housekeeping on `rke2cp1` was done with his word: the dumps under `~/p13-8` to `~/p13-14` and the Secret inventories (which held each value's length and SHA-256) deleted; `fs.inotify.max_user_instances=512` kept in `/etc/sysctl.d/99-inotify-instances.conf`.
+- **The decisions table's rows from "The simulator, `make dev` and the e2e run on a real PostgreSQL" on are confirmed**, except two:
+  - *The ConfigMap flags stay, as the copy's source only*: **changed**. The console works the ConfigMaps' names out from the release (`<namespace>/<fullname>-<what>`) and the flags go. **The wiki moves into the database** (the ConfigMap `<release>-wiki` is copied once and deleted, like the others), and **`connections.store: memory` goes**: the database is the only store.
+  - *Automation's ConfigMaps of before are copied only with `automation.enabled`*: **changed**. Every ConfigMap of before is copied and deleted at the first start, whatever is turned on.
+- On the bell: it stays red while a P0 or P1 waits, yellow while anything else does, plain when nothing does; the `?` shows only while the Inbox cannot be read (the database away), where a plain bell would say nothing waits.
+- Four rows of that part of the table are out of date, superseded by later work: "The schema has 115 tables" and "121 tables" (126 now), "the list of cases has no table" (a query, DB-87) and "a case's links are columns and arrays" (tables with keys, step `0044`).
 
 ## The 0.14 to-do list
 
