@@ -24,7 +24,8 @@ import (
 // it only what changed is written, a test run's result added being one
 // insert. So a row can be pointed at: a draft that waits for a second
 // SuperAdmin keeps the key of its request (approval_request_id, DB-91),
-// looked up by its number whenever the row is written.
+// looked up by its number whenever the row is written, and when it goes
+// live its row becomes the version's, with the key and the number.
 
 // The states of a row of prompt_versions.
 const (
@@ -276,7 +277,7 @@ func readPrompts(ctx context.Context, q db.Querier) (Prompts, bool, error) {
 			}
 			ps.Agents[agent] = ap
 		case rowVersion:
-			ap.Versions = append(ap.Versions, Version{N: version, House: house, Notes: notes[id], By: by, At: timeOf(created), Why: why, Parts: parts[id], Rev: rev, Test: test})
+			ap.Versions = append(ap.Versions, Version{N: version, House: house, Notes: notes[id], By: by, At: timeOf(created), Why: why, Parts: parts[id], Rev: rev, Test: test, Request: request})
 		case rowDraft:
 			d := &Draft{Rev: rev, House: house, Notes: notes[id], Stage: stage, By: by, At: timeOf(created), Test: runs[id], Request: request, Restored: restored, Parts: parts[id]}
 			if pilotStarted != nil {
@@ -506,7 +507,7 @@ func promptRows(id string, ap *AgentPrompt) map[string]promptRow {
 	for i, v := range ap.Versions {
 		house := v.House
 		out[name(rowVersion, v.N)] = promptRow{agent: id, state: rowVersion, position: i, version: v.N, rev: v.Rev, body: &house, why: v.Why, by: v.By, at: at(v.At),
-			notes: v.Notes, parts: v.Parts, test: v.Test}
+			request: v.Request, notes: v.Notes, parts: v.Parts, test: v.Test}
 	}
 	if d := ap.Draft; d != nil {
 		house := d.House
@@ -553,6 +554,28 @@ func rowKeys(ctx context.Context, tx pgx.Tx, agent string) (map[string]string, m
 	return ids, runs, err
 }
 
+// wentLive gives a draft that went live its row (DB-81, DB-91): when the
+// draft's row goes and a version of the draft's revision is new, the
+// version takes the draft's row, which is updated in place (its state, its
+// number, its request) and keeps its id and the key of the request that
+// approved it, where it was made a new row before.
+func wentLive(keys, runs map[string]string, before, after map[string]promptRow) {
+	d, had := before[rowDraft]
+	row, kept := keys[rowDraft]
+	if _, still := after[rowDraft]; !had || !kept || still {
+		return
+	}
+	for k, r := range after {
+		if _, old := keys[k]; old || r.state != rowVersion || r.rev != d.rev {
+			continue
+		}
+		keys[k], runs[k], before[k] = row, runs[rowDraft], d
+		delete(keys, rowDraft)
+		delete(runs, rowDraft)
+		return
+	}
+}
+
 func writePrompts(ctx context.Context, tx pgx.Tx, old, next Prompts) error {
 	ids := map[string]bool{}
 	for id := range old.Agents {
@@ -585,6 +608,7 @@ func writePrompts(ctx context.Context, tx pgx.Tx, old, next Prompts) error {
 			return err
 		}
 		before, after := promptRows(id, was), promptRows(id, ap)
+		wentLive(keys, runs, before, after)
 		names := make([]string, 0, len(after))
 		for k := range after {
 			names = append(names, k)

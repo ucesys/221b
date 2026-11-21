@@ -1059,7 +1059,7 @@ func (s *Server) applyPrompt(ctx context.Context, req twoperson.Request, by stri
 	if s.opts.AI == nil {
 		return errors.New("this console has no agents")
 	}
-	_, err := s.opts.AI.ApplyLiveWith(ctx, req.Agent, req.Rev, by, req.Untested)
+	_, err := s.opts.AI.ApplyLiveApproved(ctx, req.Agent, req.Rev, by, req.Untested, req.ID)
 	return err
 }
 

@@ -244,7 +244,8 @@ func TestAnAgentsInstructionsKeepTheirRowsIDs(t *testing.T) {
 	if n, m := count(t, d, "test_case_results"), count(t, d, "test_case_result_checks"); n != 3 || m != 3 {
 		t.Fatalf("%d results, %d checks", n, m)
 	}
-	// The draft goes live: a version more, the draft's row gone, the rest keep their ids.
+	// The draft goes live: its row becomes version 2's, with its id (the
+	// twelfth cluster test's F2), and the rest keep their ids.
 	s := ps.Agents[Sherlock]
 	live := "Answer in haiku."
 	s.Versions = append(s.Versions, Version{N: 2, House: live, By: "ann", At: day.Add(time.Hour), Why: "made live", Rev: 2})
@@ -254,7 +255,10 @@ func TestAnAgentsInstructionsKeepTheirRowsIDs(t *testing.T) {
 	for k, v := range was {
 		if k == draft {
 			if _, ok := now[k]; ok {
-				t.Error("the draft's row is still there")
+				t.Error("there is still a draft")
+			}
+			if f := strings.Fields(now[Sherlock+" version 2"]); len(f) == 0 || f[0] != strings.Fields(v)[0] {
+				t.Errorf("the draft had the row %s and version 2 has %q", v, now[Sherlock+" version 2"])
 			}
 			continue
 		}
@@ -262,7 +266,7 @@ func TestAnAgentsInstructionsKeepTheirRowsIDs(t *testing.T) {
 			t.Errorf("%s had the row %s and has %q", k, v, now[k])
 		}
 	}
-	if _, ok := now[Sherlock+" version 2"]; !ok || count(t, d, "test_runs") != 0 {
-		t.Fatalf("the new version: %v, %d runs", now, count(t, d, "test_runs"))
+	if n := count(t, d, "test_runs"); n != 0 {
+		t.Fatalf("the draft's test run is kept: %d runs", n)
 	}
 }

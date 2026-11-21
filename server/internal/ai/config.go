@@ -432,6 +432,9 @@ type Version struct {
 	// was tested (AI-32).
 	Rev  int        `json:"rev,omitempty"`
 	Test *TestBrief `json:"test,omitempty"`
+	// Request is the two-person request that approved it, by its number,
+	// when another SuperAdmin did (DB-91).
+	Request int `json:"request,omitempty"`
 }
 
 // MaxVersions bounds the versions once live each agent keeps (AI-32);

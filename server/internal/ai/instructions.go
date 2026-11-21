@@ -456,6 +456,18 @@ func (s *Service) ApplyLiveWith(ctx context.Context, id string, rev int, by, unt
 // revisions since the last go-live are dropped; the draft itself is kept
 // as the version, with its revision and its test (AI-32).
 func (s *Service) ApplyLiveNoted(ctx context.Context, id string, rev int, by, untested, note string) (Version, error) {
+	return s.applyLive(ctx, id, rev, by, untested, note, 0)
+}
+
+// ApplyLiveApproved is ApplyLiveWith for a draft another SuperAdmin
+// approved by the two-person request numbered request: its version keeps
+// the request, and with a database the draft's row becomes the version's
+// with the request's key (DB-81, DB-91).
+func (s *Service) ApplyLiveApproved(ctx context.Context, id string, rev int, by, untested string, request int) (Version, error) {
+	return s.applyLive(ctx, id, rev, by, untested, "", request)
+}
+
+func (s *Service) applyLive(ctx context.Context, id string, rev int, by, untested, note string, request int) (Version, error) {
 	var v Version
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, baseline string) error {
 		if p.Draft == nil || p.Draft.Rev != rev {
@@ -474,7 +486,7 @@ func (s *Service) ApplyLiveNoted(ctx context.Context, id string, rev int, by, un
 		p.setParts(p.Draft.Parts, s.builtIn(id))
 		p.goLive(p.Draft.House, p.Draft.Notes, baseline, by, why, s.opts.Now())
 		last := &p.Versions[len(p.Versions)-1]
-		last.Rev = p.Draft.Rev
+		last.Rev, last.Request = p.Draft.Rev, request
 		if t := p.Draft.Test; t != nil && t.Rev == p.Draft.Rev {
 			last.Test = briefOf(t)
 		}
