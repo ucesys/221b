@@ -1,16 +1,16 @@
-# The base of 221b-postgres's Wolfi variant (docs/database.md, "The Wolfi
-# variant"): PostgreSQL and Patroni as Wolfi builds them, assembled by apko
-# straight from Wolfi's package repository; no registry image is pulled.
-# Only the majors are named here: hack/wolfi-postgres.sh lock takes Wolfi's
-# current packages and writes the exact versions to apko.lock.json, which
-# every build of the base follows. The Dockerfile beside this adds what
-# 221B adds on top, by the base's digest.
+# The base of 221b-postgres, the bundled database's image (docs/database.md,
+# "The image"): PostgreSQL and Patroni as Wolfi builds them, assembled by
+# apko straight from Wolfi's package repository; no registry image is
+# pulled. Only the majors are named here: hack/wolfi-postgres.sh lock takes
+# Wolfi's current packages and writes the exact versions to apko.lock.json,
+# which every build of the base follows. The Dockerfile beside this adds
+# what 221B adds on top, by the base's digest.
 #
 # WAL-G is not Wolfi's: Wolfi's wal-g-pg is built without libsodium, and
 # the chart encrypts every backup with it (WALG_LIBSODIUM_KEY). The
-# Dockerfile takes the WAL-G release the Debian image takes, checked by its
-# digest. Once Wolfi's build has libsodium, wal-g-pg goes in the list below
-# and the Dockerfile's WAL-G stage goes.
+# Dockerfile takes WAL-G's own release, checked by its digest. Once Wolfi's
+# build has libsodium, wal-g-pg goes in the list below and the
+# Dockerfile's WAL-G stage goes.
 contents:
   repositories:
     - https://packages.wolfi.dev/os
@@ -24,15 +24,17 @@ contents:
     # dirname, and kubectl exec a shell.
     - bash
     - busybox
-    # One PostgreSQL major per 221B release line, as in deploy/postgres.
+    # One PostgreSQL major per 221B release line; a new major is a new
+    # line, with pg_upgrade (docs/upgrading.md).
     - postgresql-18
     - postgresql-18-client
     - patroni
     # python3 itself (restore.sh), beside the python3.13 Patroni runs on.
     - python-3.13
 accounts:
-  # The Debian image's user: 999, the owner of the data and the user of the
-  # chart's securityContext.
+  # User 999, the owner of the data and the user of the chart's
+  # securityContext; the Debian image of 0.13's development builds had the
+  # same, so their volumes keep their owner.
   groups:
     - groupname: postgres
       gid: 999
@@ -58,7 +60,7 @@ environment:
   LANG: C.UTF-8
   PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 annotations:
-  org.opencontainers.image.description: "Wolfi packages (packages.wolfi.dev) assembled with apko: the base of 221b-postgres's Wolfi variant"
+  org.opencontainers.image.description: "Wolfi packages (packages.wolfi.dev) assembled with apko: the base of 221b-postgres"
   org.opencontainers.image.source: https://github.com/ucesys/221b
 archs:
   - x86_64

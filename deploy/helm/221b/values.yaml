@@ -571,8 +571,10 @@ database:
     # 221b.io/environment=production unless this says it is meant.
     acknowledgeNoHA: false
     image:
-      # Published by CI with the console's image, under the same tags, and
-      # signed the same way (docs/releasing.md).
+      # PostgreSQL 18 and Patroni from Wolfi's packages, WAL-G's release
+      # (docs/database.md, "The image"), for linux/amd64 and linux/arm64;
+      # published with the console's image, under the same tags, and signed
+      # the same way (docs/releasing.md).
       repository: ghcr.io/ucesys/221b-postgres
       # Defaults to the chart's appVersion; a digest replaces the tag. With
       # another image.tag for the console (main, pr-N), set the same here.

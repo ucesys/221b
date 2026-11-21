@@ -1,55 +1,69 @@
 #!/usr/bin/env bash
-# Builds 221b-postgres's Wolfi variant (deploy/postgres-wolfi, docs/database.md,
-# "The Wolfi variant") and keeps a copy of its packages. Not the default:
-# the chart, CI and the release build deploy/postgres, on Debian.
+# Builds 221b-postgres, the bundled database's image (deploy/postgres,
+# docs/database.md, "The image"), from Wolfi's packages, and keeps a copy of
+# those packages so that an old release can be built again once Wolfi has
+# deleted them.
 #
 #   hack/wolfi-postgres.sh tools          the pinned apko, melange, crane, oras and cosign, into bin/tools
 #   hack/wolfi-postgres.sh lock           Wolfi's current packages for the majors of apko.yaml, into apko.lock.json
-#   hack/wolfi-postgres.sh base           the base from the lock, pushed to WOLFI_BASE_REPO; its digest
-#                                         must be the Dockerfile's WOLFI_BASE_DIGEST
+#   hack/wolfi-postgres.sh base           the base from the lock, both architectures, pushed to WOLFI_BASE_REPO;
+#                                         its digest must be the Dockerfile's WOLFI_BASE_DIGEST
 #   hack/wolfi-postgres.sh pin            the same, writing the digest into the Dockerfile (after a new lock)
-#   hack/wolfi-postgres.sh image          base, then the image for PLATFORM as DB_WOLFI_IMAGE
-#   hack/wolfi-postgres.sh packages       the locked .apk files of both architectures, checked against
-#                                         the lock, with an APKINDEX signed by WOLFI_PACKAGES_KEY, and
-#                                         WAL-G's release files: bin/wolfi/packages
-#   hack/wolfi-postgres.sh push           that copy to WOLFI_PACKAGES_REF as one OCI artifact (oras),
-#                                         signed with cosign (COSIGN_KEY, or keyless when empty)
-#   hack/wolfi-postgres.sh rebuild-base DIGEST
-#                                         the base again from the copy alone: the artifact pulled by
-#                                         digest, its signature checked, apko run against it trusting
-#                                         only WOLFI_PACKAGES_PUBKEY; the package set must be the lock's
-#   hack/wolfi-postgres.sh rebuild DIGEST rebuild-base, then the image from that base
+#   hack/wolfi-postgres.sh image [DIGEST] base (or the base at DIGEST), then the image for PLATFORM as
+#                                         DB_IMAGE, in the local docker
+#   hack/wolfi-postgres.sh publish REF... base, then the image for linux/amd64 and linux/arm64 as one index,
+#                                         pushed under every REF (repository:tag); no emulation needed
+#   hack/wolfi-postgres.sh keygen DIR NAME
+#                                         a new RSA key pair for the index, DIR/NAME.rsa and DIR/NAME.rsa.pub
+#   hack/wolfi-postgres.sh packages       the locked .apk files of both architectures, checked against the
+#                                         lock, with an APKINDEX signed by WOLFI_PACKAGES_KEY, its public
+#                                         key (WOLFI_PACKAGES_KEY.pub) and WAL-G's release files:
+#                                         bin/wolfi/packages
+#   hack/wolfi-postgres.sh push           that copy to WOLFI_PACKAGES_REF as one OCI artifact (oras), signed
+#                                         with cosign: keyless (the release job's identity), or COSIGN_KEY
+#   hack/wolfi-postgres.sh verify REF     the copy's signature: REF is a digest or a tag of WOLFI_PACKAGES_REPO
+#   hack/wolfi-postgres.sh rebuild-base REF
+#                                         the base again from the copy alone: the signature checked, the
+#                                         artifact pulled by digest, apko run against it trusting only the
+#                                         public key the copy carries; the package set must be the lock's
+#   hack/wolfi-postgres.sh rebuild REF    rebuild-base, then the image from that base
 #
 # Variables:
 #   WOLFI_BASE_REPO        where the base goes (the Dockerfile's default: a registry on 127.0.0.1:5123,
 #                          started here from crane when nothing answers)
-#   DB_WOLFI_IMAGE         the image's name (ghcr.io/ucesys/221b-postgres:wolfi-dev)
-#   PLATFORM               linux/amd64 or linux/arm64 (linux/amd64); neither needs emulation
+#   DB_IMAGE               the image's name for image and rebuild (ghcr.io/ucesys/221b-postgres:dev)
+#   DB_LABELS              more labels for the image, one key=value a line
+#   PLATFORM               linux/amd64 or linux/arm64, for image (linux/amd64); neither needs emulation
 #   DOCKER                 the docker command ("sudo docker" where docker needs it)
-#   WOLFI_PACKAGES_REF     repository:tag of the copy (push), e.g. ghcr.io/ucesys/221b-postgres-packages:0.14.0
-#   WOLFI_PACKAGES_REPO    repository the rebuild reads by digest (ghcr.io/ucesys/221b-postgres-packages)
-#   WOLFI_PACKAGES_KEY     the RSA key that signs the APKINDEX (packages); never committed
-#   WOLFI_PACKAGES_PUBKEY  its public key, the only key a rebuild trusts; its file name is the key's
-#                          name in the index (deploy/postgres-wolfi/221b-packages.rsa.pub, the release's)
-#   COSIGN_KEY, COSIGN_PUB a cosign key pair; empty signs and verifies keylessly, as CI signs images,
-#                          the signer then being COSIGN_IDENTITY (a regexp) from COSIGN_ISSUER
+#   WOLFI_PACKAGES_REF     repository:tag of the copy (push), e.g. ghcr.io/ucesys/221b-postgres-packages:0.13.0
+#   WOLFI_PACKAGES_REPO    repository verify and the rebuild read (ghcr.io/ucesys/221b-postgres-packages)
+#   WOLFI_PACKAGES_KEY     the RSA key that signs the index (packages); its public key is WOLFI_PACKAGES_KEY.pub.
+#                          A release makes a new pair in its job and keeps neither (docs/releasing.md)
+#   WOLFI_PACKAGES_PUBKEY  for tests: the key a rebuild trusts instead of the one in the copy
+#   COSIGN_KEY, COSIGN_PUB for tests: a cosign key pair to sign and verify the copy with; empty signs
+#                          keylessly and verifies the signer's certificate: COSIGN_IDENTITY (a regexp,
+#                          the release workflow at a version tag) from COSIGN_ISSUER (GitHub Actions)
 # Registry credentials come from the docker config (DOCKER_CONFIG), as for crane, oras and cosign.
 set -euo pipefail
 # shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-APKO_VERSION=v1.5.2
-APKO_SHA256=b49256442c8dd3031d1ec2ad84383e08b0f25f6fcb58c21cd40fba7df28520d4
-MELANGE_VERSION=v0.65.0
-MELANGE_SHA256=82340e525934c634d2a15f8f5ae3ac6fe859b0a27e3841465b274cb5508af9d0
+# Releases at least two weeks old, each checked by its SHA-256.
+APKO_VERSION=v1.4.17
+APKO_SHA256=cb5f43875c93664297d4d0196081c7149c46315d7ea6eb6acb5b1ebb0511d1cc
+MELANGE_VERSION=v0.64.0
+MELANGE_SHA256=d8ae32eea4e0dc390e4a1e7d7a7740cf10f4a84675b792a2ff5417097e4ce317
 CRANE_VERSION=v0.22.1
 CRANE_SHA256=0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
-ORAS_VERSION=v1.4.0
-ORAS_SHA256=d8e1dce2fd8ce996f1d901845b688eb0cf505a6082897606f053825bb47935d1
+ORAS_VERSION=v1.3.6
+ORAS_SHA256=66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
 COSIGN_VERSION=v3.1.4
 COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 
-DIR=$ROOT/deploy/postgres-wolfi
+# Paths from the repository's root: apko writes the config's path into the
+# lock, and it must not be anyone's home.
+REL=deploy/postgres
+DIR=$ROOT/$REL
 CONFIG=$DIR/apko.yaml
 LOCK=$DIR/apko.lock.json
 DOCKERFILE=$DIR/Dockerfile
@@ -60,14 +74,15 @@ mkdir -p "$OUT"
 arg() { sed -n "s/^ARG $1=//p" "$DOCKERFILE"; }
 
 WOLFI_BASE_REPO=${WOLFI_BASE_REPO:-$(arg WOLFI_BASE_REPO)}
-DB_WOLFI_IMAGE=${DB_WOLFI_IMAGE:-ghcr.io/ucesys/221b-postgres:wolfi-dev}
+DB_IMAGE=${DB_IMAGE:-ghcr.io/ucesys/221b-postgres:dev}
+DB_LABELS=${DB_LABELS:-}
 PLATFORM=${PLATFORM:-linux/amd64}
 DOCKER=${DOCKER:-docker}
 WOLFI_PACKAGES_REPO=${WOLFI_PACKAGES_REPO:-ghcr.io/ucesys/221b-postgres-packages}
-WOLFI_PACKAGES_PUBKEY=${WOLFI_PACKAGES_PUBKEY:-$DIR/221b-packages.rsa.pub}
+WOLFI_PACKAGES_PUBKEY=${WOLFI_PACKAGES_PUBKEY:-}
 COSIGN_KEY=${COSIGN_KEY:-}
 COSIGN_PUB=${COSIGN_PUB:-}
-COSIGN_IDENTITY=${COSIGN_IDENTITY:-^https://github.com/ucesys/221b/\.github/workflows/}
+COSIGN_IDENTITY=${COSIGN_IDENTITY:-^https://github\.com/ucesys/221b/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$}
 COSIGN_ISSUER=${COSIGN_ISSUER:-https://token.actions.githubusercontent.com}
 
 tools() {
@@ -83,9 +98,9 @@ tools() {
   chmod +x "$TOOLS/cosign"
 }
 
-# The registry the base goes to on a laptop: crane's, on 127.0.0.1 (port
-# 5123 unless WOLFI_BASE_REPO names another), its blobs on disk under
-# bin/wolfi. Docker pulls from 127.0.0.1 over plain HTTP.
+# The registry the base goes to on a laptop and in CI: crane's, on
+# 127.0.0.1 (port 5123 unless WOLFI_BASE_REPO names another), its blobs on
+# disk under bin/wolfi. Docker pulls from 127.0.0.1 over plain HTTP.
 local_registry() {
   [[ "$WOLFI_BASE_REPO" == 127.0.0.1:*/* ]] || return 0
   local addr=${WOLFI_BASE_REPO%%/*}
@@ -99,7 +114,7 @@ local_registry() {
 }
 
 lock() {
-  apko lock "$CONFIG" --output "$LOCK"
+  (cd "$ROOT" && apko lock "$REL/apko.yaml" --output "$REL/apko.lock.json")
   echo "$LOCK: $(grep -c '"name"' "$LOCK") entries"
 }
 
@@ -109,7 +124,7 @@ build_base() {
   local_registry
   local tag
   tag=lock-$(sha256sum "$LOCK" | cut -c1-12)
-  apko publish "$CONFIG" "$WOLFI_BASE_REPO:$tag" --lockfile "$LOCK" --sbom-path "$OUT" >&2
+  (cd "$ROOT" && apko publish "$REL/apko.yaml" "$WOLFI_BASE_REPO:$tag" --lockfile "$REL/apko.lock.json" --sbom-path "$OUT") >&2
   crane digest "$WOLFI_BASE_REPO:$tag"
 }
 
@@ -148,39 +163,91 @@ walg() {
   done
 }
 
+# context: the build context in bin/wolfi/context, the scripts and the
+# backup program beside the Dockerfile and WAL-G's release files.
+context() {
+  local ctx=$OUT/context
+  rm -rf "$ctx"
+  mkdir -p "$ctx"
+  cp -r "$DIR/entrypoint.sh" "$DIR/post-bootstrap.sh" "$DIR/restore.sh" "$DIR/backup" "$ctx/"
+  walg "$ctx/wal-g"
+}
+
+# build_args DIGEST: sets BUILD_ARGS, what both builds pass: the Go image
+# and the BuildKit frontend pinned in hack/base-images.env, the base and the
+# labels of DB_LABELS.
+build_args() {
+  local line
+  BUILD_ARGS=(-f "$DOCKERFILE"
+    --build-arg GO_IMAGE="$(sed -n 's/^GO_IMAGE=//p' "$ROOT/hack/base-images.env")"
+    --build-arg BUILDKIT_SYNTAX="$(sed -n 's/^BUILDKIT_SYNTAX=//p' "$ROOT/hack/base-images.env")"
+    --build-arg WOLFI_BASE_REPO="$WOLFI_BASE_REPO" --build-arg WOLFI_BASE_DIGEST="$1")
+  while IFS= read -r line; do
+    [ -n "$line" ] && BUILD_ARGS+=(--label "$line")
+  done <<< "$DB_LABELS"
+  return 0
+}
+
+# docker_cmd: sets DOCKER_CMD, the docker command with BuildKit on, through
+# sudo too.
+docker_cmd() {
+  local d
+  read -ra d <<< "$DOCKER"
+  DOCKER_CMD=(env DOCKER_BUILDKIT=1 "${d[@]}")
+  if [ "${d[0]}" = sudo ]; then DOCKER_CMD=(sudo env DOCKER_BUILDKIT=1 "${d[@]:1}"); fi
+}
+
 # image [DIGEST]: the image for PLATFORM from the base at DIGEST (the
-# Dockerfile's, checked by building it, when none is given). The context is
-# deploy/postgres's scripts and backup program, as the Debian image's, and
-# WAL-G's release files.
+# Dockerfile's, checked by building it, when none is given).
 image() {
   local digest=${1:-}
   if [ -z "$digest" ]; then
     digest=$(base)
     digest=${digest##*@}
   fi
-  local ctx=$OUT/context
-  rm -rf "$ctx"
-  mkdir -p "$ctx"
-  cp -r "$ROOT/deploy/postgres/entrypoint.sh" "$ROOT/deploy/postgres/post-bootstrap.sh" "$ROOT/deploy/postgres/restore.sh" "$ROOT/deploy/postgres/backup" "$ctx/"
-  walg "$ctx/wal-g"
-  local go_image
-  go_image=$(sed -n 's/^GO_IMAGE=//p' "$ROOT/hack/base-images.env")
-  # BuildKit, through sudo too.
-  local d docker
-  read -ra d <<< "$DOCKER"
-  docker=(env DOCKER_BUILDKIT=1 "${d[@]}")
-  [ "${d[0]}" = sudo ] && docker=(sudo env DOCKER_BUILDKIT=1 "${d[@]:1}")
-  "${docker[@]}" build --platform "$PLATFORM" -f "$DOCKERFILE" \
-    --build-arg GO_IMAGE="$go_image" --build-arg WOLFI_BASE_REPO="$WOLFI_BASE_REPO" --build-arg WOLFI_BASE_DIGEST="$digest" \
-    -t "$DB_WOLFI_IMAGE" "$ctx"
-  echo "$DB_WOLFI_IMAGE ($PLATFORM) from $WOLFI_BASE_REPO@$digest"
+  context
+  build_args "$digest"
+  docker_cmd
+  "${DOCKER_CMD[@]}" build --platform "$PLATFORM" "${BUILD_ARGS[@]}" -t "$DB_IMAGE" "$OUT/context"
+  echo "$DB_IMAGE ($PLATFORM) from $WOLFI_BASE_REPO@$digest"
+}
+
+# publish REF...: both architectures as one index, pushed under each REF.
+# BuildKit runs in a container of its own on the host's network, so it
+# reaches the base's registry on 127.0.0.1, told that it speaks plain HTTP.
+publish() {
+  [ $# -gt 0 ] || { echo "publish needs at least one repository:tag" >&2; return 1; }
+  local digest builder=postgres-221b r
+  digest=$(base)
+  digest=${digest##*@}
+  context
+  build_args "$digest"
+  docker_cmd
+  printf '[registry."%s"]\n  http = true\n  insecure = true\n' "${WOLFI_BASE_REPO%%/*}" > "$OUT/buildkitd.toml"
+  if ! "${DOCKER_CMD[@]}" buildx inspect "$builder" > /dev/null 2>&1; then
+    "${DOCKER_CMD[@]}" buildx create --name "$builder" --driver docker-container \
+      --driver-opt network=host --buildkitd-config "$OUT/buildkitd.toml" > /dev/null
+  fi
+  local tags=()
+  for r in "$@"; do tags+=(-t "$r"); done
+  "${DOCKER_CMD[@]}" buildx build --builder "$builder" --platform linux/amd64,linux/arm64 \
+    "${BUILD_ARGS[@]}" "${tags[@]}" --push "$OUT/context"
+  echo "$* (linux/amd64, linux/arm64) from $WOLFI_BASE_REPO@$digest"
+}
+
+keygen() {
+  local dir=${1:?the directory of the new key pair} name=${2:?its name, e.g. 221b-packages-0.13.0}
+  mkdir -p "$dir"
+  (umask 077 && melange keygen "$dir/$name.rsa")
+  echo "$dir/$name.rsa and $dir/$name.rsa.pub"
 }
 
 packages() {
-  : "${WOLFI_PACKAGES_KEY:?the RSA key that signs the index (melange keygen); never committed}"
+  : "${WOLFI_PACKAGES_KEY:?the RSA key that signs the index (hack/wolfi-postgres.sh keygen); never committed}"
+  [ -f "$WOLFI_PACKAGES_KEY.pub" ] || { echo "no public key at $WOLFI_PACKAGES_KEY.pub" >&2; return 1; }
   local repo=$OUT/packages
   rm -rf "$repo"
-  mkdir -p "$repo"
+  mkdir -p "$repo/keys"
   # Each locked package, downloaded once and checked against the lock: the
   # hash of its control part (apk's checksum) and of its data part.
   python3 - "$LOCK" "$repo" <<'PY'
@@ -208,25 +275,29 @@ PY
     melange index --arch "$arch" --signing-key "$WOLFI_PACKAGES_KEY" -o "$repo/$arch/APKINDEX.tar.gz" "$repo/$arch"/*.apk
     echo "$arch: $(find "$repo/$arch" -name '*.apk' | wc -l) packages, $(du -sb "$repo/$arch" | cut -f1) bytes"
   done
+  # The index names its key by the public key's file name: the copy
+  # carries it under that name, and a rebuild trusts it and nothing else.
+  cp "$WOLFI_PACKAGES_KEY.pub" "$repo/keys/"
   walg "$repo/wal-g"
   cp "$LOCK" "$repo/apko.lock.json"
 }
 
 push() {
-  : "${WOLFI_PACKAGES_REF:?repository:tag of the copy, e.g. ghcr.io/ucesys/221b-postgres-packages:0.14.0}"
+  : "${WOLFI_PACKAGES_REF:?repository:tag of the copy, e.g. ghcr.io/ucesys/221b-postgres-packages:0.13.0}"
   local repo=$OUT/packages digest
   [ -f "$repo/apko.lock.json" ] || { echo "run hack/wolfi-postgres.sh packages first" >&2; return 1; }
   # Directories go as one tar.gz layer each.
   digest=$(cd "$repo" && oras push "$WOLFI_PACKAGES_REF" --artifact-type application/vnd.ucesys.221b.postgres-packages.v1 \
     --annotation "org.opencontainers.image.source=https://github.com/ucesys/221b" \
-    --annotation "org.opencontainers.image.description=The Wolfi packages of a 221b-postgres Wolfi build, with an APKINDEX signed by 221B's key" \
+    --annotation "org.opencontainers.image.description=The Wolfi packages of a 221b-postgres build, with an APKINDEX signed by the key under keys/" \
     --format go-template='{{.digest}}' \
-    apko.lock.json:application/vnd.ucesys.221b.apko-lock.v1+json x86_64 aarch64 wal-g)
+    apko.lock.json:application/vnd.ucesys.221b.apko-lock.v1+json keys x86_64 aarch64 wal-g)
   echo "$digest" > "$OUT/packages.digest"
   local ref=${WOLFI_PACKAGES_REF%:*}@$digest
   if [ -n "$COSIGN_KEY" ]; then
-    # A key pair of our own: a signing config without services, so nothing
-    # goes to the public transparency log or a timestamp authority.
+    # A key pair of our own, for tests: a signing config without services,
+    # so nothing goes to the public transparency log or a timestamp
+    # authority.
     cosign signing-config create --out "$OUT/signing-config-keyed.json"
     cosign sign --yes --key "$COSIGN_KEY" --signing-config "$OUT/signing-config-keyed.json" "$ref"
   else
@@ -235,6 +306,13 @@ push() {
     cosign sign --yes "$ref"
   fi
   echo "$ref"
+}
+
+# resolve REF: the digest of REF, a digest already or a tag of
+# WOLFI_PACKAGES_REPO.
+resolve() {
+  local ref=${1:?a digest (sha256:...) or a tag of $WOLFI_PACKAGES_REPO}
+  if [[ "$ref" == sha256:* ]]; then echo "$ref"; else crane digest "$WOLFI_PACKAGES_REPO:$ref"; fi
 }
 
 verify_signature() {
@@ -274,18 +352,30 @@ PY
 }
 
 rebuild_base() {
-  local digest=${1:?the digest of the copy, sha256:...}
-  local ref=$WOLFI_PACKAGES_REPO@$digest work=$OUT/rebuild
-  [ -f "$WOLFI_PACKAGES_PUBKEY" ] || { echo "no public key at $WOLFI_PACKAGES_PUBKEY (WOLFI_PACKAGES_PUBKEY)" >&2; return 1; }
+  local digest ref work=$OUT/rebuild key
+  digest=$(resolve "${1:-}")
+  ref=$WOLFI_PACKAGES_REPO@$digest
   rm -rf "$work"
   mkdir -p "$work/keys" "$work/cache"
+  # The signature first: it vouches for the manifest, the manifest for
+  # every layer by digest, and so for the key the copy carries.
   verify_signature "$ref"
   oras pull "$ref" -o "$work/copy"
   # The copy is of this tree's lock, or it is the wrong copy.
   cmp "$work/copy/apko.lock.json" "$LOCK" || { echo "$ref holds another lock than $LOCK" >&2; return 1; }
-  # Only our key: Wolfi's is not given, and the copy's index is signed
-  # with ours.
-  cp "$WOLFI_PACKAGES_PUBKEY" "$work/keys/"
+  if [ -n "$WOLFI_PACKAGES_PUBKEY" ]; then
+    key=$WOLFI_PACKAGES_PUBKEY
+  else
+    local keys=("$work/copy/keys"/*.pub)
+    if [ "${#keys[@]}" != 1 ] || [ ! -f "${keys[0]}" ]; then
+      echo "$ref carries no single public key under keys/" >&2
+      return 1
+    fi
+    key=${keys[0]}
+  fi
+  # Only that key: Wolfi's is not given, and the copy's index is signed
+  # with it.
+  cp "$key" "$work/keys/"
   local pins
   pins=$(python3 - "$LOCK" <<'PY'
 import json, sys
@@ -299,9 +389,9 @@ for name, version in sorted(sets[0]):
     print(f"    - {name}={version}")
 PY
 )
-  # apko.yaml with the copy for the repository, our key for the keyring and
+  # apko.yaml with the copy for the repository, the key for the keyring and
   # every locked package at its locked version.
-  awk -v repo="$work/copy" -v key="$work/keys/$(basename "$WOLFI_PACKAGES_PUBKEY")" -v pins="$pins" '
+  awk -v repo="$work/copy" -v key="$work/keys/$(basename "$key")" -v pins="$pins" '
     /^  repositories:$/ { print; print "    - " repo; skip = 1; next }
     /^  keyring:$/ { print; print "    - " key; skip = 1; next }
     /^  packages:$/ { print; print pins; skip = 1; next }
@@ -321,7 +411,7 @@ PY
   # crane push (the digest stays).
   crane pull --format oci "$WOLFI_BASE_REPO@$base" "$work/base-oci"
   echo "$base" > "$work/base.digest"
-  echo "the base rebuilt from $ref alone: $WOLFI_BASE_REPO@$base"
+  echo "the base rebuilt from $ref alone, trusting $(basename "$key"): $WOLFI_BASE_REPO@$base"
 }
 
 cmd=${1:-}
@@ -332,8 +422,11 @@ case "$cmd" in
   base) tools; base ;;
   pin) tools; pin ;;
   image) tools; image "$@" ;;
+  publish) tools; publish "$@" ;;
+  keygen) tools; keygen "$@" ;;
   packages) tools; packages ;;
   push) tools; push ;;
+  verify) tools; verify_signature "$WOLFI_PACKAGES_REPO@$(resolve "${1:-}")" ;;
   rebuild-base) tools; rebuild_base "$@" ;;
   rebuild)
     tools

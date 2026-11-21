@@ -98,9 +98,9 @@ has() { grep "$@" > /dev/null; }
 # The kind scripts install the chart with its bundled database (DB-69):
 # there is no console without one. Both images must be in the local docker
 # before a cluster takes them with `kind load`: IMAGE (the console's) and
-# DB_IMAGE (221b-postgres, deploy/postgres). CI passes the images it built
-# and scanned; on a laptop an unset one is built here, and one named but
-# not there is built under that name.
+# DB_IMAGE (221b-postgres, deploy/postgres, built by hack/wolfi-postgres.sh).
+# CI passes the images it built and scanned; on a laptop an unset one is
+# built here, and one named but not there is built under that name.
 CONSOLE_DEV_IMAGE=ghcr.io/ucesys/221b:kind-dev
 DB_DEV_IMAGE=ghcr.io/ucesys/221b-postgres:kind-dev
 # The console's NodePort on the host (hack/kind.yaml); another port where
@@ -119,7 +119,8 @@ build_images() {
     DOCKER_BUILDKIT=1 docker build --build-arg VERSION="kind-$(git -C "$ROOT" rev-parse --short=12 HEAD)" -t "$IMAGE" "$ROOT"
   fi
   if ! docker image inspect "$DB_IMAGE" > /dev/null 2>&1; then
-    DOCKER_BUILDKIT=1 docker build -t "$DB_IMAGE" "$ROOT/deploy/postgres"
+    # Its base is assembled by apko from Wolfi's packages (docs/database.md).
+    DB_IMAGE="$DB_IMAGE" PLATFORM=linux/amd64 "$ROOT/hack/wolfi-postgres.sh" image
   fi
   echo "the console's image $IMAGE, the database's $DB_IMAGE"
 }

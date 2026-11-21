@@ -1,8 +1,8 @@
 {
   "version": "v1",
   "config": {
-    "name": "/home/mikhail/221b-wolfi/deploy/postgres-wolfi/apko.yaml",
-    "checksum": "sha256-BT6DlOdqM4+Sisocjtn/aaTbQy35wXiaFkwRkjHVAEQ="
+    "name": "deploy/postgres/apko.yaml",
+    "checksum": "sha256-rmbbpYzcY6MWT12QklTIQFYG89qL1G7LHp99lzliEFA="
   },
   "contents": {
     "keyring": [

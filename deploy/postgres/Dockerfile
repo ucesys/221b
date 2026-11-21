@@ -1,18 +1,56 @@
 # syntax=docker/dockerfile:1
 
 # 221b-postgres: the database the chart can run beside the console
-# (database.mode: bundled, docs/database.md). PostgreSQL from the PostgreSQL
-# project's own packages, Patroni, which elects the primary through
-# Kubernetes objects, and WAL-G, which archives the write-ahead log and takes
-# the base backups. The console's own image stays distroless and holds none
-# of this.
+# (database.mode: bundled, docs/database.md, "The image"). PostgreSQL and
+# Patroni as Wolfi packages them, from packages.wolfi.dev, assembled by apko
+# (apko.yaml and its lock file, apko.lock.json, beside this file); WAL-G's
+# own release, which archives the write-ahead log and takes the base
+# backups; and 221B's scripts and backup program. The console's own image
+# stays distroless and holds none of this.
 #
-#   docker build -t ghcr.io/ucesys/221b-postgres:dev deploy/postgres
+# The base is no registry image of anyone else's: apko builds it from the
+# locked packages (the same lock gives the same digest), and this file
+# starts from it by that digest and adds what 221B adds, the scripts and
+# the backup program, and WAL-G (below), nothing else. There is no RUN
+# step in the final stage, so every architecture builds without emulation.
+#
+#   make image-postgres    (hack/wolfi-postgres.sh image)
+#
+# builds the base, pushes it to WOLFI_BASE_REPO (a registry on 127.0.0.1
+# by default) and builds this from a context of the scripts and backup
+# program beside this file and WAL-G's release files (wal-g/). A plain
+# `docker build deploy/postgres` does not work: the base and WAL-G come
+# from the script.
 
-# A tag here, for builds on a laptop; CI passes it pinned to a digest, from
-# hack/base-images.env, as it does for the console's image.
-ARG DB_BASE_IMAGE=debian:13-slim
 ARG GO_IMAGE=golang:1.26.9
+# Where hack/wolfi-postgres.sh base pushed the base, and the digest of the
+# index apko builds from apko.lock.json (hack/wolfi-postgres.sh pin writes
+# it here after a new lock; hack/check-base-images.sh checks its form).
+ARG WOLFI_BASE_REPO=127.0.0.1:5123/221b-postgres-base
+ARG WOLFI_BASE_DIGEST=sha256:df424eb18b20206a07a11c5f0326805cacb9883da1be28c7fa8bd967b6f1a508
+
+# WAL-G: WAL-G's own release. Wolfi's wal-g-pg is built
+# without libsodium, and the chart encrypts every backup with it
+# (WALG_LIBSODIUM_KEY), so it would refuse to archive anything. The script
+# fetches the release files into the context (or takes them from the copy
+# of the packages, on a rebuild); here they are checked again.
+ARG WALG_VERSION=v3.0.10
+ARG WALG_SHA256_AMD64=481204eec9ca4418be345eea39da8dc6ff9cbcb16c7c259294b50477dc62f377
+ARG WALG_SHA256_ARM64=165c22724471127d2a08cbd3ff33503454f5252f5c5a8ab4aa0116895b880a40
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS walg
+ARG TARGETARCH
+ARG WALG_SHA256_AMD64
+ARG WALG_SHA256_ARM64
+COPY wal-g/ /in/
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) f=wal-g-pg-24.04-amd64; sum=$WALG_SHA256_AMD64 ;; \
+      arm64) f=wal-g-pg-24.04-aarch64; sum=$WALG_SHA256_ARM64 ;; \
+      *) echo "no WAL-G build for $TARGETARCH"; exit 1 ;; \
+    esac; \
+    echo "$sum  /in/$f" | sha256sum -c -; \
+    install -D -m 0755 "/in/$f" /out/wal-g
 
 # The backup container's program (backup/, DB-84): Go's standard library
 # only, built for the image's platform, static and without the build's
@@ -24,53 +62,32 @@ COPY backup/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} GOFLAGS=-buildvcs=false \
     go build -trimpath -ldflags="-s -w" -o /out/221b-backup .
 
-FROM ${DB_BASE_IMAGE}
+FROM ${WOLFI_BASE_REPO}@${WOLFI_BASE_DIGEST}
+ARG WOLFI_BASE_REPO
+ARG WOLFI_BASE_DIGEST
 
-# One PostgreSQL major version per 221B release line; a new one is a new
-# line, with pg_upgrade (docs/upgrading.md).
-ARG PG_MAJOR=18
-ARG PATRONI_VERSION=4.1.5
-ARG WALG_VERSION=v3.0.10
-ARG TARGETARCH
-
+# The chart's contract: user 999, PGDATA, and every program on the PATH
+# (Wolfi links PostgreSQL's programs into /usr/bin).
 ENV LANG=C.UTF-8 \
-    PATH=/usr/lib/postgresql/${PG_MAJOR}/bin:/opt/patroni/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PGDATA=/var/lib/postgresql/data/pgdata
 
-# The postgres user is 999 whatever the package would pick, so the chart's
-# securityContext and the volume's owner agree across image builds.
-RUN set -eux; \
-    groupadd -r -g 999 postgres; \
-    useradd -r -u 999 -g postgres -d /var/lib/postgresql -s /bin/bash postgres; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg python3 python3-venv; \
-    install -d /usr/share/postgresql-common/pgdg /etc/postgresql-common; \
-    curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
-    . /etc/os-release; \
-    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list; \
-    # The package would make and start a cluster of its own; Patroni makes it.
-    echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf; \
-    apt-get update; \
-    # The pinned base's packages, brought up to their security fixes: CI's
-    # scan fails on a high or critical finding that has a fix.
-    apt-get upgrade -y --no-install-recommends; \
-    apt-get install -y --no-install-recommends "postgresql-${PG_MAJOR}"; \
-    python3 -m venv /opt/patroni; \
-    /opt/patroni/bin/pip install --no-cache-dir "patroni[kubernetes,psycopg3]==${PATRONI_VERSION}"; \
-    case "${TARGETARCH:-amd64}" in amd64) arch=amd64 ;; arm64) arch=aarch64 ;; *) echo "no WAL-G build for ${TARGETARCH}"; exit 1 ;; esac; \
-    curl -fsSL "https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}/wal-g-pg-24.04-${arch}.tar.gz" | tar -xz -C /usr/local/bin; \
-    mv "/usr/local/bin/wal-g-pg-24.04-${arch}" /usr/local/bin/wal-g; \
-    chmod 0755 /usr/local/bin/wal-g; \
-    wal-g --version; patroni --version; postgres --version; \
-    apt-get purge -y --auto-remove gnupg; \
-    rm -rf /var/lib/apt/lists/* /root/.cache
-
+# 221B's own, and WAL-G.
 COPY --chmod=0755 entrypoint.sh post-bootstrap.sh restore.sh /usr/local/bin/
 COPY --from=backup --chmod=0755 /out/221b-backup /usr/local/bin/221b-backup
+COPY --from=walg /out/wal-g /usr/local/bin/wal-g
 
-LABEL org.opencontainers.image.source="https://github.com/ucesys/221b" \
-      org.opencontainers.image.description="PostgreSQL, Patroni and WAL-G for 221B's bundled database" \
-      org.opencontainers.image.licenses="Apache-2.0"
+# Built from Wolfi packages; not a Chainguard image, and neither Chainguard
+# nor the Wolfi project made or endorses it. What 221B added is named.
+LABEL org.opencontainers.image.title="221b-postgres" \
+      org.opencontainers.image.source="https://github.com/ucesys/221b" \
+      org.opencontainers.image.description="PostgreSQL and Patroni from Wolfi packages (packages.wolfi.dev) assembled with apko, with WAL-G's release and 221B's scripts and backup program, for 221B's bundled database" \
+      org.opencontainers.image.vendor="221B" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.base.name="${WOLFI_BASE_REPO}" \
+      org.opencontainers.image.base.digest="${WOLFI_BASE_DIGEST}" \
+      dev.221b.base="Wolfi packages from packages.wolfi.dev, assembled with apko from deploy/postgres/apko.lock.json" \
+      dev.221b.added="221B's: /usr/local/bin/entrypoint.sh post-bootstrap.sh restore.sh 221b-backup; WAL-G's release: /usr/local/bin/wal-g"
 
 USER 999:999
 EXPOSE 5432 8008

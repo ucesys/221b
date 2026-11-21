@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Checks hack/base-images.env against what it pins: every base image of the
-# console's Dockerfile and of deploy/postgres/Dockerfile, the BuildKit
-# frontend both name (and the pins of deploy/postgres-wolfi/Dockerfile), and the PostgreSQL of the Makefile and of the
-# workflows' services, each pinned to a digest of the very tag the file
-# names. A tag moved without hack/pin-base-images.sh, or a base image added
-# without a pin, fails here. Needs no network.
+# console's Dockerfile and of deploy/postgres/Dockerfile (the Go image its
+# backup program is built with), the BuildKit frontend both name, and the
+# PostgreSQL of the Makefile and of the workflows' services, each pinned to
+# a digest of the very tag the file names; and the database's own pins: its
+# base by the digest of apko's build of its lock, WAL-G by SHA-256. A tag
+# moved without hack/pin-base-images.sh, or a base image added without a
+# pin, fails here. Needs no network.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fail=0
@@ -34,22 +36,23 @@ for dockerfile in Dockerfile deploy/postgres/Dockerfile; do
 done
 want POSTGRES_IMAGE "$(sed -n 's/^POSTGRES_IMAGE ?= //p' Makefile)" Makefile
 
-# The database's Wolfi variant (not the default): its Go image and BuildKit
-# frontend are the pins above; its base is no registry image but apko's
-# build of deploy/postgres-wolfi/apko.lock.json, named by digest; its WAL-G
-# is the Debian image's release, checked by digest.
-wolfi=deploy/postgres-wolfi/Dockerfile
-while IFS='=' read -r arg tag; do
-  want "${arg#ARG }" "$tag" "$wolfi"
-done < <(grep -E '^ARG [A-Z_]+_IMAGE=' "$wolfi")
-want BUILDKIT_SYNTAX "$(sed -n 's/^# syntax=//p' "$wolfi")" "$wolfi"
-[[ "$(sed -n 's/^ARG WOLFI_BASE_DIGEST=//p' "$wolfi")" =~ ^sha256:[0-9a-f]{64}$ ]] || bad "$wolfi: WOLFI_BASE_DIGEST is not a digest"
-[ -s deploy/postgres-wolfi/apko.lock.json ] || bad "$wolfi: no apko.lock.json beside it"
+# The database's base is no registry image but apko's build of
+# deploy/postgres/apko.lock.json, named by digest, from Wolfi's repository
+# alone; its WAL-G is WAL-G's release, checked by digest.
+db=deploy/postgres/Dockerfile
+[[ "$(sed -n 's/^ARG WOLFI_BASE_DIGEST=//p' "$db")" =~ ^sha256:[0-9a-f]{64}$ ]] || bad "$db: WOLFI_BASE_DIGEST is not a digest"
+[ -s deploy/postgres/apko.lock.json ] || bad "$db: no apko.lock.json beside it"
+grep -q '^FROM ${WOLFI_BASE_REPO}@${WOLFI_BASE_DIGEST}$' "$db" || bad "$db does not start from the base by its digest"
+[[ "$(sed -n 's/^ARG WALG_VERSION=//p' "$db")" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || bad "$db: WALG_VERSION is not a release"
 for arg in WALG_SHA256_AMD64 WALG_SHA256_ARM64; do
-  [[ "$(sed -n "s/^ARG $arg=//p" "$wolfi")" =~ ^[0-9a-f]{64}$ ]] || bad "$wolfi: $arg is not a SHA-256"
+  [[ "$(sed -n "s/^ARG $arg=//p" "$db")" =~ ^[0-9a-f]{64}$ ]] || bad "$db: $arg is not a SHA-256"
 done
-[ "$(sed -n 's/^ARG WALG_VERSION=//p' "$wolfi")" = "$(sed -n 's/^ARG WALG_VERSION=//p' deploy/postgres/Dockerfile)" ] ||
-  bad "$wolfi takes another WAL-G than deploy/postgres/Dockerfile"
+if grep -E '^ +- +https?://' deploy/postgres/apko.yaml | grep -qv 'https://packages\.wolfi\.dev/'; then
+  bad "deploy/postgres/apko.yaml names a repository or key outside packages.wolfi.dev"
+fi
+if grep -E '"url": "https?://' deploy/postgres/apko.lock.json | grep -qv '"url": "https://packages\.wolfi\.dev/'; then
+  bad "deploy/postgres/apko.lock.json takes something from outside packages.wolfi.dev"
+fi
 
 # The workflows' PostgreSQL services name the pin itself.
 services=0

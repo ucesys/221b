@@ -6,8 +6,10 @@
 # The console keeps its records in PostgreSQL and does not run without it
 # (DB-69): every job that runs a console runs a PostgreSQL too. Both images
 # are published to GitHub Container Registry, under the same tags, from
-# main, from version tags, from this repository's pull requests and from
-# runs started by hand on a branch (branch-<name>, never main).
+# main, from this repository's pull requests and from runs started by hand
+# on a branch (branch-<name>, never main); for a version tag the console's
+# image is published here and the database's by release.yml, beside the
+# copy of its packages.
 name: CI
 
 on:
@@ -33,8 +35,9 @@ env:
   NODE_VERSION: '24'
   HELM_VERSION: 'v4.3.0'
   IMAGE: ghcr.io/ucesys/221b
-  # The bundled database's image (deploy/postgres), published beside the
-  # console's under the same tags: the chart runs it at its appVersion.
+  # The bundled database's image (deploy/postgres, built from Wolfi's
+  # packages by hack/wolfi-postgres.sh), published beside the console's
+  # under the same tags: the chart runs it at its appVersion.
   DB_IMAGE: ghcr.io/ucesys/221b-postgres
 
 jobs:
@@ -299,17 +302,19 @@ jobs:
           if docker run --rm --entrypoint /bin/sh "$IMAGE:ci" -c true 2>/dev/null; then echo "The image has a shell." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; fi
           docker run --rm --read-only "$IMAGE:ci" -h 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Build the database's image
-        # 221b-postgres (deploy/postgres): PostgreSQL, Patroni and WAL-G on
-        # Debian, the bundled database's (DB-69). Always built here, from
-        # the same pinned base images and BuildKit frontend as the console's.
+        # 221b-postgres (deploy/postgres): PostgreSQL and Patroni from Wolfi's
+        # packages, assembled by apko from the committed lock (the same lock
+        # gives the same base, checked against the Dockerfile's digest), WAL-G's
+        # release, the bundled database's (DB-69). Always built here, for
+        # linux/amd64, the platform the kind jobs run; the Go image and the
+        # BuildKit frontend are the console's pins. hack/wolfi-postgres.sh
+        # fetches its tools at pinned versions, each checked by its SHA-256.
         run: |
           version="ci-${GITHUB_SHA::12}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] && version="${GITHUB_REF_NAME#v}"
-          pins=()
-          while read -r line; do pins+=(--build-arg "$line"); done < <(grep -v '^#' hack/base-images.env)
-          DOCKER_BUILDKIT=1 docker build "${pins[@]}" \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" --label org.opencontainers.image.version="$version" \
-            -t "$DB_IMAGE:ci" deploy/postgres 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          export DB_LABELS="org.opencontainers.image.revision=$GITHUB_SHA
+          org.opencontainers.image.version=$version"
+          DB_IMAGE="$DB_IMAGE:ci" PLATFORM=linux/amd64 hack/wolfi-postgres.sh image 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           exit "${PIPESTATUS[0]}"
       - name: The database's image's size, user and contents
         run: |
@@ -324,12 +329,11 @@ jobs:
       - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         id: grype
       - name: Vulnerability scan of both images (fails on high or critical)
-        # The console's image is distroless: any high or critical finding
-        # fails it, and every finding is listed. The database's is Debian's
-        # PostgreSQL, whose packages carry findings Debian marks as not to
-        # be fixed, or not fixed yet: a high or critical finding that has a
-        # fix fails it (its Dockerfile takes Debian's security updates),
-        # its high and critical findings are listed, and the log has all.
+        # Both images by one rule: any high or critical finding fails it,
+        # with a fix or without, and every finding is listed. The console's
+        # is distroless; the database's is built from Wolfi's packages,
+        # which had none high or critical when it became the image (an
+        # unfixed one there is fixed by moving the lock, make postgres-lock).
         env:
           GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
@@ -338,28 +342,21 @@ jobs:
           set +e
           "$GRYPE" "docker:$IMAGE:ci" --fail-on high -o table -o "json=$RUNNER_TEMP/grype.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           code=${PIPESTATUS[0]}
-          "$GRYPE" "docker:$DB_IMAGE:ci" -o table -o "json=$RUNNER_TEMP/grype-db.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          "$GRYPE" "docker:$DB_IMAGE:ci" --fail-on high -o table -o "json=$RUNNER_TEMP/grype-db.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           dbcode=${PIPESTATUS[0]}
           set -e
-          [ "$dbcode" -eq 0 ] || exit "$dbcode"
-          jq -r ".matches[] | $line" "$RUNNER_TEMP/grype.json" | sort -u > "$RUNNER_TEMP/findings.txt" || true
-          if [ -s "$RUNNER_TEMP/findings.txt" ]; then
-            echo "::warning title=Vulnerability findings::$(sed ':a;N;$!ba;s/\n/%0A/g' "$RUNNER_TEMP/findings.txt")"
+          for f in grype grype-db; do
+            jq -r ".matches[] | $line" "$RUNNER_TEMP/$f.json" | sort -u > "$RUNNER_TEMP/findings-$f.txt" || true
+          done
+          if [ -s "$RUNNER_TEMP/findings-grype.txt" ]; then
+            echo "::warning title=Vulnerability findings in the console's image::$(sed ':a;N;$!ba;s/\n/%0A/g' "$RUNNER_TEMP/findings-grype.txt")"
           fi
-          high='.matches[] | select(.vulnerability.severity == "High" or .vulnerability.severity == "Critical")'
-          jq -r "$high | $line" "$RUNNER_TEMP/grype-db.json" | sort -u > "$RUNNER_TEMP/findings-db.txt"
-          jq -r "$high | select(.vulnerability.fix.state == \"fixed\") | $line" "$RUNNER_TEMP/grype-db.json" | sort -u > "$RUNNER_TEMP/fixable-db.txt"
-          if [ -s "$RUNNER_TEMP/findings-db.txt" ]; then
-            echo "::warning title=High and critical findings in the database's image, $(wc -l < "$RUNNER_TEMP/findings-db.txt")::$(head -40 "$RUNNER_TEMP/findings-db.txt" | sed ':a;N;$!ba;s/\n/%0A/g')"
+          if [ -s "$RUNNER_TEMP/findings-grype-db.txt" ]; then
+            echo "::warning title=Vulnerability findings in the database's image, $(wc -l < "$RUNNER_TEMP/findings-grype-db.txt")::$(head -40 "$RUNNER_TEMP/findings-grype-db.txt" | sed ':a;N;$!ba;s/\n/%0A/g')"
           fi
           if [ "$code" -ne 0 ]; then exit "$code"; fi
-          echo "::notice title=Vulnerability scan::No high or critical vulnerability in the console's image."
-          if [ -s "$RUNNER_TEMP/fixable-db.txt" ]; then
-            echo "The database's image has high or critical findings with a fix:" | tee -a "$RUNNER_TEMP/ci.log"
-            tee -a "$RUNNER_TEMP/ci.log" < "$RUNNER_TEMP/fixable-db.txt"
-            exit 1
-          fi
-          echo "::notice title=Vulnerability scan::No high or critical vulnerability with a fix in the database's image."
+          if [ "$dbcode" -ne 0 ]; then exit "$dbcode"; fi
+          echo "::notice title=Vulnerability scan::No high or critical vulnerability in either image."
       - name: Save
         # Both images in one file: the jobs below load them together.
         run: docker save "$IMAGE:ci" "$DB_IMAGE:ci" | gzip > bin/image.tar.gz
@@ -595,13 +592,13 @@ jobs:
       (needs.browsers.result == 'success' || (github.event_name == 'pull_request' && needs.browsers.result == 'failure')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
-    # The database's linux/arm64 image is built under emulation.
     timeout-minutes: 60
     # id-token and attestations sign what is published: a cosign signature
     # made with the workflow's own identity, and SLSA build provenance and
     # an SPDX SBOM kept as GitHub attestations beside each image (#79). The
     # database's image is published under the console's tags, built,
-    # scanned, signed and attested the same way.
+    # signed and attested the same way; for a version tag release.yml
+    # publishes it, with the copy of its packages.
     permissions:
       contents: read
       packages: write
@@ -624,12 +621,6 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-      # The database's image (below) runs PostgreSQL's packages for its platform at
-      # build time, so its linux/arm64 is built under emulation; the
-      # emulator is in place before the builder starts.
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
       - name: Build and push for linux/amd64 and linux/arm64
         id: push
         env:
@@ -747,45 +738,25 @@ jobs:
           cosign sign --yes "$IMAGE@$DIGEST" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           echo "::notice title=Signed::$IMAGE@$DIGEST, with build provenance and an SBOM attested"
       - name: Build and push the database's image for linux/amd64 and linux/arm64
+        # Built from the committed lock for both platforms, none under
+        # emulation (the Dockerfile's last stage runs nothing). A version
+        # tag's is release.yml's: it builds it with the copy of its packages
+        # and signs both, so nothing here runs for a tag.
         id: dbpush
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         env:
           PUBLISHED: ${{ steps.push.outputs.tags }}
           VERSION: ${{ steps.push.outputs.version }}
-          GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
           refs=()
           for t in $PUBLISHED; do refs+=("$DB_IMAGE:$t"); done
-          tags=()
-          for r in "${refs[@]}"; do tags+=(-t "$r"); done
           echo "ref=${refs[0]}" >> "$GITHUB_OUTPUT"
-          # A release's image is never replaced, as the console's.
-          if [[ "$GITHUB_REF" == refs/tags/v* ]] && docker manifest inspect "$DB_IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "::notice title=Published::$DB_IMAGE:$VERSION exists already and is kept as it is; a release's image is never replaced"
-            exit 0
-          fi
-          pins=()
-          while read -r line; do pins+=(--build-arg "$line"); done < <(grep -v '^#' hack/base-images.env)
-          docker buildx inspect multi >/dev/null 2>&1 || docker buildx create --name multi --driver docker-container
-          docker buildx use multi
-          labels=(--label org.opencontainers.image.revision="$GITHUB_SHA" --label org.opencontainers.image.version="$VERSION")
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            # A release: linux/amd64 is the image the kind jobs ran, as it
-            # is; linux/arm64 is built here and scanned.
-            gunzip -c bin/image.tar.gz | docker load
-            docker tag "$DB_IMAGE:ci" "$DB_IMAGE:$VERSION-amd64"
-            docker push "$DB_IMAGE:$VERSION-amd64" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-            docker buildx build --platform linux/arm64 "${pins[@]}" "${labels[@]}" \
-              -t "$DB_IMAGE:$VERSION-arm64" --push deploy/postgres 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-            # As in the image job: a high or critical finding with a fix fails it.
-            "$GRYPE" "registry:$DB_IMAGE:$VERSION-arm64" --platform linux/arm64 --fail-on high --only-fixed 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-            docker buildx imagetools create "${tags[@]}" "$DB_IMAGE:$VERSION-amd64" "$DB_IMAGE:$VERSION-arm64" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-            echo "::notice title=Published::${refs[*]} (linux/amd64 as tested, linux/arm64 built here and scanned)"
-            exit 0
-          fi
-          docker buildx build --platform linux/amd64,linux/arm64 "${pins[@]}" "${labels[@]}" \
-            "${tags[@]}" --push deploy/postgres 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-          echo "::notice title=Published::${refs[*]}"
+          export DB_LABELS="org.opencontainers.image.revision=$GITHUB_SHA
+          org.opencontainers.image.version=$VERSION"
+          hack/wolfi-postgres.sh publish "${refs[@]}" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          exit "${PIPESTATUS[0]}"
       - name: The database's digest published
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         id: dbdigest
         env:
           REF: ${{ steps.dbpush.outputs.ref }}
@@ -794,6 +765,7 @@ jobs:
           [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $REF"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:
           image: ${{ env.DB_IMAGE }}@${{ steps.dbdigest.outputs.digest }}
           format: spdx-json
@@ -801,6 +773,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
       - name: The database's SBOM attestation
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.DB_IMAGE }}
@@ -808,12 +781,14 @@ jobs:
           sbom-path: bin/sbom-postgres.spdx.json
           push-to-registry: true
       - name: The database's build provenance
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.DB_IMAGE }}
           subject-digest: ${{ steps.dbdigest.outputs.digest }}
           push-to-registry: true
       - name: Sign the database's image
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         env:
           DIGEST: ${{ steps.dbdigest.outputs.digest }}
         run: |

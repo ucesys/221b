@@ -58,7 +58,7 @@ Three steps: deploy the console into a cluster, set up that cluster (the "local"
      --set service.type=LoadBalancer
    ```
 
-   This installs the console, its read-only account, the four roles for people (see [Four roles](#reference) below), and the database it keeps its records in: PostgreSQL from the image `ghcr.io/ucesys/221b-postgres`, which CI publishes beside the console's under the same tags (so a console of `image.tag=main` takes the database's of `main` too), one member with a 10 GiB volume of the cluster's default storage class and a 20 GiB volume for its backups (`database.bundled.*`; three members with `database.bundled.ha=true`, or a PostgreSQL you run with `database.mode=external`: [docs/database.md](docs/database.md)). The console does not run without it. The roles' names are fixed, one set per cluster: a second console in another namespace uses the first one's.
+   This installs the console, its read-only account, the four roles for people (see [Four roles](#reference) below), and the database it keeps its records in: PostgreSQL from the image `ghcr.io/ucesys/221b-postgres` (PostgreSQL 18 and Patroni from Wolfi's packages), published beside the console's under the same tags (so a console of `image.tag=main` takes the database's of `main` too), one member with a 10 GiB volume of the cluster's default storage class and a 20 GiB volume for its backups (`database.bundled.*`; three members with `database.bundled.ha=true`, or a PostgreSQL you run with `database.mode=external`: [docs/database.md](docs/database.md)). The console does not run without it. The roles' names are fixed, one set per cluster: a second console in another namespace uses the first one's.
 
 4. **Wait for it and find its address.**
 
