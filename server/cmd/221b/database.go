@@ -433,7 +433,17 @@ func (w *wiring) removeCopiedSources(ctx context.Context) {
 		rctx, cancel := context.WithTimeout(ctx, time.Minute)
 		var waiting []string
 		for _, id := range ids {
-			if copied, err := w.database.Imported(rctx, id); err != nil || !copied {
+			copied, err := w.database.Imported(rctx, id)
+			if err != nil {
+				// The database cannot say: nothing is deleted, and the pass
+				// stops with one line rather than one a ConfigMap that
+				// would say their records are not copied (the eleventh
+				// cluster test: 11 such lines during an outage).
+				cancel()
+				log.Warn("the ConfigMaps of before are kept: the database cannot say now whether their record sets are copied; the next start looks again", "err", err)
+				return
+			}
+			if !copied {
 				waiting = append(waiting, id)
 			}
 		}

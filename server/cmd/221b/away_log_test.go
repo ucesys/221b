@@ -35,7 +35,7 @@ func TestTheLogSaysAnOutageOnce(t *testing.T) {
 		con.get(b, "/api/v1/jobs")
 	}
 	during := con.logs.String()[before:]
-	for _, line := range []string{"reading the AI providers failed", "reading the Sherlock spend failed", "cannot read the saved settings", "path=/api/v1/jobs code=503", "saving the audit log failed"} {
+	for _, line := range []string{"reading the AI providers failed", "reading the Sherlock spend failed", "cannot read the saved settings", "path=/api/v1/jobs code=503", "saving the audit log failed", "expiring the run requests failed"} {
 		if n := strings.Count(during, line); n > 1 {
 			t.Errorf("%q is said %d times in half a minute of the outage", line, n)
 		}

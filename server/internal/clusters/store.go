@@ -221,8 +221,26 @@ func (s *SecretStore) Kind() string { return "secrets" }
 
 func (s *SecretStore) name(id string) string { return s.prefix + "-cluster-" + id }
 
-func (s *SecretStore) List(ctx context.Context) ([]Spec, error) {
+// list lists the connection Secrets of this console: the label marks a
+// connection Secret, and the name says whose, since another release in the
+// namespace labels its own the same way (the eleventh cluster test's N1).
+func (s *SecretStore) list(ctx context.Context) (*corev1.SecretList, error) {
 	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	if err != nil {
+		return nil, err
+	}
+	own := list.Items[:0]
+	for _, sec := range list.Items {
+		if strings.HasPrefix(sec.Name, s.prefix+"-cluster-") {
+			own = append(own, sec)
+		}
+	}
+	list.Items = own
+	return list, nil
+}
+
+func (s *SecretStore) List(ctx context.Context) ([]Spec, error) {
+	list, err := s.list(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing the connection Secrets in %s: %w", s.namespace, err)
 	}
@@ -245,7 +263,7 @@ func (s *SecretStore) List(ctx context.Context) ([]Spec, error) {
 // Revisions lists the connection Secrets' resourceVersions, by the
 // connection each one holds.
 func (s *SecretStore) Revisions(ctx context.Context) (map[string]string, error) {
-	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	list, err := s.list(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing the connection Secrets in %s: %w", s.namespace, err)
 	}
@@ -386,7 +404,7 @@ func (s *SecretStore) Delete(ctx context.Context, id string) error {
 
 // all lists the connection Secrets, by name.
 func (s *SecretStore) all(ctx context.Context) ([]corev1.Secret, error) {
-	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	list, err := s.list(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing the connection Secrets in %s: %w", s.namespace, err)
 	}

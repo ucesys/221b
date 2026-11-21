@@ -171,9 +171,10 @@ func (s *Server) expireWaitingRuns(r *http.Request) {
 	after := s.waitingRunFor()
 	gone, err := s.opts.AutomationStore.ExpireWaitingRuns(r.Context(), after, "expired after "+waitText(after))
 	if err != nil {
-		s.opts.Logger.Warn("expiring the run requests failed", "err", err)
+		s.expiring.Failed(s.opts.Logger, "expiring the run requests failed", err)
 		return
 	}
+	s.expiring.Worked(s.opts.Logger, "the run requests are expired again")
 	for _, wr := range gone {
 		if s.opts.Audit != nil {
 			s.opts.Audit.Record(audit.Event{Action: audit.ActionAutomationRun, Cluster: wr.Cluster, Target: wr.Script, Outcome: audit.OutcomeFailed,

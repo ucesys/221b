@@ -381,6 +381,9 @@ type Server struct {
 	reqs  map[reqKey]uint64
 	// quiet are the routes that failed for the database being away (DB-15).
 	quiet map[string]*db.Quiet
+	// expiring keeps the run requests' expiry, asked at every page of the
+	// home, quiet while the database is away (the eleventh cluster test's F1).
+	expiring db.Quiet
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
