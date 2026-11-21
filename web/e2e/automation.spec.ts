@@ -411,6 +411,36 @@ test('Variables is a table of what each one gets, edited in a drawer', async ({ 
   await expect(row).toHaveCount(0)
 })
 
+test('a sensitive variable reads as set, never as its value or its digest, and its drawer keeps it unless a new one is typed (DB-71)', async ({ page }) => {
+  await page.goto('/#/variables')
+  const name = `E2E_SECRET_${Date.now()}`
+  const row = page.locator(`[data-testid=param-row][data-name=${name}]`)
+  await page.getByTestId('params-new').click()
+  await page.getByTestId('param-name').fill(name)
+  await page.getByTestId('param-sensitive').check()
+  await expect(page.getByTestId('param-value-hint')).toContainText('cluster’s Secret')
+  await page.getByTestId('param-value').fill('s3cret-one')
+  await page.getByTestId('param-save').click()
+  await expect(row).toContainText('set')
+  await expect(row).not.toContainText('s3cret-one')
+  await expect(row).not.toContainText('hidden:')
+
+  // The drawer opens it empty and says so; a new value replaces it.
+  await row.getByTestId('param-edit').click()
+  await expect(page.getByTestId('param-value')).toHaveValue('')
+  await expect(page.getByTestId('param-value-hint')).toContainText('Leave this empty to keep it')
+  await expect(page.getByTestId('param-drawer')).not.toContainText('hidden:')
+  await page.getByTestId('param-value').fill('s3cret-two')
+  await page.getByTestId('param-save').click()
+  await expect(row).toContainText('set')
+  await expect(row).not.toContainText('s3cret-two')
+
+  await row.getByTestId('param-edit').click()
+  await page.getByTestId('param-delete').click()
+  await page.getByTestId('confirm-ok').click()
+  await expect(row).toHaveCount(0)
+})
+
 test('a fleet can be started from Variables, and it opens there', async ({ page }) => {
   await page.goto('/#/variables')
   const name = `e2e-params-${Date.now()}`

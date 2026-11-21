@@ -34,6 +34,22 @@ export interface VariableRow {
   conflict?: string[]
 }
 
+/**
+ * What stands for a sensitive value in everything the server sends (DB-71): "hidden:" and 24 hex
+ * digits, a digest of the value, never the value. The page never shows it; it only sends it back,
+ * unchanged, to say "keep the value set now".
+ */
+export const isHidden = (v: string | undefined): boolean => !!v && /^hidden:[0-9a-f]{24}$/.test(v)
+
+/** The fixed mask a sensitive value shows as. */
+export const MASK = '••••••••'
+
+/** A value as the page shows it: a sensitive one as the mask and "set", or "not set", never its digest. */
+export function shownValue(v: string | undefined, sensitive: boolean): string {
+  if (!sensitive && !isHidden(v)) return v ?? ''
+  return v ? `${MASK} set` : 'not set'
+}
+
 const has = (m: Record<string, string> | undefined, name: string) => !!m && Object.prototype.hasOwnProperty.call(m, name)
 
 const layersOf = (fleets: AutomationFleet[], node: string) => fleets.filter((f) => f.id === ALL_NODES || f.nodes.some((n) => n.name === node))
@@ -210,7 +226,8 @@ export interface ValueChange {
 export function valueChanges(before: FleetVariables, after: FleetVariables): ValueChange[] {
   const out: ValueChange[] = []
   const compare = (a: Record<string, string> | undefined, b: Record<string, string> | undefined, label: (name: string) => string) => {
-    for (const k of [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])].sort()) if (a?.[k] !== b?.[k]) out.push({ what: label(k), before: a?.[k], after: b?.[k] })
+    for (const k of [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])].sort())
+      if (a?.[k] !== b?.[k]) out.push({ what: label(k), before: isHidden(a?.[k]) ? MASK : a?.[k], after: isHidden(b?.[k]) ? `a new value (${MASK})` : b?.[k] })
   }
   compare(before.values, after.values, (k) => k)
   const nodes = new Set([...Object.keys(before.nodes ?? {}), ...Object.keys(after.nodes ?? {})])
