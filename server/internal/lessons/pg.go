@@ -126,16 +126,20 @@ func writeExceptions(ctx context.Context, tx pgx.Tx, old, next exceptionsRecord)
 			continue
 		}
 		b.Queue(`INSERT INTO exceptions (exception_id, exception_key, position, cluster_id, resource, check_name, title, detail, finding_key, run_key, job_id, reason, created_by,
-				created_at, expires_at, removed_by, removed_at, wiki_path, wiki_error, case_key, match_count, last_matched_at, last_run_key, updated_at, duplicate_of_exception_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+				created_at, expires_at, removed_by, removed_at, wiki_path, wiki_error, case_key, match_count, last_matched_at, last_run_key, updated_at, duplicate_of_exception_key,
+				case_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+				(SELECT t.case_id FROM cases t WHERE $20 LIKE 'C-%' AND t.object_name = substr($20, 3)))
 			ON CONFLICT (exception_key) DO UPDATE SET position = excluded.position, cluster_id = excluded.cluster_id, resource = excluded.resource,
 				check_name = excluded.check_name, title = excluded.title, detail = excluded.detail, finding_key = excluded.finding_key, run_key = excluded.run_key,
 				job_id = excluded.job_id, reason = excluded.reason, created_by = excluded.created_by, created_at = excluded.created_at, expires_at = excluded.expires_at,
 				removed_by = excluded.removed_by, removed_at = excluded.removed_at, wiki_path = excluded.wiki_path, wiki_error = excluded.wiki_error,
 				case_key = excluded.case_key, match_count = excluded.match_count, last_matched_at = excluded.last_matched_at, last_run_key = excluded.last_run_key,
-				updated_at = excluded.updated_at, duplicate_of_exception_key = excluded.duplicate_of_exception_key`,
+				updated_at = excluded.updated_at, duplicate_of_exception_key = excluded.duplicate_of_exception_key, case_id = excluded.case_id`,
 			db.NewID(), e.ID, place, e.Cluster, e.Resource, e.Check, e.Title, e.Detail, e.Finding, e.Run, e.Job, e.Reason, e.By,
 			at(e.At), atOrNone(e.Expires), e.RemovedBy, atOrNone(e.RemovedAt), e.Wiki, e.WikiError, e.Case, e.Matches, atOrNone(e.LastMatched), e.LastRun, atOrNone(e.Updated), e.DuplicateOf)
+		// The findings that named it before it had a row take its key (DB-90).
+		b.Queue("UPDATE findings SET exception_id = (SELECT exception_id FROM exceptions WHERE exception_key = $1) WHERE exception_id IS NULL AND exception_key = $1", e.ID)
 	}
 	b.Queue("DELETE FROM exceptions WHERE NOT (exception_key = ANY($1))", kept)
 	return tx.SendBatch(ctx, b).Close()

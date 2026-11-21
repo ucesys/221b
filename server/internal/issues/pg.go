@@ -447,8 +447,18 @@ func keyLinksTo(ctx context.Context, tx pgx.Tx, id, name string) error {
 	if _, err := tx.Exec(ctx, "UPDATE case_links SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_number = $2", id, n); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, "UPDATE rca_cases SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_key = $2", id, "C-"+name)
-	return err
+	// What other domains name it by, as people read it (DB-90).
+	for _, q := range []string{
+		"UPDATE rca_cases SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_key = $2",
+		"UPDATE findings SET case_id = $1 WHERE case_id IS NULL AND case_key = $2",
+		"UPDATE exceptions SET case_id = $1 WHERE case_id IS NULL AND case_key = $2",
+		"UPDATE change_resolves SET resolved_case_id = $1 WHERE resolved_case_id IS NULL AND resolved_key = $2",
+	} {
+		if _, err := tx.Exec(ctx, q, id, "C-"+name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // readMessages are a case's messages, in order.
@@ -547,6 +557,8 @@ func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	}
 	n := len(db.Columns(&row))
 	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(n+1)), " WHERE ", ", is_case_kept = true WHERE ", 1), append(db.Fields(&row), id)...)
+	// Its service's key, beside the service's id, while the service has a row.
+	b.Queue("UPDATE cases SET service_id = (SELECT s.service_id FROM services s WHERE s.service_id = cases.service_key) WHERE case_id = $1", id)
 	for i := range c.Messages {
 		now := messageValues(&c.Messages[i])
 		if i < len(was) {
@@ -994,6 +1006,21 @@ func writeKnown(ctx context.Context, tx pgx.Tx, old, next knownDoc) error {
 		kept[i] = k.ID
 	}
 	places := db.Places(kept, placed)
+	// A known issue keeps its row, and so its key, for as long as it is
+	// kept (DB-90): a change updates the row and writes again what hangs
+	// from it.
+	ids := map[string]string{}
+	rows, err := tx.Query(ctx, "SELECT known_issue_key, known_issue_id::text FROM known_issues")
+	if err != nil {
+		return err
+	}
+	var key, kid string
+	if _, err := pgx.ForEachRow(rows, []any{&key, &kid}, func() error {
+		ids[key] = kid
+		return nil
+	}); err != nil {
+		return err
+	}
 	b := &pgx.Batch{}
 	for i, k := range next.Known {
 		if was, had := before[k.ID]; had && pgSame(was, k) {
@@ -1002,9 +1029,6 @@ func writeKnown(ctx context.Context, tx pgx.Tx, old, next knownDoc) error {
 			}
 			continue
 		}
-		// Whole: its updates, followers and keys go with the row.
-		b.Queue("DELETE FROM known_issues WHERE known_issue_key = $1", k.ID)
-		id := db.NewID()
 		ok, on, oe, os := pgPerson(k.Owner)
 		ck, cn, ce, cs := pgPerson(k.CreatedBy)
 		var winStart, winEnd, stillLast *time.Time
@@ -1016,13 +1040,33 @@ func writeKnown(ctx context.Context, tx pgx.Tx, old, next knownDoc) error {
 		if sp := k.StillPresent; sp != nil {
 			stillCount, stillLast, stillRun = &sp.Count, pgAt(sp.Last), sp.Run
 		}
-		b.Queue(`INSERT INTO known_issues (known_issue_id, known_issue_key, position, title, symptoms, status, workaround, expected, owner_key, owner_name, owner_email,
-				owner_is_system, kind, window_start_at, window_end_at, source, is_draft, link, created_by_key, created_by_name, created_by_email, created_by_is_system, created_at,
-				updated_at, resolved_at, still_present_count, still_present_last_at, still_present_run_key, verify_jobs, is_pending, is_inactive, duplicate_of_known_issue_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)`,
-			id, k.ID, places[i], k.Title, pgList(k.Symptoms), string(k.Status), k.Workaround, k.Expected, ok, on, oe,
-			os, k.Kind, winStart, winEnd, k.Source, k.Draft, k.Link, ck, cn, ce, cs, pgAt(k.Created),
-			pgAt(k.Updated), pgAtPtr(k.Resolved), stillCount, stillLast, stillRun, pgList(k.VerifyJobs), k.Pending, k.Inactive, k.DuplicateOf)
+		id, held := ids[k.ID]
+		if held {
+			for _, t := range []string{"known_issue_services", "known_issue_updates", "known_issue_followers", "known_issue_keys"} {
+				b.Queue("DELETE FROM "+t+" WHERE known_issue_id = $1", id)
+			}
+			b.Queue(`UPDATE known_issues SET position = $3, title = $4, symptoms = $5, status = $6, workaround = $7, expected = $8, owner_key = $9, owner_name = $10,
+					owner_email = $11, owner_is_system = $12, kind = $13, window_start_at = $14, window_end_at = $15, source = $16, is_draft = $17, link = $18,
+					created_by_key = $19, created_by_name = $20, created_by_email = $21, created_by_is_system = $22, created_at = $23, updated_at = $24, resolved_at = $25,
+					still_present_count = $26, still_present_last_at = $27, still_present_run_key = $28, verify_jobs = $29, is_pending = $30, is_inactive = $31,
+					duplicate_of_known_issue_key = $32
+				WHERE known_issue_id = $1 AND known_issue_key = $2`,
+				id, k.ID, places[i], k.Title, pgList(k.Symptoms), string(k.Status), k.Workaround, k.Expected, ok, on, oe,
+				os, k.Kind, winStart, winEnd, k.Source, k.Draft, k.Link, ck, cn, ce, cs, pgAt(k.Created),
+				pgAt(k.Updated), pgAtPtr(k.Resolved), stillCount, stillLast, stillRun, pgList(k.VerifyJobs), k.Pending, k.Inactive, k.DuplicateOf)
+		} else {
+			id = db.NewID()
+			b.Queue(`INSERT INTO known_issues (known_issue_id, known_issue_key, position, title, symptoms, status, workaround, expected, owner_key, owner_name, owner_email,
+					owner_is_system, kind, window_start_at, window_end_at, source, is_draft, link, created_by_key, created_by_name, created_by_email, created_by_is_system, created_at,
+					updated_at, resolved_at, still_present_count, still_present_last_at, still_present_run_key, verify_jobs, is_pending, is_inactive, duplicate_of_known_issue_key)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)`,
+				id, k.ID, places[i], k.Title, pgList(k.Symptoms), string(k.Status), k.Workaround, k.Expected, ok, on, oe,
+				os, k.Kind, winStart, winEnd, k.Source, k.Draft, k.Link, ck, cn, ce, cs, pgAt(k.Created),
+				pgAt(k.Updated), pgAtPtr(k.Resolved), stillCount, stillLast, stillRun, pgList(k.VerifyJobs), k.Pending, k.Inactive, k.DuplicateOf)
+			// What named it while it had no row takes its key.
+			b.Queue("UPDATE findings SET known_issue_id = $1 WHERE known_issue_id IS NULL AND known_issue_key = $2", id, k.ID)
+			b.Queue("UPDATE change_resolves SET resolved_known_issue_id = $1 WHERE resolved_known_issue_id IS NULL AND resolved_key = $2", id, k.ID)
+		}
 		// Its services: each with the service's key while the service is
 		// there, and its id, which the known issue keeps when it goes (DB-89).
 		for n, svc := range k.Services {
@@ -1123,6 +1167,7 @@ func writeConfig(ctx context.Context, tx pgx.Tx, old, next configDoc) error {
 				s.ID, i, s.Name, s.Description, pgList(s.Contacts), pgList(s.Aliases), pgAt(s.Created), pgAt(s.Updated))
 			// What named it by its id while it had no row takes its key.
 			b.Queue("UPDATE known_issue_services SET service_id = $1 WHERE service_id IS NULL AND service_key = $1", s.ID)
+			b.Queue("UPDATE cases SET service_id = $1 WHERE service_id IS NULL AND service_key = $1", s.ID)
 		}
 		for n, r := range s.RunsOn {
 			b.Queue("INSERT INTO service_runs_on (service_id, position, kind, value, cluster_id) VALUES ($1, $2, $3, $4, $5)", s.ID, n, r.Kind, r.Value, r.Cluster)

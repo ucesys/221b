@@ -454,8 +454,11 @@ func queueRun(b *pgx.Batch, r Run, position int64) {
 		}
 		b.Queue(`INSERT INTO findings (finding_id, job_run_id, position, finding_key, severity, check_name, title, detail, evidence, cluster_id, resource, has_key,
 				key_cluster_id, key_object, key_check, invalid_reason, is_unverified, routing, case_key, known_issue_key, exception_key, is_new_check, is_expected,
-				expected_why, confidence, check_why)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+				expected_why, confidence, check_why, case_id, known_issue_id, exception_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+				(SELECT t.case_id FROM cases t WHERE $19 LIKE 'C-%' AND t.object_name = substr($19, 3)),
+				(SELECT k.known_issue_id FROM known_issues k WHERE k.known_issue_key = $20),
+				(SELECT e.exception_id FROM exceptions e WHERE e.exception_key = $21))`,
 			db.NewID(), id, i, f.ID, f.Severity, f.Check, f.Title, f.Detail, list(f.Evidence), f.Cluster, f.Resource, f.Key != nil, k.Cluster, k.Object, k.Check,
 			f.InvalidReason, f.Unverified, f.Routing, f.Case, f.KnownIssue, f.Exception, f.NewCheck, f.Expected, f.ExpectedWhy, f.Confidence, f.CheckWhy)
 	}

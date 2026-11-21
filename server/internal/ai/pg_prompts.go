@@ -118,7 +118,7 @@ func readTestRuns(ctx context.Context, q db.Querier) (map[string]*TestRun, error
 		return nil, err
 	}
 	results := map[string][]TestResult{}
-	rows, err = q.Query(ctx, `SELECT test_case_result_id::text, test_run_id::text, case_key, case_name, is_built_in, is_passed, why, answer, tools, hand_overs, cost_usd::float8,
+	rows, err = q.Query(ctx, `SELECT test_case_result_id::text, test_run_id::text, test_case_id, case_name, is_built_in, is_passed, why, answer, tools, hand_overs, cost_usd::float8,
 			question, has_expect, expect_tools, expect_hand_overs, expect_is_refusal, expect_points, expect_secret_count
 		FROM test_case_results ORDER BY test_run_id, position`)
 	if err != nil {
@@ -143,7 +143,7 @@ func readTestRuns(ctx context.Context, q db.Querier) (map[string]*TestRun, error
 		return nil, err
 	}
 	planned := map[string][]CaseState{}
-	rows, err = q.Query(ctx, "SELECT test_run_id::text, case_key, name, is_built_in, state FROM test_run_cases ORDER BY test_run_id, position")
+	rows, err = q.Query(ctx, "SELECT test_run_id::text, test_case_id, name, is_built_in, state FROM test_run_cases ORDER BY test_run_id, position")
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +444,7 @@ func queueTestRun(b *pgx.Batch, of string, t TestRun) {
 
 func queueCases(b *pgx.Batch, id string, planned []CaseState) {
 	for i, c := range planned {
-		b.Queue("INSERT INTO test_run_cases (test_run_id, position, case_key, name, is_built_in, state) VALUES ($1, $2, $3, $4, $5, $6)", id, i, c.ID, c.Name, c.Base, c.State)
+		b.Queue("INSERT INTO test_run_cases (test_run_id, position, test_case_id, name, is_built_in, state) VALUES ($1, $2, $3, $4, $5, $6)", id, i, c.ID, c.Name, c.Base, c.State)
 	}
 }
 
@@ -456,7 +456,7 @@ func queueResults(b *pgx.Batch, id string, results []TestResult, from int) {
 		if r.Expect != nil {
 			e = *r.Expect
 		}
-		b.Queue(`INSERT INTO test_case_results (test_case_result_id, test_run_id, position, case_key, case_name, is_built_in, is_passed, why, answer, tools, hand_overs,
+		b.Queue(`INSERT INTO test_case_results (test_case_result_id, test_run_id, position, test_case_id, case_name, is_built_in, is_passed, why, answer, tools, hand_overs,
 				cost_usd, question, has_expect, expect_tools, expect_hand_overs, expect_is_refusal, expect_points, expect_secret_count)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 			rid, id, i, r.ID, r.Name, r.Base, r.Passed, list(r.Why), r.Answer, list(r.Tools), list(r.HandOvers), r.CostUSD, r.Question, r.Expect != nil,

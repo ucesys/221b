@@ -369,6 +369,12 @@ var changeColumns = []string{"position", "agent_id", "model", "source_kind", "so
 	"approval_policy_id", "watson_item", "proposed_by_name", "proposed_by_kind", "last_by_name", "last_by_kind", "last_at"}
 
 // The tables that hang from a change's row, each keyed by it.
+// resolvedKeys are the keys of what a change resolves, by the id people
+// read at $3: a case's ("C-12") or a known issue's ("KI-3"), none where it
+// has no row (DB-90).
+const resolvedKeys = `(SELECT t.case_id FROM cases t WHERE $3 LIKE 'C-%' AND t.object_name = substr($3, 3)),
+	(SELECT k.known_issue_id FROM known_issues k WHERE k.known_issue_key = $3)`
+
 var changeTables = []string{"change_evidence", "change_actions", "change_plans", "change_results", "change_decisions", "change_events", "change_commands", "change_resolves"}
 
 // insertChange makes a change's row ($1 its key, $2 the console's id);
@@ -554,7 +560,7 @@ func queueHanging(b *pgx.Batch, id string, was, c Card) {
 		if who, ok := c.ResolvesBy[key]; ok {
 			by = &who
 		}
-		b.Queue("INSERT INTO change_resolves (change_id, position, resolved_key, is_listed, linked_by) VALUES ($1, $2, $3, true, $4)", id, n, key, by)
+		b.Queue("INSERT INTO change_resolves (change_id, position, resolved_key, is_listed, linked_by, resolved_case_id, resolved_known_issue_id) VALUES ($1, $2, $3, true, $4, "+resolvedKeys+")", id, n, key, by)
 		n++
 	}
 	var rest []string
@@ -565,7 +571,7 @@ func queueHanging(b *pgx.Batch, id string, was, c Card) {
 	}
 	sort.Strings(rest)
 	for _, key := range rest {
-		b.Queue("INSERT INTO change_resolves (change_id, position, resolved_key, is_listed, linked_by) VALUES ($1, $2, $3, false, $4)", id, n, key, c.ResolvesBy[key])
+		b.Queue("INSERT INTO change_resolves (change_id, position, resolved_key, is_listed, linked_by, resolved_case_id, resolved_known_issue_id) VALUES ($1, $2, $3, false, $4, "+resolvedKeys+")", id, n, key, c.ResolvesBy[key])
 		n++
 	}
 }

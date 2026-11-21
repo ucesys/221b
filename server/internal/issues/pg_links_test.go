@@ -97,3 +97,44 @@ func TestAKnownIssuesServicesAreKeys(t *testing.T) {
 		t.Fatalf("the known issue's services once shop is gone: %v, %v", got.Services, err)
 	}
 }
+
+// A known issue keeps its row through a change (DB-90), so what keys to it
+// keeps its key; a case made after what names it takes its key then.
+func TestAKnownIssueKeepsItsRow(t *testing.T) {
+	d := dbtest.Open(t)
+	set := NewSetPG(d)
+	f := newFixture(t, Options{Backend: &kv.Keyed{Keys: map[string]kv.Backend{IndexKey: set, KnownKey: set, ConfigKey: set}, Rest: &kv.Memory{}}, Cases: NewCasesPG(d, nil)})
+	k := seed(t, f)
+	rowOf := func() string {
+		var id string
+		if err := d.Pool().QueryRow(ctx, "SELECT known_issue_id::text FROM known_issues WHERE known_issue_key = $1", k.ID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	was := rowOf()
+	if _, err := f.s.SaveKnown(ctx, operator, k.ID, KnownInput{Title: ptr("Checkout times out everywhere"), Status: ptr(KnownIdentified)}); err != nil {
+		t.Fatal(err)
+	}
+	if now := rowOf(); now != was {
+		t.Fatalf("the known issue was written again under a new row: %s, then %s", was, now)
+	}
+	got, err := f.s.KnownIssue(ctx, operator, k.ID)
+	if err != nil || got.Title != "Checkout times out everywhere" || len(got.Services) != 1 || len(got.Symptoms) != 2 {
+		t.Fatalf("the known issue changed: %+v, %v", got, err)
+	}
+	// A change that names a case before the case has a row.
+	if _, err := d.Pool().Exec(ctx, "INSERT INTO changes (change_id, change_key, created_at, updated_at) VALUES ('00000000-0000-7000-8000-0000000000c0', 'PC-1', now(), now())"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, "INSERT INTO change_resolves (change_id, position, resolved_key) VALUES ('00000000-0000-7000-8000-0000000000c0', 0, 'C-1')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Submit(ctx, alice, Submission{Text: "The reports page is slow"}); err != nil {
+		t.Fatal(err)
+	}
+	var keyed bool
+	if err := d.Pool().QueryRow(ctx, "SELECT resolved_case_id IS NOT NULL FROM change_resolves").Scan(&keyed); err != nil || !keyed {
+		t.Fatalf("the change's resolved case has no key once C-1 is made: %v", err)
+	}
+}

@@ -72,7 +72,8 @@ func (workPart) Read(ctx context.Context, q db.Querier, id, _ string) ([]byte, b
 	var applied, updated *time.Time
 	var runs []string
 	var note Note
-	err := q.QueryRow(ctx, `SELECT case_number, source_kind, finding_key, run_key, job_id, check_name, severity, alert, alert_key, runs, fix,
+	// The case's number is its row's (DB-90: case_work no longer repeats it).
+	err := q.QueryRow(ctx, `SELECT (SELECT c.case_number FROM cases c WHERE c.case_id = case_work.case_id), source_kind, finding_key, run_key, job_id, check_name, severity, alert, alert_key, runs, fix,
 			fix_applied_at, fix_applied_body, fix_applied_by, fix_applied_change_key, updated_at
 		FROM case_work WHERE case_id = $1`, id).Scan(&w.Number, &w.Source.Kind, &w.Source.Finding, &w.Source.Run, &w.Source.Job, &w.Source.Check, &w.Source.Severity,
 		&w.Source.Alert, &w.Source.AlertKey, &runs, &w.Fix, &applied, &note.Text, &note.By, &note.Change, &updated)
@@ -282,10 +283,10 @@ func (workPart) Write(ctx context.Context, tx pgx.Tx, id, _ string, doc []byte) 
 		note = *w.FixApplied
 		applied = wAt(note.At)
 	}
-	b.Queue(`INSERT INTO case_work (case_id, case_number, source_kind, finding_key, run_key, job_id, check_name, severity, alert, alert_key, runs, fix, fix_applied_at,
+	b.Queue(`INSERT INTO case_work (case_id, source_kind, finding_key, run_key, job_id, check_name, severity, alert, alert_key, runs, fix, fix_applied_at,
 			fix_applied_body, fix_applied_by, fix_applied_change_key, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-		id, w.Number, w.Source.Kind, w.Source.Finding, w.Source.Run, w.Source.Job, w.Source.Check, w.Source.Severity, w.Source.Alert, w.Source.AlertKey, wList(w.Runs), w.Fix, applied,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		id, w.Source.Kind, w.Source.Finding, w.Source.Run, w.Source.Job, w.Source.Check, w.Source.Severity, w.Source.Alert, w.Source.AlertKey, wList(w.Runs), w.Fix, applied,
 		note.Text, note.By, note.Change, wAt(w.Updated))
 	if a := w.Analysis; a != nil {
 		b.Queue(`INSERT INTO case_analyses (case_id, run_key, analyzed_at, summary, cause, evidence, fix_summary, fix_commands, confidence, ruled_out, is_expected, expected_why, error, left_out)
