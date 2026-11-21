@@ -15,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -88,6 +89,9 @@ type Options struct {
 // Service keeps the cases' work and routes the runs' findings.
 type Service struct {
 	o Options
+	// catchUpQuiet keeps the catch-up's reads of the proposed changes quiet
+	// while the database is away (DB-15).
+	catchUpQuiet db.Quiet
 
 	mu sync.Mutex
 	// active are the cases whose analysis runs on this replica.

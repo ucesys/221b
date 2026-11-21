@@ -801,9 +801,10 @@ func (s *Service) Tick(ctx context.Context) {
 	s.sweep(ctx)
 	rec, err := s.loadJobs(ctx)
 	if err != nil {
-		s.o.Logger.Warn("the jobs cannot be read", "err", err)
+		s.quiet.Failed(s.o.Logger, "the jobs cannot be read", err)
 		return
 	}
+	s.quiet.Worked(s.o.Logger, "the jobs are read again")
 	s.reroute(ctx, rec)
 	// The alerts are read once per look, by whoever wants them: the alert
 	// jobs, and the cases' safety net (CF-78).
@@ -1004,7 +1005,7 @@ func (s *Service) Fire(ev Event) int {
 	}
 	rec, err := s.loadJobs(s.base)
 	if err != nil {
-		s.o.Logger.Warn("the jobs cannot be read", "err", err)
+		s.quiet.Failed(s.o.Logger, "the jobs cannot be read", err)
 		return 0
 	}
 	return s.fire(rec, ev)

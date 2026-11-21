@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
@@ -185,6 +186,9 @@ type Options struct {
 type Service struct {
 	o        Options
 	instance string
+	// quiet keeps the jobs' reads at every look quiet while the database
+	// is away (DB-15).
+	quiet db.Quiet
 	// claims claims the scheduled times where the jobs are kept in the
 	// database (DB-80); nil claims them in the jobs' record.
 	claims Claims

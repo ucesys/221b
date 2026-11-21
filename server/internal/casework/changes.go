@@ -352,9 +352,10 @@ func (s *Service) catchUp(ctx context.Context) {
 	s.mu.Unlock()
 	list, err := s.o.Cards.List(ctx, cards.Filter{})
 	if err != nil {
-		s.o.Logger.Warn("the proposed changes could not be read to catch up with them", "err", err)
+		s.catchUpQuiet.Failed(s.o.Logger, "the proposed changes could not be read to catch up with them", err)
 		return
 	}
+	s.catchUpQuiet.Worked(s.o.Logger, "the proposed changes are read again to catch up with them")
 	for _, c := range list {
 		// A margin for the replicas' clocks and the hook under way.
 		if len(c.Resolves) == 0 || !since.IsZero() && c.Updated.Before(since.Add(-2*time.Minute)) {

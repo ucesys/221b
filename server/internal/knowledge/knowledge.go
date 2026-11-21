@@ -37,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -236,6 +237,9 @@ type Service struct {
 	o      Options
 	kv     kv.Backend
 	limits Limits
+	// kindsQuiet keeps the sources' reads for the Wiki sync jobs quiet
+	// while the database is away (DB-15).
+	kindsQuiet db.Quiet
 
 	// writeMu serialises this process's writes to the ConfigMap.
 	writeMu sync.Mutex

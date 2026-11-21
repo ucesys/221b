@@ -15,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -101,6 +102,9 @@ type setupState struct {
 	mem  kv.Memory
 	view *SetupView
 	at   time.Time
+	// quiet keeps the record's reads, every few seconds while Getting
+	// started is asked for, quiet while the database is away (DB-15).
+	quiet db.Quiet
 }
 
 // setupFresh is how long a worked-out view stands.
@@ -222,7 +226,9 @@ func (s *Server) workOutSetup(ctx context.Context) SetupView {
 	defer cancel()
 	rec, _, err := s.loadSetup(ctx)
 	if err != nil {
-		s.opts.Logger.Warn("reading Getting started's record failed", "err", err)
+		s.setup.quiet.Failed(s.opts.Logger, "reading Getting started's record failed", err)
+	} else {
+		s.setup.quiet.Worked(s.opts.Logger, "Getting started's record is read again")
 	}
 	_, inMemory := s.setupKV().(*kv.Memory)
 	v := SetupView{Kept: !inMemory}

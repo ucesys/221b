@@ -20,6 +20,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cardid"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/scrub"
 )
@@ -121,6 +122,9 @@ type Options struct {
 // Store keeps the cards.
 type Store struct {
 	opts Options
+	// sweepQuiet keeps the sweep's reads quiet while the database is away
+	// (DB-15).
+	sweepQuiet db.Quiet
 	// changes keeps the cards, convs their conversations (DB-79).
 	changes Changes
 	convs   Conversations
@@ -1254,9 +1258,10 @@ func (s *Store) expire(ctx context.Context, id, why string) (Card, error) {
 func (s *Store) Sweep(ctx context.Context) {
 	rec, err := s.loadCards(ctx)
 	if err != nil {
-		s.opts.Logger.Warn("the proposals could not be read", "err", err)
+		s.sweepQuiet.Failed(s.opts.Logger, "the proposals could not be read", err)
 		return
 	}
+	s.sweepQuiet.Worked(s.opts.Logger, "the proposals are read again")
 	// The conversations of proposals decided elsewhere, or gone, go too
 	// (CF-61).
 	s.sweepChats(ctx, rec)
