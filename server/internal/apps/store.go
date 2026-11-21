@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -75,10 +76,29 @@ func (s *SecretStore) name(cluster, namespace, name string) string {
 	return s.prefix + "-app-" + ID(cluster, namespace, name)
 }
 
-func (s *SecretStore) List(ctx context.Context) ([]Record, error) {
+// list lists this console's application Secrets: the label marks an
+// application Secret, and the name says whose, since another release in
+// the namespace labels its own the same way (the fourteenth cluster test's
+// N1; the one-time copy reads this list).
+func (s *SecretStore) list(ctx context.Context) (*corev1.SecretList, error) {
 	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
 	if err != nil {
 		return nil, fmt.Errorf("listing the application Secrets in %s: %w", s.namespace, err)
+	}
+	own := list.Items[:0]
+	for _, sec := range list.Items {
+		if strings.HasPrefix(sec.Name, s.prefix+"-app-") {
+			own = append(own, sec)
+		}
+	}
+	list.Items = own
+	return list, nil
+}
+
+func (s *SecretStore) List(ctx context.Context) ([]Record, error) {
+	list, err := s.list(ctx)
+	if err != nil {
+		return nil, err
 	}
 	var out []Record
 	for i := range list.Items {

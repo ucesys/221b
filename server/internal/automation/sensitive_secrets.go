@@ -220,6 +220,11 @@ func (s *SecretSensitive) Held(ctx context.Context) (map[string][]string, error)
 	out := map[string][]string{}
 	for i := range list.Items {
 		sec := &list.Items[i]
+		// Another release in the namespace labels its own Secrets the
+		// same way: the name says whose (the fourteenth cluster test's N1).
+		if !strings.HasPrefix(sec.Name, s.prefix+"-automation-") {
+			continue
+		}
 		// A Secret whose cluster's id is no label is named by its own name.
 		cluster, ok := sec.Labels[labelCluster]
 		if !ok {

@@ -113,9 +113,9 @@ func labelsOf(r Record) map[string]string {
 
 // all are the applications' Secrets, by name.
 func (s *SecretStore) all(ctx context.Context) (map[string]*corev1.Secret, error) {
-	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	list, err := s.list(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing the application Secrets in %s: %w", s.namespace, err)
+		return nil, err
 	}
 	out := make(map[string]*corev1.Secret, len(list.Items))
 	for i := range list.Items {
