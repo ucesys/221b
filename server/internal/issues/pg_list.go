@@ -35,7 +35,19 @@ func lineColumns() string {
 		}
 	}
 	return "case_id::text, " + strings.Join(cols, ", ") +
-		", ARRAY(SELECT p.person_key FROM case_people p WHERE p.case_id = cases.case_id AND p.role = 'watcher' ORDER BY p.position)"
+		", ARRAY(SELECT p.person_key FROM case_people p WHERE p.case_id = cases.case_id AND p.role = 'watcher' ORDER BY p.position)" +
+		", ARRAY(SELECT l.kind || ' ' || l.linked_case_number FROM case_links l WHERE l.case_id = cases.case_id AND l.kind <> '" + linkSimilar + "')"
+}
+
+// linksOfLine reads the links lineColumns gives as "<kind> <number>".
+func linksOfLine(pairs []string) caseLinks {
+	var out caseLinks
+	for _, p := range pairs {
+		kind, n, _ := strings.Cut(p, " ")
+		number, _ := strconv.Atoi(n)
+		out = append(out, caseLink{kind: kind, number: number})
+	}
+	return out
 }
 
 // outcomesOf are the outcomes stored that read as o (CF-90).
@@ -186,17 +198,19 @@ func scanLines(rows pgx.Rows) ([]Line, error) {
 	var out []Line
 	var row caseRow
 	var id string
-	var watchers []string
-	_, err := pgx.ForEachRow(rows, append(append([]any{&id}, db.Fields(&row)...), &watchers), func() error {
-		out = append(out, rowLine(&row, watchers))
+	var watchers, links []string
+	_, err := pgx.ForEachRow(rows, append(append([]any{&id}, db.Fields(&row)...), &watchers, &links), func() error {
+		out = append(out, rowLine(&row, watchers, linksOfLine(links)))
 		return nil
 	})
 	return out, err
 }
 
-// rowLine is the line of a case's row, with its watchers' ids.
-func rowLine(row *caseRow, watchers []string) Line {
+// rowLine is the line of a case's row, with its watchers' ids and the
+// cases it names.
+func rowLine(row *caseRow, watchers []string, links caseLinks) Line {
 	c := rowToCase(row)
+	links.set(&c)
 	for _, w := range watchers {
 		c.Watchers = append(c.Watchers, Person{ID: w})
 	}

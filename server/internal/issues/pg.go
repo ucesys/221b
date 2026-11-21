@@ -166,12 +166,6 @@ type caseRow struct {
 	SeenFinding string     `col:"seen_finding_key"`
 	SeenAs      string     `col:"seen_as"`
 
-	RegressionOf int   `col:"regression_of_number"`
-	SameAs       int   `col:"same_as_number"`
-	PossibleDup  int   `col:"possible_duplicate_of_number"`
-	DuplicateOf  int   `col:"duplicate_of_number"`
-	Similar      []int `col:"similar_numbers"`
-
 	PrevCase    *int       `col:"previous_case_number"`
 	PrevOutcome string     `col:"previous_outcome"`
 	PrevExplain string     `col:"previous_explanation"`
@@ -263,7 +257,6 @@ type caseRow struct {
 
 func caseToRow(c *Case) caseRow {
 	r := caseRow{Number: c.Number, Title: c.Title, Source: c.Source, Cluster: c.Cluster, Object: c.Object, Job: c.Job, Run: c.Run, Finding: c.Finding, Severity: c.Severity,
-		RegressionOf: c.RegressionOf, SameAs: c.SameAs, PossibleDup: c.PossibleDuplicateOf, DuplicateOf: c.DuplicateOf, Similar: pgList(c.Similar),
 		Exception: c.Exception, RCA: c.RCA, RCACause: c.RCACause, VerifyPending: c.VerifyPending, Verified: pgAtPtr(c.Verified), Unchecked: c.Unchecked,
 		UncheckedWhy: c.UncheckedWhy, UncheckedRun: c.UncheckedRun, SLAFrom: pgAtPtr(c.SLAFrom), FixProposed: c.FixProposed, Verification: c.Verification, Type: c.Type,
 		Incident: c.Incident, LastAt: pgAtPtr(c.LastAt), Queued: pgAtPtr(c.AnalysisQueued), Text: c.Text, Scrubbed: c.Scrubbed, Pruned: c.Pruned,
@@ -306,7 +299,6 @@ func caseToRow(c *Case) caseRow {
 // approvers.
 func rowToCase(r *caseRow) Case {
 	c := Case{Number: r.Number, Title: r.Title, Source: r.Source, Cluster: r.Cluster, Object: r.Object, Job: r.Job, Run: r.Run, Finding: r.Finding, Severity: r.Severity,
-		RegressionOf: r.RegressionOf, SameAs: r.SameAs, PossibleDuplicateOf: r.PossibleDup, DuplicateOf: r.DuplicateOf, Similar: pgListOf(r.Similar),
 		Exception: r.Exception, RCA: r.RCA, RCACause: r.RCACause, VerifyPending: r.VerifyPending, Verified: pgAtPtr(r.Verified), Unchecked: r.Unchecked,
 		UncheckedWhy: r.UncheckedWhy, UncheckedRun: r.UncheckedRun, SLAFrom: pgAtPtr(r.SLAFrom), FixProposed: r.FixProposed, Verification: r.Verification, Type: r.Type,
 		Incident: r.Incident, LastAt: pgAtPtr(r.LastAt), AnalysisQueued: pgAtPtr(r.Queued), Text: r.Text, Scrubbed: r.Scrubbed, Pruned: r.Pruned,
@@ -361,7 +353,102 @@ func readCase(ctx context.Context, q db.Querier, id string) (Case, error) {
 		return c, err
 	}
 	c.Watchers, c.Approvers = people[roleWatcher], people[roleApprover]
+	links, err := readLinks(ctx, q, id)
+	if err != nil {
+		return c, err
+	}
+	links.set(&c)
 	return c, nil
+}
+
+// ---------- a case's links ----------
+
+// The kinds of case_links: the other cases a case names.
+const (
+	linkDuplicateOf = "duplicate_of"
+	linkRegression  = "regression_of"
+	linkSameAs      = "same_as"
+	linkPossibleDup = "possible_duplicate_of"
+	linkSimilar     = "similar"
+)
+
+// caseLink is a row of case_links but its case and its key.
+type caseLink struct {
+	kind     string
+	position int
+	number   int
+}
+
+type caseLinks []caseLink
+
+// linksOf are the links a case names, in the order they are written.
+func linksOf(c *Case) caseLinks {
+	var out caseLinks
+	for _, l := range []struct {
+		kind string
+		n    int
+	}{{linkDuplicateOf, c.DuplicateOf}, {linkRegression, c.RegressionOf}, {linkSameAs, c.SameAs}, {linkPossibleDup, c.PossibleDuplicateOf}} {
+		if l.n != 0 {
+			out = append(out, caseLink{l.kind, 0, l.n})
+		}
+	}
+	for i, n := range c.Similar {
+		out = append(out, caseLink{linkSimilar, i, n})
+	}
+	return out
+}
+
+// set gives a case the links.
+func (ls caseLinks) set(c *Case) {
+	c.DuplicateOf, c.RegressionOf, c.SameAs, c.PossibleDuplicateOf, c.Similar = 0, 0, 0, 0, nil
+	for _, l := range ls {
+		switch l.kind {
+		case linkDuplicateOf:
+			c.DuplicateOf = l.number
+		case linkRegression:
+			c.RegressionOf = l.number
+		case linkSameAs:
+			c.SameAs = l.number
+		case linkPossibleDup:
+			c.PossibleDuplicateOf = l.number
+		case linkSimilar:
+			c.Similar = append(c.Similar, l.number)
+		}
+	}
+}
+
+func readLinks(ctx context.Context, q db.Querier, id string) (caseLinks, error) {
+	rows, err := q.Query(ctx, `SELECT kind, position, linked_case_number FROM case_links WHERE case_id = $1
+		ORDER BY array_position(ARRAY['duplicate_of', 'regression_of', 'same_as', 'possible_duplicate_of', 'similar'], kind), position`, id)
+	if err != nil {
+		return nil, err
+	}
+	var out caseLinks
+	var l caseLink
+	_, err = pgx.ForEachRow(rows, []any{&l.kind, &l.position, &l.number}, func() error {
+		out = append(out, l)
+		return nil
+	})
+	return out, err
+}
+
+// sqlCaseOf is the key of the case a number names, none when it has no
+// row: a case's object is named by its number.
+const sqlCaseOf = "(SELECT t.case_id FROM cases t WHERE t.object_name = ($1::integer)::text)"
+
+// keyLinksTo gives the links that name a case by its number the case's
+// key, now that it has a row: a case made after a case that names it, or
+// copied after it (DB-89).
+func keyLinksTo(ctx context.Context, tx pgx.Tx, id, name string) error {
+	n, err := strconv.Atoi(name)
+	if err != nil || strconv.Itoa(n) != name {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, "UPDATE case_links SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_number = $2", id, n); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE rca_cases SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_key = $2", id, "C-"+name)
+	return err
 }
 
 // readMessages are a case's messages, in order.
@@ -445,7 +532,19 @@ func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	if err != nil {
 		return err
 	}
+	links, err := readLinks(ctx, tx, id)
+	if err != nil {
+		return err
+	}
 	b := &pgx.Batch{}
+	// The links, written again only when they changed: each with the key
+	// of the case it names, while that case has a row, and its number.
+	if next := linksOf(c); !reflect.DeepEqual(links, next) && (len(links) > 0 || len(next) > 0) {
+		b.Queue("DELETE FROM case_links WHERE case_id = $1", id)
+		for _, l := range next {
+			b.Queue("INSERT INTO case_links (case_id, kind, position, linked_case_id, linked_case_number) VALUES ($2, $3, $4, "+sqlCaseOf+", $1)", l.number, id, l.kind, l.position)
+		}
+	}
 	n := len(db.Columns(&row))
 	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(n+1)), " WHERE ", ", is_case_kept = true WHERE ", 1), append(db.Fields(&row), id)...)
 	for i := range c.Messages {
@@ -593,6 +692,9 @@ func (s *CasesPG) Save(ctx context.Context, name, key string, b []byte, version 
 			if _, err := tx.Exec(ctx, "INSERT INTO cases (case_id, object_name, case_number) VALUES ($1, $2, $3)", id, name, number); err != nil {
 				return err
 			}
+			if err := keyLinksTo(ctx, tx, id, name); err != nil {
+				return err
+			}
 		}
 		if key == CaseKey {
 			var c Case
@@ -692,6 +794,9 @@ func (s *CasesPG) Import(ctx context.Context, from kv.Objects, source string) (i
 			id := db.NewID()
 			number, _ := strconv.Atoi(name)
 			if _, err := tx.Exec(ctx, "INSERT INTO cases (case_id, object_name, case_number, version) VALUES ($1, $2, $3, 1)", id, name, number); err != nil {
+				return 0, err
+			}
+			if err := keyLinksTo(ctx, tx, id, name); err != nil {
 				return 0, err
 			}
 			if b := keys[CaseKey]; len(b) > 0 {
@@ -818,7 +923,19 @@ func readKnown(ctx context.Context, q db.Querier) (knownDoc, bool, error) {
 	}); err != nil {
 		return doc, false, err
 	}
-	rows, err = q.Query(ctx, `SELECT known_issue_id::text, known_issue_key, title, symptoms, services, status, workaround, expected, owner_key, owner_name, owner_email, owner_is_system,
+	services := map[string][]string{}
+	rows, err = q.Query(ctx, "SELECT known_issue_id::text, service_key FROM known_issue_services ORDER BY known_issue_id, position")
+	if err != nil {
+		return doc, false, err
+	}
+	var svc string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &svc}, func() error {
+		services[id] = append(services[id], svc)
+		return nil
+	}); err != nil {
+		return doc, false, err
+	}
+	rows, err = q.Query(ctx, `SELECT known_issue_id::text, known_issue_key, title, symptoms, status, workaround, expected, owner_key, owner_name, owner_email, owner_is_system,
 			kind, window_start_at, window_end_at, source, is_draft, link, created_by_key, created_by_name, created_by_email, created_by_is_system, created_at, updated_at,
 			resolved_at, still_present_count, still_present_last_at, still_present_run_key, verify_jobs, is_pending, is_inactive, duplicate_of_known_issue_key
 		FROM known_issues ORDER BY position`)
@@ -826,18 +943,18 @@ func readKnown(ctx context.Context, q db.Querier) (knownDoc, bool, error) {
 		return doc, false, err
 	}
 	var k KnownIssue
-	var symptoms, services, verify []string
+	var symptoms, verify []string
 	var ownerKey, byKey *string
 	var ownerName, ownerEmail, byName, byEmail, stillRun string
 	var ownerSystem, bySystem bool
 	var winStart, winEnd, resolved, stillLast *time.Time
 	var created, updated time.Time
 	var stillCount *int
-	if _, err := pgx.ForEachRow(rows, []any{&id, &k.ID, &k.Title, &symptoms, &services, &status, &k.Workaround, &k.Expected, &ownerKey, &ownerName, &ownerEmail, &ownerSystem,
+	if _, err := pgx.ForEachRow(rows, []any{&id, &k.ID, &k.Title, &symptoms, &status, &k.Workaround, &k.Expected, &ownerKey, &ownerName, &ownerEmail, &ownerSystem,
 		&k.Kind, &winStart, &winEnd, &k.Source, &k.Draft, &k.Link, &byKey, &byName, &byEmail, &bySystem, &created, &updated,
 		&resolved, &stillCount, &stillLast, &stillRun, &verify, &k.Pending, &k.Inactive, &k.DuplicateOf}, func() error {
 		x := k
-		x.Symptoms, x.Services, x.VerifyJobs, x.Status = pgListOf(symptoms), pgListOf(services), pgListOf(verify), KnownStatus(status)
+		x.Symptoms, x.Services, x.VerifyJobs, x.Status = pgListOf(symptoms), services[id], pgListOf(verify), KnownStatus(status)
 		x.Owner, x.CreatedBy = pgPersonOf(ownerKey, ownerName, ownerEmail, ownerSystem), pgPersonOf(byKey, byName, byEmail, bySystem)
 		x.Created, x.Updated, x.Resolved = created.UTC(), updated.UTC(), pgAtPtr(resolved)
 		x.Window, x.StillPresent = nil, nil
@@ -899,13 +1016,19 @@ func writeKnown(ctx context.Context, tx pgx.Tx, old, next knownDoc) error {
 		if sp := k.StillPresent; sp != nil {
 			stillCount, stillLast, stillRun = &sp.Count, pgAt(sp.Last), sp.Run
 		}
-		b.Queue(`INSERT INTO known_issues (known_issue_id, known_issue_key, position, title, symptoms, services, status, workaround, expected, owner_key, owner_name, owner_email,
+		b.Queue(`INSERT INTO known_issues (known_issue_id, known_issue_key, position, title, symptoms, status, workaround, expected, owner_key, owner_name, owner_email,
 				owner_is_system, kind, window_start_at, window_end_at, source, is_draft, link, created_by_key, created_by_name, created_by_email, created_by_is_system, created_at,
 				updated_at, resolved_at, still_present_count, still_present_last_at, still_present_run_key, verify_jobs, is_pending, is_inactive, duplicate_of_known_issue_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)`,
-			id, k.ID, places[i], k.Title, pgList(k.Symptoms), pgList(k.Services), string(k.Status), k.Workaround, k.Expected, ok, on, oe,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)`,
+			id, k.ID, places[i], k.Title, pgList(k.Symptoms), string(k.Status), k.Workaround, k.Expected, ok, on, oe,
 			os, k.Kind, winStart, winEnd, k.Source, k.Draft, k.Link, ck, cn, ce, cs, pgAt(k.Created),
 			pgAt(k.Updated), pgAtPtr(k.Resolved), stillCount, stillLast, stillRun, pgList(k.VerifyJobs), k.Pending, k.Inactive, k.DuplicateOf)
+		// Its services: each with the service's key while the service is
+		// there, and its id, which the known issue keeps when it goes (DB-89).
+		for n, svc := range k.Services {
+			b.Queue("INSERT INTO known_issue_services (known_issue_id, position, service_id, service_key) VALUES ($1, $2, (SELECT service_id FROM services WHERE service_id = $3), $3)",
+				id, n, svc)
+		}
 		for n, u := range k.Updates {
 			b.Queue("INSERT INTO known_issue_updates (known_issue_id, position, at, by_key, by_name, by_email, by_is_system, body, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
 				id, n, pgAt(u.At), u.By.ID, u.By.Name, u.By.Email, u.By.System, u.Text, string(u.Status))
@@ -989,9 +1112,18 @@ func writeConfig(ctx context.Context, tx pgx.Tx, old, next configDoc) error {
 			}
 			continue
 		}
-		b.Queue("DELETE FROM services WHERE service_id = $1", s.ID)
-		b.Queue("INSERT INTO services (service_id, position, name, description, contacts, aliases, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-			s.ID, i, s.Name, s.Description, pgList(s.Contacts), pgList(s.Aliases), pgAt(s.Created), pgAt(s.Updated))
+		// A service keeps its row through a change, so that what keys to
+		// it keeps its key (DB-89); where it runs is written again.
+		if _, had := before[s.ID]; had {
+			b.Queue("UPDATE services SET position = $2, name = $3, description = $4, contacts = $5, aliases = $6, created_at = $7, updated_at = $8 WHERE service_id = $1",
+				s.ID, i, s.Name, s.Description, pgList(s.Contacts), pgList(s.Aliases), pgAt(s.Created), pgAt(s.Updated))
+			b.Queue("DELETE FROM service_runs_on WHERE service_id = $1", s.ID)
+		} else {
+			b.Queue("INSERT INTO services (service_id, position, name, description, contacts, aliases, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+				s.ID, i, s.Name, s.Description, pgList(s.Contacts), pgList(s.Aliases), pgAt(s.Created), pgAt(s.Updated))
+			// What named it by its id while it had no row takes its key.
+			b.Queue("UPDATE known_issue_services SET service_id = $1 WHERE service_id IS NULL AND service_key = $1", s.ID)
+		}
 		for n, r := range s.RunsOn {
 			b.Queue("INSERT INTO service_runs_on (service_id, position, kind, value, cluster_id) VALUES ($1, $2, $3, $4, $5)", s.ID, n, r.Kind, r.Value, r.Cluster)
 		}

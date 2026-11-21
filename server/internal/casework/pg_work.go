@@ -103,7 +103,8 @@ func (workPart) Read(ctx context.Context, q db.Querier, id, _ string) ([]byte, b
 	}
 	var r RCA
 	var cases []string
-	err = q.QueryRow(ctx, `SELECT rca_key, case_key, cases, title, cluster_id, resource, priority, cause, fix, prevention, body, written_by, written_at
+	err = q.QueryRow(ctx, `SELECT rca_key, case_key, ARRAY(SELECT x.linked_case_key FROM rca_cases x WHERE x.case_id = rcas.case_id ORDER BY x.position),
+			title, cluster_id, resource, priority, cause, fix, prevention, body, written_by, written_at
 		FROM rcas WHERE case_id = $1`, id).Scan(&r.ID, &r.Case, &cases, &r.Title, &r.Cluster, &r.Resource, &r.Priority, &r.Cause, &r.Fix, &r.Prevention, &r.Text, &r.By, &at)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -292,9 +293,16 @@ func (workPart) Write(ctx context.Context, tx pgx.Tx, id, _ string, doc []byte) 
 			id, a.Run, wAt(a.At), a.Summary, a.Cause, wList(a.Evidence), a.Fix.Summary, wList(a.Fix.Commands), a.Confidence, wList(a.RuledOut), a.Expected, a.ExpectedWhy, a.Error, wList(a.LeftOut))
 	}
 	if r := w.RCA; r != nil {
-		b.Queue(`INSERT INTO rcas (case_id, rca_key, case_key, cases, title, cluster_id, resource, priority, cause, fix, prevention, body, written_by, written_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-			id, r.ID, r.Case, wList(r.Cases), r.Title, r.Cluster, r.Resource, r.Priority, r.Cause, r.Fix, r.Prevention, r.Text, r.By, wAt(r.At))
+		b.Queue(`INSERT INTO rcas (case_id, rca_key, case_key, title, cluster_id, resource, priority, cause, fix, prevention, body, written_by, written_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			id, r.ID, r.Case, r.Title, r.Cluster, r.Resource, r.Priority, r.Cause, r.Fix, r.Prevention, r.Text, r.By, wAt(r.At))
+		// The other cases it covers: each with its case's key while the
+		// case has a row, and the id people read, which stays when the case
+		// goes (DB-89).
+		for i, c := range r.Cases {
+			b.Queue(`INSERT INTO rca_cases (case_id, position, linked_case_id, linked_case_key)
+				VALUES ($1, $2, (SELECT t.case_id FROM cases t WHERE $3 LIKE 'C-%' AND t.object_name = substr($3, 3)), $3)`, id, i, c)
+		}
 	}
 	for i, e := range w.History {
 		b.Queue("INSERT INTO case_events (case_id, position, at, what, by_name, by_kind) VALUES ($1, $2, $3, $4, $5, $6)", id, i, wAt(e.At), e.What, e.By.Name, e.By.Kind)
