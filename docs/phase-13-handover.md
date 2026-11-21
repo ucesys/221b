@@ -105,6 +105,7 @@ Written on November 19, 2026, for the session that continues Phase 13. It replac
 | `Jobs: a run's budget holds within its agent's calls and hand-overs (JB-10)` | F1, a fault since 0.12.0: a meter counts every model call of a run's chain, hand-overs included, and starts no call once the run's or the day's budget is spent; a run passes its budget by at most one call. |
 | `Database away: Getting started, the jobs, the hosts and three sweeps say it once (DB-15)` | N1: `db.Quiet` on six more repeating warnings; `TestTheLogSaysAnOutageOnce` lists them. |
 | `The thirteenth cluster test's nits: the runs' sweep says an outage once, the history names the approving request (DB-15, AI-32)` | N3: `db.Quiet` on *the runs cannot be swept* (`TestTheSweepSaysAnOutageOnce`, failing without it); N2: a history entry carries `request`, the History dialog says *approved in request N*. N1 is by design (below). |
+| `The bundled database's image on Wolfi, beside the Debian one, not the default` | Item 0b.3: `deploy/postgres-wolfi/` (apko config, lock, Dockerfile), `hack/wolfi-postgres.sh`, the Make targets, the variant's pins in `check-base-images.sh`, the socket directory in `entrypoint.sh`, `docs/database.md`. See *Item 0b (November 21): where it stands*. |
 | `Docs: …` (five commits) | The documents, the changelog, the Go CI job's PostgreSQL service, this handover. |
 
 The first two commits on the branch are not this work's: `CI: cache Playwright browsers…` (the owner's other session; reviewed, no problems found) and `docs: refresh the README screenshots` (a bot's, the one commit without a sign-off).
@@ -446,6 +447,16 @@ These differ from the design document *221B storage deployment design*, or were 
 | **A record set copied into the database is removed from its ConfigMap** (DB-55, the owner's decision): the key deleted, a case's ConfigMap deleted whole; also what was written under a copied key later, by a console rolled back, which is removed at the next start with the database and not read. The chart sets data in one ConfigMap only, `<release>-agents` (the agents' baseline instructions), which holds no record set that is copied, so Helm puts nothing back. | F1 of the sixth test. | `removeCopied` in `cmd/221b/database.go`. |
 | **A document is read on one snapshot** (`db.Snapshot`, DB-44). | A read of several statements returned rows of two saves. | — |
 | **A clean start empties the runs and the agents' cards where the console keeps them.** It was given the ConfigMaps, so with a database it emptied keys nobody read and the jobs' runs stayed (since the Jobs moved). | Found while wiring the cards. | `st.Runs`, `st.Cards` in `cmd/221b/casework.go`. |
+| **The troubleshooter's instructions put back as the chart's baseline** (item 0b.1), through a draft with no house text approved by a second SuperAdmin. | No numbered version before the twelfth test's existed to restore; the baseline was what ran before it. | Make any version live again from the drawer's History. |
+| **The test accounts' passwords made anew in memory** for the thirteenth test; only their hashes written (Helm revision 26, same images). | The earlier ones were nowhere, by rule; a test needs both accounts signed in. | `~/p13-14/values-test-accounts.yaml`. |
+| **The thirteenth test's N1 is by design**: a case's save moves the issue set's counter. | The index is a query over the cases' rows (DB-87); the counter tells other replicas and the conflict check that a line changed. | — |
+| **The Wolfi variant's WAL-G is WAL-G's own release**, not Wolfi's `wal-g-pg`. | Wolfi's is built without libsodium and refuses `WALG_LIBSODIUM_KEY`: backups would never archive. | One line of `deploy/postgres-wolfi/apko.yaml` and the Dockerfile once Wolfi builds it with libsodium. |
+| **The socket directory set in the shared `entrypoint.sh`**, not a copy of the scripts for Wolfi. | Wolfi's PostgreSQL puts it in `/tmp`; it is Debian's default already, so nothing changes there. | The one line. |
+| **The Wolfi base is pinned by its digest in the variant's Dockerfile**, not in `hack/base-images.env`; a build pushes it to a local registry (127.0.0.1:5123) or `WOLFI_BASE_REPO`. | The base is not an image anyone pulls; apko's build of the lock is reproducible, so the digest is checked. | `hack/wolfi-postgres.sh`, `hack/check-base-images.sh`. |
+| **The base adds bash, busybox, python-3.13, postgresql-18-client, tzdata and ca-certificates-bundle; no contrib modules.** | What the scripts need; the console uses no contrib module. | `deploy/postgres-wolfi/apko.yaml`. |
+| **The packages' copy also holds the lock and WAL-G's binaries**; the test signature went to no transparency log; the release would sign keylessly. | A rebuild of an old release then needs nothing but GHCR; a throwaway key has no place in the public log. | `hack/wolfi-postgres.sh push`. |
+| **The Debian image's arm64 build was not made for the comparison.** | It needs emulation (qemu), not installed on `rke2cp1`. | Install qemu and build it. |
+| **The Wolfi build's tools are their newest releases** (apko v1.5.2, a day old; melange v0.65.0, oras v1.4.0, cosign v3.1.4, grype v0.122.1, syft v1.57.2, crane v0.22.1), checksums checked, pinned in the script. | The test wanted current Wolfi; apko changes fast. | Pin releases two weeks old or more before a release job uses them. |
 
 The Claude docs *221B storage deployment design* and *221B data model: domains and tables* (not in the repository) were brought up to date from this table on November 19, as the owner decided, before its last fourteen rows were added (they wait for his word); *221B storage engine options* was not touched. What follows in this paragraph is how it stood before: the owner asked that changes to the data model be collected and made when he says.
 
@@ -521,6 +532,38 @@ Recorded by the coding session in the Claude app, which changed no code for them
    - **Hazard: Helm must never delete one first.** The chart makes most of these ConfigMaps (`templates/configmap.yaml`). A chart that stops rendering them has Helm delete them at the upgrade, before the new console has copied them, and their records are lost. Design the release order so this cannot happen. For example, the release that copies keeps rendering them with `helm.sh/resource-policy: keep` and an empty data section that Helm does not overwrite, and a later release drops the templates. Or keep the templates and stop at the console's own delete. Test it with an upgrade from 0.12 in kind and in the cluster.
    - Configuration ConfigMaps are not record sets and stay: the auth config, the Toolbox's. Secrets are not deleted, apart from the empty session Secrets (answer 1 above).
 3. **Every item of *Changes put off* is in this iteration**, with the decisions above. *What to do next*, item 0, lists the order. Items that are questions (8, the Lease; 13, `jsonb`) are answered in code or closed with the reason in the decisions table. Item 15 is the owner's own reading.
+
+## Item 0b (November 21): where it stands
+
+Done by the session that writes the code and tests it, from item 0b of *What to do next*. Nothing is merged; no pull request, no release, no CI run.
+
+- **The troubleshooter's instructions** in `221b-github` are the chart's baseline again (built-in text, no house instructions, `in-sync`). There was no earlier version to restore by number: the versions held only the twelfth test's draft (version 1), and before it the troubleshooter ran *the chart's baseline* (revisions 1 and 2 were discarded test drafts). Put back through the console as a draft with no house text, asked for by p13-admin (request 3) and approved by p13-second: version 2. The thirteenth test went through the same twice more (versions 3 and 4); version 4, the baseline, is in force.
+- **The thirteenth cluster test** (on `8f8959a9`) saw the four fixes of the twelfth test hold; its N2 and N3 are fixed, its N1 is by design (see its section under *The cluster test of November 19, 2026*). 0.063 USD of AI. Note: the brief named the commits in another order; they are `5150db59` (an approved draft keeps its row and request), `75ac19b4` (the run budget), `02d3ab54` (a message written once), `72a6b010` (the database away said once).
+- **The Wolfi variant of `221b-postgres`** (`deploy/postgres-wolfi/`, `hack/wolfi-postgres.sh`, `make image-postgres-wolfi`; `docs/database.md`, *The Wolfi variant (not the default)*), beside the Debian image, which stays the default:
+  - The base is assembled by `apko` from `packages.wolfi.dev` (no Chainguard registry, no `cgr.dev`), majors pinned (`postgresql-18`, `patroni`), `apko.lock.json` committed; the Dockerfile starts from the base by digest. Labels say *built from Wolfi packages*, vendor 221B, no Chainguard name or mark.
+  - **WAL-G is WAL-G's own v3.0.10 release binary, not Wolfi's `wal-g-pg`**, which is built without libsodium and refuses the chart's `WALG_LIBSODIUM_KEY` (backups would never archive); sha256-pinned, the same release as the Debian image.
+  - **Our copy of the packages**: `ghcr.io/ucesys/221b-postgres-packages:p13-wolfi-test` = `sha256:48dc14b9…82d4b4` (the lock, the 83 locked `.apk` files for x86_64 and aarch64 each with an APKINDEX signed by our key, the WAL-G binaries), signed with cosign (a throwaway key pair; no transparency log). An earlier push `sha256:79ae5875…` is left untagged. A rebuild pulls it by digest, verifies the signature, refuses a lock that differs from the repository's and runs apko with only our key.
+  - **The throwaway keys** are on `rke2cp1` in `~/p13-wolfi/keys/` (700/600), never committed. The release's key is the owner's (0.14 list, item 12): the build reads the public key from `WOLFI_PACKAGES_PUBKEY` (default `deploy/postgres-wolfi/221b-packages.rsa.pub`, to be committed), the private one from the release secret `WOLFI_PACKAGES_KEY`; the release job would sign keylessly like the images.
+  - **Compared** (grype 0.122.1, one vulnerability database for both, counted as CI counts):
+
+| | Debian (default) | Wolfi variant |
+| --- | --- | --- |
+| Critical, with a fix / without | 0 / 22 | 0 / 0 |
+| High, with a fix / without | 0 / 200 | 0 / 0 |
+| All findings | 671 | 12 (medium or lower) |
+| amd64 image, uncompressed / compressed | 388.1 / 138.2 MB | 535.0 / 175.5 MB |
+| arm64 image | not built (needs emulation) | 527.8 / 168.6 MB, 0 high, 0 critical |
+| Packages | 151 Debian packages and Patroni's Python environment | 83 Wolfi packages an architecture |
+| The package set kept | — | 155.8 MB (x86_64), 150.9 MB (aarch64), and 105 MB of WAL-G binaries |
+| PostgreSQL / Patroni / WAL-G | 18.7 / 4.1.5 / v3.0.10 | 18.7 / 4.1.5 / v3.0.10 |
+
+  Wolfi's is larger by libLLVM-19 (146 MB, PostgreSQL's JIT) and botocore (123 MB, a dependency of Wolfi's Patroni package). Of the Debian image's findings, curl and libcurl left by its build make 16 critical and 46 high; the Debian Dockerfile was not changed.
+  - **What the scripts had to change**: one line of the shared `deploy/postgres/entrypoint.sh` (`unix_socket_directories: /var/run/postgresql`: Wolfi's PostgreSQL puts its socket in `/tmp`, so `post-bootstrap.sh` could not connect and Patroni failed to bootstrap; Debian's default already, and a Debian run in kind with it passed). `post-bootstrap.sh`, `restore.sh` and the backup program are unchanged; `python-3.13` is in the base for `restore.sh`. Inside the image: PostgreSQL's programs in `/usr/libexec/postgresql18` linked from `/usr/bin`, no contrib modules (the console uses none), no `locale` program (initdb warns once and uses C.UTF-8), busybox for the userland. UID 999, `PGDATA`, ports, entrypoint and read-only root are the Debian image's: the chart runs it by `database.bundled.image`.
+  - **In kind** (`221b-wolfi`, Kubernetes 1.37, three nodes, deleted after): three members with quorum sync, the console at step 49; a switchover (db-0 to db-1, 3 seconds); a failover (db-1 deleted, db-2 primary 2 seconds later, the row committed just before kept); a base backup; a restore to a point in time with `restore.fromBackup` (the 100 rows before the target there, the 50 after it not). **A rebuild from the GHCR copy alone**, with `packages.wolfi.dev` unreachable (curl exits 7, IPv4 and IPv6) and ghcr.io reachable: both architectures hold exactly the lock's 83 packages, name, version and checksum; the same copy with only Wolfi's key is refused, and another cosign key fails. A build from the lock is reproducible (two builds, one digest). The test scripts and logs are in `~/p13-wolfi/` on `rke2cp1` (report: `~/p13-wolfi/report.md`).
+  - **Left to decide**: whether the default becomes Wolfi (0.14 list, item 12); the release key; the Debian image's curl (the bulk of its findings) if Debian stays.
+- **The test release** (`221b-github`): Helm revision 27, console and database `p13-8f8959a`, bundled, `ha: true`, `db-0` the leader, schema 49, one console replica pinned to `rke2cp1`, the two local test accounts in its values (new passwords made in memory for the thirteenth test, the hashes in `~/p13-14/values-test-accounts.yaml`), the agents' jobs off, the troubleshooter at the chart's baseline.
+- **On `rke2cp1` for the owner**: the dumps of the thirteenth test under `~/p13-14` (mode 600) join those of `~/p13-8` to `~/p13-13`; `fs.inotify.max_user_instances` was back at 128 after the reboot of November 21 and is 512 again until the next one; the tools the Wolfi build needs are in `~/bin`.
+- **Decisions taken for the owner** are the last rows of *Decisions made for the owner to confirm*, from "The troubleshooter's instructions put back as the chart's baseline" on.
 
 ## Confirmed by the owner on November 21
 
@@ -684,6 +727,8 @@ In this order; each with its tests, its requirement and its lines in the docs. C
 **The owner's own**: item 15, reading the decisions table through before a release.
 
 ### 0b. Left for 0.13 (November 21)
+
+*Items 1 to 3 are done: see* Item 0b (November 21): where it stands.
 
 1. **A thirteenth cluster test** of the twelfth test's fixes (`5150db59`, `02d3ab54`, `75ac19b4`, `72a6b010`): a job's run stops at its budget, approving a draft keeps its approval link, adding a message writes only the message.
 2. **The troubleshooter's live instructions back** in `221b-github`: its live version is the twelfth test's one-line draft; put the last real version back live through the console (its version history has it).
