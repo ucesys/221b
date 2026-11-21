@@ -1,11 +1,11 @@
 # 221B data model: domains and tables
 
-> Exported on November 20, 2026 from the Claude doc [221B data model: domains and tables](https://claude.ai/artifact/HkWMFgzhSfdj1GxiG2jkP8), where it is edited. Do not edit this copy: export it again after the doc changes.
+> Exported on November 21, 2026 from the Claude doc [221B data model: domains and tables](https://claude.ai/artifact/HkWMFgzhSfdj1GxiG2jkP8), where it is edited. Do not edit this copy: export it again after the doc changes.
 
 
 Nov 20, 2026 · Mikhail Stolpner
 
-The 221B schema on branch phase-13-store has 121 tables in 12 domains and three tiers, plus two tables of the database's own, after migration steps 0001 to 0037. This page is the map: each domain's tables, their keys and how they join. Every column, with what it holds, is in [docs/data-model.md](https://github.com/ucesys/221b/blob/phase-13-store/docs/data-model.md) on the branch, which a test holds to the migrated schema (DB-68).
+The 221B schema on branch phase-13-store has 126 tables in 12 domains and three tiers, plus two tables of the database's own, after migration steps 0001 to 0049. The database is the console's only store: every installation has one, bundled with one member by default or external. This page is the map: each domain's tables, their keys and how they join. Every column, with what it holds, is in [docs/data-model.md](https://github.com/ucesys/221b/blob/phase-13-store/docs/data-model.md) on the branch, which a test holds to the migrated schema (DB-68).
 
 ## Domains at a glance
 
@@ -13,38 +13,39 @@ Each domain is a set of tables one service owns. Keys point down the tiers or st
 
 ![221B data domains · 12 domains, 3 tiers](images/data-model-221b-data-domains.png)
 
-| Tier       | Domain           | Tables | Holds                                                                                                |
-|------------|------------------|--------|------------------------------------------------------------------------------------------------------|
-| Foundation | Platform         | 8      | Cluster connections, applications, acknowledged alerts, repositories, credentials, backups, settings |
-| Foundation | Identity         | 1      | Sign-in sessions                                                                                     |
-| Foundation | Approvals        | 4      | Requests, decisions, standing approvals, notification channels                                       |
-| Foundation | Inventory        | 7      | Fleets, hosts, facts, SSH pairing and logins                                                         |
-| Foundation | Activity log     | 2      | The audit log and the Toolbox's session records                                                      |
-| Engines    | Automation       | 20     | Scripts and versions, variables and their changes, profiles, runs                                    |
-| Engines    | AI configuration | 15     | Providers, agents, instructions, tests, pilots, spend                                                |
-| AIOps flow | Jobs             | 19     | Jobs, runs, findings, validation rules, what runs found under each check                             |
-| AIOps flow | Cases            | 13     | Cases with their messages, work, analyses and RCAs; the service catalogue                            |
-| AIOps flow | Changes          | 9      | Proposed changes with their evidence, actions, results and decisions                                 |
-| AIOps flow | Conversations    | 2      | The conversations kept for a change or a case                                                        |
-| AIOps flow | Knowledge        | 21     | Wiki page changes, sources and syncs, fixes, exceptions, known issues                                |
+| Tier       | Domain           | Tables | Holds                                                                                                                    |
+|------------|------------------|--------|--------------------------------------------------------------------------------------------------------------------------|
+| Foundation | Platform         | 9      | Cluster connections and their last test, applications, acknowledged alerts, repositories, credentials, backups, settings |
+| Foundation | Identity         | 1      | Sign-in sessions                                                                                                         |
+| Foundation | Approvals        | 4      | Requests, decisions, standing approvals, notification channels                                                           |
+| Foundation | Inventory        | 7      | Fleets, hosts, facts, SSH pairing and logins                                                                             |
+| Foundation | Activity log     | 2      | The audit log and the Toolbox's session records                                                                          |
+| Engines    | Automation       | 21     | Scripts and versions, variables and their changes, profiles, runs and their output                                       |
+| Engines    | AI configuration | 15     | Providers, agents, instructions, tests, pilots, spend                                                                    |
+| AIOps flow | Jobs             | 19     | Jobs, runs, findings, validation rules, what runs found under each check                                                 |
+| AIOps flow | Cases            | 15     | Cases with their messages, links, work, analyses and RCAs; the service catalogue                                         |
+| AIOps flow | Changes          | 9      | Proposed changes with their evidence, actions, results and decisions                                                     |
+| AIOps flow | Conversations    | 2      | The conversations kept for a change or a case                                                                            |
+| AIOps flow | Knowledge        | 22     | Wiki page changes, sources and syncs, fixes, exceptions, known issues                                                    |
 
-The AIOps flow runs from a job's finding to a case, a change and what is learned from it. A finding becomes a case, a known issue or an exception; a case gets a proposed change; and a fix, an exception or a known issue stays in Knowledge after the case closes. Conversations sit beside Cases and Changes, which they key to.
+The AIOps flow runs from a job's finding to a case, a change and what is learned from it. A finding becomes a case, a known issue or an exception, and keys to it; a case gets a proposed change; and a fix, an exception or a known issue stays in Knowledge after the case closes. Conversations sit beside Cases and Changes, which they key to.
 
 ## Foundation tier
 
-What every other domain stands on: five domains, 22 tables. A foundation table keys only into the foundation.
+What every other domain stands on: five domains, 23 tables. A foundation table keys only into the foundation.
 
 ### Platform
 
-![Platform data model · 8 tables, 6 relations](images/data-model-platform-data-model.png)
+![Platform data model · 9 tables, 7 relations](images/data-model-platform-data-model.png)
 
-What the console keeps about itself and the clusters it is connected to. A cluster owns its applications and acknowledged alerts, and both go with its row. An application may name a repository and a credential, and a repository a credential; those keys are emptied when the target goes.
+What the console keeps about itself and the clusters it is connected to. A cluster owns its applications, its acknowledged alerts and its last connection test, and they go with its row. An application may name a repository, a credential and a fleet in Inventory, and a repository a credential; those keys are emptied when the target goes.
 
-Secrets hold what is secret: a connection's credential, a credential's secret, and an application's values file and parameters. A removed connection keeps its row with only its id (is_kept false), so whatever names the cluster stays.
+Secrets hold what is secret: a connection's credential, a credential's secret, and an application's values file, parameters and commands' parameters. A removed connection keeps its row with only its id (is_kept false), so whatever names the cluster stays.
 
 | Table                | Holds                                                                                                                                                        |
 |----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | clusters             | The cluster connections, keyed by the console's cluster id: every field of a connection but its credential, which stays whole in a Secret                    |
+| cluster_test_steps   | The steps of a connection's last test, in the order the cluster page shows them; replaced whole by the next test                                             |
 | alert_acks           | The acknowledged alerts of a cluster: who acknowledged each, when and why, and the run, case or exception that did                                           |
 | applications         | The Helm applications deployed to a cluster: the source, the commit deployed and who set it; the values file and parameters stay in the application's Secret |
 | application_commands | An application's own deploy commands, in the menu's order; their parameters stay in the Secret                                                               |
@@ -65,11 +66,11 @@ Only the sign-in sessions are rows, one a signed-in browser, keyed by a hash of 
 
 ### Approvals
 
-![Approvals data model · 4 tables, 2 relations](images/data-model-approvals-data-model.png)
+![Approvals data model · 4 tables, 1 relation](images/data-model-approvals-data-model.png)
 
 A request collects decisions, one row an approval, a rejection or a withdrawal. Standing approvals decide for people within what each allows, and channels tell approvers that a request is waiting.
 
-Seven tables elsewhere carry an approval_request_id that points here (script versions, runs, variable changes, agents' instructions, proposed changes, wiki page changes, Toolbox sessions). None is filled today: each of those records keeps who decided in columns of its own.
+Only an agent's draft instructions name their request (prompt_versions.approval_request_id). Script versions, runs, variable changes, proposed changes and wiki page changes record their approvals in rows of their own.
 
 | Table                 | Holds                                                                                                   |
 |-----------------------|---------------------------------------------------------------------------------------------------------|
@@ -109,13 +110,15 @@ Two ledgers indexed by time and trimmed by retention. audit_events is only ever 
 
 ## Engines tier
 
-What runs things: scripts on machines, and models behind agents. Two domains, 35 tables. An engine's table keys into the foundation or stays in its domain.
+What runs things: scripts on machines, and models behind agents. Two domains, 36 tables. An engine's table keys into the foundation or stays in its domain.
 
 ### Automation
 
 ![Automation scripts and variables · 13 tables, 9 relations](images/data-model-automation-scripts-and-variables.png)
 
 A script keeps its texts as versions, each with the parameters and Kubernetes actions its header declares, what the checks found in it and what people did with it. A variable sits on one fleet or one host. A change to a fleet's variables is a row that waits for a second person, with each thing it alters and the script versions it touches. Execution profiles say which privilege or identity a run may use, and on which fleets.
+
+A sensitive variable's value is never in a row. It is kept in a Secret of its cluster, and variables, a change's items and a run's values hold only a keyed digest of it (DB-71). A name marked sensitive on one fleet is sensitive on its whole cluster.
 
 | Table                       | Holds                                                                                                                  |
 |-----------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -133,9 +136,9 @@ A script keeps its texts as versions, each with the parameters and Kubernetes ac
 | variable_change_items       | Each thing a change alters, before and after                                                                           |
 | variable_change_impacts     | The approved script versions a change touches, and whether each needs the change approved                              |
 
-![Automation runs data model · 7 tables, 10 relations](images/data-model-automation-runs-data-model.png)
+![Automation runs data model · 8 tables, 11 relations](images/data-model-automation-runs-data-model.png)
 
-A request for a run and the run are one row of script_runs, so one list has every run, the rejected ones too. A run records the fleets its nodes were in, the result on each node, and the values each fleet and host got, as they were when it started. A retry points at the run it retries. A run keeps its script's name and version number beside the key, so it outlives the version.
+A request for a run and the run are one row of script_runs, so one list has every run, the rejected ones too. A run records the fleets its nodes were in, the result on each node, its output, and the values each fleet and host got, as they were when it started. A retry points at the run it retries. A run keeps its script's name and version number beside the key, so it outlives the version.
 
 | Table                  | Holds                                                                                                                                                                                    |
 |------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -144,7 +147,8 @@ A request for a run and the run are one row of script_runs, so one list has ever
 | script_run_impacts     | What a run request's own values mean for its script, and whether they need approval                                                                                                      |
 | script_run_fleets      | The fleets a run's nodes were in when it started                                                                                                                                         |
 | script_run_hosts       | The result of a run on each node: batch, state, exit code and the end of its output                                                                                                      |
-| script_run_values      | The values a run used: the run's own, a request's, what each fleet had and what each host got                                                                                            |
+| script_run_outputs     | The whole output of each node of a run, masked as its tail is: its newest 64 KiB, kept for the newest 200 runs                                                                           |
+| script_run_values      | The values a run used: the run's own, a request's, what each fleet had and what each host got; a sensitive one only as its digest                                                        |
 | script_run_host_fleets | The fleets each node of a run was in                                                                                                                                                     |
 
 ### AI configuration
@@ -175,15 +179,15 @@ ai_spend is a ledger: one row a cost, summed when read and never updated. Rows o
 
 ## AIOps flow tier
 
-The flow from a job's finding to a case, a change and what is learned from it: five domains, 64 tables. A flow table keys into the engines, the foundation or another flow domain.
+The flow from a job's finding to a case, a change and what is learned from it: five domains, 67 tables. A flow table keys into the engines, the foundation or another flow domain.
 
 ### Jobs
 
 ![Jobs data model · 19 tables, 9 relations](images/data-model-jobs-data-model.png)
 
-A job's runs keep their facts, findings and proposed changes. The rest is what is known about the checks that findings name: the validation rules that differ from the built-in ones, the suggestions for new rules, and check_found, which counts what the runs found under each check. A finding names the case, known issue or exception it went to by id, as plain columns.
+A job's runs keep their facts, findings and proposed changes. The rest is what is known about the checks that findings name: the validation rules that differ from the built-in ones, the suggestions for new rules, and check_found, which counts what the runs found under each check. A finding keys to the case, known issue or exception it went to; each key is emptied when that record goes.
 
-schedule_claims is kept for the jobs' schedules and nothing writes it yet: a scheduled time is claimed on the job's own row.
+A scheduled time is claimed in schedule_claims, one row a time, so that it runs once whichever replica gets there first; claims are kept a week.
 
 | Table                        | Holds                                                                                                           |
 |------------------------------|-----------------------------------------------------------------------------------------------------------------|
@@ -209,33 +213,35 @@ schedule_claims is kept for the jobs' schedules and nothing writes it yet: a sch
 
 ### Cases
 
-![Cases data model · 13 tables, 11 relations](images/data-model-cases-data-model.png)
+![Cases data model · 15 tables, 15 relations](images/data-model-cases-data-model.png)
 
-Everything about a case hangs from its row in cases: its messages, the people on it, the work and its history, the Troubleshooter's analysis, the RCA, the changes proposed for it, the commands run from it, and what people are writing and have not sent. services is the catalogue that says what a case is about.
+Everything about a case hangs from its row in cases: its messages, the people on it, its links to other cases, the work and its history, the Troubleshooter's analysis, the RCA and the cases it covers, the changes proposed for it, the commands run from it, and what people are writing and have not sent. services is the catalogue that says what a case is about, and a case keys to its service.
 
-A case names what it links to by id, as plain columns: its cluster, the job, run and finding it came from, other cases, its exception, known issue and service, and the change that was applied.
+The list of cases is a query over these rows. A case still names its cluster, and the job, run and finding it came from, by id as plain columns, since a job's run is written again whole with a new id.
 
-| Table               | Holds                                                                                                                      |
-|---------------------|----------------------------------------------------------------------------------------------------------------------------|
-| cases               | The cases: number, source, what each is about, status, outcome, priority, the people on it, what it links to and its times |
-| case_messages       | The messages on a case, in order                                                                                           |
-| case_people         | Who watches a case, and who approved a change that fixed it                                                                |
-| case_work           | The work on a case, one row a case that has any: where it came from, the runs that analyzed it, the fix                    |
-| case_analyses       | The Troubleshooter's analysis of a case, one row a case: cause, evidence and the suggested fix                             |
-| rcas                | The root cause analysis of a case, one row a case                                                                          |
-| case_events         | The history of the work on a case                                                                                          |
-| case_proposals      | The changes proposed for a case, who linked each and how the case handled it                                               |
-| case_drafts         | What people are writing on a case and have not sent: a reply, a fix, a closing, an RCA                                     |
-| case_draft_drafters | Who wrote in each part of a draft, in order                                                                                |
-| case_commands       | The commands run from a case through Watson; never their output                                                            |
-| services            | The service catalogue: name, what people call it and who to contact                                                        |
-| service_runs_on     | Where a service runs                                                                                                       |
+| Table               | Holds                                                                                                                                                                  |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| cases               | The cases: number, source, what each is about, status, outcome, priority, the people on it, its service and its times                                                  |
+| case_messages       | The messages on a case, in order                                                                                                                                       |
+| case_people         | Who watches a case, and who approved a change that fixed it                                                                                                            |
+| case_links          | The other cases a case names: the original it duplicates, the case it is a regression of or the same as, the case it may duplicate, and the open cases that read alike |
+| case_work           | The work on a case, one row a case that has any: where it came from, the runs that analyzed it, the fix                                                                |
+| case_analyses       | The Troubleshooter's analysis of a case, one row a case: cause, evidence and the suggested fix                                                                         |
+| rcas                | The root cause analysis of a case, one row a case                                                                                                                      |
+| rca_cases           | The other cases an RCA covers, closed as fixed with its case at once                                                                                                   |
+| case_events         | The history of the work on a case                                                                                                                                      |
+| case_proposals      | The changes proposed for a case, who linked each and how the case handled it                                                                                           |
+| case_drafts         | What people are writing on a case and have not sent: a reply, a fix, a closing, an RCA                                                                                 |
+| case_draft_drafters | Who wrote in each part of a draft, in order                                                                                                                            |
+| case_commands       | The commands run from a case through Watson; never their output                                                                                                        |
+| services            | The service catalogue: name, what people call it and who to contact                                                                                                    |
+| service_runs_on     | Where a service runs                                                                                                                                                   |
 
 ### Changes
 
 ![Changes data model · 9 tables, 8 relations](images/data-model-changes-data-model.png)
 
-The changes the agents propose, from proposal to applied or failed; the console calls a change a card. A change owns what the agent read, what it will do, Watson's reading of each action, how each action went, its approvals and its history. change_resolves lists the cases and known issues it resolves, by their ids.
+The changes the agents propose, from proposal to applied or failed; the console calls a change a card. A change owns what the agent read, what it will do, Watson's reading of each action, how each action went, its approvals and its history. change_resolves keys to the cases and known issues it resolves.
 
 People know a change by change_key (PC-12). Its row keeps change_id for as long as the change is kept, which is what a conversation keys to.
 
@@ -300,9 +306,9 @@ A source has its addresses and its exclusions, and one row for its last read. A 
 
 #### Fixes, exceptions and known issues
 
-![Fixes, exceptions and known issues · 7 tables, 4 relations](images/data-model-fixes-exceptions-and-known-issues.png)
+![Fixes, exceptions and known issues · 8 tables, 5 relations](images/data-model-fixes-exceptions-and-known-issues.png)
 
-A fix lists the cases it was seen in. A known issue has its dated updates, its followers and the findings it covers. An exception leaves findings on one check, resource and cluster out until it expires or is removed. All three name cases, clusters, jobs and runs by id, as plain columns, so they stay when those go.
+A fix lists the cases it was seen in. A known issue has its dated updates, its followers, the services it affects and the findings it covers. An exception leaves findings on one check, resource and cluster out until it expires or is removed, and keys to the case it came from. A fix and an exception keep their row's id through a change; the cases, clusters, jobs and runs they name otherwise are ids as plain columns, so they stay when those go.
 
 | Table                 | Holds                                                                                                                        |
 |-----------------------|------------------------------------------------------------------------------------------------------------------------------|
@@ -310,6 +316,7 @@ A fix lists the cases it was seen in. A known issue has its dated updates, its f
 | fix_cases             | The cases each fix was seen in, with when, on which cluster and who closed it                                                |
 | exceptions            | The accepted exceptions: findings on this check, resource and cluster are left out until the exception expires or is removed |
 | known_issues          | The known issues: symptoms, status, workaround, owner, and what the runs still find of them                                  |
+| known_issue_services  | The services a known issue affects, in order                                                                                 |
 | known_issue_updates   | The dated updates on a known issue                                                                                           |
 | known_issue_followers | Who follows a known issue                                                                                                    |
 | known_issue_keys      | The findings a known issue covers, by cluster, object and check, with the job that found each                                |
@@ -341,7 +348,7 @@ These rules hold across the schema; docs/data-model.md gives each in full.
 
 - **A cluster is cluster_id everywhere.** Only Platform and Inventory hold a real key to clusters; every other domain keeps the id as a plain column. A removed connection keeps its row, with only its id.
 
-- **Sign-in never depends on the database while the console runs.** Local accounts stay in a Secret, and a sign-in while the session store is away gets a short-lived signed session. A console does not start without its database.
+- **Sign-in never depends on the database while the console runs.** Local accounts stay in a Secret, and a sign-in while the session store is away gets a short-lived signed session. A console does not start without its database, which is its only store: the ConfigMaps of before are copied once and then deleted (DB-72).
 
 - **Kubernetes state is never stored,** and what the facts run observes on a host is one JSON value, not columns.
 
@@ -353,7 +360,7 @@ These rules hold across the schema; docs/data-model.md gives each in full.
 
 - **Ledgers are only added to:** audit_events and ai_spend.
 
-- **Secrets stay in Kubernetes.** No column holds a secret; the tables hold the rest of a credential, an application and a connection.
+- **Secrets stay in Kubernetes.** No column holds a secret: the tables hold the rest of a credential, an application and a connection, and a sensitive variable's value only as a keyed digest.
 
 - **Bodies stay where they are:** wiki pages in Git or S3, Toolbox transcripts on their volume.
 
@@ -361,30 +368,34 @@ These rules hold across the schema; docs/data-model.md gives each in full.
 
 These questions are decided.
 
-| Question                                                                        | Decision                                                                                                                                                                                                                                                       |
-|---------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Is a record that another one names joined by a key, or named by its id?         | By a key where the row is sure to be there and keeps its id; by its id as plain data where it may have no row, may go first, or is written again with a new row id                                                                                             |
-| Where do the conversations Sherlock keeps belong?                               | In the AIOps flow tier, as a domain of their own beside Changes and Cases. A conversation is joined to its change or its case by a key, never by its session's name (Nov 20, 2026)                                                                             |
-| What of a record that was kept in a Secret moves to the database?               | Everything but the secret: the secret part of a credential, an application's values file and parameters, and a connection's credential stay in their Secrets (Nov 20, 2026)                                                                                    |
-| Does a console start without its database?                                      | No: it waits two minutes, stops and is started again. Starting without it is an option, off unless set (Nov 20, 2026)                                                                                                                                          |
-| What may be JSON?                                                               | What is read whole and has no fixed shape: a settings document, a request's summary, a host's facts, the arguments of a change's action and of its condition, and a message's parts                                                                            |
-| Is a request for a run a record of its own?                                     | No: it is a row of script_runs, the same row the run is written into once approved. Requests and runs are numbered apart                                                                                                                                       |
-| Should job runs and case analyses record the prompt version that produced them? | Not now: the code does not record it, so it would be a new feature                                                                                                                                                                                             |
-| What happens to fleets and hosts when a cluster connection is removed?          | Selector fleets are deleted. List fleets and hosts outside Kubernetes stay, with no cluster, and show under every cluster. The administrator chooses for each node whether to delete it or keep it as a host. The keys allow it; the services do not do it yet |
-| Do RCAs belong in Cases or Knowledge?                                           | Cases: an RCA is written when its case closes and is a row keyed by its case                                                                                                                                                                                   |
-| Do validation rules belong in Jobs or Cases?                                    | Jobs: they are offered to job kinds and shown under the Jobs tab                                                                                                                                                                                               |
-| Do variables belong in Automation or Inventory?                                 | Automation: only script runs read them, although they key to fleets and hosts                                                                                                                                                                                  |
-| Do known issues and services belong in Cases or Knowledge?                      | Known issues in Knowledge, with the fixes and the exceptions: they outlive the cases they came from. Services in Cases                                                                                                                                         |
-| Does clusters hold connection metadata, or does everything stay in Secrets?     | A table for the metadata, the credential in a Secret, whole                                                                                                                                                                                                    |
-| Do local users and sign-in sessions move to the database?                       | Local accounts stay in a Secret, so a database outage never blocks them. Sessions move; during an outage a sign-in of any kind gets a short-lived signed session                                                                                               |
-| Does one rejection close an approval request for good?                          | Yes; a new request is needed to try again                                                                                                                                                                                                                      |
-| Will any request need more than two approvers?                                  | No flow needs it today; required_count allows any number                                                                                                                                                                                                       |
-| Are the tables nothing writes yet kept?                                         | data_centers stays for the page that will fill it, and schedule_claims for the jobs' schedules. A table nothing will use is dropped (wiki_pages was)                                                                                                           |
+| Question                                                                        | Decision                                                                                                                                                                                                                                                              |
+|---------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Is a record that another one names joined by a key, or named by its id?         | By a key where the row is sure to be there and keeps its id; by its id as plain data where it may have no row, may go first, or is written again with a new row id                                                                                                    |
+| Can the console run without a database?                                         | No. Every installation has one: bundled with one member by default, or external. The ConfigMaps of before are copied once and then deleted (Nov 20, 2026)                                                                                                             |
+| Does a console start without its database?                                      | No: it waits two minutes, stops and is started again. The option that let it was removed (Nov 20, 2026)                                                                                                                                                               |
+| Where do the conversations Sherlock keeps belong?                               | In the AIOps flow tier, as a domain of their own beside Changes and Cases. A conversation is joined to its change or its case by a key, never by its session's name (Nov 20, 2026)                                                                                    |
+| What of a record that was kept in a Secret moves to the database?               | Everything but the secret: the secret part of a credential, an application's values file and parameters, and a connection's credential stay in their Secrets (Nov 20, 2026)                                                                                           |
+| Is a sensitive Automation variable's value a row?                               | No: it is in a Secret of its cluster, and the rows keep a keyed digest of it (Nov 20, 2026; confirmed Nov 21)                                                                                                                                                         |
+| What may be JSON?                                                               | What is read whole and has no fixed shape: a settings document, a request's summary, a host's facts, the arguments of a change's action and of its condition, and a message's parts, which stay json so they read back as written                                     |
+| Is a request for a run a record of its own?                                     | No: it is a row of script_runs, the same row the run is written into once approved. Requests and runs are numbered apart                                                                                                                                              |
+| What happens to a duplicate under a new unique key?                             | It is renamed, not deleted: fleets and hosts get ~ and eight digits of their id, finding ids ~2 and on; the older of two acknowledgements is deleted (Nov 21, 2026)                                                                                                   |
+| Should job runs and case analyses record the prompt version that produced them? | Not now: the code does not record it, so it would be a new feature                                                                                                                                                                                                    |
+| What happens to fleets and hosts when a cluster connection is removed?          | Selector fleets are deleted. List fleets and hosts outside Kubernetes stay, with no cluster, and show under every cluster. The administrator chooses for each node whether to delete it or keep it as a host. The keys allow it; the services do not do it yet (0.14) |
+| Do RCAs belong in Cases or Knowledge?                                           | Cases: an RCA is written when its case closes and is a row keyed by its case; the other cases it covers are rows of rca_cases                                                                                                                                         |
+| Do validation rules belong in Jobs or Cases?                                    | Jobs: they are offered to job kinds and shown under the Jobs tab                                                                                                                                                                                                      |
+| Do variables belong in Automation or Inventory?                                 | Automation: only script runs read them, although they key to fleets and hosts                                                                                                                                                                                         |
+| Do known issues and services belong in Cases or Knowledge?                      | Known issues in Knowledge, with the fixes and the exceptions: they outlive the cases they came from. Services in Cases                                                                                                                                                |
+| Does clusters hold connection metadata, or does everything stay in Secrets?     | A table for the metadata, the credential in a Secret, whole                                                                                                                                                                                                           |
+| Do local users and sign-in sessions move to the database?                       | Local accounts stay in a Secret, so a database outage never blocks them. Sessions move; during an outage a sign-in of any kind gets a short-lived signed session                                                                                                      |
+| Does one rejection close an approval request for good?                          | Yes; a new request is needed to try again                                                                                                                                                                                                                             |
+| Will any request need more than two approvers?                                  | No flow needs it today; required_count allows any number                                                                                                                                                                                                              |
+| Are the tables and columns nothing writes kept?                                 | data_centers stays for the page that will fill it; schedule_claims now holds the jobs' claimed times. The columns nothing wrote were dropped or filled in step 0048, and a table nothing will use is dropped (wiki_pages was)                                         |
 
 ## Change log
 
 | Date         | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 |--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Nov 21, 2026 | Updated to steps 0001 to 0049: 126 tables. New: cluster_test_steps, script_run_outputs, case_links, rca_cases, known_issue_services. Ids kept as text became keys: a finding's case, known issue and exception, a case's service, a change's resolved cases and known issues, an exception's case, an application's fleet. approval_request_id stays only on an agent's draft instructions. A sensitive variable's value is never in a row. The database is the only store; there is no mode without one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Nov 20, 2026 | Rebuilt from the final schema of branch phase-13-store, steps 0001 to 0037: 121 tables in 12 domains. Conversations is a new domain, and Knowledge is drawn in three parts. Every diagram now shows each table's keys and relations and counts its other columns; docs/data-model.md lists every column. The section "As built: where the schema differs" is gone, since this page is the schema as built. Decided the same day: a console does not start without its database.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Nov 19, 2026 | Added "As built: where the schema differs": Automation, AI configuration and Jobs are built on branch phase-13-store with every field a column, 98 tables in all. Runs that wait for approval share script_runs with the runs. ai_spend is a ledger of one row per cost. Jobs claim a scheduled time on the job's row, not through schedule_claims. The diagrams and column tables of these three domains still show the model.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Nov 18, 2026 | Removing a cluster no longer deletes list fleets or external hosts: their cluster_id is set to null and they show under every cluster; selector fleets are deleted, and each node is deleted or kept as a host by the admin's choice. Hosts gain rack_name and data_center_id, with a new data_centers table; network details stay in host_facts. Local users, groups and memberships left PostgreSQL and stay in a Secret, with signed fallback sessions during a database outage. Open questions closed as Decisions. 73 tables.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
