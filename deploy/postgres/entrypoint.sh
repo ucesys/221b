@@ -92,6 +92,10 @@ postgresql:
   connect_address: '${PATRONI_KUBERNETES_POD_IP}:5432'
   data_dir: '${PGDATA}'
   pgpass: /run/patroni/pgpass
+  parameters:
+    # Where post-bootstrap.sh, PGHOST and kubectl exec psql look: Debian's
+    # PostgreSQL puts its socket there anyway, Wolfi's in /tmp unless told.
+    unix_socket_directories: /var/run/postgresql
   create_replica_methods:
   - basebackup
   basebackup:

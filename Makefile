@@ -22,7 +22,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim cli cli-release test test-go test-go-store test-web lint lint-go lint-web licenses image image-postgres test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
+.PHONY: help build web ui server sim cli cli-release test test-go test-go-store test-web lint lint-go lint-web licenses image image-postgres image-postgres-wolfi postgres-wolfi-lock postgres-wolfi-packages postgres-wolfi-rebuild test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -92,6 +92,24 @@ image: ## Build the container image as $(IMAGE):$(TAG)
 
 image-postgres: ## Build the bundled database's image as $(IMAGE)-postgres:$(TAG)
 	DOCKER_BUILDKIT=1 docker build -t $(IMAGE)-postgres:$(TAG) deploy/postgres
+
+# The bundled database's Wolfi variant (deploy/postgres-wolfi, docs/database.md,
+# "The Wolfi variant"): not the default, which the chart, CI and the release
+# build is the Debian one above. hack/wolfi-postgres.sh says what each step
+# reads (PLATFORM, WOLFI_PACKAGES_REF, WOLFI_PACKAGES_KEY, COSIGN_KEY...).
+image-postgres-wolfi: ## Build the bundled database's Wolfi variant (not the default) for PLATFORM as $(IMAGE)-postgres:$(TAG)-wolfi
+	DB_WOLFI_IMAGE=$(IMAGE)-postgres:$(TAG)-wolfi hack/wolfi-postgres.sh image
+
+postgres-wolfi-lock: ## Take Wolfi's current packages for the Wolfi variant: a new apko.lock.json, and its base's digest in the Dockerfile
+	hack/wolfi-postgres.sh lock
+	hack/wolfi-postgres.sh pin
+
+postgres-wolfi-packages: ## Copy the Wolfi variant's locked packages to WOLFI_PACKAGES_REF, their index signed with WOLFI_PACKAGES_KEY, the copy with cosign
+	hack/wolfi-postgres.sh packages
+	hack/wolfi-postgres.sh push
+
+postgres-wolfi-rebuild: ## Rebuild the Wolfi variant from the copy at WOLFI_PACKAGES_DIGEST alone, trusting only WOLFI_PACKAGES_PUBKEY
+	DB_WOLFI_IMAGE=$(IMAGE)-postgres:$(TAG)-wolfi hack/wolfi-postgres.sh rebuild $(WOLFI_PACKAGES_DIGEST)
 
 test-db: ## Run the Go tests with those that need PostgreSQL, against a throwaway one in Docker, or the one TEST_DATABASE names (host:port)
 	@if [ -z "$$TEST_DATABASE" ]; then \
