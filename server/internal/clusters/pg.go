@@ -197,15 +197,17 @@ type testRow struct {
 // noTestSQL empties the last test's columns, with a removal.
 const noTestSQL = "tested_at = NULL, tested_by = '', test_tone = '', test_summary = '', test_error = '', test_version = '', test_nodes = 0, is_test_nodes_more = false, test_who = '', is_test_impersonate = false"
 
-// saveTestSQL writes the last test's columns of a kept row and counts the
-// write, so the other replicas read it.
+// saveTestSQL writes the last test's columns of a kept row. It does not
+// count the write: a test is no edit of the connection, and an editor
+// open meanwhile can still save over the version it read (DB-92). The
+// other replicas see the test by its time, which Revisions carries.
 var saveTestSQL = func() string {
 	cols := db.Columns(&testRow{})
 	sets := make([]string, len(cols))
 	for i, c := range cols {
 		sets[i] = c + " = $" + strconv.Itoa(i+2)
 	}
-	return "UPDATE clusters SET " + strings.Join(sets, ", ") + ", version = version + 1 WHERE cluster_id = $1 AND is_kept"
+	return "UPDATE clusters SET " + strings.Join(sets, ", ") + " WHERE cluster_id = $1 AND is_kept"
 }()
 
 // SaveTest keeps a connection's last test (DB-64): its row's columns and
@@ -297,7 +299,9 @@ func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Spec,
 	var specs []Spec
 	var versions []int
 	_, err = pgx.ForEachRow(rows, append(db.Fields(&row), &version), func() error {
-		specs = append(specs, specOf(row))
+		spec := specOf(row)
+		spec.RowVersion = version
+		specs = append(specs, spec)
 		versions = append(versions, version)
 		return nil
 	})
@@ -356,12 +360,27 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 }
 
 // Save writes the row, then the Secret when a credential is given, then
-// commits (see the top of the file), and tells the other replicas.
+// commits (see the top of the file), and tells the other replicas. A spec
+// with a RowVersion is an edit of what was read at that version: the row
+// is locked and the save refused with ErrConflict when its version moved
+// since (DB-92), so of two replicas editing one connection the second is
+// told rather than writing over the first. One without (a new
+// connection, a restore) is written whatever is there.
 func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 	if spec.ID == "" {
 		return errors.New("a connection is saved under its identifier, and this one has none")
 	}
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
+		if spec.RowVersion > 0 {
+			var now int
+			err := tx.QueryRow(ctx, "SELECT version FROM clusters WHERE cluster_id = $1 AND is_kept FOR UPDATE", spec.ID).Scan(&now)
+			if errors.Is(err, pgx.ErrNoRows) || err == nil && now != spec.RowVersion {
+				return ErrConflict
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if err := write(ctx, tx, spec); err != nil {
 			return err
 		}
@@ -375,6 +394,9 @@ func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 		// changed the same row first.
 		return s.secrets.putCredential(ctx, spec.ID, *c)
 	})
+	if errors.Is(err, ErrConflict) {
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("saving the connection %s: %w", spec.ID, err)
 	}
@@ -417,17 +439,20 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Revisions is each connection's revision: its row's version and its
-// Secret's resourceVersion, so a replica notices a connection another one
-// saved and a credential replaced by hand in the Secret alike. Either
+// Revisions is each connection's revision: its row's version, the time of
+// its last test and its Secret's resourceVersion, so a replica notices a
+// connection another one saved, a test another one ran and a credential
+// replaced by hand in the Secret alike. Either
 // half that cannot be read is an error: a list that only looked shorter
 // would stop connections that are still saved.
 func (s *PGStore) Revisions(ctx context.Context) (map[string]string, error) {
 	var specs []Spec
 	var versions []int
 	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
-		specs, versions, err = read(ctx, q, "")
-		return err
+		if specs, versions, err = read(ctx, q, ""); err != nil {
+			return err
+		}
+		return readTests(ctx, q, specs)
 	}); err != nil {
 		return nil, fmt.Errorf("reading the connections: %w", err)
 	}
@@ -440,7 +465,11 @@ func (s *PGStore) Revisions(ctx context.Context) (map[string]string, error) {
 		return nil, err
 	}
 	for i, spec := range specs {
-		out[spec.ID] = strconv.Itoa(versions[i]) + "/" + secrets[spec.ID]
+		tested := ""
+		if spec.Tested != nil {
+			tested = strconv.FormatInt(spec.Tested.At.UnixMicro(), 10)
+		}
+		out[spec.ID] = strconv.Itoa(versions[i]) + "/" + tested + "/" + secrets[spec.ID]
 	}
 	return out, nil
 }

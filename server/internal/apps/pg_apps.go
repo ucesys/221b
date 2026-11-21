@@ -101,6 +101,10 @@ type appRow struct {
 	UpdatedBy         string     `col:"updated_by"`
 	Updated           *time.Time `col:"updated_at"`
 	Version           int        `col:"version"`
+	// FleetID is the row of the fleet Fleet names in the cluster, which a
+	// write works out (DB-92); emptied when the fleet is removed, while
+	// Fleet keeps its id.
+	FleetID *string `col:"fleet_id"`
 }
 
 // rowOf is a record as its row, without its keys to the repository and
@@ -147,7 +151,7 @@ func recordOf(row appRow, repository *string) Record {
 var selectApps = func() string {
 	cols := db.Columns(&appRow{})
 	for i, c := range cols {
-		if c == "application_id" || c == "repository_id" {
+		if c == "application_id" || c == "repository_id" || c == "fleet_id" {
 			c += "::text"
 		}
 		cols[i] = "a." + c
@@ -327,6 +331,17 @@ func writeApp(ctx context.Context, tx pgx.Tx, r Record, held bool) (fresh bool, 
 			return false, err
 		case !fresh && was.repository != nil && name == was.repositoryName:
 			row.RepositoryID = was.repository
+		}
+	}
+	// The fleet it is deployed to, by its row (DB-92): none for a fleet the
+	// cluster has no row of.
+	if r.Fleet != "" {
+		var id string
+		switch err := tx.QueryRow(ctx, "SELECT fleet_id::text FROM fleets WHERE coalesce(cluster_id, '') = $1 AND fleet_key = $2 ORDER BY fleet_id LIMIT 1", r.Cluster, r.Fleet).Scan(&id); {
+		case err == nil:
+			row.FleetID = &id
+		case !errors.Is(err, pgx.ErrNoRows):
+			return false, err
 		}
 	}
 	// The cluster's row, and the credential's, with only their ids when

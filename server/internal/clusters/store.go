@@ -24,6 +24,11 @@ import (
 // ErrNotFound says there is no such connection.
 var ErrNotFound = errors.New("no such cluster connection")
 
+// ErrConflict is an edit saved over a version of the connection that is
+// no longer the saved one (DB-92): someone else saved it since it was
+// read.
+var ErrConflict = errors.New("the connection was changed by someone else since it was read")
+
 // Store keeps connections: specs beside their credentials, which are
 // written and read by the server only (X-04, P3-07).
 type Store interface {
@@ -64,11 +69,13 @@ type MemoryStore struct {
 	tests map[string]LastTest
 	revs  map[string]int
 	saves int
+	// vers is each connection's version, as a row's (DB-92).
+	vers map[string]int
 }
 
 // NewMemoryStore makes an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}, tests: map[string]LastTest{}, revs: map[string]int{}}
+	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}, tests: map[string]LastTest{}, revs: map[string]int{}, vers: map[string]int{}}
 }
 
 func (m *MemoryStore) Revisions(context.Context) (map[string]string, error) {
@@ -106,7 +113,7 @@ func (m *MemoryStore) Get(_ context.Context, id string) (Spec, Credential, error
 
 // withTest is a spec with its kept test, under the lock.
 func (m *MemoryStore) withTest(id string, s Spec) Spec {
-	s.Tested = nil
+	s.Tested, s.RowVersion = nil, m.vers[id]
 	if t, ok := m.tests[id]; ok {
 		s.Tested = &t
 	}
@@ -130,8 +137,13 @@ func (m *MemoryStore) SaveTest(_ context.Context, id string, t LastTest) error {
 func (m *MemoryStore) Save(_ context.Context, s Spec, c *Credential) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// An edit is held to the version it was read at, as in the database.
+	if s.RowVersion > 0 && s.RowVersion != m.vers[s.ID] {
+		return ErrConflict
+	}
+	m.vers[s.ID]++
 	// A save never writes the test (TestKeeper).
-	s.Tested = nil
+	s.Tested, s.RowVersion = nil, 0
 	m.specs[s.ID] = s
 	if c != nil {
 		m.creds[s.ID] = *c
@@ -151,6 +163,7 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	delete(m.creds, id)
 	delete(m.tests, id)
 	delete(m.revs, id)
+	m.vers[id]++
 	return nil
 }
 

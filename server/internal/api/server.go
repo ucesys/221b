@@ -130,6 +130,9 @@ type Clusters interface {
 	Summary(id string) (clusters.Summary, bool)
 	Add(ctx context.Context, d clusters.Draft) (clusters.Summary, error)
 	Update(ctx context.Context, id string, d clusters.Draft) (clusters.Summary, error)
+	// Held says whether an edit read at rowVersion may still be saved
+	// (ErrConflict when not, DB-92); 0 holds to nothing.
+	Held(ctx context.Context, id string, rowVersion int) error
 	Remove(ctx context.Context, id string) error
 	TestDraft(ctx context.Context, id string, d clusters.Draft) (clusters.TestResult, error)
 	TestSaved(ctx context.Context, id, by string) (clusters.TestResult, error)

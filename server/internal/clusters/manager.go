@@ -488,10 +488,13 @@ type Summary struct {
 	LastTest     *TestResult `json:"lastTest,omitempty"`
 	LastTested   *time.Time  `json:"lastTested,omitempty"`
 	LastTestedBy string      `json:"lastTestedBy,omitempty"`
+	// EditVersion is the version of the connection's row this summary
+	// shows (Spec.RowVersion), which an edit gives back (DB-92).
+	EditVersion int `json:"rowVersion,omitempty"`
 }
 
 func (m *Manager) summarize(inst *Instance) Summary {
-	s := Summary{Spec: inst.Spec}
+	s := Summary{Spec: inst.Spec, EditVersion: inst.Spec.RowVersion}
 	now := m.opts.Now()
 	if inst.Spec.Cred.Expires != nil {
 		s.Expired = inst.Spec.Cred.Expires.Before(now)
@@ -557,6 +560,10 @@ func (m *Manager) Summary(id string) (Summary, bool) {
 type Draft struct {
 	Spec
 	Credential
+	// EditVersion is the version of the connection the editor read
+	// (Summary.EditVersion): the edit is saved only over it (DB-92). 0
+	// holds to nothing, as before.
+	EditVersion int `json:"rowVersion,omitempty"`
 }
 
 // nameTaken says whether another connection has the name.
@@ -575,6 +582,7 @@ func (m *Manager) nameTaken(name, except string) bool {
 // spec to save and the credential (nil when the saved one is kept).
 func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Credential, error) {
 	spec := d.Spec
+	spec.RowVersion = d.EditVersion
 	spec.Name = strings.TrimSpace(spec.Name)
 	spec.Description = strings.TrimSpace(spec.Description)
 	spec.Server = strings.TrimSpace(spec.Server)
@@ -590,6 +598,7 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		spec.ID = Slug(spec.Name)
 		spec.Local = false
 		spec.Added = now
+		spec.RowVersion = 0
 	}
 	spec.Updated = now
 	if err := ValidateSpec(spec); err != nil {
@@ -708,8 +717,18 @@ func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
 	if err := m.store.Save(ctx, spec, cred); err != nil {
 		return Summary{}, err
 	}
+	m.readVersion(ctx, &spec)
 	inst := m.start(spec, *cred)
 	return m.summaryOf(inst), nil
+}
+
+// readVersion gives a connection just made the version the store saved
+// it at, so that its first edit is held to it (DB-92). A store that
+// cannot say leaves it 0 until the next sync reads it.
+func (m *Manager) readVersion(ctx context.Context, spec *Spec) {
+	if saved, _, err := m.store.Get(ctx, spec.ID); err == nil {
+		spec.RowVersion = saved.RowVersion
+	}
 }
 
 // Redacted is a connection's saved credential with its secrets replaced
@@ -756,10 +775,29 @@ func (m *Manager) Restore(ctx context.Context, spec Spec, cred Credential) (Summ
 		return Summary{}, invalid("name", fmt.Sprintf("Another cluster is already called “%s”.", spec.Name))
 	}
 	spec.Updated = m.opts.Now().UTC()
+	spec.RowVersion = 0
 	if err := m.store.Save(ctx, spec, &cred); err != nil {
 		return Summary{}, err
 	}
+	m.readVersion(ctx, &spec)
 	return m.summaryOf(m.start(spec, cred)), nil
+}
+
+// Held says whether an edit read at rowVersion may still be saved: nil,
+// or ErrConflict when the connection was saved since (DB-92). 0 holds to
+// nothing. Update checks the same, and the store again as it writes.
+func (m *Manager) Held(ctx context.Context, id string, rowVersion int) error {
+	if rowVersion <= 0 {
+		return nil
+	}
+	orig, _, err := m.getSpec(ctx, id)
+	if err != nil {
+		return err
+	}
+	if orig.RowVersion > 0 && orig.RowVersion != rowVersion {
+		return ErrConflict
+	}
+	return nil
 }
 
 // Update changes a connection; a credential given replaces the saved one.
@@ -774,6 +812,16 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	if err != nil {
 		return Summary{}, err
 	}
+	// An edit read at a version is saved only over it (DB-92): checked
+	// here against what the store has, and by the store as it writes.
+	if d.EditVersion > 0 && orig.RowVersion > 0 && d.EditVersion != orig.RowVersion {
+		return Summary{}, ErrConflict
+	}
+	saved := func() {
+		if orig.RowVersion > 0 {
+			spec.RowVersion = orig.RowVersion + 1
+		}
+	}
 	// The kept test stays the connection's through an edit, as the store
 	// keeps it.
 	spec.Tested = orig.Tested
@@ -781,6 +829,7 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 		if err := m.store.Save(ctx, spec, nil); err != nil {
 			return Summary{}, err
 		}
+		saved()
 		m.mu.Lock()
 		inst := m.instances[LocalID]
 		inst.Spec = spec
@@ -790,6 +839,7 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	if err := m.store.Save(ctx, spec, cred); err != nil {
 		return Summary{}, err
 	}
+	saved()
 	changed := orig.Server != spec.Server || orig.CA != spec.CA || orig.Auth != spec.Auth || !d.Credential.Empty() || d.Credential.CAPEM != ""
 	if changed {
 		return m.summaryOf(m.start(spec, *cred)), nil

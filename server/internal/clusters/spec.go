@@ -79,6 +79,12 @@ type Spec struct {
 	// reads it (TestKeeper); a save never writes it. Never in the
 	// connection's JSON: the summary carries it (Summary.LastTest).
 	Tested *LastTest `json:"-"`
+	// RowVersion is the version of the connection's row the spec was read
+	// at (clusters.version), as a store that keeps one gives it; 0 where
+	// it keeps none. A save that carries it is held to that version, else
+	// ErrConflict (DB-92). Not in the spec's JSON: the browser has it as
+	// Summary.EditVersion and gives it back as Draft.EditVersion.
+	RowVersion int `json:"-"`
 }
 
 // LastTest is a connection's last test as it is kept with the

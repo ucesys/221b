@@ -69,6 +69,8 @@ export interface ClusterSummary {
   expired?: boolean
   lastTest?: TestResult
   lastTested?: string
+  /** The version of the connection's saved record this shows; an edit gives it back (DB-92). */
+  rowVersion?: number
 }
 
 /** The editor's form as the server takes it: the spec and, when given, the credential. */
@@ -91,7 +93,12 @@ export interface Draft {
   clientID?: string
   clientSecret?: string
   scopes?: string
+  /** The version of the connection the editor opened: the edit is saved only over it (DB-92). */
+  rowVersion?: number
 }
+
+/** What the editor says when the connection was saved by someone else since it opened (409). */
+export const CONNECTION_CHANGED = 'This connection was changed by someone else since you opened it. Close the editor and open it again to see the change, then make yours.'
 
 export const ENVS: { id: Env; label: string; short: string; tone: Tone }[] = [
   { id: 'production', label: 'Production', short: 'prod', tone: 'warn' },
