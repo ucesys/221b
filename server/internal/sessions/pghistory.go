@@ -36,7 +36,7 @@ type PGHistory struct {
 }
 
 const historyColumns = `toolbox_session_id, cluster_id, kind, summary, namespace, pod, container, node, owner, owner_user, approved_by, reason,
-	created_at, started_at, ended_at, ended_by, end_note, exit_code, is_recorded, byte_count, connection_count, watched_by`
+	created_at, started_at, ended_at, ended_by, end_note, exit_code, is_recorded, byte_count, connection_count, watched_by, card_key, ends_at`
 
 func historyTime(t time.Time) *time.Time {
 	if t.IsZero() {
@@ -55,10 +55,10 @@ func insertRecords(ctx context.Context, q db.Querier, list []Record) (int, error
 			watchers = []string{}
 		}
 		tag, err := q.Exec(ctx, "INSERT INTO toolbox_sessions ("+historyColumns+`, state)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, 'ended')
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, 'ended')
 			ON CONFLICT (toolbox_session_id) DO NOTHING`,
 			r.ID, r.Cluster, r.Tool, r.Summary, r.Namespace, r.Pod, r.Container, r.Node, r.Owner, r.OwnerUser, r.Approver, r.Reason,
-			r.Created.UTC(), historyTime(r.Started), historyTime(r.Ended), r.EndedBy, r.EndNote, r.Exit, r.Recorded, r.Bytes, r.Conns, watchers)
+			r.Created.UTC(), historyTime(r.Started), historyTime(r.Ended), r.EndedBy, r.EndNote, r.Exit, r.Recorded, r.Bytes, r.Conns, watchers, r.Card, historyTime(r.Ends))
 		if err != nil {
 			return n, err
 		}
@@ -128,9 +128,12 @@ func (h *PGHistory) List() []Record {
 		}
 		list, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Record, error) {
 			var r Record
-			var started, ended *time.Time
+			var started, ended, ends *time.Time
 			err := row.Scan(&r.ID, &r.Cluster, &r.Tool, &r.Summary, &r.Namespace, &r.Pod, &r.Container, &r.Node, &r.Owner, &r.OwnerUser, &r.Approver, &r.Reason,
-				&r.Created, &started, &ended, &r.EndedBy, &r.EndNote, &r.Exit, &r.Recorded, &r.Bytes, &r.Conns, &r.Watchers)
+				&r.Created, &started, &ended, &r.EndedBy, &r.EndNote, &r.Exit, &r.Recorded, &r.Bytes, &r.Conns, &r.Watchers, &r.Card, &ends)
+			if ends != nil {
+				r.Ends = ends.UTC()
+			}
 			r.Created = r.Created.UTC()
 			if started != nil {
 				r.Started = started.UTC()

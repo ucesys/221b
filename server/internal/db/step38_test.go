@@ -63,7 +63,23 @@ func copyRows(t *testing.T, from, to *db.DB) {
 			if err := from.Pool().QueryRow(ctx, `SELECT coalesce(json_agg(r), '[]') FROM `+id+` r`).Scan(&all); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO `+id+` SELECT * FROM json_populate_recordset(NULL::`+id+`, $1::json)`, string(all)); err != nil {
+			// Only the columns both schemas have: a later step drops or
+			// renames some, and the older schema's own take their defaults.
+			var cols []string
+			if err := from.Pool().QueryRow(ctx, `SELECT coalesce(array_agg(quote_ident(column_name::text) ORDER BY ordinal_position), '{}') FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = $1`, table).Scan(&cols); err != nil {
+				return err
+			}
+			var both []string
+			if err := tx.QueryRow(ctx, `SELECT coalesce(array_agg(quote_ident(column_name::text) ORDER BY ordinal_position), '{}') FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = $1 AND quote_ident(column_name::text) = ANY($2)`, table, cols).Scan(&both); err != nil {
+				return err
+			}
+			if len(both) == 0 {
+				continue
+			}
+			list := strings.Join(both, ", ")
+			if _, err := tx.Exec(ctx, `INSERT INTO `+id+` (`+list+`) SELECT `+list+` FROM json_populate_recordset(NULL::`+id+`, $1::json)`, string(all)); err != nil {
 				return err
 			}
 		}

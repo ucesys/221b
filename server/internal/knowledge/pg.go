@@ -157,7 +157,8 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	var s Source
 	var on bool
 	var migrated []string
-	var sha *string
+	// No pin is '' (step 0049), as in credentials and repositories.
+	var sha string
 	var pin certpin.Pin
 	var notAfter, pinnedAt, added *time.Time
 	if _, err := pgx.ForEachRow(rows, []any{&s.ID, &s.Name, &s.Kind, &on, &s.BaseURL, &s.Flavor, &s.Email, &s.Space, &s.URL, &s.Branch, &s.Path, &s.Username, &s.Repository, &s.Bucket,
@@ -166,9 +167,9 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 		x := s
 		x.Off, x.MigratedFrom, x.Added, x.PinnedCert = !on, pgListOf(migrated), pgTimeOf(added), nil
 		x.Addresses, x.Excluded = addresses[x.ID], excluded[x.ID]
-		if sha != nil {
+		if sha != "" {
 			p := pin
-			p.SHA256, p.NotAfter, p.At = *sha, pgTimeOf(notAfter), pgTimeOf(pinnedAt)
+			p.SHA256, p.NotAfter, p.At = sha, pgTimeOf(notAfter), pgTimeOf(pinnedAt)
 			x.PinnedCert = &p
 		}
 		set.Sources = append(set.Sources, x)
@@ -202,11 +203,11 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 		}
 		// Whole: its addresses and exclusions go with the row.
 		b.Queue("DELETE FROM knowledge_sources WHERE knowledge_source_id = $1", s.ID)
-		var sha *string
+		var sha string
 		var pin certpin.Pin
 		if s.PinnedCert != nil {
 			pin = *s.PinnedCert
-			sha = &pin.SHA256
+			sha = pin.SHA256
 		}
 		// Its credential is a key (step 0034): none is null, and one whose
 		// own record is not in the database, a list kept in memory or a
@@ -295,7 +296,7 @@ func readStatus(ctx context.Context, q db.Querier) (Status, bool, error) {
 	}
 	rows, err = q.Query(ctx, `SELECT knowledge_sync_id::text, slot, run_key, started_at, finished_at, started_by, is_full, is_rebuild, read_count, unchanged_count, gone_count, page_count,
 			proposal_count, reported, errors, not_proposed, summary, knowledge_source_id, source_name, skipped_count, skipped_why, unsent_count, model, tokens_in, tokens_out,
-			cost_usd, fixes, contradictions
+			cost_usd::float8, fixes, contradictions
 		FROM knowledge_syncs ORDER BY slot, position`)
 	if err != nil {
 		return st, false, err

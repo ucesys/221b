@@ -89,7 +89,7 @@ func TestSettingsInTheDatabase(t *testing.T) {
 		if _, err := pgxForEach(rows, &s, func() { scopes = append(scopes, s) }); err != nil {
 			return err
 		}
-		return q.QueryRow(ctx, "SELECT count(*) FROM alert_acks a JOIN clusters c USING (cluster_id) WHERE a.is_expected AND a.job_run_id = 'run-12' AND a.case_id = 'C-7'").Scan(&n)
+		return q.QueryRow(ctx, "SELECT count(*) FROM alert_acks a JOIN clusters c USING (cluster_id) WHERE a.is_expected AND a.job_run_key = 'run-12' AND a.case_key = 'C-7'").Scan(&n)
 	})
 	if err != nil || !reflect.DeepEqual(scopes, []string{"general", "watson"}) || n != 1 {
 		t.Fatalf("scopes %v, %d acknowledgements with their run and case: %v", scopes, n, err)

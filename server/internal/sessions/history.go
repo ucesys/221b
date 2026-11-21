@@ -18,33 +18,37 @@ import (
 // Record is what is kept of an ended session for Administration ›
 // Sessions (TB-44, TB-45): no output, no transcript, the facts.
 type Record struct {
-	ID        string    `json:"id"`
-	Cluster   string    `json:"cluster"`
-	Tool      string    `json:"tool"`
-	Summary   string    `json:"summary"`
-	Namespace string    `json:"namespace,omitempty"`
-	Pod       string    `json:"pod,omitempty"`
-	Container string    `json:"container,omitempty"`
-	Node      string    `json:"node,omitempty"`
-	Owner     string    `json:"owner"`
-	OwnerUser string    `json:"ownerUser,omitempty"`
-	Approver  string    `json:"approver,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Created   time.Time `json:"created"`
-	Started   time.Time `json:"started,omitempty"`
-	Ended     time.Time `json:"ended"`
-	EndedBy   string    `json:"endedBy"`
-	EndNote   string    `json:"endNote,omitempty"`
-	Exit      *int      `json:"exit,omitempty"`
-	Recorded  bool      `json:"recorded,omitempty"`
-	Bytes     int64     `json:"bytes,omitempty"`
-	Conns     int       `json:"connections,omitempty"`
-	Watchers  []string  `json:"watchers,omitempty"`
+	ID        string `json:"id"`
+	Cluster   string `json:"cluster"`
+	Tool      string `json:"tool"`
+	Summary   string `json:"summary"`
+	Namespace string `json:"namespace,omitempty"`
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
+	Node      string `json:"node,omitempty"`
+	Owner     string `json:"owner"`
+	OwnerUser string `json:"ownerUser,omitempty"`
+	Approver  string `json:"approver,omitempty"`
+	// Card is the Watson card the session came from, by its id (DB-93).
+	Card    string    `json:"card,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	Created time.Time `json:"created"`
+	Started time.Time `json:"started,omitempty"`
+	// Ends is the session's hard limit as it ended (DB-93).
+	Ends     time.Time `json:"ends,omitempty"`
+	Ended    time.Time `json:"ended"`
+	EndedBy  string    `json:"endedBy"`
+	EndNote  string    `json:"endNote,omitempty"`
+	Exit     *int      `json:"exit,omitempty"`
+	Recorded bool      `json:"recorded,omitempty"`
+	Bytes    int64     `json:"bytes,omitempty"`
+	Conns    int       `json:"connections,omitempty"`
+	Watchers []string  `json:"watchers,omitempty"`
 }
 
 func recordOf(s *Session) Record {
 	r := Record{ID: s.ID, Cluster: s.Cluster, Tool: s.Req.Tool, Summary: s.Req.Summary(), Namespace: s.Req.Namespace, Pod: s.Req.Pod, Container: s.Container, Node: s.Req.Node,
-		Owner: s.Owner.Name, OwnerUser: s.Owner.User, Approver: s.Approver, Reason: s.Req.Reason, Created: s.Created, Started: s.Started, Ended: s.Ended,
+		Owner: s.Owner.Name, OwnerUser: s.Owner.User, Approver: s.Approver, Card: s.Card, Reason: s.Req.Reason, Created: s.Created, Started: s.Started, Ends: s.Ends, Ended: s.Ended,
 		EndedBy: s.EndedBy, EndNote: s.EndNote, Exit: s.Exit, Recorded: s.Recorded, Conns: s.Forward.Total, Watchers: append([]string(nil), s.Watchers...)}
 	if s.Req.Tool == "forward" {
 		r.Bytes = s.Forward.BytesIn + s.Forward.BytesOut

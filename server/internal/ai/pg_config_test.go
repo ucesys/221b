@@ -69,7 +69,7 @@ func TestProvidersInTheDatabase(t *testing.T) {
 	var prefix, conn string
 	var daily float64
 	if err := d.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM ai_providers), (SELECT count(*) FROM ai_provider_headers), auth_prefix, tested_conn, daily_limit_usd::float8
-		FROM ai_providers WHERE ai_provider_id = 'gateway' AND is_default AND tested_is_keyless AND NOT tested_ok`).Scan(&rows, &headers, &prefix, &conn, &daily); err != nil {
+		FROM ai_providers WHERE ai_provider_id = 'gateway' AND is_default AND tested_is_keyless AND NOT tested_is_ok`).Scan(&rows, &headers, &prefix, &conn, &daily); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 3 || headers != 2 || prefix != "Token " || conn != "c1" || daily != 5 {

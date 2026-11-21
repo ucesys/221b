@@ -141,8 +141,8 @@ func readJobs(ctx context.Context, q db.Querier) (jobsRecord, bool, error) {
 		return rec, false, err
 	}
 	rec.Settings, rec.Next = kept.Settings, kept.Next
-	rows, err := q.Query(ctx, `SELECT job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_at, schedule_days, schedule_every, schedule_cron,
-			schedule_time_zone, event, event_severity, cluster_ids, run_usd::float8, day_usd::float8, is_enabled, skips_overlap, catches_up, set_by, set_at, since_at,
+	rows, err := q.Query(ctx, `SELECT job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_time_of_day, schedule_days, schedule_every, schedule_cron,
+			schedule_time_zone, event, event_severity, cluster_ids, run_usd::float8, day_usd::float8, is_enabled, is_overlap_skipped, is_catching_up, set_by, set_at, since_at,
 			is_added, min_priority, spend_day, spend_usd, spend_stopped
 		FROM jobs`)
 	if err != nil {
@@ -271,8 +271,8 @@ func writeJobs(ctx context.Context, tx pgx.Tx, old, next jobsRecord) error {
 			spend = *r.Spend
 			day = &spend.Day
 		}
-		b.Queue(`INSERT INTO jobs (job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_at, schedule_days, schedule_every, schedule_cron,
-				schedule_time_zone, event, event_severity, cluster_ids, run_usd, day_usd, is_enabled, skips_overlap, catches_up, set_by, set_at, since_at, is_added,
+		b.Queue(`INSERT INTO jobs (job_id, is_kept, kind, name, task, has_schedule, schedule_kind, schedule_time_of_day, schedule_days, schedule_every, schedule_cron,
+				schedule_time_zone, event, event_severity, cluster_ids, run_usd, day_usd, is_enabled, is_overlap_skipped, is_catching_up, set_by, set_at, since_at, is_added,
 				min_priority, spend_day, spend_usd, spend_stopped)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)`,
 			id, r.Job != nil, j.Kind, j.Name, j.Task, j.When.Schedule != nil, sp.Kind, sp.At, list(sp.Days), sp.Every, sp.Cron, sp.TimeZone, j.When.Event, j.When.Severity,
@@ -373,7 +373,7 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 		return rec, false, err
 	}
 	proposals := map[string][]ProposalRef{}
-	rows, err = q.Query(ctx, "SELECT job_run_id::text, position, card_key, title, error, resolves FROM job_run_proposals ORDER BY job_run_id, position")
+	rows, err = q.Query(ctx, "SELECT job_run_id::text, position, change_key, title, error, resolved_case_ids FROM job_run_proposals ORDER BY job_run_id, position")
 	if err != nil {
 		return rec, false, err
 	}
@@ -390,7 +390,7 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 	rows, err = q.Query(ctx, `SELECT job_run_id::text, run_key, job_id, kind, label, coalesce(agent_id, ''), trigger_kind, trigger_what, trigger_set_by, trigger_by, trigger_slot_at,
 			trigger_event, trigger_key, trigger_is_rebuild, subject, repeats, last_seen_at, severity, fingerprint, ref, cluster_ids, model, started_at, ended_at, status, note,
 			report, routed_opened, routed_seen, routed_known, routed_excepted, routed_reopened, routed_regression, routed_verified, routed_capped, routed_invalid,
-			routed_ignored, routed_expected, verified_cases, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
+			routed_ignored, routed_expected, verified_case_ids, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
 			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd::float8, not_routed, is_reroute, instance, is_without_findings
 		FROM job_runs ORDER BY position DESC`)
 	if err != nil {
@@ -437,7 +437,7 @@ func queueRun(b *pgx.Batch, r Run, position int64) {
 	b.Queue(`INSERT INTO job_runs (job_run_id, run_key, position, job_id, kind, label, agent_id, trigger_kind, trigger_what, trigger_set_by, trigger_by, trigger_slot_at,
 			trigger_event, trigger_key, trigger_is_rebuild, subject, repeats, last_seen_at, severity, fingerprint, ref, cluster_ids, model, started_at, ended_at, status, note,
 			report, routed_opened, routed_seen, routed_known, routed_excepted, routed_reopened, routed_regression, routed_verified, routed_capped, routed_invalid,
-			routed_ignored, routed_expected, verified_cases, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
+			routed_ignored, routed_expected, verified_case_ids, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
 			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd, not_routed, is_reroute, instance, is_without_findings)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
 			$34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56)`,
@@ -466,7 +466,7 @@ func queueRun(b *pgx.Batch, r Run, position int64) {
 		b.Queue("INSERT INTO job_run_facts (job_run_id, position, label, body, href, tone) VALUES ($1, $2, $3, $4, $5, $6)", id, i, f.Label, f.Text, f.Href, f.Tone)
 	}
 	for i, p := range r.Proposals {
-		b.Queue("INSERT INTO job_run_proposals (job_run_id, position, card_key, title, error, resolves) VALUES ($1, $2, $3, $4, $5, $6)", id, i, p.ID, p.Title, p.Error, list(p.Resolves))
+		b.Queue("INSERT INTO job_run_proposals (job_run_id, position, change_key, title, error, resolved_case_ids) VALUES ($1, $2, $3, $4, $5, $6)", id, i, p.ID, p.Title, p.Error, list(p.Resolves))
 		for k, t := range p.ResolvesTitles {
 			b.Queue("INSERT INTO job_run_proposal_cases (job_run_id, position, case_key, title) VALUES ($1, $2, $3, $4)", id, i, k, t)
 		}

@@ -80,7 +80,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	if len(fl) > 0 {
 		s.Fleets, found = fl, true
 	}
-	rows, err := q.Query(ctx, `SELECT cluster_id, alert_key, fingerprint, acked_by, acked_at, job_run_id, case_id, exception_id, is_expected, reason
+	rows, err := q.Query(ctx, `SELECT cluster_id, alert_key, fingerprint, acked_by, acked_at, job_run_key, case_key, exception_key, is_expected, reason
 		FROM alert_acks ORDER BY cluster_id, acked_at, alert_ack_id`)
 	if err != nil {
 		return s, false, err
@@ -164,7 +164,7 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 			if _, err := tx.Exec(ctx, "INSERT INTO clusters (cluster_id) VALUES ($1) ON CONFLICT (cluster_id) DO NOTHING", cluster); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO alert_acks (alert_ack_id, cluster_id, alert_key, fingerprint, acked_by, acked_at, job_run_id, case_id, exception_id, is_expected, reason)
+			_, err := tx.Exec(ctx, `INSERT INTO alert_acks (alert_ack_id, cluster_id, alert_key, fingerprint, acked_by, acked_at, job_run_key, case_key, exception_key, is_expected, reason)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				db.NewID(), cluster, a.Key, a.Fingerprint, a.By, a.At.UTC(), a.Run, a.Case, a.Exception, a.Expected, a.Why)
 			return err

@@ -23,7 +23,7 @@ func NewStandingPG(d *db.DB) *db.Doc[standingRecord] {
 
 func readStanding(ctx context.Context, q db.Querier) (standingRecord, bool, error) {
 	rows, err := q.Query(ctx, `SELECT approval_policy_id, name, is_enabled, agent_id, cluster_ids, actions, namespaces, condition, per_hour,
-			run_as_user, run_as_groups, updated_by, updated_by_key, updated_by_kind, created_at, updated_at, applied_at
+			run_as_user, run_as_groups, updated_by, updated_by_key, updated_by_kind, created_at, updated_at, applied_times
 		FROM approval_policies ORDER BY position, approval_policy_id`)
 	if err != nil {
 		return standingRecord{}, false, err
@@ -80,13 +80,13 @@ func writeStanding(ctx context.Context, tx pgx.Tx, old, next standingRecord) err
 	}
 	put := func(st Standing) error {
 		_, err := tx.Exec(ctx, `INSERT INTO approval_policies (approval_policy_id, position, name, is_enabled, agent_id, cluster_ids, actions, namespaces,
-				condition, per_hour, run_as_user, run_as_groups, updated_by, updated_by_key, updated_by_kind, created_at, updated_at, applied_at)
+				condition, per_hour, run_as_user, run_as_groups, updated_by, updated_by_key, updated_by_kind, created_at, updated_at, applied_times)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			ON CONFLICT (approval_policy_id) DO UPDATE SET position = excluded.position, name = excluded.name, is_enabled = excluded.is_enabled,
 				agent_id = excluded.agent_id, cluster_ids = excluded.cluster_ids, actions = excluded.actions, namespaces = excluded.namespaces,
 				condition = excluded.condition, per_hour = excluded.per_hour, run_as_user = excluded.run_as_user, run_as_groups = excluded.run_as_groups,
 				updated_by = excluded.updated_by, updated_by_key = excluded.updated_by_key, updated_by_kind = excluded.updated_by_kind,
-				created_at = excluded.created_at, updated_at = excluded.updated_at, applied_at = excluded.applied_at`,
+				created_at = excluded.created_at, updated_at = excluded.updated_at, applied_times = excluded.applied_times`,
 			st.ID, place[st.ID], st.Name, st.On, st.Agent, list(st.Clusters), list(st.Actions), list(st.Namespaces), st.Condition, st.PerHour,
 			st.RunAs.User, list(st.RunAs.Groups), st.By.Name, st.By.Key, st.By.Kind, pgTime(st.Created), pgTime(st.Updated), list(st.Applied))
 		return err

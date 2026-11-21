@@ -12,8 +12,8 @@ import (
 func recordAt(id string, min int) Record {
 	exit := 0
 	return Record{ID: id, Cluster: "prod", Tool: "shell", Summary: "shell in web-1", Namespace: "shop", Pod: "web-1", Container: "web", Owner: "Ada", OwnerUser: "ada",
-		Approver: "Bob", Reason: "a stuck request", Created: time.Date(2026, 11, 18, 10, min, 0, 0, time.UTC), Started: time.Date(2026, 11, 18, 10, min, 5, 0, time.UTC),
-		Ended: time.Date(2026, 11, 18, 10, min, 50, 0, time.UTC), EndedBy: "owner", EndNote: "closed", Exit: &exit, Recorded: true, Bytes: 2048, Conns: 2, Watchers: []string{"Cy"}}
+		Approver: "Bob", Card: "W-7", Reason: "a stuck request", Created: time.Date(2026, 11, 18, 10, min, 0, 0, time.UTC), Started: time.Date(2026, 11, 18, 10, min, 5, 0, time.UTC),
+		Ends: time.Date(2026, 11, 18, 11, min, 0, 0, time.UTC), Ended: time.Date(2026, 11, 18, 10, min, 50, 0, time.UTC), EndedBy: "owner", EndNote: "closed", Exit: &exit, Recorded: true, Bytes: 2048, Conns: 2, Watchers: []string{"Cy"}}
 }
 
 // Every field of a record comes back; the newest ended is first; no more
@@ -21,7 +21,7 @@ func recordAt(id string, min int) Record {
 func TestPGHistory(t *testing.T) {
 	h := &PGHistory{DB: dbtest.Open(t), Keep: 3}
 	a, b := recordAt("00000000000000aa", 1), recordAt("00000000000000bb", 2)
-	b.Exit, b.Watchers, b.Started = nil, nil, time.Time{}
+	b.Exit, b.Watchers, b.Started, b.Card, b.Ends = nil, nil, time.Time{}, "", time.Time{}
 	h.Add(a)
 	h.Add(b)
 	h.Add(a)

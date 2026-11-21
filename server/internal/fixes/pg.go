@@ -87,7 +87,7 @@ func readFixes(ctx context.Context, q db.Querier) (record, bool, error) {
 		return rec, false, err
 	}
 	rows, err = q.Query(ctx, `SELECT fix_id::text, fix_key, title, problem_key, cluster_id, resource, symptoms, cause, steps, commands, prevention, status, reason,
-			duplicate_of_fix_key, contradicts, accepted, created_at, updated_at, created_by, updated_by
+			duplicate_of_fix_key, contradicted_fix_ids, accepted_fix_ids, created_at, updated_at, created_by, updated_by
 		FROM fixes ORDER BY position`)
 	if err != nil {
 		return rec, false, err
@@ -141,12 +141,12 @@ func writeFixes(ctx context.Context, tx pgx.Tx, old, next record) error {
 		}
 		// The row keeps its id; the cases it was seen in are written again.
 		b.Queue(`INSERT INTO fixes (fix_id, fix_key, position, title, problem_key, cluster_id, resource, symptoms, cause, steps, commands, prevention, status, reason,
-				duplicate_of_fix_key, contradicts, accepted, created_at, updated_at, created_by, updated_by)
+				duplicate_of_fix_key, contradicted_fix_ids, accepted_fix_ids, created_at, updated_at, created_by, updated_by)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 			ON CONFLICT (fix_key) DO UPDATE SET position = excluded.position, title = excluded.title, problem_key = excluded.problem_key, cluster_id = excluded.cluster_id,
 				resource = excluded.resource, symptoms = excluded.symptoms, cause = excluded.cause, steps = excluded.steps, commands = excluded.commands,
 				prevention = excluded.prevention, status = excluded.status, reason = excluded.reason, duplicate_of_fix_key = excluded.duplicate_of_fix_key,
-				contradicts = excluded.contradicts, accepted = excluded.accepted, created_at = excluded.created_at, updated_at = excluded.updated_at,
+				contradicted_fix_ids = excluded.contradicted_fix_ids, accepted_fix_ids = excluded.accepted_fix_ids, created_at = excluded.created_at, updated_at = excluded.updated_at,
 				created_by = excluded.created_by, updated_by = excluded.updated_by`,
 			db.NewID(), f.ID, places[i], f.Title, f.Key, f.Cluster, f.Resource, f.Symptoms, f.Cause, f.Steps, list(f.Commands), f.Prevention, f.Status, f.Reason,
 			f.DuplicateOf, list(f.Contradicts), list(f.Accepted), at(f.Created), at(f.Updated), f.CreatedBy, f.UpdatedBy)

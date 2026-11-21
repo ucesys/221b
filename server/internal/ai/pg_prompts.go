@@ -234,7 +234,7 @@ func readPrompts(ctx context.Context, q db.Querier) (Prompts, bool, error) {
 		return ps, false, err
 	}
 	rows, err = q.Query(ctx, `SELECT prompt_version_id::text, agent_id, state, version_number, revision_number, body, why, created_by, created_at, base_hash, base_body,
-			stage, request_number, restored_version, pilot_started_at, pilot_until, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
+			stage, request_number, restored_version, pilot_started_at, pilot_ends_at, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
 			tested_at, tested_cases, tested_passed, tested_state
 		FROM prompt_versions ORDER BY agent_id, state, position`)
 	if err != nil {
@@ -312,7 +312,7 @@ type promptRow struct {
 // promptColumns are the columns of a row of prompt_versions after its key,
 // in the order promptValues gives them.
 const promptColumns = `agent_id, state, position, version_number, revision_number, body, why, created_by, created_at, base_hash,
-	base_body, stage, request_number, restored_version, pilot_started_at, pilot_until, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
+	base_body, stage, request_number, restored_version, pilot_started_at, pilot_ends_at, pilot_by, pilot_people, pilot_cluster_ids, is_discarded,
 	tested_at, tested_cases, tested_passed, tested_state`
 
 // requestOf is the key of the request a row names by its number ($14,

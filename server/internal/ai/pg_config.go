@@ -44,7 +44,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	found := false
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT ai_provider_id, name, kind, endpoint, auth, auth_header, auth_prefix, query, region, project, ca_cert, model,
-			price_in_usd::float8, price_out_usd::float8, context_window, tested_at, tested_ok, tested_model, tested_is_keyless, tested_conn, tested_error,
+			price_in_usd::float8, price_out_usd::float8, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn, tested_error,
 			daily_limit_usd::float8, monthly_limit_usd::float8, is_default, is_removed
 		FROM ai_providers ORDER BY position, ai_provider_id`)
 	if err != nil {
@@ -116,13 +116,13 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 		}
 		caps := next.Limits[p.ID]
 		if _, err := tx.Exec(ctx, `INSERT INTO ai_providers (ai_provider_id, position, name, kind, endpoint, auth, auth_header, auth_prefix, query, region,
-				project, ca_cert, model, price_in_usd, price_out_usd, context_window, tested_at, tested_ok, tested_model, tested_is_keyless, tested_conn,
+				project, ca_cert, model, price_in_usd, price_out_usd, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn,
 				tested_error, daily_limit_usd, monthly_limit_usd, is_default, is_removed)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 			ON CONFLICT (ai_provider_id) DO UPDATE SET position = excluded.position, name = excluded.name, kind = excluded.kind, endpoint = excluded.endpoint,
 				auth = excluded.auth, auth_header = excluded.auth_header, auth_prefix = excluded.auth_prefix, query = excluded.query, region = excluded.region,
 				project = excluded.project, ca_cert = excluded.ca_cert, model = excluded.model, price_in_usd = excluded.price_in_usd,
-				price_out_usd = excluded.price_out_usd, context_window = excluded.context_window, tested_at = excluded.tested_at, tested_ok = excluded.tested_ok,
+				price_out_usd = excluded.price_out_usd, context_window = excluded.context_window, tested_at = excluded.tested_at, tested_is_ok = excluded.tested_is_ok,
 				tested_model = excluded.tested_model, tested_is_keyless = excluded.tested_is_keyless, tested_conn = excluded.tested_conn,
 				tested_error = excluded.tested_error, daily_limit_usd = excluded.daily_limit_usd, monthly_limit_usd = excluded.monthly_limit_usd,
 				is_default = excluded.is_default, is_removed = excluded.is_removed`,

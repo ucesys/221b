@@ -151,7 +151,7 @@ func readChats(ctx context.Context, q db.Querier, name, rest string, args ...any
 		return out, nil
 	}
 	rows, err = q.Query(ctx, `SELECT `+name+`, m.message_number, m.role, m.body, m.note, m.status, m.error, m.asked_by, m.agent_id, m.model, m.at, m.first_at, m.done_at,
-			m.cost_usd, m.tokens_in, m.tokens_out, m.tokens_cache_write, m.tokens_cache_read, m.parts
+			m.cost_usd::float8, m.tokens_in, m.tokens_out, m.tokens_cache_write, m.tokens_cache_read, m.parts
 		FROM chat_messages m JOIN chats c USING (chat_id) `+rest+` ORDER BY 1, m.position`, args...)
 	if err != nil {
 		return nil, err
