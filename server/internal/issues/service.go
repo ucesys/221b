@@ -556,11 +556,22 @@ func (f Filter) match(c Caller, l *Line, q []string) bool {
 
 // Lines are the index's lines a caller may see that pass a filter, newest
 // first.
+// A store of cases that lists them with a query (the database, DB-88)
+// gives them; otherwise they are the index's, filtered here.
 func (s *Service) Lines(ctx context.Context, c Caller, f Filter) ([]Line, error) {
+	if ls, ok := s.cases.(caseLister); ok {
+		return ls.listLines(ctx, c, f)
+	}
 	st, err := s.load(ctx, false)
 	if err != nil {
 		return nil, err
 	}
+	return st.lines(c, f), nil
+}
+
+// lines are the index's lines a caller may see that pass a filter, newest
+// first.
+func (st *state) lines(c Caller, f Filter) []Line {
 	var out []Line
 	q := strings.Fields(strings.ToLower(f.Query))
 	for i := len(st.index.Lines) - 1; i >= 0; i-- {
@@ -569,7 +580,7 @@ func (s *Service) Lines(ctx context.Context, c Caller, f Filter) ([]Line, error)
 			out = append(out, *l)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // Reports lists the cases a caller may see, newest first, as their rows

@@ -455,36 +455,75 @@ func (s *Service) load(ctx context.Context, fresh bool) (*state, error) {
 	}
 	for try := 0; ; try++ {
 		st := &state{at: s.now()}
-		versions := map[string]bool{}
-		for _, k := range []struct {
-			key string
-			v   any
-		}{{IndexKey, &st.index}, {KnownKey, &st.known}, {ConfigKey, &st.config}} {
-			b, version, err := s.kv.LoadKey(ctx, k.key)
-			if err != nil && !errors.Is(err, kv.ErrNotFound) {
-				return nil, err
-			}
-			versions[version] = true
-			st.version = version
-			if err == nil {
-				if err := json.Unmarshal(b, k.v); err != nil {
-					return nil, fmt.Errorf("%s cannot be read: %w", k.key, err)
-				}
-				if k.key == ConfigKey {
-					s.noteMoved(b)
-				}
-			}
+		same, err := s.readKeys(ctx, st, true)
+		if err != nil {
+			return nil, err
 		}
-		if len(versions) == 1 || try == 4 {
-			if st.index.Next == 0 {
-				st.index.Next = 1
-			}
-			if st.known.Next == 0 {
-				st.known.Next = 1
-			}
+		if same || try == 4 {
 			sort.SliceStable(st.index.Lines, func(i, j int) bool { return st.index.Lines[i].Number < st.index.Lines[j].Number })
 			s.remember(st)
 			return s.bind(ctx, st.clone()), nil
+		}
+	}
+}
+
+// readKeys reads the known issues and the settings into st, and the index
+// with them when withIndex, and says whether all were read at one version.
+func (s *Service) readKeys(ctx context.Context, st *state, withIndex bool) (bool, error) {
+	versions := map[string]bool{}
+	keys := []struct {
+		key string
+		v   any
+	}{{IndexKey, &st.index}, {KnownKey, &st.known}, {ConfigKey, &st.config}}
+	if !withIndex {
+		keys = keys[1:]
+	}
+	for _, k := range keys {
+		b, version, err := s.kv.LoadKey(ctx, k.key)
+		if err != nil && !errors.Is(err, kv.ErrNotFound) {
+			return false, err
+		}
+		versions[version] = true
+		st.version = version
+		if err == nil {
+			if err := json.Unmarshal(b, k.v); err != nil {
+				return false, fmt.Errorf("%s cannot be read: %w", k.key, err)
+			}
+			if k.key == ConfigKey {
+				s.noteMoved(b)
+			}
+		}
+	}
+	if st.index.Next == 0 {
+		st.index.Next = 1
+	}
+	if st.known.Next == 0 {
+		st.known.Next = 1
+	}
+	return len(versions) == 1, nil
+}
+
+// loadDocs reads the known issues and the settings at one version, without
+// the index: what the views of a list need beside its lines (DB-88). The
+// state it gives is for reading only.
+func (s *Service) loadDocs(ctx context.Context) (*state, error) {
+	s.cacheMu.Lock()
+	cached := s.cache
+	s.cacheMu.Unlock()
+	if cached != nil && s.now().Sub(cached.at) < readFresh {
+		st := &state{version: cached.version, at: cached.at}
+		copyJSON(&st.known, cached.known)
+		copyJSON(&st.config, cached.config)
+		return s.bind(ctx, st), nil
+	}
+	for try := 0; ; try++ {
+		st := &state{at: s.now()}
+		same, err := s.readKeys(ctx, st, false)
+		if err != nil {
+			return nil, err
+		}
+		if same || try == 4 {
+			return s.bind(ctx, st), nil
 		}
 	}
 }

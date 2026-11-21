@@ -43,11 +43,21 @@ type SetMember interface {
 type member[T any] struct {
 	read  func(ctx context.Context, q Querier) (T, bool, error)
 	write func(ctx context.Context, tx pgx.Tx, old, next T) error
+	// old reads what a save compares with; read when nil.
+	old func(ctx context.Context, q Querier) (T, bool, error)
 }
 
 // Member is a document of a set, with the Read and Write a Doc has.
 func Member[T any](read func(ctx context.Context, q Querier) (T, bool, error), write func(ctx context.Context, tx pgx.Tx, old, next T) error) SetMember {
-	return member[T]{read, write}
+	return member[T]{read: read, write: write}
+}
+
+// MemberSavedOver is a document of a set whose save compares with less
+// than a read gives: old reads only what write looks at in what was there
+// (the issue service's index, whose lines are the cases' own rows and
+// which a save writes only the counter of).
+func MemberSavedOver[T any](read, old func(ctx context.Context, q Querier) (T, bool, error), write func(ctx context.Context, tx pgx.Tx, old, next T) error) SetMember {
+	return member[T]{read: read, write: write, old: old}
 }
 
 func (m member[T]) load(ctx context.Context, q Querier) ([]byte, bool, error) {
@@ -67,7 +77,11 @@ func (m member[T]) save(ctx context.Context, tx pgx.Tx, doc []byte) error {
 			return err
 		}
 	}
-	old, _, err := m.read(ctx, tx)
+	read := m.read
+	if m.old != nil {
+		read = m.old
+	}
+	old, _, err := read(ctx, tx)
 	if err != nil {
 		return err
 	}

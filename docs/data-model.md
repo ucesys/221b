@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL: 123 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0042`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
+What 221B keeps in PostgreSQL: 123 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0043`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
 
 ## How to read it
 
@@ -238,7 +238,7 @@ What the runs found is counted by check and not by cluster and check: `cluster_c
 
 ### Cases
 
-The one record of a problem someone works on until it is closed, with its messages, the people on it, the work done on it and its analysis; and the catalogue of services cases are about. Schema: `0031_cases.sql`.
+The one record of a problem someone works on until it is closed, with its messages, the people on it, the work done on it and its analysis; and the catalogue of services cases are about. Schema: `0031_cases.sql`, and `0043_case_list.sql` (the indexes of the list of cases).
 
 | Table | Holds | Columns |
 | --- | --- | --- |
@@ -256,7 +256,7 @@ The one record of a problem someone works on until it is closed, with its messag
 | `services` | The service catalogue: name, what people call it and who to contact. | `service_id` PK (text: the id the console gives it), `position` (its place in the catalogue), `name`, `description`, `contacts` (text array), `aliases` (text array), `created_at`, `updated_at` |
 | `service_runs_on` | Where a service runs. | `service_id` PK FK → `services`, `position` PK, `kind` (what kind of place), `value` (the place), `cluster_id` ≈ `clusters` |
 
-A case is one object with one version: the case itself, the work on it and its conversation with Sherlock are read and saved over `cases.version`, under `object_name`, which is unique. The case's row is made by the first save of any of the three (`is_case_kept` false until the case itself is saved) and keeps its `case_id` through every save; what hangs from it is written again when it changed. The list of cases has no table: a line is `line_title`, `involved` and the case's own columns.
+A case is one object with one version: the case itself, the work on it and its conversation with Sherlock are read and saved over `cases.version`, under `object_name`, which is unique. The case's row is made by the first save of any of the three (`is_case_kept` false until the case itself is saved) and keeps its `case_id` through every save; what hangs from it is written where it changed, row by row: a message added is one row inserted, and a save reads and writes no other case's rows. The list of cases has no table: it is a query over `cases` with the filters of the lists and who may see each case (DB-88), and a line is `line_title`, `involved` and the case's own columns. `line_title` and `involved` stay, worked out at each save: the list shows them and filters on them without reading a case's text and messages, and the title worked out from the text cannot be in SQL. `version` stays too: the case, the work on it and its conversation are still three documents saved over one version.
 
 **People.** A person is four columns (`_key`, `_name`, `_email`, `_is_system`, the last true for the console itself), the first empty where there is none: who opened, reported, filed, owns and closed a case, who wrote and sent a message, a watcher, an approver.
 

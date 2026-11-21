@@ -354,20 +354,50 @@ func (s *Service) CaseView(ctx context.Context, c Caller, n int) (ReportView, er
 }
 
 // CaseViews are the cases a caller may see, as their rows show them,
-// newest first: from the index.
-func (s *Service) CaseViews(ctx context.Context, c Caller, f Filter) ([]ReportView, error) {
+// newest first, with their lines: from a query where the store of cases
+// lists them (DB-88), from the index otherwise.
+func (s *Service) CaseViews(ctx context.Context, c Caller, f Filter) ([]ReportView, []Line, error) {
+	var st *state
+	var lines []Line
+	var err error
+	if ls, ok := s.cases.(caseLister); ok {
+		// The views need the known issues and the settings, not the index.
+		if st, err = s.loadDocs(ctx); err != nil {
+			return nil, nil, err
+		}
+		if lines, err = ls.listLines(ctx, c, f); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		if st, err = s.load(ctx, false); err != nil {
+			return nil, nil, err
+		}
+		lines = st.lines(c, f)
+	}
+	out := make([]ReportView, 0, len(lines))
+	now := s.now()
+	for i := range lines {
+		r := lines[i].lite()
+		out = append(out, st.reportView(c, &r, now))
+	}
+	return out, lines, nil
+}
+
+// NoActionCounts counts the agent-found cases closed as no action needed,
+// by the cluster and the check of their key, as "<cluster> <check>"
+// (CF-13): from a query where the store of cases lists them (DB-88).
+func (s *Service) NoActionCounts(ctx context.Context) (map[string]int, error) {
+	if ls, ok := s.cases.(caseLister); ok {
+		return ls.noActionCounts(ctx)
+	}
 	st, err := s.load(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	var out []ReportView
-	q := strings.Fields(strings.ToLower(f.Query))
-	now := s.now()
-	for i := len(st.index.Lines) - 1; i >= 0; i-- {
-		l := &st.index.Lines[i]
-		if st.visible(c, l) && f.match(c, l, q) {
-			r := l.lite()
-			out = append(out, st.reportView(c, &r, now))
+	out := map[string]int{}
+	for _, l := range st.index.Lines {
+		if l.AgentFound && l.Key != nil && l.Outcome == OutcomeNoAction {
+			out[l.Key.Cluster+" "+l.Key.Check]++
 		}
 	}
 	return out, nil

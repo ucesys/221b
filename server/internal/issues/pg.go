@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -351,64 +352,140 @@ func readCase(ctx context.Context, q db.Querier, id string) (Case, error) {
 		return Case{}, err
 	}
 	c := rowToCase(&row)
+	var err error
+	if c.Messages, err = readMessages(ctx, q, id); err != nil {
+		return c, err
+	}
+	people, err := readPeople(ctx, q, id)
+	if err != nil {
+		return c, err
+	}
+	c.Watchers, c.Approvers = people[roleWatcher], people[roleApprover]
+	return c, nil
+}
+
+// readMessages are a case's messages, in order.
+func readMessages(ctx context.Context, q db.Querier, id string) ([]Message, error) {
 	rows, err := q.Query(ctx, `SELECT message_number, at, kind, from_key, from_name, from_email, from_is_system, body, is_draft, draft_by, is_internal,
 			sent_by_key, sent_by_name, sent_by_email, sent_by_is_system
 		FROM case_messages WHERE case_id = $1 ORDER BY position`, id)
 	if err != nil {
-		return c, err
+		return nil, err
 	}
+	var out []Message
 	var m Message
 	var when time.Time
 	var kind, sentName, sentEmail string
 	var sentKey *string
 	var sentSystem bool
-	if _, err := pgx.ForEachRow(rows, []any{&m.ID, &when, &kind, &m.From.ID, &m.From.Name, &m.From.Email, &m.From.System, &m.Text, &m.Draft, &m.DraftBy, &m.Internal,
+	_, err = pgx.ForEachRow(rows, []any{&m.ID, &when, &kind, &m.From.ID, &m.From.Name, &m.From.Email, &m.From.System, &m.Text, &m.Draft, &m.DraftBy, &m.Internal,
 		&sentKey, &sentName, &sentEmail, &sentSystem}, func() error {
 		x := m
 		x.At, x.Kind, x.SentBy = when.UTC(), MessageKind(kind), pgPersonOf(sentKey, sentName, sentEmail, sentSystem)
-		c.Messages = append(c.Messages, x)
+		out = append(out, x)
 		return nil
-	}); err != nil {
-		return c, err
-	}
-	rows, err = q.Query(ctx, "SELECT role, person_key, person_name, person_email, person_is_system FROM case_people WHERE case_id = $1 ORDER BY role, position", id)
-	if err != nil {
-		return c, err
-	}
-	var role string
-	var p Person
-	if _, err := pgx.ForEachRow(rows, []any{&role, &p.ID, &p.Name, &p.Email, &p.System}, func() error {
-		if role == roleWatcher {
-			c.Watchers = append(c.Watchers, p)
-		} else {
-			c.Approvers = append(c.Approvers, p)
-		}
-		return nil
-	}); err != nil {
-		return c, err
-	}
-	return c, nil
+	})
+	return out, err
 }
 
-// writeCase changes a case's row and what hangs from it to hold c.
+// readPeople are a case's watchers and approvers, by role, in order.
+func readPeople(ctx context.Context, q db.Querier, id string) (map[string][]Person, error) {
+	rows, err := q.Query(ctx, "SELECT role, person_key, person_name, person_email, person_is_system FROM case_people WHERE case_id = $1 ORDER BY role, position", id)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]Person{}
+	var role string
+	var p Person
+	_, err = pgx.ForEachRow(rows, []any{&role, &p.ID, &p.Name, &p.Email, &p.System}, func() error {
+		out[role] = append(out[role], p)
+		return nil
+	})
+	return out, err
+}
+
+// messageValues are a message's columns after case_id and position, as
+// they are written.
+func messageValues(m *Message) []any {
+	sk, sn, se, ss := pgPerson(m.SentBy)
+	return []any{m.ID, pgAt(m.At), string(m.Kind), m.From.ID, m.From.Name, m.From.Email, m.From.System, m.Text, m.Draft, m.DraftBy, m.Internal, sk, sn, se, ss}
+}
+
+// sameValues says two rows' values are the same as the database keeps
+// them: times to the microsecond.
+func sameValues(a, b []any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, isTime := a[i].(*time.Time)
+		if y, ok := b[i].(*time.Time); isTime && ok {
+			if (x == nil) != (y == nil) || x != nil && !x.Truncate(time.Microsecond).Equal(y.Truncate(time.Microsecond)) {
+				return false
+			}
+			continue
+		}
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeCase changes a case's row and what hangs from it to hold c,
+// touching only its own rows, and of those only what changed: a message
+// added is one row inserted (DB-88).
 func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	row := caseToRow(c)
+	was, err := readMessages(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	people, err := readPeople(ctx, tx, id)
+	if err != nil {
+		return err
+	}
 	b := &pgx.Batch{}
 	n := len(db.Columns(&row))
 	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(n+1)), " WHERE ", ", is_case_kept = true WHERE ", 1), append(db.Fields(&row), id)...)
-	b.Queue("DELETE FROM case_messages WHERE case_id = $1", id)
-	b.Queue("DELETE FROM case_people WHERE case_id = $1", id)
-	for i, m := range c.Messages {
-		sk, sn, se, ss := pgPerson(m.SentBy)
+	for i := range c.Messages {
+		now := messageValues(&c.Messages[i])
+		if i < len(was) {
+			if sameValues(messageValues(&was[i]), now) {
+				continue
+			}
+			b.Queue(`UPDATE case_messages SET message_number = $3, at = $4, kind = $5, from_key = $6, from_name = $7, from_email = $8, from_is_system = $9, body = $10,
+					is_draft = $11, draft_by = $12, is_internal = $13, sent_by_key = $14, sent_by_name = $15, sent_by_email = $16, sent_by_is_system = $17
+				WHERE case_id = $1 AND position = $2`, append([]any{id, i}, now...)...)
+			continue
+		}
 		b.Queue(`INSERT INTO case_messages (case_id, position, message_number, at, kind, from_key, from_name, from_email, from_is_system, body, is_draft, draft_by, is_internal,
 				sent_by_key, sent_by_name, sent_by_email, sent_by_is_system)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-			id, i, m.ID, pgAt(m.At), string(m.Kind), m.From.ID, m.From.Name, m.From.Email, m.From.System, m.Text, m.Draft, m.DraftBy, m.Internal, sk, sn, se, ss)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`, append([]any{id, i}, now...)...)
 	}
-	for role, people := range map[string][]Person{roleWatcher: c.Watchers, roleApprover: c.Approvers} {
-		for i, p := range people {
+	if len(was) > len(c.Messages) {
+		b.Queue("DELETE FROM case_messages WHERE case_id = $1 AND position >= $2", id, len(c.Messages))
+	}
+	for _, role := range []string{roleWatcher, roleApprover} {
+		next := c.Watchers
+		if role == roleApprover {
+			next = c.Approvers
+		}
+		had := people[role]
+		for i, p := range next {
+			if i < len(had) {
+				if had[i] == p {
+					continue
+				}
+				b.Queue("UPDATE case_people SET person_key = $4, person_name = $5, person_email = $6, person_is_system = $7 WHERE case_id = $1 AND role = $2 AND position = $3",
+					id, role, i, p.ID, p.Name, p.Email, p.System)
+				continue
+			}
 			b.Queue("INSERT INTO case_people (case_id, role, position, person_key, person_name, person_email, person_is_system) VALUES ($1, $2, $3, $4, $5, $6, $7)",
 				id, role, i, p.ID, p.Name, p.Email, p.System)
+		}
+		if len(had) > len(next) {
+			b.Queue("DELETE FROM case_people WHERE case_id = $1 AND role = $2 AND position >= $3", id, role, len(next))
 		}
 	}
 	return tx.SendBatch(ctx, b).Close()
@@ -650,6 +727,24 @@ type indexKept struct {
 }
 
 func readIndex(ctx context.Context, q db.Querier) (indexDoc, bool, error) {
+	doc, found, err := readIndexKept(ctx, q)
+	if err != nil {
+		return doc, false, err
+	}
+	rows, err := q.Query(ctx, "SELECT "+lineColumns()+" FROM cases WHERE is_case_kept ORDER BY case_number, object_name")
+	if err != nil {
+		return doc, false, err
+	}
+	if doc.Lines, err = scanLines(rows); err != nil {
+		return doc, false, err
+	}
+	return doc, found || len(doc.Lines) > 0, nil
+}
+
+// readIndexKept is what the index keeps that no case does: the counter
+// and the archived counts, without the lines. It is what a save of the
+// index compares with, so that a case's save reads no other case (DB-88).
+func readIndexKept(ctx context.Context, q db.Querier) (indexDoc, bool, error) {
 	var doc indexDoc
 	var kept indexKept
 	found, err := pgLoadScope(ctx, q, indexScope, &kept)
@@ -657,41 +752,7 @@ func readIndex(ctx context.Context, q db.Querier) (indexDoc, bool, error) {
 		return doc, false, err
 	}
 	doc.Next, doc.Archived = kept.Next, kept.Archived
-	watchers := map[string][]Person{}
-	rows, err := q.Query(ctx, "SELECT case_id::text, person_key FROM case_people WHERE role = $1 ORDER BY case_id, position", roleWatcher)
-	if err != nil {
-		return doc, false, err
-	}
-	var id, who string
-	if _, err := pgx.ForEachRow(rows, []any{&id, &who}, func() error {
-		watchers[id] = append(watchers[id], Person{ID: who})
-		return nil
-	}); err != nil {
-		return doc, false, err
-	}
-	// Every column of a case but its text, which a line does not show.
-	var row caseRow
-	cols := db.Columns(&row)
-	for i, c := range cols {
-		if c == "body" {
-			cols[i] = "'' AS body"
-		}
-	}
-	rows, err = q.Query(ctx, "SELECT case_id::text, "+strings.Join(cols, ", ")+" FROM cases WHERE is_case_kept ORDER BY case_number, object_name")
-	if err != nil {
-		return doc, false, err
-	}
-	if _, err := pgx.ForEachRow(rows, append([]any{&id}, db.Fields(&row)...), func() error {
-		c := rowToCase(&row)
-		c.Watchers = watchers[id]
-		l := lineOf(&c)
-		l.Title, l.Involved = row.LineTitle, pgListOf(row.Involved)
-		doc.Lines = append(doc.Lines, l)
-		return nil
-	}); err != nil {
-		return doc, false, err
-	}
-	return doc, found || len(doc.Lines) > 0, nil
+	return doc, found, nil
 }
 
 // writeIndex writes the counter and the archived counts. The lines are
@@ -943,7 +1004,7 @@ func writeConfig(ctx context.Context, tx pgx.Tx, old, next configDoc) error {
 // one version.
 func NewSetPG(d *db.DB) *db.DocSet {
 	return &db.DocSet{DB: d, Name: "issues", Members: map[string]db.SetMember{
-		IndexKey:  db.Member(readIndex, writeIndex),
+		IndexKey:  db.MemberSavedOver(readIndex, readIndexKept, writeIndex),
 		KnownKey:  db.Member(readKnown, writeKnown),
 		ConfigKey: db.Member(readConfig, writeConfig),
 	}}
