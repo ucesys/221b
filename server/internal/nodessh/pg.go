@@ -76,26 +76,37 @@ func putHost(ctx context.Context, tx pgx.Tx, x Host) error {
 		WHERE host_id = $1`, id, x.Address, x.Port, x.State, x.AutoName, x.AddedBy, x.AddedAt.UTC()); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "DELETE FROM host_logins WHERE host_id = $1", id); err != nil {
+	// The host's login and its row of host_pairings are shared with its
+	// pairing (writePairings): the host writes only its own columns, and
+	// the pairing's principal and authority stay (the release check of
+	// 0.13.0: a host paired lost its pairing, or read as never paired).
+	if _, err := tx.Exec(ctx, "DELETE FROM host_logins WHERE host_id = $1 AND login_user <> $2", id, x.LoginUser); err != nil {
 		return err
 	}
 	if x.LoginUser != "" {
-		if _, err := tx.Exec(ctx, "INSERT INTO host_logins (host_id, login_user) VALUES ($1, $2)", id, x.LoginUser); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO host_logins (host_id, login_user) VALUES ($1, $2) ON CONFLICT (host_id, login_user) DO NOTHING", id, x.LoginUser); err != nil {
 			return err
 		}
-	}
-	if _, err := tx.Exec(ctx, "DELETE FROM host_pairings WHERE host_id = $1", id); err != nil {
-		return err
-	}
-	if x.HostKey == "" && x.Fingerprint == "" && x.TrustedBy == "" && x.TrustedAt == nil && x.Offered == "" && x.Mismatch == "" && x.PairedBy == "" && x.PairedAt == nil {
-		return nil
 	}
 	keys := []string{}
 	if x.HostKey != "" {
 		keys = append(keys, x.HostKey)
 	}
+	if x.HostKey == "" && x.Fingerprint == "" && x.TrustedBy == "" && x.TrustedAt == nil && x.Offered == "" && x.Mismatch == "" && x.PairedBy == "" && x.PairedAt == nil {
+		// Nothing of the host's own: its row goes, unless a pairing holds it.
+		_, err = tx.Exec(ctx, "DELETE FROM host_pairings WHERE host_id = $1 AND ca_fingerprint = ''", id)
+		if err == nil {
+			_, err = tx.Exec(ctx, `UPDATE host_pairings SET host_keys = '{}', fingerprint = '', trusted_by = '', trusted_at = NULL, offered_key = '', mismatch_key = '',
+				paired_by = '', paired_at = NULL WHERE host_id = $1`, id)
+		}
+		return err
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO host_pairings (host_id, host_keys, fingerprint, trusted_by, trusted_at, offered_key, mismatch_key, paired_by, paired_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, keys, x.Fingerprint, x.TrustedBy, utcPtr(x.TrustedAt), x.Offered, x.Mismatch, x.PairedBy, utcPtr(x.PairedAt))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (host_id) DO UPDATE SET host_keys = excluded.host_keys, fingerprint = excluded.fingerprint, trusted_by = excluded.trusted_by,
+			trusted_at = excluded.trusted_at, offered_key = excluded.offered_key, mismatch_key = excluded.mismatch_key,
+			paired_by = excluded.paired_by, paired_at = excluded.paired_at`,
+		id, keys, x.Fingerprint, x.TrustedBy, utcPtr(x.TrustedAt), x.Offered, x.Mismatch, x.PairedBy, utcPtr(x.PairedAt))
 	return err
 }
 
@@ -174,7 +185,7 @@ func readPairings(ctx context.Context, q db.Querier) (map[string]Pairing, bool, 
 			coalesce((SELECT l.principal FROM host_logins l WHERE l.host_id = h.host_id ORDER BY l.login_user LIMIT 1), ''),
 			p.host_keys, p.ca_fingerprint, p.paired_by, p.paired_at
 		FROM hosts h JOIN host_pairings p ON p.host_id = h.host_id
-		WHERE h.is_kubernetes_node`)
+		WHERE h.is_kubernetes_node OR p.ca_fingerprint <> ''`)
 	if err != nil {
 		return nil, false, err
 	}
@@ -218,6 +229,14 @@ func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing)
 			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE host_id IN (SELECT host_id FROM hosts WHERE host_id = $1 AND is_kubernetes_node)", id); err != nil {
 				return err
 			}
+		}
+		// A host outside Kubernetes keeps its row and its trusted key (the
+		// hosts' record): only the pairing's authority and principal go.
+		if _, err := tx.Exec(ctx, `UPDATE host_pairings SET ca_fingerprint = '' WHERE host_id IN (SELECT host_id FROM hosts WHERE host_id = $1 AND NOT is_kubernetes_node)`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE host_logins SET principal = '' WHERE host_id IN (SELECT host_id FROM hosts WHERE host_id = $1 AND NOT is_kubernetes_node)`, id); err != nil {
+			return err
 		}
 	}
 	for _, k := range sortedKeys(next) {
