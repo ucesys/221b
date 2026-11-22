@@ -359,7 +359,7 @@ func serve(parent context.Context, args []string, h *hooks) error {
 	// held is in the database (DB-72), when every copy has run.
 	go func() {
 		w.copying.Wait()
-		w.removeCopiedSources(ctx)
+		w.waitForHelmThenRemove(ctx)
 	}()
 	if err := w.wireAPI(); err != nil {
 		return err
