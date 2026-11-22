@@ -30,8 +30,11 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web /src/web/dist/ ./internal/ui/dist/
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-      -ldflags "-s -w -X github.com/ucesys/221b/server/internal/version.Version=${VERSION} -X github.com/ucesys/221b/server/internal/version.Commit=${COMMIT}" \
+# The chart's version, which the account menu shows with the commit (RB-58).
+COPY deploy/helm/221b/Chart.yaml /src/Chart.yaml
+RUN chart=$(sed -n 's/^version: *//p' /src/Chart.yaml | tr -d '"') && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w -X github.com/ucesys/221b/server/internal/version.Version=${VERSION} -X github.com/ucesys/221b/server/internal/version.Commit=${COMMIT} -X github.com/ucesys/221b/server/internal/version.Chart=${chart}" \
       -o /out/221b ./cmd/221b
 
 # Distroless: no shell, no package manager, runs as user 65532.

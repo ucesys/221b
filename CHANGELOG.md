@@ -2,6 +2,10 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## 0.14.0 (unreleased)
+
+- **The console's version in the account menu**: its last line reads `221B 0.13.0 · build 9ef9683` (a release's version alone), and a click copies it. The build stamps the chart's version beside the commit; it is told to people signed in only, never on the sign-in page (RB-58).
+
 ## 0.13.0 (2026-11-22)
 
 Phase 13: **the console keeps its records in PostgreSQL, and does not run without it** ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-72). Every record set that was kept in a ConfigMap, and the part of what was kept in Secrets that is not secret, is now rows of a proper data model. **The chart runs a bundled PostgreSQL by default** (`database.mode: bundled`, one member); `database.mode: none` is gone. **Every installation changes at this upgrade**: a 0.12 release gets the bundled database, and its first start copies its ConfigMaps and Secrets in, once, and removes what it copied. Where an entry below says *with a database*, that is every console now.

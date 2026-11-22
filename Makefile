@@ -2,6 +2,9 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+# The chart's version, which the account menu shows with the commit (RB-58):
+# git describe names the last tag until the next release is tagged.
+CHART_VERSION := $(shell sed -n 's/^version: *//p' deploy/helm/221b/Chart.yaml | tr -d '"')
 IMAGE   ?= ghcr.io/ucesys/221b
 TAG     ?= $(VERSION)
 GO      ?= go
@@ -18,7 +21,7 @@ SIM_PODS  ?= 900
 SIM_SMTP  ?= -fake-smtp 127.0.0.1:7525
 
 PKG     := github.com/ucesys/221b/server/internal/version
-LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
+LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Chart=$(CHART_VERSION)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build

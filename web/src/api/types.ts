@@ -570,6 +570,10 @@ export interface Me {
   sessionIdleSeconds: number
   /** For a SuperAdmin: a peer that sent X-Forwarded-For, Forwarded or X-Real-IP without being listed under auth.trustedProxies (SEC-30). */
   untrustedProxy?: string
+  /** The console's version, the chart's (RB-58): told to people signed in only, never with sign-in off. */
+  version?: string
+  /** The short commit of a build that is not a release; absent for a release. */
+  build?: string
 }
 
 /** One row of an alert's table: an event, or a node's condition or state (P4-07). */

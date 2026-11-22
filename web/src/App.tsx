@@ -539,6 +539,7 @@ function Shell() {
               me={me}
               route={route}
               onEditCluster={(id) => setEditing(id)}
+              onToast={setToast}
             />
             {/* On every page while the console's database is away (DB-15). */}
             <DatabaseBanner />

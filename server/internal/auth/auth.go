@@ -24,6 +24,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/twoperson"
+	"github.com/ucesys/221b/server/internal/version"
 	"golang.org/x/oauth2"
 )
 
@@ -1015,6 +1016,13 @@ type Me struct {
 	// a forwarding header without being listed under auth.trustedProxies
 	// (SEC-30).
 	UntrustedProxy string `json:"untrustedProxy,omitempty"`
+	// Version is the console's version (the chart's) and Build the short
+	// commit of a build that is not a release, for the account menu's last
+	// line (RB-58). Given to people signed in only: never with sign-in
+	// off, where nobody is, nor on the sign-in page, since an exact build
+	// helps an attacker match known flaws.
+	Version string `json:"version,omitempty"`
+	Build   string `json:"build,omitempty"`
 }
 
 // ProxyWatch is what notices a proxy that is not trusted (SEC-30).
@@ -1034,6 +1042,9 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess.Admin {
 		me.UntrustedProxy = s.cfg.ProxyWatch.Peer()
+	}
+	if s.cfg.Mode != ModeNone {
+		me.Version, me.Build = version.Console(), version.Build()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
