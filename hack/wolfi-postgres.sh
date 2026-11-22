@@ -124,7 +124,7 @@ build_base() {
   local_registry
   local tag
   tag=lock-$(sha256sum "$LOCK" | cut -c1-12)
-  (cd "$ROOT" && apko publish "$REL/apko.yaml" "$WOLFI_BASE_REPO:$tag" --lockfile "$REL/apko.lock.json" --sbom-path "$OUT") >&2
+  (cd "$ROOT" && apko publish --vcs=false "$REL/apko.yaml" "$WOLFI_BASE_REPO:$tag" --lockfile "$REL/apko.lock.json" --sbom-path "$OUT") >&2
   crane digest "$WOLFI_BASE_REPO:$tag"
 }
 
@@ -403,7 +403,7 @@ PY
     return 1
   fi
   local_registry
-  apko publish "$work/apko.yaml" "$WOLFI_BASE_REPO:rebuild-${digest#sha256:}" --cache-dir "$work/cache" --sbom-path "$work" >&2
+  apko publish --vcs=false "$work/apko.yaml" "$WOLFI_BASE_REPO:rebuild-${digest#sha256:}" --cache-dir "$work/cache" --sbom-path "$work" >&2
   local base
   base=$(crane digest "$WOLFI_BASE_REPO:rebuild-${digest#sha256:}")
   same_as_lock "$WOLFI_BASE_REPO@$base"
