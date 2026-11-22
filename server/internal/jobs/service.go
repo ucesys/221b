@@ -427,9 +427,13 @@ type RunBrief struct {
 	Findings int       `json:"findings"`
 	// Open counts the cases its findings opened or reopened; Routed what
 	// they all did (CF-01).
-	Open      int     `json:"open"`
-	Routed    Routed  `json:"routed"`
+	Open   int    `json:"open"`
+	Routed Routed `json:"routed"`
+	// Proposals counts the proposed changes it filed; NotFiled those it
+	// made that were not (a change that resolves no case, CF-27, or one
+	// the proposer refused), which the run's page lists with why.
 	Proposals int     `json:"proposals"`
+	NotFiled  int     `json:"notFiled,omitempty"`
 	CostUSD   float64 `json:"costUSD"`
 	Model     string  `json:"model,omitempty"`
 	// NotRouted says why its findings were not routed into cases (W-8).
@@ -447,8 +451,15 @@ type RunBrief struct {
 
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
-		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, Proposals: len(r.Proposals), CostUSD: r.CostUSD, Model: r.Model,
+		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, CostUSD: r.CostUSD, Model: r.Model,
 		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked}
+	for _, p := range r.Proposals {
+		if p.ID == "" {
+			b.NotFiled++
+		} else {
+			b.Proposals++
+		}
+	}
 	b.Health, b.Severities = r.Health()
 	return b
 }

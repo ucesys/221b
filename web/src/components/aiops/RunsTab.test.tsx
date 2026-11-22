@@ -4,7 +4,7 @@ import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
 import { findingTitles } from './RunDetail'
-import { RunsTab } from './RunsTab'
+import { RunsTab, runSummary } from './RunsTab'
 
 vi.mock('../../api/jobs', async (original) => ({
   ...(await original<typeof import('../../api/jobs')>()),
@@ -310,5 +310,14 @@ describe('AIOps › Runs since wave 6c (CF-33, CF-39, CF-40)', () => {
     expect([...table.querySelectorAll('th')].map((h) => h.textContent)).not.toContain('Cost')
     expect(table.textContent).not.toContain('$')
     expect(detail.textContent).not.toContain('$')
+  })
+})
+
+describe('a run in a few words', () => {
+  it('counts the proposed changes not filed apart from those filed (CF-27)', () => {
+    const r = { id: 'run-240', job: 'nightly-audit', status: 'ok', started: '2026-11-22T02:26:53Z', findings: 34, proposals: 0, notFiled: 1, costUSD: 2.47 } as unknown as api.RunBrief
+    expect(runSummary(r)).toBe('34 findings, 1 proposed change not filed')
+    expect(runSummary({ ...r, proposals: 2, notFiled: 0 })).toBe('34 findings, 2 proposed changes')
+    expect(runSummary({ ...r, proposals: 1, notFiled: 2 })).toBe('34 findings, 1 proposed change, 2 proposed changes not filed')
   })
 })

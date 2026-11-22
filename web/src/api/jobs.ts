@@ -76,7 +76,10 @@ export interface RunBrief {
   findings: number
   /** Why its findings were not routed into cases (W-8). */
   notRouted?: string
+  /** The proposed changes it filed. */
   proposals: number
+  /** Those it made that were not filed (CF-27: they resolve no case); the run's page says why. */
+  notFiled?: number
   costUSD: number
   model?: string
   health?: RunHealth

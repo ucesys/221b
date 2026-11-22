@@ -51,6 +51,8 @@ export function runSummary(r: RunBrief): string {
   const parts: string[] = []
   if (r.findings) parts.push(`${r.findings} finding${r.findings === 1 ? '' : 's'}`)
   if (r.proposals) parts.push(`${r.proposals} proposed change${r.proposals === 1 ? '' : 's'}`)
+  // A change it made that was not filed is not in the Inbox: said apart.
+  if (r.notFiled) parts.push(`${r.notFiled} proposed change${r.notFiled === 1 ? '' : 's'} not filed`)
   return parts.length ? parts.join(', ') : 'report'
 }
 
