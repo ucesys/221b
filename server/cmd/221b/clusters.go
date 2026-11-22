@@ -167,8 +167,9 @@ func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore)
 // parameters and commands' parameters stay in their Secrets. What the
 // Secrets of a release before 0.13 held of the records is copied once,
 // and the Secrets are then rewritten to hold the secret part alone
-// (DB-63): no Secret is deleted, and one whose record could not be copied
-// is left whole.
+// (DB-63): no Secret is deleted but that of an application with nothing
+// secret and no token, and one whose record could not be copied is left
+// whole.
 
 func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) apps.Store {
 	log := w.dbLog()
@@ -185,6 +186,14 @@ func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) ap
 	// is removed on that guess.
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	// A Secret that holds nothing secret and no token, as a console before
+	// step 0051 made for every application, is deleted: that is certain.
+	// A Secret that is not there is only said, below.
+	if n, err := store.DropEmptySecrets(cctx); err != nil {
+		log.Warn("the application Secrets that hold nothing could not all be deleted; the next start tries again", "deleted", n, "err", err)
+	} else if n > 0 {
+		log.Info("application Secrets that held nothing secret were deleted: their applications have nothing to keep in one", "deleted", n)
+	}
 	if noSecret, noRow, err := store.Unmatched(cctx); err != nil {
 		log.Warn("the applications in the database and their Secrets could not be compared", "err", err)
 	} else if len(noSecret) > 0 || len(noRow) > 0 {

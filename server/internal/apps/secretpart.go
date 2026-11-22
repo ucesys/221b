@@ -55,6 +55,34 @@ func partOf(r Record) secretPart {
 	return p
 }
 
+// empty says the secret part holds nothing: no values, no parameters, and
+// no parameters of any command. An application with nothing secret and no
+// token has no Secret (applications.is_secret_set false).
+func (p secretPart) empty() bool {
+	if p.Values != "" || len(p.Params) > 0 {
+		return false
+	}
+	for _, c := range p.Commands {
+		if len(c.Params) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// holdsNothing says a Secret holds an empty secret part and no token, and
+// nothing else, so deleting it loses nothing: what it held of a record of
+// before the move counts when it has no "set.json" yet.
+func holdsNothing(sec *corev1.Secret) bool {
+	for k, v := range sec.Data {
+		if k != keySet && k != keySpec && !(k == keyToken && len(v) == 0) {
+			return false
+		}
+	}
+	p, ok := readPart(sec)
+	return ok && p.empty()
+}
+
 // into puts the secret part into a record read from its row. A command
 // takes the parameters kept under its name, the first of them not taken
 // yet: one command's parameters are never given to another, whatever the
@@ -143,14 +171,42 @@ func (s *SecretStore) one(ctx context.Context, cluster, namespace, name string) 
 // removed, goes. The Secret is written over the version read, and read
 // again when it changed meanwhile; one that already holds all of it is
 // left alone.
-func (s *SecretStore) putPart(ctx context.Context, r Record, token *string, fresh bool) error {
+//
+// An application with nothing secret, no values, parameters or commands'
+// parameters, and no token (given, or kept from the Secret) has no Secret:
+// none is made, and one that is there is deleted, over the version read.
+// One that still holds a record ("spec.json", a copy that failed) is
+// written as before and not deleted. kept says the application has its
+// Secret after the save, which its row then says (is_secret_set).
+func (s *SecretStore) putPart(ctx context.Context, r Record, token *string, fresh bool) (kept bool, err error) {
 	name := s.name(r.Cluster, r.Namespace, r.Name)
-	set, err := json.Marshal(partOf(r))
+	part := partOf(r)
+	set, err := json.Marshal(part)
 	if err != nil {
-		return errors.New("the application's values cannot be written")
+		return false, errors.New("the application's values cannot be written")
 	}
+	given := token != nil && *token != ""
 	for range 5 {
 		cur, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) && part.empty() && !given {
+			return false, nil
+		}
+		if err == nil && part.empty() && !given {
+			_, uncopied := cur.Data[keySpec]
+			// The token a nil one keeps: a Secret of a removed application
+			// of that name keeps none, unless it was never copied.
+			keepsToken := token == nil && len(cur.Data[keyToken]) > 0 && (!fresh || uncopied)
+			if !uncopied && !keepsToken {
+				switch err := s.deleteRead(ctx, cur); {
+				case err == nil:
+					return false, nil
+				case apierrors.IsConflict(err):
+					continue
+				default:
+					return false, fmt.Errorf("deleting the application's Secret, which holds nothing now: %w", err)
+				}
+			}
+		}
 		if apierrors.IsNotFound(err) {
 			sec := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: labelsOf(r)},
@@ -163,12 +219,12 @@ func (s *SecretStore) putPart(ctx context.Context, r Record, token *string, fres
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("saving the application's values in its Secret: %w", err)
+				return false, fmt.Errorf("saving the application's values in its Secret: %w", err)
 			}
-			return nil
+			return true, nil
 		}
 		if err != nil {
-			return fmt.Errorf("reading the application Secret: %w", err)
+			return false, fmt.Errorf("reading the application Secret: %w", err)
 		}
 		next := cur.DeepCopy()
 		// A Secret that still holds a record was never copied (a copy that
@@ -190,17 +246,34 @@ func (s *SecretStore) putPart(ctx context.Context, r Record, token *string, fres
 		}
 		maps.Copy(next.Labels, labelsOf(r))
 		if reflect.DeepEqual(cur.Data, next.Data) && reflect.DeepEqual(cur.Labels, next.Labels) {
-			return nil
+			return true, nil
 		}
 		if _, err = s.secrets.Update(ctx, next, metav1.UpdateOptions{}); apierrors.IsConflict(err) {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("saving the application's values in its Secret: %w", err)
+			return false, fmt.Errorf("saving the application's values in its Secret: %w", err)
 		}
+		return true, nil
+	}
+	return false, errors.New("the application's Secret kept changing while its values were saved")
+}
+
+// deleteRead deletes a Secret as it was read: a conflict when it changed
+// since, nothing when it is gone already.
+func (s *SecretStore) deleteRead(ctx context.Context, sec *corev1.Secret) error {
+	pre := &metav1.Preconditions{}
+	if uid := sec.UID; uid != "" {
+		pre.UID = &uid
+	}
+	if rv := sec.ResourceVersion; rv != "" {
+		pre.ResourceVersion = &rv
+	}
+	err := s.secrets.Delete(ctx, sec.Name, metav1.DeleteOptions{Preconditions: pre})
+	if apierrors.IsNotFound(err) {
 		return nil
 	}
-	return errors.New("the application's Secret kept changing while its values were saved")
+	return err
 }
 
 // errLeftWhole says a Secret was not rewritten: it holds a record this

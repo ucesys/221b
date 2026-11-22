@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -35,6 +36,11 @@ import (
 // So a row may be met without its Secret (it reads with no values, and is
 // said once in the log) and a Secret without its row (it is not an
 // application, and is left where it is).
+//
+// An application with nothing secret, no values, parameters or commands'
+// parameters and no token, has no Secret, and its row says so
+// (is_secret_set false): it reads with nothing secret and is not said, and
+// a Secret that is not there is told apart from one never needed.
 
 // ImportID is the name the one-time copy of the applications out of their
 // Secrets is recorded under.
@@ -105,6 +111,9 @@ type appRow struct {
 	// write works out (DB-92); emptied when the fleet is removed, while
 	// Fleet keeps its id.
 	FleetID *string `col:"fleet_id"`
+	// SecretSet says the application has a Secret, for it has something
+	// secret: false, it has none and needs none.
+	SecretSet bool `col:"is_secret_set"`
 }
 
 // rowOf is a record as its row, without its keys to the repository and
@@ -160,24 +169,25 @@ var selectApps = func() string {
 }()
 
 // read is the applications that where picks, with their commands, each
-// with the version of its row, and without their secret part.
-func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Record, error) {
+// with the version of its row, and without their secret part; set says,
+// for each, whether it has a Secret (is_secret_set).
+func read(ctx context.Context, q db.Querier, where string, args ...any) (out []Record, set []bool, err error) {
 	rows, err := q.Query(ctx, selectApps+where, args...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var row appRow
 	var repository *string
-	var out []Record
 	at := map[string]int{}
 	if _, err := pgx.ForEachRow(rows, append(db.Fields(&row), &repository), func() error {
 		r := recordOf(row, repository)
 		r.Rev = strconv.Itoa(row.Version)
 		at[row.ID] = len(out)
 		out = append(out, r)
+		set = append(set, row.SecretSet)
 		return nil
 	}); err != nil || len(out) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	ids := make([]string, 0, len(at))
 	for id := range at {
@@ -186,7 +196,7 @@ func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Recor
 	rows, err = q.Query(ctx, `SELECT application_id::text, name, note, created_at, created_by, updated_at, updated_by
 		FROM application_commands WHERE application_id = ANY($1::uuid[]) ORDER BY application_id, position`, ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var id string
 	var c Command
@@ -196,9 +206,9 @@ func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Recor
 		out[at[id]].Commands = append(out[at[id]].Commands, c)
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, set, nil
 }
 
 const oneApp = "WHERE a.cluster_id = $1 AND a.namespace = $2 AND a.name = $3"
@@ -206,9 +216,16 @@ const oneApp = "WHERE a.cluster_id = $1 AND a.namespace = $2 AND a.name = $3"
 // join puts a record's secret part into it, from its Secret; sec is nil
 // when the application has none. A row without a Secret it can read is an
 // application with no values, said once: a save gives it its values again.
-func (s *PGStore) join(r *Record, sec *corev1.Secret) {
+// A row that says it has no Secret (set false) has nothing secret, and is
+// read so whatever is there, and not said.
+func (s *PGStore) join(r *Record, sec *corev1.Secret, set bool) {
 	var part secretPart
 	ok := false
+	if !set {
+		part.into(r)
+		r.HasToken = false
+		return
+	}
 	if sec != nil {
 		part, ok = readPart(sec)
 		r.HasToken = len(sec.Data[keyToken]) > 0
@@ -231,8 +248,9 @@ func (s *PGStore) join(r *Record, sec *corev1.Secret) {
 // Secret holds. A Secret without a row is not an application.
 func (s *PGStore) List(ctx context.Context) ([]Record, error) {
 	var recs []Record
+	var set []bool
 	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
-		recs, err = read(ctx, q, "")
+		recs, set, err = read(ctx, q, "")
 		return err
 	}); err != nil {
 		return nil, fmt.Errorf("reading the applications: %w", err)
@@ -246,7 +264,7 @@ func (s *PGStore) List(ctx context.Context) ([]Record, error) {
 	}
 	for i := range recs {
 		recs[i].Rev = ""
-		s.join(&recs[i], secs[s.secrets.name(recs[i].Cluster, recs[i].Namespace, recs[i].Name)])
+		s.join(&recs[i], secs[s.secrets.name(recs[i].Cluster, recs[i].Namespace, recs[i].Name)], set[i])
 	}
 	sortRecords(recs)
 	return recs, nil
@@ -254,8 +272,9 @@ func (s *PGStore) List(ctx context.Context) ([]Record, error) {
 
 func (s *PGStore) Get(ctx context.Context, cluster, namespace, name string) (Record, string, error) {
 	var recs []Record
+	var set []bool
 	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
-		recs, err = read(ctx, q, oneApp, cluster, namespace, name)
+		recs, set, err = read(ctx, q, oneApp, cluster, namespace, name)
 		return err
 	}); err != nil {
 		return Record{}, "", fmt.Errorf("reading the application: %w", err)
@@ -263,12 +282,15 @@ func (s *PGStore) Get(ctx context.Context, cluster, namespace, name string) (Rec
 	if len(recs) == 0 {
 		return Record{}, "", ErrNotFound
 	}
-	sec, err := s.secrets.one(ctx, cluster, namespace, name)
-	if err != nil {
-		return Record{}, "", err
+	var sec *corev1.Secret
+	if set[0] {
+		var err error
+		if sec, err = s.secrets.one(ctx, cluster, namespace, name); err != nil {
+			return Record{}, "", err
+		}
 	}
 	rec := recs[0]
-	s.join(&rec, sec)
+	s.join(&rec, sec, set[0])
 	token := ""
 	if sec != nil {
 		token = string(sec.Data[keyToken])
@@ -279,13 +301,20 @@ func (s *PGStore) Get(ctx context.Context, cluster, namespace, name string) (Rec
 // Save writes the row, then the Secret, then commits (see the top of the
 // file). A record that came from Get is saved only over the version Get
 // read; one that did not replaces what is there, as in the other stores.
+// An application left with nothing secret has its Secret deleted, or none
+// made, and its row says it has none.
 func (s *PGStore) Save(ctx context.Context, r Record, token *string) error {
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
-		fresh, err := writeApp(ctx, tx, r, true)
+		fresh, err := writeApp(ctx, tx, r, true, true)
 		if err != nil {
 			return err
 		}
-		return s.secrets.putPart(ctx, r, token, fresh)
+		kept, err := s.secrets.putPart(ctx, r, token, fresh)
+		if err != nil || kept {
+			return err
+		}
+		_, err = tx.Exec(ctx, "UPDATE applications SET is_secret_set = false WHERE cluster_id = $1 AND namespace = $2 AND name = $3", r.Cluster, r.Namespace, r.Name)
+		return err
 	})
 	if err != nil && !errors.Is(err, ErrConflict) {
 		return fmt.Errorf("saving the application: %w", err)
@@ -300,9 +329,11 @@ func (s *PGStore) Save(ctx context.Context, r Record, token *string) error {
 // secret part, and says whether the row is new. The row is locked first,
 // so two saves of one application take turns, the Secret's write with
 // them. held says the record's Rev is what the row must be at; the copy
-// from the Secrets, which has none, only adds.
-func writeApp(ctx context.Context, tx pgx.Tx, r Record, held bool) (fresh bool, err error) {
+// from the Secrets, which has none, only adds. secretSet is what the row
+// says of the application's Secret.
+func writeApp(ctx context.Context, tx pgx.Tx, r Record, held, secretSet bool) (fresh bool, err error) {
 	row := rowOf(r)
+	row.SecretSet = secretSet
 	var was struct {
 		repository     *string
 		repositoryName string
@@ -402,11 +433,13 @@ func (s *PGStore) Delete(ctx context.Context, cluster, namespace, name string) e
 
 // Unmatched compares the two halves at a start: the applications of the
 // database whose Secret is not there, as cluster/namespace/name, and the
-// application Secrets no row is of, by name. Neither is changed.
+// application Secrets no row is of, by name. An application whose row says
+// it has no Secret is not missing one. Neither is changed.
 func (s *PGStore) Unmatched(ctx context.Context) (noSecret, noRow []string, err error) {
 	var recs []Record
+	var set []bool
 	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
-		recs, err = read(ctx, q, "")
+		recs, set, err = read(ctx, q, "")
 		return err
 	}); err != nil {
 		return nil, nil, err
@@ -416,10 +449,10 @@ func (s *PGStore) Unmatched(ctx context.Context) (noSecret, noRow []string, err 
 		return nil, nil, err
 	}
 	of := map[string]bool{}
-	for _, r := range recs {
+	for i, r := range recs {
 		name := s.secrets.name(r.Cluster, r.Namespace, r.Name)
 		of[name] = true
-		if secs[name] == nil {
+		if secs[name] == nil && set[i] {
 			noSecret = append(noSecret, r.Cluster+"/"+r.Key())
 		}
 	}
@@ -433,12 +466,98 @@ func (s *PGStore) Unmatched(ctx context.Context) (noSecret, noRow []string, err 
 	return noSecret, noRow, nil
 }
 
+// DropEmptySecrets is the start's pass over the applications whose row
+// says they have a Secret: one whose Secret holds an empty secret part and
+// no token, as a console before step 0051 made for every application, has
+// it deleted and its row set to say it has none; that loses nothing. A
+// Secret that is not there is not guessed at: Unmatched says it. It says
+// how many it deleted; one that fails does not stop the others.
+func (s *PGStore) DropEmptySecrets(ctx context.Context) (int, error) {
+	var recs []Record
+	var set []bool
+	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
+		recs, set, err = read(ctx, q, "")
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	if len(recs) == 0 {
+		return 0, nil
+	}
+	secs, err := s.secrets.all(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var failed []string
+	for i, r := range recs {
+		sec := secs[s.secrets.name(r.Cluster, r.Namespace, r.Name)]
+		if !set[i] || sec == nil || !holdsNothing(sec) {
+			continue
+		}
+		if _, spec := sec.Data[keySpec]; spec {
+			// Not copied or rewritten yet: RewriteSecrets does it.
+			continue
+		}
+		switch done, err := dropNothing(ctx, s.db, s.secrets, sec, r.Cluster, r.Namespace, r.Name); {
+		case err != nil:
+			failed = append(failed, err.Error())
+		case done:
+			n++
+		}
+	}
+	if len(failed) > 0 {
+		return n, errors.New(strings.Join(failed, "; "))
+	}
+	return n, nil
+}
+
+// dropNothing deletes the Secret of an application that holds nothing
+// secret, as it was read, and sets its row to say it has none, in one
+// transaction under the row's lock, so a save of the application waits
+// for it and is not undone by it. done is false when there is no row, or
+// the Secret changed since it was read: it is then left as it is.
+func dropNothing(ctx context.Context, d *db.DB, secrets *SecretStore, sec *corev1.Secret, cluster, namespace, name string) (done bool, err error) {
+	err = d.Tx(ctx, func(tx pgx.Tx) error {
+		var one int
+		switch err := tx.QueryRow(ctx, "SELECT 1 FROM applications WHERE cluster_id = $1 AND namespace = $2 AND name = $3 FOR UPDATE", cluster, namespace, name).Scan(&one); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE applications SET is_secret_set = false WHERE cluster_id = $1 AND namespace = $2 AND name = $3", cluster, namespace, name); err != nil {
+			return err
+		}
+		switch err := secrets.deleteRead(ctx, sec); {
+		case apierrors.IsConflict(err):
+			return errChanged
+		case err != nil:
+			return fmt.Errorf("deleting the application Secret %s, which holds nothing: %w", sec.Name, err)
+		}
+		done = true
+		return nil
+	})
+	if errors.Is(err, errChanged) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return done, nil
+}
+
+// errChanged rolls back a transaction whose Secret changed meanwhile.
+var errChanged = errors.New("the Secret changed meanwhile")
+
 // --- The one-time copy out of the Secrets, and their rewrite (DB-63) ---
 
 // CopyFromSecrets copies the records the applications' Secrets keep under
 // "spec.json" into the database, once, and says how many it copied: each
 // becomes a row and its commands' rows, without its values, parameters and
-// commands' parameters, which are not read into anything here. An
+// commands' parameters, which are not read into anything here; the row
+// says whether the application has anything secret, or a token, to keep in
+// its Secret (is_secret_set). An
 // application the database already has stays as the database has it. A
 // Secret whose record cannot be read is skipped, and said: it has no row,
 // so it is never rewritten. Secrets that cannot be listed are an error:
@@ -476,7 +595,10 @@ func CopyFromSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return 0, err
 			}
-			if _, err := writeApp(ctx, tx, r, false); err != nil {
+			// An application with nothing secret and no token has no
+			// Secret: the rewrite deletes it.
+			secretSet := !partOf(r).empty() || len(secs[name].Data[keyToken]) > 0
+			if _, err := writeApp(ctx, tx, r, false, secretSet); err != nil {
 				return 0, err
 			}
 			n++
@@ -493,8 +615,11 @@ func CopyFromSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog
 // the database keeps them: each Secret that still holds "spec.json" and
 // whose application has a row is rewritten once (SecretStore.dropSpec),
 // its values, parameters and commands' parameters kept under "set.json",
-// its token and its labels as they were. It says how many it rewrote. No
-// Secret is deleted. A Secret with no row is left whole, and said: its
+// its token and its labels as they were. It says how many it rewrote. A
+// Secret that holds nothing secret and no token is deleted in place of
+// being rewritten, and the row says the application has no Secret
+// (is_secret_set); no other Secret is deleted. A Secret with no row is
+// left whole, and said: its
 // record could not be read at the copy, or a console from before the move
 // wrote it since. One that fails does not stop the others.
 func RewriteSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog.Logger) (int, error) {
@@ -540,6 +665,25 @@ func RewriteSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog.
 		if !rows[name] {
 			left = append(left, name)
 			continue
+		}
+		if holdsNothing(secs[name]) {
+			// Nothing secret and no token: the Secret is deleted and the
+			// row says the application has none. One that changed since
+			// it was listed is rewritten over what it holds now.
+			r, err := unmarshal(secs[name].Data[keySpec])
+			if err != nil || from.name(r.Cluster, r.Namespace, r.Name) != name {
+				left = append(left, name)
+				continue
+			}
+			done, err := dropNothing(ctx, d, from, secs[name], r.Cluster, r.Namespace, r.Name)
+			if err != nil {
+				failed = append(failed, err.Error())
+				continue
+			}
+			if done {
+				n++
+				continue
+			}
 		}
 		switch done, err := from.dropSpec(ctx, secs[name]); {
 		case errors.Is(err, errLeftWhole):
