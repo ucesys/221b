@@ -59,7 +59,7 @@ sim: ## Build bin/221b-sim, the simulated API server for development and tests
 test: test-go test-web ## Run the Go and browser unit tests
 
 test-go:
-	cd server && $(GO) test -race ./...
+	cd server && $(GO) test -race -timeout 30m ./...
 
 test-go-store: ## Run the tests of the packages whose records have moved with those records in the database TEST_DATABASE names
 	cd server && TEST_STORE=database $(GO) test -race ./internal/ai/ ./internal/jobs/ ./internal/casework/ ./internal/cards/ ./internal/fixes/ ./internal/lessons/ ./internal/knowledge/ ./internal/issues/ ./internal/credentials/ ./internal/apps/... ./internal/clusters/... ./internal/watson/

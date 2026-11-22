@@ -387,11 +387,13 @@ export function viewState(route: Route = currentRoute(), max = 2000): ViewState 
     if (Object.keys(f).length) base.filters = f
   }
   const handles = route.view === 'tabs' || route.view === 'admin' ? tableHandles() : []
-  // Fewer row names, then fewer tables, until it fits.
-  for (const names of [50, 25, 12, 6, 3, 0]) {
-    for (let n = handles.length; n >= 0; n--) {
-      const v: ViewState = { ...base }
-      if (n) v.tables = handles.slice(0, n).map((t) => tableState(t, names))
+  // Fewer row names first, then fewer tables, until it fits: every table
+  // is tried with fewer names before one is left out (the 0.13.0 release
+  // check: in kind, the 221b namespace's 50 long object names did not fit,
+  // and the table went at the first try where three names would have).
+  for (let n = handles.length; n >= 1; n--) {
+    for (const names of [50, 25, 12, 6, 3, 0]) {
+      const v: ViewState = { ...base, tables: handles.slice(0, n).map((t) => tableState(t, names)) }
       if (JSON.stringify(v).length <= max) return v
     }
   }

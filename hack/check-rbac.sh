@@ -175,6 +175,12 @@ for ns in default kube-system "$NS"; do
   list=$(kubectl auth can-i --list --as="$SA" -n "$ns")
   echo "$list"
   extra=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/ {print $1}' | grep -v -E "$allowed" || true)
+  # The console's own namespace grants its Secrets whatever secrets.read
+  # says (DB-97: connections, applications, credentials and sessions keep
+  # their secrets there); secrets.read=false takes away the others only.
+  if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
+    extra=$(echo "$extra" | grep -v -x secrets || true)
+  fi
   if [ "$ns" = "$NS" ]; then
     if echo "$list" | grep -E "^configmaps +\[\] +\[$NAME-wiki\]" > /dev/null; then
       failed "the temporary wiki store's ConfigMap is still granted by name in $ns"
