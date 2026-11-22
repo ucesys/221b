@@ -803,9 +803,14 @@ In this order; each with its tests, its requirement and its lines in the docs. C
    - The default stays Debian until the owner decides.
 4. **The owner's housekeeping on rke2cp1**: the Secret and database dumps under `~/p13-8` to `~/p13-13` deleted; `fs.inotify.max_user_instances=512` made to persist or set back.
 
-### 0c. The next iteration, still 0.13 (the owner, November 22)
+### Planned: `phase-13.1-ai`, the AI phase (the owner, November 22)
 
-The owner's list; to be built, tested and deployed to `221b` like the rest. The aim, in his words: select only the provider per agent, "and then it's all auto".
+Not 0.13: a phase of its own, on a branch `phase-13.1-ai`, once the owner says to start. Two parts. Part A was 0.13's list (item 0c) until the owner moved it here the same day ("that list looks like ai"); 0.13 keeps no list of new work.
+
+#### A. The agents: effort, Auto, and what they show
+
+
+The aim, in the owner's words: select only the provider per agent, "and then it's all auto". Built, tested and deployed to `221b` like the rest.
 
 1. **An effort level for each agent.** Administration › AI › an agent: *Effort* with `low`, `medium`, `high`, `xhigh`, `max` and **Auto**, beside the model. Today the console sends no effort at all, so each model's own default applies (Claude Opus 5.5's is `medium`). Sent as `output_config.effort` to Anthropic's models that take it; for an OpenAI-compatible provider (the A5000's vLLM with Qwen) say what it maps to (thinking on or off, or the provider's own reasoning setting) or that the field does not apply.
 2. **Auto for the effort: picked for every message** (the owner, November 22). Sherlock: each message; a job's run: each step, from what started it (a P0/P1 case, a production cluster, an alert, a schedule) and what the step is. Sent as the mid-conversation effort change that keeps the prompt cache (Anthropic's beta on Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5; a change of the top-level effort would cost the cache).
@@ -824,9 +829,10 @@ The owner's list; to be built, tested and deployed to `221b` like the rest. The 
 
 **To decide while building** (the owner's, asked when the work starts): which models Auto picks among for Anthropic and with what signals; whether the jobs' picks are by rules alone or by the classifier too; what Effort means on a provider without it (Qwen on vLLM: thinking on or off, or not applied); whether a change of an agent's Auto settings needs a second SuperAdmin like its instructions; what the agent's page shows of the picks (the last ones, with why and cost).
 
-### Planned: `phase-13.1-ai`, knowledge at scale with semantic search (the owner, November 22)
+#### B. Knowledge at scale, with semantic search
 
-Not 0.13, and not the Auto list (0c): a phase of its own, on a branch `phase-13.1-ai`, once the owner says to start. Why: Mycroft's knowledge is built for small sources. Today a file is sent to Mycroft only up to 24 KiB and kept for the search only up to about 29 KiB (24 chunks of 1,200 characters), every replica holds the whole index in memory, the search matches words alone (BM25), and every page Mycroft writes waits for a person; the owner means to add large sources (in-house documentation, full of typos and names written several ways; vendor documentation such as RKE2's). What agents see does not grow with the sources (`ask_knowledge` gives 6 hits): the work is in finding the right passage.
+
+Why: Mycroft's knowledge is built for small sources. Today a file is sent to Mycroft only up to 24 KiB and kept for the search only up to about 29 KiB (24 chunks of 1,200 characters), every replica holds the whole index in memory, the search matches words alone (BM25), and every page Mycroft writes waits for a person; the owner means to add large sources (in-house documentation, full of typos and names written several ways; vendor documentation such as RKE2's). What agents see does not grow with the sources (`ask_knowledge` gives 6 hits): the work is in finding the right passage.
 
 1. **Documents cut by section.** A long Markdown, HTML or Word document is items by heading, not one item cut at 24 KiB, so all of it is read and searched (`requirements.md`, 713 KiB, is read to about 4% today).
 2. **The index in PostgreSQL.** The excerpts and pages in tables with full-text search (`tsvector`, GIN), shared by every replica, in place of the index each replica builds in memory from its local copy (KN-07, KN-11); the per-file excerpt cap goes.
