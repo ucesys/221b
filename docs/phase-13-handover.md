@@ -618,6 +618,17 @@ Done from the owner's answers of the evening (*Confirmed by the owner on Novembe
 - **The test release** (`221b-github`): Helm revision 31, console and database `p13-c648dd4` (the database on Wolfi, three members), schema 50, `db-0` the leader, one console replica pinned to `rke2cp1`, the agents' jobs off, the troubleshooter at the chart's baseline; its wiki keeps two test pages and three notes from the test. Values for the next upgrade: `~/p13-18/values-current.yaml` and `~/p13-18/values-c648dd4.yaml`.
 - **Decisions taken for the owner**: the rows of *Decisions made for the owner to confirm* from "The database image's directory is `deploy/postgres/`" on.
 
+## November 22: the owner's console runs the Phase 13 build
+
+At the owner's word ("deploy to 221b"), the console in namespace `221b` (release `k8s-console`) went from the released 0.12.1 to the build of this branch, the first deploy of 0.13 there. Revision 188 (`c6635a1a`, image `p13-c6635a1`) on November 21 and 189 (`1d35f9aa`, `p13-1d35f9a`) on November 22, both with `-f values-221b.yaml` (backups `~/values-221b.yaml.bak-20261121`, `-20261122` on `rke2cp1`).
+
+- **Values changed**: the image tag; a `database` block, bundled with **one member on `rke2cp1`** beside the console (database image `p13-c648dd4`, Wolfi; `rke2cp2` and `rke2cp3` have 38 and 52 GB free and the build image only on `rke2cp1`; `ha: true` needs the image on all three); `cases.cleanStart` removed (its token had run on November 8; the copied mark keeps it from running again anyway).
+- **The copy**: steps `0001` to `0050` once; 52 record sets copied; the 13 ConfigMaps of before and the 53 case ConfigMaps deleted, each with its line; 53 cases, 1,458 audit events, 5 jobs with 114 runs, 6 scripts, the connection and 43 wiki files in the database; the clean start not run; `/healthz` 200 throughout. Two warnings said the 0.12 audit log and runs record were past four fifths of their ConfigMap limit, said of a copy source where it no longer matters (to silence).
+- **The owner's clean-up**: two application Secrets holding `{}`, `sandbox-knowledge-s3` (made by hand on November 9, named by nothing) and Helm revisions 179 to 186 deleted (187, 0.12.1, kept for a rollback); the 11 `p13-target-*` ConfigMaps of the November 19 test deleted from `221b-github`.
+- **All cases deleted** (the owner): in one transaction after a dump (`~/p13-live/pre-cases-delete.sql`, mode 600), the 53 cases (their messages, events, work, analyses, proposals, a command and an RCA with them), the 55 check records and 64 findings that named a case, the 5 exceptions, one alert acknowledgement, and the counter set back so the next case is C-1; the runs, their other findings, the known issues, the changes, the run proposals and the wiki kept; the console restarted.
+- `1d35f9aa` **An application has a Secret only when it has something secret** (step `0051`, `applications.is_secret_set`): no `{}` Secret made or kept, the start deletes one that holds nothing, the copy from 0.12 makes none, and a missing Secret is warned about only where one is expected. The two applications whose `{}` Secrets were deleted by hand were set `is_secret_set = false` by hand; the console then started with no warning.
+- **To go back to 0.12.1**: `helm rollback k8s-console 187 -n 221b`, then the ConfigMaps from `~/p13-live/pre-cm.yaml` (and nothing done since the upgrade survives).
+
 ## Confirmed by the owner on November 21, in the evening
 
 After the report of item 0b (head `910a7fb2`):
