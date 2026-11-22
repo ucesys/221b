@@ -1,12 +1,17 @@
-// AIOps › Mycroft › Sources (0.12.1): every item the agents can draw on —
-// uploaded documents and notes, web site pages, Confluence pages, git
-// files, S3 objects, the console's records and the fixes — and the live
-// sources' addresses, looked up when asked and never copied. Sources hold
-// thousands of items, so the list is paged and filtered on the server
-// (GET /api/v1/knowledge/items): by source (every source, and Uploaded
-// documents for both built-in sources of uploads), type, state and words.
-// A row opens its details: the first excerpts the agents quote, the wiki
-// pages Mycroft wrote that drew on it, and a link to the original.
+// AIOps › Mycroft › Sources (0.12.1): what the agents can draw on. Since
+// phase-13.1-ai (KN-50) it lists sources, not files: one row a source
+// (GET /api/v1/knowledge/sources) with its kind, its items (and how many
+// failed or are excluded), on or off, and when its last Wiki sync finished
+// with a short result; a live source is looked up when asked, a source
+// never read says Never. Opening a source (#/aiops/mycroft/sources/<id>)
+// lists its items: uploaded documents and notes, web site pages,
+// Confluence pages, git files, S3 objects, the console's records and the
+// fixes, and a live source's addresses, looked up when asked and never
+// copied. Sources hold thousands of items, so that list is paged and
+// filtered on the server (GET /api/v1/knowledge/items?source=<id>): by
+// type, state and words. A row opens its details: the first excerpts the
+// agents quote, the wiki pages Mycroft wrote that drew on it, and a link
+// to the original.
 //
 // A SuperAdmin excludes an item of a syncable source (a web site, a
 // Confluence space, a git repository, an S3 bucket): Exclude this, or
@@ -27,8 +32,27 @@
 // here (lib/router.ts).
 import { useEffect, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
-import { excludeItems, fetchItemDetail, fetchItems, includeAgain, isWebUrl, ITEM_STATE_LABEL, ITEM_TYPE_LABEL, type ItemDetail, type ItemsPage, type ItemStateName, type PageBrief, type SourceItem } from '../../api/knowledge'
-import { fmtTs } from '../../lib/format'
+import {
+  excludeItems,
+  fetchItemDetail,
+  fetchItems,
+  fetchSources,
+  includeAgain,
+  isWebUrl,
+  ITEM_STATE_LABEL,
+  ITEM_TYPE_LABEL,
+  SOURCE_KIND_LABEL,
+  SOURCES_HREF,
+  sourceHref,
+  type ItemDetail,
+  type ItemsPage,
+  type ItemStateName,
+  type PageBrief,
+  type SourceItem,
+  type SourceSummary,
+  type SourcesView,
+} from '../../api/knowledge'
+import { fmtTs, nWord } from '../../lib/format'
 import { aiHref } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
@@ -83,8 +107,157 @@ function StateCell({ it }: { it: SourceItem }) {
   )
 }
 
-export function MycroftSources({ onToast }: { onToast?: (msg: string) => void }): JSX.Element {
-  const [source, setSource] = useState('')
+/** A source's kind, in words: Git repository, S3 bucket, Web site, Confluence, Uploaded documents, This console, Live. */
+export const sourceKindText = (kind: string): string => (kind === 'live' ? 'Live' : ((SOURCE_KIND_LABEL as Record<string, string>)[kind] ?? kind))
+
+/** When a source's last sync finished, with a short result: "<when> · 2 changed", "· failed"; Looked up when asked, or Never. */
+export function lastSyncedText(s: SourceSummary): string {
+  if (s.kind === 'live') return 'Looked up when asked'
+  const ls = s.lastSync
+  if (!ls) return 'Never'
+  const when = fmtTs(ls.at)
+  if (ls.failed) return `${when} · failed`
+  if (ls.changed !== undefined) return `${when} · ${ls.changed === 0 ? 'nothing changed' : `${ls.changed} changed`}`
+  if (ls.every) return `${when} · with every source`
+  return when
+}
+
+/** A source's items, in words: "120 items", with how many failed or are excluded. */
+export function itemsText(s: SourceSummary): { count: string; more: string } {
+  const more = [s.failed ? `${s.failed} failed` : '', s.excluded ? `${s.excluded} excluded` : ''].filter(Boolean).join(' · ')
+  return { count: nWord(s.items, 'item', 'items'), more }
+}
+
+/** AIOps › Mycroft › Sources: the sources, or the items of the one opened. */
+export function MycroftSources({ open = '', onToast }: { open?: string; onToast?: (msg: string) => void }): JSX.Element {
+  return open ? <SourceItems key={open} source={open} onToast={onToast} /> : <SourceList />
+}
+
+/** What the page says on top, with the link to change the sources for a SuperAdmin. */
+function Lead({ text, settings }: { text: string; settings: boolean }) {
+  return (
+    <>
+      {text}
+      {settings && (
+        <>
+          {' '}
+          <a className="rk-link" href={aiHref('knowledge')} data-testid="sources-settings-link">
+            Change the sources in Administration › AI › Knowledge
+          </a>
+          .
+        </>
+      )}
+    </>
+  )
+}
+
+const LIST_LEAD = 'The sources the agents draw on, one row each: open one to list its items. Live sources are looked up when asked, never copied.'
+
+/** One row a source: its kind, its items, on or off, and its last sync (KN-50). */
+function SourceList(): JSX.Element {
+  const [data, setData] = useState<SourcesView | null>(null)
+  const [error, setError] = useState('')
+  const [denied, setDenied] = useState(false)
+  const [typed, setTyped] = useState('')
+  useEffect(() => {
+    let stop = false
+    fetchSources().then(
+      (r) => {
+        if (stop) return
+        setData(r)
+        setError('')
+      },
+      (e: unknown) => {
+        if (stop) return
+        setDenied(e instanceof CallError && e.status === 403)
+        setError(errorText(e))
+      },
+    )
+    return () => {
+      stop = true
+    }
+  }, [])
+  const lead = <Lead text={LIST_LEAD} settings={!!data?.mayExclude} />
+  if (denied)
+    return (
+      <MycroftPage testId="mycroft-sources" lead={lead} filter={null}>
+        <p className="rk-fhint" style={{ margin: 0 }} data-testid="sources-denied">
+          Admins and SuperAdmins see the sources and their items.
+        </p>
+      </MycroftPage>
+    )
+  const words = typed.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const all = data?.sources ?? []
+  const rows = all.filter((x) => words.every((w) => `${x.name} ${sourceKindText(x.kind)}`.toLowerCase().includes(w)))
+  return (
+    <MycroftPage
+      testId="mycroft-sources"
+      lead={lead}
+      filter={null}
+      tools={
+        <label className="rk-field" style={{ flex: '0 1 240px' }}>
+          <span className="rk-sr">Search the sources</span>
+          <input type="search" placeholder="Name or kind" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setTyped('')} data-testid="sources-list-search" />
+        </label>
+      }
+    >
+      {error && (
+        <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }} data-testid="sources-error">
+          {error}
+        </p>
+      )}
+      <MycroftTable label="Sources" testId="sources-table">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Kind</th>
+            <th>Items</th>
+            <th>State</th>
+            <th>Last synced</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data === null && !error && <EmptyRow cols={5}>Loading…</EmptyRow>}
+          {data !== null && rows.length === 0 && (
+            <EmptyRow cols={5} testId="sources-empty">
+              {all.length > 0 ? 'No source matches these words.' : 'No sources yet.'}
+            </EmptyRow>
+          )}
+          {rows.map((x) => {
+            const items = itemsText(x)
+            return (
+              <tr key={x.id} data-testid="sources-row" data-id={x.id}>
+                <td style={{ overflowWrap: 'anywhere', maxWidth: 320 }}>
+                  <a className="rk-link" href={sourceHref(x.id)} data-testid="sources-row-open">
+                    {x.name}
+                  </a>
+                </td>
+                <td data-testid="sources-row-kind">{sourceKindText(x.kind)}</td>
+                <td data-testid="sources-row-items">
+                  {items.count}
+                  {items.more && <div className="rk-fhint">{items.more}</div>}
+                </td>
+                <td>
+                  <span className="rk-pill" data-tone={x.off ? 'muted' : 'ok'} data-testid="sources-row-state">
+                    {x.off ? 'Off' : 'On'}
+                  </span>
+                </td>
+                <td style={{ maxWidth: 300 }} data-testid="sources-row-synced" title={x.lastSync?.error}>
+                  <span className={x.lastSync?.failed ? 'rk-t' : undefined} data-tone={x.lastSync?.failed ? 'err' : undefined}>
+                    {lastSyncedText(x)}
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </MycroftTable>
+    </MycroftPage>
+  )
+}
+
+/** The items of the source opened: paged on the server, with its search and filters. */
+function SourceItems({ source, onToast }: { source: string; onToast?: (msg: string) => void }): JSX.Element {
   const [type, setType] = useState('')
   const [state, setState] = useState('')
   const [typed, setTyped] = useState('')
@@ -144,25 +317,34 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
   }
   const total = data?.total ?? 0
   const items = data?.items ?? []
+  const named = data?.sources.find((x) => x.id === source)
+  const name = named?.name ?? (data ? source : '')
   const lead = (
     <>
-      Everything the agents can draw on: uploaded notes and documents, web site pages, Confluence pages, git files, S3 objects and the console’s records; live sources are looked up when asked, never copied.
-      {data?.mayExclude && (
-        <>
-          {' '}
-          <a className="rk-link" href={aiHref('knowledge')} data-testid="sources-settings-link">
-            Change the sources in Administration › AI › Knowledge
-          </a>
-          .
-        </>
-      )}
+      <span style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <a className="rk-link" href={SOURCES_HREF} data-testid="sources-back">
+          ‹ All sources
+        </a>
+        {name && (
+          <strong style={{ color: 'var(--fg)' }} data-testid="sources-open-name">
+            {name}
+          </strong>
+        )}
+        {named && <span className="rk-fhint">{named.kind === 'uploads' ? 'Uploaded documents' : sourceKindText(named.kind)}</span>}
+        {named?.off && (
+          <span className="rk-pill" data-tone="muted">
+            Off
+          </span>
+        )}
+      </span>
+      <Lead text={named?.kind === 'live' ? 'Its addresses are looked up when asked, never copied.' : 'Its items, as Mycroft read them.'} settings={!!data?.mayExclude} />
     </>
   )
   if (denied)
     return (
       <MycroftPage testId="mycroft-sources" lead={lead} filter={null}>
         <p className="rk-fhint" style={{ margin: 0 }} data-testid="sources-denied">
-          Admins and SuperAdmins see the sources’ items.
+          Admins and SuperAdmins see the sources and their items.
         </p>
       </MycroftPage>
     )
@@ -172,7 +354,6 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
       lead={lead}
       filter={
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Select label="Source" value={source} options={[['', 'Every source'], ...(data?.sources ?? []).map((s): [string, string] => [s.id, s.name + (s.off ? ' (off)' : '')])]} onChange={pick(setSource)} testId="sources-filter-source" />
           <Select label="Type" value={type} options={[['', 'Every type'], ...(Object.entries(ITEM_TYPE_LABEL) as [string, string][])]} onChange={pick(setType)} testId="sources-filter-type" />
           <Select label="State" value={state} options={[['', 'Every state'], ...STATES.map((s): [string, string] => [s, s === 'live' ? 'Live' : ITEM_STATE_LABEL[s]])]} onChange={pick(setState)} testId="sources-filter-state" />
         </div>
@@ -200,11 +381,10 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
           Excluded items are not read by any sync, and the web crawler does not follow links found only on them. Include again takes effect at the next sync of the source, or its Run now in AIOps › Jobs.
         </p>
       )}
-      <MycroftTable label="Items" testId="sources-table">
+      <MycroftTable label="Items" testId="sources-items-table">
         <thead>
           <tr>
             <th>Title</th>
-            <th>Source</th>
             <th>Type</th>
             <th>State</th>
             <th style={{ textAlign: 'right' }}>Pages</th>
@@ -214,10 +394,10 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
           </tr>
         </thead>
         <tbody>
-          {data === null && !error && <EmptyRow cols={6}>Loading…</EmptyRow>}
+          {data === null && !error && <EmptyRow cols={5}>Loading…</EmptyRow>}
           {data !== null && items.length === 0 && (
-            <EmptyRow cols={6} testId="sources-empty">
-              {source || type || state || q ? 'No item matches these filters.' : 'No items yet: Mycroft has read nothing.'}
+            <EmptyRow cols={5} testId="sources-empty">
+              {type || state || q ? 'No item matches these filters.' : 'No items yet: Mycroft has read nothing of this source.'}
             </EmptyRow>
           )}
           {items.map((it) => (
@@ -232,7 +412,6 @@ export function MycroftSources({ onToast }: { onToast?: (msg: string) => void })
                   </div>
                 )}
               </td>
-              <td>{it.sourceName}</td>
               <td>{ITEM_TYPE_LABEL[it.type] ?? it.type}</td>
               <td style={{ maxWidth: 300 }}>
                 <StateCell it={it} />

@@ -4,6 +4,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.14.0 (unreleased)
 
+- **AIOps › Mycroft › Sources lists sources, not files**: one row a source with its kind, its items (and how many failed or are excluded), on or off, and *Last synced* (when its last Wiki sync finished, with a short result: *2 changed*, *failed*); a live source is *Looked up when asked*, a source never read *Never*. Opening a source lists its items as before, paged 50 at a time with its search, filters, Exclude, Include again and details (`GET /api/v1/knowledge/sources`; MY-13, KN-50).
 - **The console's version in the account menu**: its last line reads `221B 0.13.0 · build 9ef9683` (a release's version alone), and a click copies it. The build stamps the chart's version beside the commit; it is told to people signed in only, never on the sign-in page (RB-58).
 - **Tests**: `hack/ha-kind.sh`'s failover step tries the setting's read and write again for a while (60 s and 30 s) after the database's primary is lost, where one 503 before the console reconnected failed CI on `main` once.
 

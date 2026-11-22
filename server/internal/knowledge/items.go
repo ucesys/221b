@@ -286,8 +286,9 @@ type SourceItem struct {
 	key string
 }
 
-// ItemSource is a source as the filter lists it; UploadsSource stands for
-// both sources of uploaded documents.
+// ItemSource is a source as the items' page names it: UploadsSource,
+// which stands for both sources of uploaded documents, then every source
+// by itself.
 type ItemSource struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -335,10 +336,10 @@ func (s *Service) Items(ctx context.Context, c Caller, q ItemsQuery) (ItemsPage,
 	}
 	out := ItemsPage{Items: []SourceItem{}, Offset: q.Offset, Limit: q.Limit, MayExclude: c.SuperAdmin, MayRemove: true,
 		Sources: []ItemSource{{ID: UploadsSource, Name: "Uploaded documents", Kind: UploadsSource}}}
+	// Then every source by itself, those of uploaded documents too: a
+	// source opened in Mycroft › Sources names itself (KN-50).
 	for _, x := range set.Sources {
-		if x.Kind != SourceUpload {
-			out.Sources = append(out.Sources, ItemSource{ID: x.ID, Name: x.Name, Kind: x.Kind, Off: x.Off})
-		}
+		out.Sources = append(out.Sources, ItemSource{ID: x.ID, Name: x.Name, Kind: x.Kind, Off: x.Off})
 	}
 	words := strings.Fields(strings.ToLower(q.Q))
 	var kept []SourceItem

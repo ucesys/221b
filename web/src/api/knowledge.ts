@@ -502,8 +502,11 @@ export const wikiHref = (view: 'pages' | 'drafts' = 'pages') => '#/aiops/mycroft
 /** The Wiki's page list showing only these pages: Review those pages, after a source item was removed or excluded. */
 export const wikiPagesHref = (paths: string[]) => '#/aiops/mycroft/wiki?pages=' + paths.map(encodeURIComponent).join(',')
 
-/** AIOps › Mycroft › Sources: every item the agents can draw on (0.12.1). */
+/** AIOps › Mycroft › Sources: the sources, one row each (0.12.1; one row a source since phase-13.1-ai, KN-50). */
 export const SOURCES_HREF = '#/aiops/mycroft/sources'
+
+/** A source opened in AIOps › Mycroft › Sources: its items. */
+export const sourceHref = (id: string) => `${SOURCES_HREF}/${enc(id)}`
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))
@@ -728,6 +731,38 @@ export function itemsUrl(q: ItemsQuery): string {
 }
 
 export const fetchItems = (q: ItemsQuery) => call<ItemsPage>(itemsUrl(q))
+
+/** When a source's last sync finished, and how it went (KN-50). */
+export interface SourceSync {
+  at: string
+  /** How many changed items it read; absent for a sync of every source, or a read no kept sync names. */
+  changed?: number
+  failed?: boolean
+  error?: string
+  /** A sync of every source, not of this one alone. */
+  every?: boolean
+}
+
+/** A source as AIOps › Mycroft › Sources lists it (KN-50). */
+export interface SourceSummary {
+  id: string
+  name: string
+  kind: SourceKind
+  off?: boolean
+  items: number
+  failed?: number
+  excluded?: number
+  /** Absent for a live source, and for one never read. */
+  lastSync?: SourceSync
+}
+
+export interface SourcesView {
+  sources: SourceSummary[]
+  mayExclude: boolean
+  mayRemove: boolean
+}
+
+export const fetchSources = () => call<SourcesView>(base + 'sources')
 
 export interface ItemDetail {
   item: SourceItem

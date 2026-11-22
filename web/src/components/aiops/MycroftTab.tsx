@@ -2,9 +2,11 @@
 // knows and what people decided, in sub-tabs. Wiki is Mycroft's wiki (its
 // pages and the drafts to review) at #/aiops/mycroft/wiki[/...]; it has no
 // Add: notes and documents are added in Administration › AI › Knowledge's Uploaded
-// documents section (MY-11, 0.12.1). Sources, since 0.12.1, is every item
-// the agents can draw on, with the exclusions, at #/aiops/mycroft/sources
-// (MycroftSources.tsx; the Wiki's old Sources view leads there). Known issues at
+// documents section (MY-11, 0.12.1). Sources, since 0.12.1, is what
+// the agents can draw on, with the exclusions, at #/aiops/mycroft/sources:
+// one row a source since phase-13.1-ai, its items at
+// #/aiops/mycroft/sources/<id> (MycroftSources.tsx; the Wiki's old
+// Sources view leads there). Known issues at
 // #/aiops/mycroft/known[/<id>]; Exceptions, the agent-found cases people
 // accepted as they are (the console's records, not the wiki's), at
 // #/aiops/mycroft/exceptions[/<id>]. Since wave 6e there is no RCAs tab:
@@ -36,7 +38,7 @@ export type MycroftSub = 'wiki' | 'sources' | 'known' | 'exceptions' | 'fixes'
 
 const SUBS: { id: MycroftSub; label: string; tip: string }[] = [
   { id: 'wiki', label: 'Wiki', tip: 'Mycroft’s wiki: its pages and the changes waiting for review' },
-  { id: 'sources', label: 'Sources', tip: 'Every item the agents can draw on, from every source, and what is excluded' },
+  { id: 'sources', label: 'Sources', tip: 'The sources the agents draw on, each with its items and its last sync, and what is excluded' },
   { id: 'known', label: 'Known issues', tip: 'The known issues: symptoms, workaround and status' },
   { id: 'exceptions', label: 'Exceptions', tip: 'What people accepted as it is: the agents stop reporting it' },
   { id: 'fixes', label: 'Fixes', tip: 'What worked before: saved when a case is closed as Fixed, given to the agents for the cases like it' },
@@ -101,7 +103,7 @@ export function MycroftTab({ route, access, onToast }: { route: Route; access: C
       </div>
       {find.active && <MycroftSearchResults find={find} />}
       {!find.active && sub === 'wiki' && <KnowledgeTab route={{ ...route, path: ['wiki', ...rest] }} onToast={onToast} onPages={onPages} />}
-      {!find.active && sub === 'sources' && <MycroftSources onToast={onToast} />}
+      {!find.active && sub === 'sources' && <MycroftSources open={rest[0] ?? ''} onToast={onToast} />}
       {!find.active && sub === 'known' && <KnownTab route={{ ...route, path: ['known', ...rest] }} access={access} onToast={onToast} />}
       {!find.active && sub === 'exceptions' && <ExceptionsView open={rest[0] ?? ''} onToast={onToast} onCount={onExceptions} />}
       {!find.active && sub === 'fixes' && <FixesView open={rest[0] ?? ''} onToast={onToast} onCount={onFixes} />}

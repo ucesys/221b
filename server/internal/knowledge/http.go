@@ -82,6 +82,8 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	// What Mycroft draws on (0.12.1, KN-45, KN-47, MY-12 to MY-14).
 	route("GET uploads", h.getUploads)
 	route("DELETE uploads/{source}/{name}", h.deleteUpload)
+	// One row a source, with its last sync (phase-13.1-ai, KN-50).
+	route("GET sources", h.getSources)
 	route("GET items", h.getItems)
 	route("GET items/detail", h.getItem)
 	route("POST sources/{id}/exclusions", h.postExclusion)
@@ -536,6 +538,15 @@ func (h *handler) getItems(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) getSources(w http.ResponseWriter, r *http.Request, c Caller) {
+	v, err := h.s.SourceSummaries(r.Context(), c)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *handler) getItem(w http.ResponseWriter, r *http.Request, c Caller) {
