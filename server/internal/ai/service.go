@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -573,7 +574,7 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	if why := s.usable(p); why != "" {
 		return sherlock.Agent{}, errors.New(why)
 	}
-	model := modelOf(set, p)
+	model := modelOfAuto(set, p)
 	baseline := s.Baseline(id)
 	ap := snap.prompts.Agents[id]
 	version := "live"
@@ -635,6 +636,15 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 		Version:      version,
 		Setup:        setup,
 		MaxTokens:    replyBound(window),
+	}
+	// Effort and Auto (AI-43, AI-44): a fixed effort is sent as it is set;
+	// what is left to Auto is picked message by message, or by a job's
+	// rules before the agent runs (PickRun).
+	if set.Effort != auto.Auto {
+		a.Effort = set.Effort
+	}
+	if set.usesAuto() {
+		a.Auto = &chooser{s: s, settings: autoSettings(set, p, model), provider: p}
 	}
 	if id == Sherlock && s.compact(set, window, a, view) {
 		a = compactForm(a, set, info, parts, text)
@@ -807,6 +817,12 @@ type Overview struct {
 	Spend          sherlock.Spend `json:"spend"`
 	SingleProvider bool           `json:"singleProvider"`
 	ViewControl    bool           `json:"viewControl"`
+	// Classifier is the provider Auto's classifier asks, "" for none, and
+	// ClassifierOff why it is not used when one is chosen (AI-45).
+	Classifier    string `json:"classifier"`
+	ClassifierOff string `json:"classifierOff,omitempty"`
+	// AutoModels are the models Auto picks among on Anthropic.
+	AutoModels []string `json:"autoModels"`
 }
 
 // View is the overview.
@@ -817,7 +833,11 @@ func (s *Service) View(ctx context.Context) Overview {
 	if s.engine != nil {
 		spend = s.engine.Ledger().Now(ctx)
 	}
-	o := Overview{Models: sherlock.Models, DefaultModel: sh.Model, DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD, Spend: spend, SingleProvider: snap.agents.SingleProvider, ViewControl: sh.ChangesView()}
+	o := Overview{Models: sherlock.Models, DefaultModel: sh.Model, DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD, Spend: spend, SingleProvider: snap.agents.SingleProvider, ViewControl: sh.ChangesView(),
+		Classifier: snap.providers.ClassifierID, AutoModels: auto.Models}
+	if o.Classifier != "" {
+		_, _, o.ClassifierOff = s.classifier(snap)
+	}
 	used := map[string][]string{}
 	for _, info := range Catalog {
 		set := s.settingsOf(snap, info.ID)
@@ -841,6 +861,9 @@ func (s *Service) View(ctx context.Context) Overview {
 		}
 		if ok {
 			v.Model, v.DefaultModel = modelOf(set, p), set.Model == ""
+			if set.Model == auto.Auto {
+				v.Model = auto.Auto
+			}
 			if v.Enabled {
 				used[pid] = append(used[pid], info.Name)
 			}
@@ -1021,6 +1044,9 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
 		delete(ps.Limits, id)
+		if ps.ClassifierID == id {
+			ps.ClassifierID = ""
+		}
 		if id == DefaultProvider {
 			ps.DefaultRemoved, ps.DefaultTested = true, nil
 			return nil
@@ -1111,8 +1137,12 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	snap := s.read(ctx)
-	if _, ok := s.provider(snap, set.Provider); !ok {
+	prov, ok := s.provider(snap, set.Provider)
+	if !ok {
 		return fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
+	}
+	if set.Model == auto.Auto && !anthropicKind(prov) {
+		return fmt.Errorf("%w: Auto picks among Claude Haiku, Sonnet and Opus 5.5 on a provider of kind Anthropic; %s is %s: pick its model", ErrInvalid, prov.Name, KindLabel(prov.Provider.Kind))
 	}
 	if set.Provider == s.defaultID(snap) {
 		set.Provider = ""

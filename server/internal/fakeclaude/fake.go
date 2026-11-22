@@ -172,6 +172,10 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "invalid_request_error", msg)
 		return
 	}
+	if msg := checkEffort(body, r.Header.Get("anthropic-beta")); msg != "" {
+		apiError(w, 400, "invalid_request_error", msg)
+		return
+	}
 	question, round, results := where(req.Messages)
 	question, view := splitView(question)
 	if strings.Contains(strings.ToLower(question), "overloaded") {
@@ -220,6 +224,57 @@ func checkThinking(body []byte) string {
 					return fmt.Sprintf("messages.%d.content.%d.redacted_thinking.data: Field required", i, j)
 				}
 			}
+		}
+	}
+	return ""
+}
+
+// classify is the fake classifier's word for a message: high for an
+// outage, an incident or production down; low for a lookup or a status;
+// medium otherwise.
+func classify(text string) string {
+	t := strings.ToLower(text)
+	switch {
+	case strings.Contains(t, "outage") || strings.Contains(t, "incident") || strings.Contains(t, "down") || strings.Contains(t, "root cause"):
+		return "high"
+	case strings.Contains(t, "list ") || strings.Contains(t, "status") || strings.Contains(t, "ready?") || strings.Contains(t, "what is"):
+		return "low"
+	}
+	return "medium"
+}
+
+// checkEffort holds a request to what the API asks of the effort
+// (phase-13.1-ai): output_config.effort one of the five levels, and a
+// system message's output_config only with the beta that allows it.
+func checkEffort(body []byte, betas string) string {
+	var req struct {
+		OutputConfig *struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+		Messages []struct {
+			Role         string          `json:"role"`
+			Content      json.RawMessage `json:"content"`
+			OutputConfig *struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	levels := map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	if req.OutputConfig != nil && !levels[req.OutputConfig.Effort] {
+		return "output_config.effort: Input should be 'low', 'medium', 'high', 'xhigh' or 'max'"
+	}
+	for i, m := range req.Messages {
+		if m.OutputConfig == nil {
+			continue
+		}
+		if !strings.Contains(betas, "mid-conversation-output-config-2026-07-01") {
+			return fmt.Sprintf("messages.%d.output_config: Extra inputs are not permitted", i)
+		}
+		if m.Role != "system" || string(m.Content) != "[]" || !levels[m.OutputConfig.Effort] {
+			return fmt.Sprintf("messages.%d: an effort change is a system message with empty content and a level", i)
 		}
 	}
 	return ""
@@ -911,6 +966,23 @@ func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
 			Content    *string `json:"content"`
 			ToolCallID string  `json:"tool_call_id"`
 		} `json:"messages"`
+		StructuredOutputs *struct {
+			Choice []string `json:"choice"`
+		} `json:"structured_outputs"`
+	}
+	// Auto's classifier (phase-13.1-ai): one word of the choices, not
+	// streamed, by what the message says.
+	if err := json.Unmarshal(body, &req); err == nil && req.StructuredOutputs != nil && !req.Stream && len(req.Messages) > 0 {
+		last := ""
+		if c := req.Messages[len(req.Messages)-1].Content; c != nil {
+			last = *c
+		}
+		word := classify(last)
+		w.Header().Set("Content-Type", "application/json")
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": word}}},
+			"usage": map[string]int{"prompt_tokens": 300 + len(last)/4, "completion_tokens": 1}})
+		w.Write(b)
+		return
 	}
 	if err := json.Unmarshal(body, &req); err != nil || len(req.Messages) == 0 || !req.Stream {
 		apiError(w, 400, "invalid_request_error", "messages and stream are required")

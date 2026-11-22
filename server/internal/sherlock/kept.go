@@ -246,14 +246,21 @@ func clipText(t string, n int) string {
 func keptHistory(msgs []*Msg, context string) ([]Message, []int) {
 	var history []Message
 	var starts []int
+	inForce := ""
 	for i := 0; i < len(msgs); i++ {
 		m := msgs[i]
 		if m.Role != "user" {
 			continue
 		}
 		answer := ""
+		// The effort Auto picked for an answer goes after its question, as
+		// it went when the answer was asked for (AI-44).
+		effort := ""
 		if i+1 < len(msgs) && msgs[i+1].Role == "sherlock" {
 			a := msgs[i+1]
+			if a.PickBy != "" {
+				effort = a.Effort
+			}
 			answer = strings.TrimSpace(a.Text)
 			if answer == "" {
 				answer = "(This answer was " + firstNonEmpty(a.Status, "not given") + " before it was complete.)"
@@ -269,7 +276,12 @@ func keptHistory(msgs []*Msg, context string) ([]Message, []int) {
 			content = append([]Block{{Type: "text", Text: context}}, content...)
 		}
 		starts = append(starts, len(history))
-		history = append(history, Message{Role: "user", Content: content}, Message{Role: "assistant", Content: []Block{{Type: "text", Text: answer}}})
+		history = append(history, Message{Role: "user", Content: content})
+		if effort != "" && effort != inForce {
+			history = append(history, EffortMessage(effort))
+			inForce = effort
+		}
+		history = append(history, Message{Role: "assistant", Content: []Block{{Type: "text", Text: answer}}})
 	}
 	return history, starts
 }

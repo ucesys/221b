@@ -215,6 +215,46 @@ describe('the Agents section', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/troubleshooter', body: { tools: ['list_pods', 'top'], dailyUSD: 7, clusters: ['local'] } }))
   })
 
+  it('sets an effort beside the model, Auto for the model on Anthropic only, and the floor under Auto (AI-43, AI-44, AI-47)', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    const effort = within(drawer).getByTestId('agent-effort') as HTMLSelectElement
+    expect([...effort.options].map((o) => o.textContent)).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Auto'])
+    expect(effort.value).toBe('')
+    expect(within(drawer).queryByTestId('agent-auto')).toBeNull()
+    fireEvent.change(effort, { target: { value: 'auto' } })
+    fireEvent.click(within(drawer).getByTestId('agent-auto-model'))
+    expect(within(drawer).getByTestId('agent-model-auto')).toBeTruthy()
+    const line = within(drawer).getByTestId('agent-auto-line').textContent
+    expect(line).toContain('the effort for every message and the model when a conversation or a run starts')
+    expect(line).toContain('Never xhigh or max without an open P0 or P1 case')
+    expect(line).toContain('off: medium on Claude Sonnet 5.5')
+    fireEvent.change(within(drawer).getByTestId('agent-floor-effort'), { target: { value: 'medium' } })
+    fireEvent.change(within(drawer).getByTestId('agent-floor-model'), { target: { value: 'claude-sonnet-5-5' } })
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PUT')).toMatchObject({
+        url: '/api/v1/ai/agents/troubleshooter',
+        body: { effort: 'auto', model: 'auto', floorEffort: 'medium', floorModel: 'claude-sonnet-5-5' },
+      }),
+    )
+  })
+
+  it('offers no Auto model on an OpenAI-compatible provider, and says what its effort means there (AI-43)', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.click(within(drawer).getByTestId('agent-auto-model'))
+    fireEvent.change(within(drawer).getByTestId('agent-provider'), { target: { value: 'gw' } })
+    expect(within(drawer).queryByTestId('agent-auto-model')).toBeNull()
+    fireEvent.change(within(drawer).getByTestId('agent-effort'), { target: { value: 'low' } })
+    expect(within(drawer).getByTestId('agent-effort-hint').textContent).toContain('Low turns the model’s thinking off')
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({ provider: 'gw', effort: 'low' }))
+    expect((calls.find((c) => c.method === 'PUT')?.body as { model?: string }).model).toBeUndefined()
+  })
+
   it('asks for the single-provider confirmation before the Script reviewer shares the author’s provider', async () => {
     render(<AgentsSection />)
     fireEvent.click((await screen.findAllByTestId('agent-open'))[3]!)

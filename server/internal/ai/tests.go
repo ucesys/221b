@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/scrub"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -356,6 +357,42 @@ type TestOptions struct {
 	Replays int
 	By      string
 	Who     audit.Who
+	// Effort and Model, when set, run the cases and replays at that effort
+	// and on that model instead of the agent's, Auto off (AI-48): to
+	// measure the lowest effort and model whose answers still pass. Such a
+	// run is not kept as the draft's test.
+	Effort string
+	Model  string
+}
+
+// CheckOverride reports an effort or a model to test with that is not one.
+func (o TestOptions) CheckOverride() error {
+	if o.Effort != "" && auto.Rank(o.Effort) < 0 {
+		return fmt.Errorf("%w: test at low, medium, high, xhigh or max, not %q", ErrInvalid, o.Effort)
+	}
+	if o.Model != "" && !reModel.MatchString(o.Model) {
+		return fmt.Errorf("%w: %q is not a model name", ErrInvalid, o.Model)
+	}
+	return nil
+}
+
+// overridden says the run tests at an effort or on a model of its own.
+func (o TestOptions) overridden() bool { return o.Effort != "" || o.Model != "" }
+
+// override puts the run's effort and model on an agent, priced on its
+// provider.
+func (s *Service) override(snap snapshot, a *sherlock.Agent, o TestOptions) {
+	if !o.overridden() {
+		return
+	}
+	if o.Model != "" {
+		p, _ := s.provider(snap, a.Provider)
+		a.Model, a.Price = o.Model, priceOf(o.Model, p)
+	}
+	if o.Effort != "" {
+		a.Effort = o.Effort
+	}
+	a.Auto = nil
 }
 
 // MaxReplays bounds a test's replays.
@@ -394,6 +431,7 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	s.override(snap, &a, o)
 	cases, err := s.TestsOf(ctx, id)
 	if err != nil {
 		return 0, 0, 0, err
@@ -578,6 +616,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 				s.publish(id, run)
 				continue
 			}
+			s.override(snap, &a, o)
 			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "replay", Cluster: t.Cluster}, Text: t.Question, Cluster: t.Cluster, Tools: newRecorded(defs, t.Tools), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, t.Question)
@@ -600,7 +639,9 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 	if run.State == RunRunning {
 		run.State = RunDone
 	}
-	if o.Draft {
+	// A run at an effort or on a model of its own measures; it does not
+	// stand for the draft's test.
+	if o.Draft && !o.overridden() {
 		_, err = s.editPrompt(context.Background(), id, func(p *AgentPrompt, _ string) error {
 			if p.Draft == nil || p.Draft.Rev != rev {
 				return nil
@@ -672,6 +713,10 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 			cluster = "local"
 		}
 		a, err := s.resolve(snap, id, cluster, nil, over, recordedSetup(c.Recorded), false)
+		// The answers are graded on the agent's own model, whatever the run
+		// tests at.
+		grader := a
+		s.override(snap, &a, o)
 		if err != nil {
 			run.Planned[i].State = CaseFailed
 			halt, haltAt = err, i+1
@@ -684,13 +729,13 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 		show()
 		mu.Unlock()
 		wg.Add(1)
-		go func(i int, c TestCase, a sherlock.Agent, cluster string) {
+		go func(i int, c TestCase, a, grader sherlock.Agent, cluster string) {
 			defer wg.Done()
 			defer func() { <-slots }()
 			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "test", Cluster: cluster}, Text: c.Question, Cluster: cluster, Tools: newRecorded(defs, c.Recorded), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, c.Question)
-			cr := s.check(ctx, a, c, res)
+			cr := s.check(ctx, grader, c, res)
 			mu.Lock()
 			defer mu.Unlock()
 			done[i] = &cr
@@ -707,7 +752,7 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 				halt, haltAt = res.Err, i+1
 			}
 			show()
-		}(i, c, a, cluster)
+		}(i, c, a, grader, cluster)
 	}
 	wg.Wait()
 	mu.Lock()

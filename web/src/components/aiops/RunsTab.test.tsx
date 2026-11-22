@@ -85,6 +85,31 @@ describe('AIOps › Runs', () => {
     await waitFor(() => expect(api.fetchRuns).toHaveBeenLastCalledWith({ status: '', mine: true, limit: 200 }, false))
   })
 
+  it('says each run’s agent, model and effort under the job’s name; an old run what it has (AI-48)', async () => {
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [{ ...brief, effort: 'high', provider: 'Anthropic', pickBy: 'rules' }, { ...brief, id: 'run-11' }], total: 2 })
+    render(<RunsTab route={route()} />)
+    const lines = await screen.findAllByTestId('run-agent-line')
+    expect(lines[0]!.textContent).toMatch(/ · Claude Opus 5\.5 · high$/)
+    expect(lines[1]!.textContent).toMatch(/ · Claude Opus 5\.5$/)
+  })
+
+  it('shows the run’s agent, model with its provider and effort as facts, what Auto picked and why, and a move up with its step (AI-48)', async () => {
+    vi.mocked(api.fetchRun).mockResolvedValue({ ...run, provider: 'Anthropic', effort: 'high', pickBy: 'rules', pickWhy: 'a P0 case', movedUp: { step: 2, from: 'claude-sonnet-5-5', why: 'a P0 case' } })
+    render(<RunsTab route={route('run-12')} />)
+    const detail = await screen.findByTestId('run-detail')
+    expect(within(detail).getByTestId('run-model').textContent).toBe('Claude Opus 5.5 · Anthropic')
+    expect(within(detail).getByTestId('run-effort').textContent).toBe('high, picked: a P0 case')
+    expect(within(detail).getByTestId('run-moved-up').textContent).toContain('moved up from Claude Sonnet 5.5 at step 2')
+    cleanup()
+    // An old run: the model alone, no effort.
+    vi.mocked(api.fetchRun).mockResolvedValue(run)
+    render(<RunsTab route={route('run-12')} />)
+    const old = await screen.findByTestId('run-detail')
+    expect(within(old).getByTestId('run-model').textContent).toBe('Claude Opus 5.5')
+    expect(within(old).queryByTestId('run-effort')).toBeNull()
+    expect(within(old).queryByTestId('run-moved-up')).toBeNull()
+  })
+
   it('shows what each proposed change resolves, linked, and why an agent’s change that names no case was not filed (CF-25, CF-27)', async () => {
     vi.mocked(api.fetchRun).mockResolvedValue({
       ...run,

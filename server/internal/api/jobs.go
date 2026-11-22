@@ -166,7 +166,7 @@ func (s *Server) JobsClusters() []jobs.Cluster {
 	}
 	var out []jobs.Cluster
 	for _, c := range s.opts.Clusters.List() {
-		out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name})
+		out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name, Env: c.Env})
 	}
 	return out
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -112,6 +113,9 @@ type Providers struct {
 	// default provider's too (Phase 12.1, AI-36): what every agent spends
 	// on it together. None, or 0, is no limit.
 	Limits map[string]sherlock.Caps `json:"limits,omitempty"`
+	// ClassifierID is the OpenAI-compatible provider Auto's classifier asks
+	// (phase-13.1-ai, AI-45), on its default model; "" is no classifier.
+	ClassifierID string `json:"classifierId,omitempty"`
 }
 
 // MaxProviders bounds the providers.
@@ -181,7 +185,25 @@ type AgentSettings struct {
 	// form does not fit the model's context (CompactAuto), "always" or
 	// "never" (AS-07).
 	Compact string `json:"compact,omitempty"`
+	// --- Effort and Auto (phase-13.1-ai, AI-43 to AI-47) ---
+	// Effort is its effort: "" the model's default (as before), low,
+	// medium, high, xhigh, max, or auto. Model may be auto too, on a
+	// provider of kind Anthropic: Auto picks among Claude Haiku, Sonnet
+	// and Opus 5.5.
+	Effort string `json:"effort,omitempty"`
+	// FloorEffort and FloorModel are the lowest effort and model Auto may
+	// pick for it; "" is none.
+	FloorEffort string `json:"floorEffort,omitempty"`
+	FloorModel  string `json:"floorModel,omitempty"`
 }
+
+// auto is the settings as package auto reads them.
+func (a AgentSettings) auto() auto.Settings {
+	return auto.Settings{Effort: a.Effort, Model: a.Model, FloorEffort: a.FloorEffort, FloorModel: a.FloorModel}
+}
+
+// usesAuto says Auto picks its effort or its model.
+func (a AgentSettings) usesAuto() bool { return a.Effort == auto.Auto || a.Model == auto.Auto }
 
 // Sherlock's forms.
 const (
@@ -212,6 +234,17 @@ const MaxCapUSD = 100_000
 func (a AgentSettings) Validate(info Info) error {
 	if a.Model != "" && !reModel.MatchString(a.Model) {
 		return fmt.Errorf("%q is not a model name", a.Model)
+	}
+	if !auto.ValidEffort(a.Effort) {
+		return fmt.Errorf("the effort is the model's default, low, medium, high, xhigh, max or auto, not %q", a.Effort)
+	}
+	// Auto never picks below the floor; a floor above high would make every
+	// pick xhigh or max, which Auto keeps for an open P0 or P1 case.
+	if a.FloorEffort != "" && (auto.Rank(a.FloorEffort) < 0 || auto.Rank(a.FloorEffort) > auto.Rank(auto.High)) {
+		return errors.New("the lowest effort Auto may pick is low, medium or high")
+	}
+	if a.FloorModel != "" && auto.Tier(a.FloorModel) < 0 {
+		return fmt.Errorf("the lowest model Auto may pick is one of %s", strings.Join(auto.Models, ", "))
 	}
 	for _, v := range []float64{a.DailyUSD, a.MonthlyUSD} {
 		if v < 0 || v > MaxCapUSD || math.IsNaN(v) {

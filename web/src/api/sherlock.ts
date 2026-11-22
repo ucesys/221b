@@ -57,6 +57,11 @@ export interface SherlockMsg {
   firstAt?: string
   doneAt?: string
   model?: string
+  /** The effort it ran at; under Auto how and why it was picked, and the model it moved the conversation up from (AI-48). */
+  effort?: string
+  pickBy?: string
+  pickWhy?: string
+  movedUpFrom?: string
   usage?: SherlockUsage
   costUSD?: number
   /** What the answer changed in the asking window's view (P6U-10). */

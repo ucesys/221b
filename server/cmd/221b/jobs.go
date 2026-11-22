@@ -83,7 +83,7 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 		Clusters: func() []jobs.Cluster {
 			var out []jobs.Cluster
 			for _, c := range manager.List() {
-				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name})
+				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name, Env: c.Env})
 			}
 			return out
 		},
@@ -309,8 +309,15 @@ func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentR
 	if err != nil {
 		return jobs.AgentResult{Err: err}
 	}
+	// A run's step is picked by rules alone (the owner, November 22), from
+	// what started the run and what the step is about (AI-45).
+	movedFrom := ""
+	if req.Auto != nil {
+		_, movedFrom = a.ai.PickRun(ctx, &agent, req.Auto.Input, req.Auto.Model, req.Auto.MovedUp)
+	}
 	res := a.engine.RunAgent(ctx, agent, q, req.Task)
-	return jobs.AgentResult{Text: res.Text, Model: res.Model, Tokens: jobs.Tokens{In: res.Usage.Prompt(), Out: res.Usage.OutputTokens}, CostUSD: res.CostUSD, Tools: res.Tools, Err: res.Err}
+	return jobs.AgentResult{Text: res.Text, Model: res.Model, Tokens: jobs.Tokens{In: res.Usage.Prompt(), Out: res.Usage.OutputTokens}, CostUSD: res.CostUSD, Tools: res.Tools, Err: res.Err,
+		Provider: agent.ProviderName, Effort: res.Effort, PickBy: res.PickBy, PickWhy: res.PickWhy, MovedUpFrom: movedFrom}
 }
 
 // --- One flow for findings and cases (Phase 12, wave 6, CF-05) ---

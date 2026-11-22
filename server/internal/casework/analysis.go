@@ -83,7 +83,8 @@ func (s *Service) event(c caseInfo, draft bool) jobs.Event {
 	if draft {
 		label = fmt.Sprintf("Draft the RCA of case %s", c.ID)
 	}
-	return jobs.Event{Kind: jobs.EventCase, Cluster: c.Cluster, Label: label, Ref: "case:" + c.ID, Data: request{Case: c, Draft: draft}}
+	pr := c.Priority
+	return jobs.Event{Kind: jobs.EventCase, Cluster: c.Cluster, Label: label, Ref: "case:" + c.ID, Data: request{Case: c, Draft: draft}, CasePriority: &pr}
 }
 
 // launch runs a case's analysis in the background, on the leader, where

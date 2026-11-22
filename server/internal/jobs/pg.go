@@ -391,7 +391,8 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 			trigger_event, trigger_key, trigger_is_rebuild, subject, repeats, last_seen_at, severity, fingerprint, ref, cluster_ids, model, started_at, ended_at, status, note,
 			report, routed_opened, routed_seen, routed_known, routed_excepted, routed_reopened, routed_regression, routed_verified, routed_capped, routed_invalid,
 			routed_ignored, routed_expected, verified_case_ids, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
-			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd::float8, not_routed, is_reroute, instance, is_without_findings
+			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd::float8, not_routed, is_reroute, instance, is_without_findings,
+			ai_provider_name, effort, pick_method, pick_why, moved_up_step, moved_up_from_model, moved_up_why
 		FROM job_runs ORDER BY position DESC`)
 	if err != nil {
 		return rec, false, err
@@ -401,11 +402,13 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 	var hasLeftOut bool
 	var slot, lastSeen, started, ended *time.Time
 	var clusters, verified, newChecks, failed []string
+	var mu MovedUp
 	if _, err := pgx.ForEachRow(rows, []any{&run, &r.ID, &r.Job, &r.Kind, &r.Label, &r.Agent, &r.Trigger.Kind, &r.Trigger.What, &r.Trigger.SetBy, &r.Trigger.By, &slot,
 		&r.Trigger.Event, &r.Trigger.Key, &r.Trigger.Rebuild, &r.Subject, &r.Repeats, &lastSeen, &r.Severity, &r.Fingerprint, &r.Ref, &clusters, &r.Model, &started, &ended,
 		&r.Status, &r.Note, &r.Report, &r.Routed.Opened, &r.Routed.Seen, &r.Routed.Known, &r.Routed.Excepted, &r.Routed.Reopened, &r.Routed.Regression, &r.Routed.Verified,
 		&r.Routed.Capped, &r.Routed.Invalid, &r.Routed.Ignored, &r.Routed.Expected, &verified, &newChecks, &failed, &hasLeftOut, &lo.Count, &lo.Cap, &lo.Severities.Critical,
-		&lo.Severities.Warning, &lo.Severities.Info, &r.NotRechecked, &r.Tokens.In, &r.Tokens.Out, &r.CostUSD, &r.NotRouted, &r.Reroute, &r.Instance, &r.NoFindings}, func() error {
+		&lo.Severities.Warning, &lo.Severities.Info, &r.NotRechecked, &r.Tokens.In, &r.Tokens.Out, &r.CostUSD, &r.NotRouted, &r.Reroute, &r.Instance, &r.NoFindings,
+		&r.Provider, &r.Effort, &r.PickBy, &r.PickWhy, &mu.Step, &mu.From, &mu.Why}, func() error {
 		x := r
 		x.Trigger.Slot, x.LastSeen, x.Started, x.Ended = timeOf(slot), timeOf(lastSeen), timeOf(started), timeOf(ended)
 		x.Clusters, x.VerifiedCases, x.NewChecks, x.FailedClusters = listOf(clusters), listOf(verified), listOf(newChecks), listOf(failed)
@@ -413,6 +416,11 @@ func readRuns(ctx context.Context, q db.Querier) (runsRecord, bool, error) {
 		if hasLeftOut {
 			y := lo
 			x.LeftOut = &y
+		}
+		x.MovedUp = nil
+		if mu.Step > 0 {
+			y := mu
+			x.MovedUp = &y
 		}
 		rec.Runs = append(rec.Runs, x)
 		return nil
@@ -434,19 +442,24 @@ func queueRun(b *pgx.Batch, r Run, position int64) {
 	if r.LeftOut != nil {
 		lo = *r.LeftOut
 	}
+	var mu MovedUp
+	if r.MovedUp != nil {
+		mu = *r.MovedUp
+	}
 	b.Queue(`INSERT INTO job_runs (job_run_id, run_key, position, job_id, kind, label, agent_id, trigger_kind, trigger_what, trigger_set_by, trigger_by, trigger_slot_at,
 			trigger_event, trigger_key, trigger_is_rebuild, subject, repeats, last_seen_at, severity, fingerprint, ref, cluster_ids, model, started_at, ended_at, status, note,
 			report, routed_opened, routed_seen, routed_known, routed_excepted, routed_reopened, routed_regression, routed_verified, routed_capped, routed_invalid,
 			routed_ignored, routed_expected, verified_case_ids, new_checks, failed_cluster_ids, has_left_out, left_out_count, left_out_cap, left_out_critical,
-			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd, not_routed, is_reroute, instance, is_without_findings)
+			left_out_warning, left_out_info, not_rechecked, tokens_in, tokens_out, cost_usd, not_routed, is_reroute, instance, is_without_findings,
+			ai_provider_name, effort, pick_method, pick_why, moved_up_step, moved_up_from_model, moved_up_why)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
-			$34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56)`,
+			$34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63)`,
 		id, r.ID, position, r.Job, r.Kind, r.Label, agent, r.Trigger.Kind, r.Trigger.What, r.Trigger.SetBy, r.Trigger.By, atOrNone(r.Trigger.Slot), r.Trigger.Event,
 		r.Trigger.Key, r.Trigger.Rebuild, r.Subject, r.Repeats, atOrNone(r.LastSeen), r.Severity, r.Fingerprint, r.Ref, list(r.Clusters), r.Model, at(r.Started),
 		atOrNone(r.Ended), r.Status, r.Note, r.Report, r.Routed.Opened, r.Routed.Seen, r.Routed.Known, r.Routed.Excepted, r.Routed.Reopened, r.Routed.Regression,
 		r.Routed.Verified, r.Routed.Capped, r.Routed.Invalid, r.Routed.Ignored, r.Routed.Expected, list(r.VerifiedCases), list(r.NewChecks), list(r.FailedClusters),
 		r.LeftOut != nil, lo.Count, lo.Cap, lo.Severities.Critical, lo.Severities.Warning, lo.Severities.Info, r.NotRechecked, r.Tokens.In, r.Tokens.Out, r.CostUSD,
-		r.NotRouted, r.Reroute, r.Instance, r.NoFindings)
+		r.NotRouted, r.Reroute, r.Instance, r.NoFindings, r.Provider, r.Effort, r.PickBy, r.PickWhy, mu.Step, mu.From, mu.Why)
 	for i, f := range r.Findings {
 		var k Key
 		if f.Key != nil {

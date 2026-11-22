@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { modelLabel } from '../../api/ai'
 import { fetchRuns, HEALTH_LABEL, healthTone, mergedNote, runStatus, usd, type RunBrief } from '../../api/jobs'
 import { useShowCosts } from '../../lib/costs'
 import { fmtTs } from '../../lib/format'
@@ -147,7 +148,7 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
                       <strong>{r.label}</strong>
                       <br />
                       <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
-                        {r.agent ? names.agent(r.agent) : 'no agent'}
+                        <span data-testid="run-agent-line">{[r.agent ? names.agent(r.agent) : 'no agent', modelLabel(r.model), r.effort].filter(Boolean).join(' · ')}</span>
                         {r.clusters?.length ? ` · ${r.clusters.map(names.cluster).join(', ')}` : ''}
                       </span>
                     </td>

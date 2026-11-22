@@ -7,6 +7,7 @@ import {
   makeDefaultProvider,
   removeProvider,
   removeProviderKey,
+  saveClassifier,
   saveProvider,
   saveProviderKey,
   testProvider,
@@ -81,6 +82,7 @@ export function ProvidersSection({ onToast, initial }: { onToast?: (msg: string)
           <ProviderCard key={p.id} p={p} onEdit={() => setEditing(p)} onChange={setOv} onError={setError} />
         ))}
       </div>
+      <ClassifierChoice ov={ov} onChange={setOv} onError={setError} onToast={onToast} />
       {editing && (
         <ProviderDrawer
           seed={editing === 'new' ? null : editing}
@@ -94,6 +96,53 @@ export function ProvidersSection({ onToast, initial }: { onToast?: (msg: string)
         />
       )}
     </>
+  )
+}
+
+/**
+ * Auto's classifier (phase-13.1-ai, AI-45): the OpenAI-compatible provider
+ * whose default model reads a conversation's message and answers low,
+ * medium or high, or none. Saved at once and audited.
+ */
+export function ClassifierChoice({ ov, onChange, onError, onToast }: { ov: AIOverview; onChange: (o: AIOverview) => void; onError: (e: string) => void; onToast?: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const choices = ov.providers.filter((p) => p.kind === 'openai' && p.id !== 'default')
+  const set = async (id: string) => {
+    setBusy(true)
+    onError('')
+    try {
+      onChange(await saveClassifier(id))
+      onToast?.(id ? `Auto’s classifier asks ${ov.providers.find((p) => p.id === id)?.name ?? id}.` : 'Auto’s classifier is off.')
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="rk-card" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12 }} data-testid="classifier">
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>Auto’s classifier</span>
+        <Select
+          label="Auto’s classifier"
+          value={ov.classifier || ''}
+          options={[['', 'Off'], ...choices.map((p) => [p.id, `${p.name}${p.model ? ` · ${p.model}` : ''}`] as [string, string])]}
+          onChange={(v) => void set(v)}
+          disabled={busy}
+          testId="classifier-provider"
+          width={260}
+        />
+      </div>
+      <span className="rk-fhint">
+        For an agent whose effort or model is Auto, a short request to this provider reads each message of a conversation and answers low, medium or high, within 1.5 seconds; slower, or off, the agent’s fixed defaults
+        apply (medium on Claude Sonnet 5.5). An OpenAI-compatible provider only, such as an in-house vLLM: free, and the messages stay on site. Jobs’ runs are picked by rules, never by the classifier.
+      </span>
+      {ov.classifierOff && (
+        <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="classifier-off">
+          Not used now: {ov.classifierOff}.
+        </span>
+      )}
+    </div>
   )
 }
 

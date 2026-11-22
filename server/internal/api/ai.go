@@ -30,6 +30,7 @@ import (
 func (s *Server) aiRoutes() {
 	s.handle("GET /api/v1/ai", "ai", s.getAI)
 	s.handle("PUT /api/v1/ai/limits", "ai-limits", s.putAILimits)
+	s.handle("PUT /api/v1/ai/classifier", "ai-classifier", s.putAIClassifier)
 	s.handle("POST /api/v1/ai/providers", "ai-provider-add", s.postAIProvider)
 	s.handle("PUT /api/v1/ai/providers/{id}", "ai-provider-update", s.putAIProvider)
 	s.handle("DELETE /api/v1/ai/providers/{id}", "ai-provider-remove", s.deleteAIProvider)
@@ -501,11 +502,15 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		in.SherlockClusters = append([]string{}, keep...)
 	}
+	before := agentSettingsOf(s.opts.AI.View(r.Context()), id)
 	if err := s.opts.AI.SaveAgent(r.Context(), id, in); err != nil {
 		s.aiFail(w, err)
 		return
 	}
 	d := fmt.Sprintf("agent %s: provider %s, model %s, caps $%.2f/$%.2f, clusters [%s], tools [%s]", id, firstOf(in.Provider, ai.DefaultProvider), firstOf(in.Model, "the provider's default"), in.DailyUSD, in.MonthlyUSD, strings.Join(in.Clusters, ", "), strings.Join(in.Tools, ", "))
+	// A change of what is left to Auto is saved at once and said in the
+	// audit record, before and after (the owner, November 22; AI-47).
+	d += autoChange(before, in.AgentSettings)
 	if in.On != nil {
 		d += fmt.Sprintf(", on %v", *in.On)
 	}
@@ -513,6 +518,51 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 		d += "; confirmed a single provider"
 	}
 	s.record(r, audit.ActionAISettings, "agent "+id, d)
+	s.getAI(w, r)
+}
+
+// agentSettingsOf is an agent's settings in an overview.
+func agentSettingsOf(o ai.Overview, id string) ai.AgentSettings {
+	for _, a := range o.Agents {
+		if a.ID == id {
+			return a.Settings
+		}
+	}
+	return ai.AgentSettings{}
+}
+
+// autoChange says an agent's effort, Auto and floor settings for its audit
+// record, and what they were when they changed (AI-47).
+func autoChange(was, next ai.AgentSettings) string {
+	say := func(a ai.AgentSettings) string {
+		return fmt.Sprintf("effort %s, model %s, floor %s/%s", firstOf(a.Effort, "the model's default"), firstOf(a.Model, "the provider's default"),
+			firstOf(a.FloorEffort, "none"), firstOf(a.FloorModel, "none"))
+	}
+	d := "; " + say(next)
+	if was.Effort != next.Effort || was.FloorEffort != next.FloorEffort || was.FloorModel != next.FloorModel || (was.Model == "auto") != (next.Model == "auto") {
+		d += " (was " + say(was) + ")"
+	}
+	return d
+}
+
+// putAIClassifier chooses the provider Auto's classifier asks, or none
+// (AI-45): saved at once and audited.
+func (s *Server) putAIClassifier(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	var in struct {
+		Provider string `json:"provider"`
+	}
+	if !decodeAutomation(w, r, &in) {
+		return
+	}
+	was := s.opts.AI.View(r.Context()).Classifier
+	if err := s.opts.AI.SetClassifier(r.Context(), in.Provider); err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	s.record(r, audit.ActionAISettings, "classifier", fmt.Sprintf("Auto's classifier: %s → %s", firstOf(was, "off"), firstOf(in.Provider, "off")))
 	s.getAI(w, r)
 }
 
@@ -780,12 +830,21 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 		Replays  int  `json:"replays"`
 		Estimate bool `json:"estimate"`
 		Live     bool `json:"live"`
+		// Effort and Model run the cases at an effort and on a model other
+		// than the agent's (AI-48): for measuring Auto's floor.
+		Effort string `json:"effort"`
+		Model  string `json:"model"`
 	}
 	if !decodeAutomation(w, r, &in) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	o := ai.TestOptions{Draft: !in.Live, Replays: min(max(in.Replays, 0), ai.MaxReplays), By: aiBy(r), Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}}
+	o := ai.TestOptions{Draft: !in.Live, Replays: min(max(in.Replays, 0), ai.MaxReplays), By: aiBy(r), Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
+		Effort: in.Effort, Model: in.Model}
+	if err := o.CheckOverride(); err != nil {
+		s.aiFail(w, err)
+		return
+	}
 	usd, cases, replays, err := s.opts.AI.Estimate(r.Context(), id, o)
 	if err != nil {
 		s.aiFail(w, err)
@@ -803,6 +862,9 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 	err = s.opts.AI.StartTests(ctx, id, o, func(run ai.TestRun, err error) {
 		defer cancel()
 		detail := fmt.Sprintf("tested: %d of %d cases passed, %d replays (%d the same), $%.4f", run.Passed, run.Cases, len(run.Replays), run.Same, run.CostUSD)
+		if o.Effort != "" || o.Model != "" {
+			detail += fmt.Sprintf(" (at effort %s on model %s)", firstOf(o.Effort, "as set"), firstOf(o.Model, "as set"))
+		}
 		outcome := audit.OutcomeOK
 		switch {
 		case err != nil:

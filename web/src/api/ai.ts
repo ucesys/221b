@@ -77,6 +77,46 @@ export interface AgentSettings {
   contextWindow?: number
   /** Sherlock's compact form: '' when needed, 'always' or 'never'. */
   compact?: CompactMode
+  /** Its effort (phase-13.1-ai, AI-43): '' the model's default, a level, or 'auto'. The model may be 'auto' on an Anthropic provider. */
+  effort?: Effort
+  /** The lowest effort and model Auto may pick (AI-47); '' none. */
+  floorEffort?: string
+  floorModel?: string
+}
+
+/** An agent's effort: the model's default (''), a level, or Auto. */
+export type Effort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto'
+
+/** The effort levels, lowest first, with their labels. */
+export const EFFORTS: { id: Effort; label: string }[] = [
+  { id: '', label: 'Default' },
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'Extra high' },
+  { id: 'max', label: 'Max' },
+  { id: 'auto', label: 'Auto' },
+]
+
+/** The value of a model left to Auto. */
+export const AUTO = 'auto'
+
+/** The models Auto picks among on Anthropic, when the server does not say (the owner, November 22). */
+export const AUTO_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']
+
+/** A model's name for people: "Claude Opus 5.5" for claude-opus-5-5; anything else as it is. */
+export function modelLabel(id?: string): string {
+  if (!id) return ''
+  const m = /^claude-(haiku|sonnet|opus|fable|mythos)-(\d+)(?:-(\d+))?$/.exec(id)
+  if (!m) return id
+  const family = m[1]!
+  return `Claude ${family[0]!.toUpperCase()}${family.slice(1)} ${m[2]}${m[3] ? '.' + m[3] : ''}`
+}
+
+/** What Auto's pick says: "high, picked: a P0 case". */
+export function pickText(effort?: string, why?: string): string {
+  if (!effort) return ''
+  return why ? `${effort}, picked: ${why}` : effort
 }
 
 export type CompactMode = '' | 'always' | 'never'
@@ -152,6 +192,11 @@ export interface AIOverview {
   clusters: { id: string; name: string; env: string }[]
   running: number
   knowledge: string
+  /** The provider Auto's classifier asks, '' none, and why it is not used when one is chosen (AI-45). */
+  classifier?: string
+  classifierOff?: string
+  /** The models Auto picks among on Anthropic. */
+  autoModels?: string[]
 }
 
 export interface CaseResult {
@@ -381,6 +426,7 @@ const enc = encodeURIComponent
 
 export const fetchAI = () => call<AIOverview>('GET', '/api/v1/ai')
 /** Saves the total limits and, when given, the providers' (by id; one left out keeps its own). */
+export const saveClassifier = (provider: string) => call<AIOverview>('PUT', '/api/v1/ai/classifier', { provider })
 export const saveLimits = (dailyUSD: number, monthlyUSD: number, providers?: Record<string, Caps>) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD, providers })
 export const addProvider = (p: AIProvider) => call<AIOverview>('POST', '/api/v1/ai/providers', p)
 export const saveProvider = (p: AIProvider) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(p.id)}`, p)
@@ -436,8 +482,14 @@ export const fetchPrompt = (id: string, cluster: string, draft: boolean) =>
 export const saveDraft = (id: string, house: string, notes: Record<string, string>, parts?: Record<string, string>) => call<Instructions>('PUT', `/api/v1/ai/agents/${enc(id)}/draft`, { house, notes, ...(parts ? { parts } : {}) })
 export const discardDraft = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/draft`)
 export const resolveBaseline = (id: string, action: 'keep' | 'take') => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/baseline`, { action })
-export const estimateTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live })
-export const startTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live })
+/** A test run at an effort and on a model of its own (AI-48), for measuring Auto's floor. */
+export interface TestAt {
+  effort?: string
+  model?: string
+}
+export const estimateTest = (id: string, replays: number, live = false, at?: TestAt) =>
+  call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live, ...at })
+export const startTest = (id: string, replays: number, live = false, at?: TestAt) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live, ...at })
 /** The agent's test run: the one in flight, with each case's state, else the latest that ended (Phase 12.1). */
 export const fetchTestRun = (id: string) => call<TestRun>('GET', `/api/v1/ai/agents/${enc(id)}/tests/run`)
 /** Stops the agent's tests in flight; the run is kept as stopped. */

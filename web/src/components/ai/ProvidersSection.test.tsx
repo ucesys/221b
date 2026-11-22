@@ -104,6 +104,27 @@ describe('the Providers section', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/ai/providers/gw/default')).toBe(true))
   })
 
+  it('chooses Auto’s classifier among the OpenAI-compatible providers, or off, saved at once (AI-45)', async () => {
+    const two = overview()
+    two.providers.push({ ...two.providers[0]!, id: 'a5000', name: 'A5000', kind: 'openai', model: 'qwen3.8-27b', default: false, usedBy: [] })
+    let classifier = ''
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ method: init?.method ?? 'GET', url: String(url), body })
+      if (String(url) === '/api/v1/ai/classifier') classifier = body.provider
+      return new Response(JSON.stringify({ ...two, classifier }))
+    })
+    render(<ProvidersSection />)
+    const box = await screen.findByTestId('classifier')
+    const sel = within(box).getByTestId('classifier-provider') as HTMLSelectElement
+    // The default provider, of kind Anthropic, is no choice.
+    expect([...sel.options].map((o) => o.textContent)).toEqual(['Off', 'A5000 · qwen3.8-27b'])
+    expect(box.textContent).toContain('within 1.5 seconds')
+    fireEvent.change(sel, { target: { value: 'a5000' } })
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/classifier', body: { provider: 'a5000' } }))
+    await waitFor(() => expect((within(screen.getByTestId('classifier')).getByTestId('classifier-provider') as HTMLSelectElement).value).toBe('a5000'))
+  })
+
   it('makes an id from a name and keeps only what was given', () => {
     expect(idFromName('Second gateway!')).toBe('second-gateway')
     expect(idFromName('42 Corp AI')).toBe('corp-ai')

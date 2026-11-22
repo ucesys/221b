@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { modelLabel, pickText } from '../../api/ai'
 import { caseHref } from '../../api/casework'
 import { cancelRun, fetchRun, HEALTH_LABEL, healthTone, mergedNote, runLimits, runStatus, usd, type Finding, type FindingRouting, type Routed, type Run, type RunFact } from '../../api/jobs'
 import { useAIOpsItem } from '../../lib/aiopsItem'
@@ -168,10 +169,29 @@ export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string)
           <span data-testid="run-trigger">{run.trigger.what}</span>
           {run.trigger.setBy ? <span style={{ color: 'var(--fg3)' }}> · trigger set by {run.trigger.setBy}</span> : null}
         </Fact>
+        {/* --- AI-48: agent, model with its provider, and effort as facts; under Auto, what was picked and why, and a move up with its step. --- */}
         <Fact label="Agent">
-          {run.agent ? names.agent(run.agent) : '—'}
-          {run.model ? <span style={{ color: 'var(--fg3)' }}> · {run.model}</span> : null}
+          <span data-testid="run-agent">{run.agent ? names.agent(run.agent) : '—'}</span>
         </Fact>
+        {run.model && (
+          <Fact label="Model">
+            <span data-testid="run-model">
+              {modelLabel(run.model)}
+              {run.provider ? <span style={{ color: 'var(--fg3)' }}> · {run.provider}</span> : null}
+            </span>
+            {run.movedUp && (
+              <span style={{ color: 'var(--fg3)' }} data-testid="run-moved-up">
+                {' '}
+                · moved up from {modelLabel(run.movedUp.from)} at step {run.movedUp.step}
+              </span>
+            )}
+          </Fact>
+        )}
+        {run.effort && (
+          <Fact label="Effort">
+            <span data-testid="run-effort">{run.pickBy ? pickText(run.effort, run.pickWhy) : run.effort}</span>
+          </Fact>
+        )}
         <Fact label="When">
           {fmtTs(run.started)}
           {run.ended ? ` to ${fmtTs(run.ended)}` : <span style={{ color: 'var(--fg3)' }}> · running {fmtAge(run.started, now)}</span>}

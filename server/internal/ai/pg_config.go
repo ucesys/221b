@@ -45,7 +45,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT ai_provider_id, name, kind, endpoint, auth, auth_header, auth_prefix, query, region, project, ca_cert, model,
 			price_in_usd::float8, price_out_usd::float8, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn, tested_error,
-			daily_limit_usd::float8, monthly_limit_usd::float8, is_default, is_removed
+			daily_limit_usd::float8, monthly_limit_usd::float8, is_default, is_removed, is_classifier
 		FROM ai_providers ORDER BY position, ai_provider_id`)
 	if err != nil {
 		return ps, false, err
@@ -54,10 +54,10 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	var t ProviderTest
 	var tested *time.Time
 	var caps sherlock.Caps
-	var isDefault, removed bool
+	var isDefault, removed, classifier bool
 	if _, err := pgx.ForEachRow(rows, []any{&p.ID, &p.Name, &p.Kind, &p.Endpoint, &p.Auth, &p.AuthHeaderName, &p.AuthPrefix, &p.Query, &p.Region, &p.Project,
 		&p.CACert, &p.Model, &p.PriceIn, &p.PriceOut, &p.ContextWindow, &tested, &t.OK, &t.Model, &t.Keyless, &t.Conn, &t.Error,
-		&caps.DailyUSD, &caps.MonthlyUSD, &isDefault, &removed}, func() error {
+		&caps.DailyUSD, &caps.MonthlyUSD, &isDefault, &removed, &classifier}, func() error {
 		found = true
 		var test *ProviderTest
 		if tested != nil {
@@ -77,6 +77,9 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 		}
 		if isDefault {
 			ps.DefaultID = p.ID
+		}
+		if classifier && ps.ClassifierID == "" {
+			ps.ClassifierID = p.ID
 		}
 		x := p
 		x.Tested, x.Headers = test, nil
@@ -106,7 +109,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 }
 
 func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
-	put := func(p Provider, position int, test *ProviderTest, isDefault, removed bool) error {
+	put := func(p Provider, position int, test *ProviderTest, isDefault, removed, classifier bool) error {
 		var tested *time.Time
 		var t ProviderTest
 		if test != nil {
@@ -117,17 +120,17 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 		caps := next.Limits[p.ID]
 		if _, err := tx.Exec(ctx, `INSERT INTO ai_providers (ai_provider_id, position, name, kind, endpoint, auth, auth_header, auth_prefix, query, region,
 				project, ca_cert, model, price_in_usd, price_out_usd, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn,
-				tested_error, daily_limit_usd, monthly_limit_usd, is_default, is_removed)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+				tested_error, daily_limit_usd, monthly_limit_usd, is_default, is_removed, is_classifier)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 			ON CONFLICT (ai_provider_id) DO UPDATE SET position = excluded.position, name = excluded.name, kind = excluded.kind, endpoint = excluded.endpoint,
 				auth = excluded.auth, auth_header = excluded.auth_header, auth_prefix = excluded.auth_prefix, query = excluded.query, region = excluded.region,
 				project = excluded.project, ca_cert = excluded.ca_cert, model = excluded.model, price_in_usd = excluded.price_in_usd,
 				price_out_usd = excluded.price_out_usd, context_window = excluded.context_window, tested_at = excluded.tested_at, tested_is_ok = excluded.tested_is_ok,
 				tested_model = excluded.tested_model, tested_is_keyless = excluded.tested_is_keyless, tested_conn = excluded.tested_conn,
 				tested_error = excluded.tested_error, daily_limit_usd = excluded.daily_limit_usd, monthly_limit_usd = excluded.monthly_limit_usd,
-				is_default = excluded.is_default, is_removed = excluded.is_removed`,
+				is_default = excluded.is_default, is_removed = excluded.is_removed, is_classifier = excluded.is_classifier`,
 			p.ID, position, p.Name, p.Kind, p.Endpoint, p.Auth, p.AuthHeaderName, p.AuthPrefix, p.Query, p.Region, p.Project, p.CACert, p.Model,
-			p.PriceIn, p.PriceOut, p.ContextWindow, tested, t.OK, t.Model, t.Keyless, t.Conn, t.Error, caps.DailyUSD, caps.MonthlyUSD, isDefault, removed); err != nil {
+			p.PriceIn, p.PriceOut, p.ContextWindow, tested, t.OK, t.Model, t.Keyless, t.Conn, t.Error, caps.DailyUSD, caps.MonthlyUSD, isDefault, removed, classifier); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM ai_provider_headers WHERE ai_provider_id = $1", p.ID); err != nil {
@@ -144,7 +147,7 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 	// What is kept of the default provider, when anything is.
 	if c := next.Limits[DefaultProvider]; next.DefaultName != "" || next.DefaultWindow != 0 || next.DefaultTested != nil || next.DefaultRemoved || c.DailyUSD != 0 || c.MonthlyUSD != 0 {
 		kept = append(kept, DefaultProvider)
-		if err := put(Provider{ID: DefaultProvider, Name: next.DefaultName, ContextWindow: next.DefaultWindow}, -1, next.DefaultTested, false, next.DefaultRemoved); err != nil {
+		if err := put(Provider{ID: DefaultProvider, Name: next.DefaultName, ContextWindow: next.DefaultWindow}, -1, next.DefaultTested, false, next.DefaultRemoved, false); err != nil {
 			return err
 		}
 	}
@@ -158,10 +161,11 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 	}
 	for i, p := range next.List {
 		kept = append(kept, p.ID)
-		if b, had := before[p.ID]; had && place[p.ID] == i && sameDoc(b, p) && sameDoc(old.Limits[p.ID], next.Limits[p.ID]) && (old.DefaultID == p.ID) == (next.DefaultID == p.ID) {
+		if b, had := before[p.ID]; had && place[p.ID] == i && sameDoc(b, p) && sameDoc(old.Limits[p.ID], next.Limits[p.ID]) && (old.DefaultID == p.ID) == (next.DefaultID == p.ID) &&
+			(old.ClassifierID == p.ID) == (next.ClassifierID == p.ID) {
 			continue
 		}
-		if err := put(p, i, p.Tested, next.DefaultID == p.ID, false); err != nil {
+		if err := put(p, i, p.Tested, next.DefaultID == p.ID, false, next.ClassifierID == p.ID); err != nil {
 			return err
 		}
 	}
@@ -197,9 +201,9 @@ func readAgents(ctx context.Context, q db.Querier) (Agents, bool, error) {
 	// A row is every agent's: only those an administrator chose something
 	// for are in the document.
 	rows, err := q.Query(ctx, `SELECT agent_id, is_enabled, coalesce(ai_provider_id, ''), model, daily_usd::float8, monthly_usd::float8, cluster_ids, tools,
-			context_window, compact_mode, baseline_tested,
+			context_window, compact_mode, baseline_tested, effort, floor_effort, floor_model,
 			(is_enabled IS NOT NULL OR ai_provider_id IS NOT NULL OR model <> '' OR daily_usd <> 0 OR monthly_usd <> 0 OR cluster_ids <> '{}'
-				OR tools <> '{}' OR context_window <> 0 OR compact_mode <> '')
+				OR tools <> '{}' OR context_window <> 0 OR compact_mode <> '' OR effort <> '' OR floor_effort <> '' OR floor_model <> '')
 		FROM agents`)
 	if err != nil {
 		return a, false, err
@@ -209,7 +213,8 @@ func readAgents(ctx context.Context, q db.Querier) (Agents, bool, error) {
 	var on *bool
 	var clusters, tools []string
 	var chosen bool
-	if _, err := pgx.ForEachRow(rows, []any{&id, &on, &s.Provider, &s.Model, &s.DailyUSD, &s.MonthlyUSD, &clusters, &tools, &s.ContextWindow, &s.Compact, &baseline, &chosen}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&id, &on, &s.Provider, &s.Model, &s.DailyUSD, &s.MonthlyUSD, &clusters, &tools, &s.ContextWindow, &s.Compact, &baseline, &s.Effort, &s.FloorEffort, &s.FloorModel,
+		&chosen}, func() error {
 		if baseline != "" {
 			if a.BaselineTested == nil {
 				a.BaselineTested = map[string]string{}
@@ -288,12 +293,14 @@ func writeAgents(ctx context.Context, tx pgx.Tx, old, next Agents) error {
 		// An agent with nothing chosen keeps its row, at the defaults:
 		// its instructions, tests and spending point at it.
 		if _, err := tx.Exec(ctx, `INSERT INTO agents (agent_id, is_enabled, ai_provider_id, model, daily_usd, monthly_usd, cluster_ids, tools, context_window,
-				compact_mode, baseline_tested)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				compact_mode, baseline_tested, effort, floor_effort, floor_model)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (agent_id) DO UPDATE SET is_enabled = excluded.is_enabled, ai_provider_id = excluded.ai_provider_id, model = excluded.model,
 				daily_usd = excluded.daily_usd, monthly_usd = excluded.monthly_usd, cluster_ids = excluded.cluster_ids, tools = excluded.tools,
-				context_window = excluded.context_window, compact_mode = excluded.compact_mode, baseline_tested = excluded.baseline_tested`,
-			id, s.On, provider, s.Model, s.DailyUSD, s.MonthlyUSD, clusters, tools, s.ContextWindow, s.Compact, next.BaselineTested[id]); err != nil {
+				context_window = excluded.context_window, compact_mode = excluded.compact_mode, baseline_tested = excluded.baseline_tested,
+				effort = excluded.effort, floor_effort = excluded.floor_effort, floor_model = excluded.floor_model`,
+			id, s.On, provider, s.Model, s.DailyUSD, s.MonthlyUSD, clusters, tools, s.ContextWindow, s.Compact, next.BaselineTested[id], s.Effort, s.FloorEffort,
+			s.FloorModel); err != nil {
 			return err
 		}
 	}

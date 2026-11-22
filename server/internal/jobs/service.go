@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -55,6 +56,17 @@ type AgentRequest struct {
 	// no call once it says stop (JB-10). A runner that does not is
 	// counted by the result's cost when it ends.
 	Meter Meter
+	// Auto is what Auto's rules read for this step of the run (AI-45): what
+	// started the run and what the step is about, the model the run started
+	// on ("" for its first step) and whether it moved up already.
+	Auto *AutoStep
+}
+
+// AutoStep is a step of a run as Auto's rules see it.
+type AutoStep struct {
+	Input   auto.RunInput
+	Model   string
+	MovedUp bool
 }
 
 // Meter counts a run's model calls as they end and says when the run's
@@ -66,12 +78,21 @@ type Meter interface {
 
 // AgentResult is what an agent's call came to.
 type AgentResult struct {
-	Text    string
-	Model   string
-	Tokens  Tokens
-	CostUSD float64
-	Tools   []string
-	Err     error
+	Text  string
+	Model string
+	// Provider names the provider it ran on; Effort the effort, "" for the
+	// model's default; PickBy and PickWhy how they were picked when Auto
+	// picked them; MovedUpFrom the model this step moved the run up from
+	// (AI-48).
+	Provider    string
+	Effort      string
+	PickBy      string
+	PickWhy     string
+	MovedUpFrom string
+	Tokens      Tokens
+	CostUSD     float64
+	Tools       []string
+	Err         error
 }
 
 // AgentRunner runs agents on their own; cmd/221b gives the console's, over
@@ -99,6 +120,10 @@ const NoAccessHint = "set Administration › AI › Jobs › reader role, or bin
 type Cluster struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Env is the cluster's environment as its connection marks it
+	// (production, staging, development, other); Auto's rules read it
+	// (AI-45).
+	Env string `json:"env,omitempty"`
 }
 
 // Alert is an alert on a cluster's Alerts tab, as the alert jobs see it.
@@ -436,6 +461,11 @@ type RunBrief struct {
 	NotFiled  int     `json:"notFiled,omitempty"`
 	CostUSD   float64 `json:"costUSD"`
 	Model     string  `json:"model,omitempty"`
+	// Provider, Effort and PickBy are the run's (AI-48), for the row's
+	// "Auditor · Claude Opus 5.5 · high".
+	Provider string `json:"provider,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	PickBy   string `json:"pickBy,omitempty"`
 	// NotRouted says why its findings were not routed into cases (W-8).
 	NotRouted string `json:"notRouted,omitempty"`
 	// Health is the worst of what it found, or failed, and Severities its
@@ -452,7 +482,7 @@ type RunBrief struct {
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
 		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, CostUSD: r.CostUSD, Model: r.Model,
-		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked}
+		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked, Provider: r.Provider, Effort: r.Effort, PickBy: r.PickBy}
 	for _, p := range r.Proposals {
 		if p.ID == "" {
 			b.NotFiled++

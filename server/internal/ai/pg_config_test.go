@@ -47,6 +47,8 @@ func TestProvidersInTheDatabase(t *testing.T) {
 			{ID: "local", Name: "Local", Provider: sherlock.Provider{Kind: sherlock.KindOpenAI, Endpoint: "http://ollama.ai.svc:11434/v1"}, Model: "llama"},
 		},
 		Limits: map[string]sherlock.Caps{"gateway": {DailyUSD: 5, MonthlyUSD: 50.5}, DefaultProvider: {MonthlyUSD: 100}},
+		// Auto's classifier (step 0052).
+		ClassifierID: "local",
 	}
 	save := func() {
 		t.Helper()
@@ -111,7 +113,10 @@ func TestAgentsInTheDatabase(t *testing.T) {
 		Agents: map[string]AgentSettings{
 			Auditor:        {On: &on, Provider: "gateway", Model: "gpt-5", DailyUSD: 2.5, MonthlyUSD: 20, Clusters: []string{"prod", "dev"}, Tools: []string{"review_cluster"}, ContextWindow: 64000, Compact: "auto"},
 			Troubleshooter: {On: &off},
-			ChangePlanner:  {Model: "claude-haiku-5-5"},
+			ChangePlanner:  {Model: "claude-haiku-5-5", Effort: "high"},
+			// Effort and Auto (step 0052): an agent with only these chosen
+			// is in the document.
+			Summarizer: {Effort: "auto", FloorEffort: "medium", FloorModel: "claude-sonnet-5-5"},
 		},
 		SingleProvider: true, Migrated: true,
 		BaselineTested: map[string]string{Auditor: "h1", Sherlock: "h2"},
@@ -147,7 +152,7 @@ func TestAgentsInTheDatabase(t *testing.T) {
 	delete(a.BaselineTested, Sherlock)
 	save()
 	var rows int
-	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM agents").Scan(&rows); err != nil || rows != 4 {
+	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM agents").Scan(&rows); err != nil || rows != 5 {
 		t.Fatalf("rows %d: %v", rows, err)
 	}
 	// A row made for what points at an agent says nothing of its settings.

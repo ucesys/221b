@@ -82,12 +82,23 @@ export interface RunBrief {
   notFiled?: number
   costUSD: number
   model?: string
+  /** The provider its agent ran on, the highest effort a step ran at, and how Auto picked it (AI-48). */
+  provider?: string
+  effort?: string
+  pickBy?: string
   health?: RunHealth
   severities?: Severities
   /** What the run could not be used for (I-3): see RunLimits. */
   failedClusters?: string[]
   leftOut?: LeftOut
   notRechecked?: number
+}
+
+/** A run's model moved up at one of its steps (AI-44): the step, from 1, the model before, and why. */
+export interface MovedUp {
+  step: number
+  from: string
+  why?: string
 }
 
 /**
@@ -223,6 +234,12 @@ export interface Run {
   failedClusters?: string[]
   leftOut?: LeftOut
   notRechecked?: number
+  /** What its agent ran with (AI-48): the provider, the highest effort, how and why Auto picked it, and the step that moved its model up. */
+  provider?: string
+  effort?: string
+  pickBy?: string
+  pickWhy?: string
+  movedUp?: MovedUp
 }
 
 /** One thing a run did, for its drawer (KN-28): a label, the value in words, where it leads. */

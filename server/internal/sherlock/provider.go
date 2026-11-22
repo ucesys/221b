@@ -380,6 +380,9 @@ func (c *Client) once(ctx context.Context, p Provider, req Request, onDelta func
 	}
 	if p.Kind == KindAnthropic {
 		hr.Header.Set("anthropic-version", APIVersion)
+		if b := betasOf(req); b != "" {
+			hr.Header.Set("anthropic-beta", b)
+		}
 	}
 	for k, v := range p.Headers {
 		hr.Header.Set(k, v)
@@ -462,6 +465,7 @@ func regionOf(host string) string {
 // to the endpoint itself when it already ends in /messages.
 func buildAnthropic(p Provider, req Request) (string, []byte, reader, error) {
 	req.Stream = true
+	req = claudeEffort(req, true)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return "", nil, nil, err
@@ -487,6 +491,9 @@ func buildVertex(p Provider, req Request) (string, []byte, reader, error) {
 		return buildOpenAI(p, base+"/endpoints/openapi", req)
 	}
 	req.Stream = true
+	// Vertex is sent the effort in force at the top level: the change of
+	// effort mid-conversation is the Claude API's beta.
+	req = claudeEffort(req, false)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return "", nil, nil, err

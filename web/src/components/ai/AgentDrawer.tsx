@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ALL_CLUSTERS,
+  AUTO,
+  AUTO_MODELS,
+  EFFORTS,
+  modelLabel,
   backToDraft,
   discardDraft,
   estimateTest,
@@ -26,6 +30,7 @@ import {
   words,
   type AgentChange,
   type CompactMode,
+  type Effort,
   type AgentView,
   type AIOverview,
   type Instructions,
@@ -148,6 +153,10 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   const changed = canon(set) !== canon({ ...agent.settings, ...(sherlock ? { sherlockClusters: agent.clusters ?? [], viewControl: ov.viewControl } : {}) })
   useUnsaved(changed, 'the agent drawer')
   const tools = set.tools ?? agent.tools
+  // Effort and Auto (phase-13.1-ai, AI-43, AI-44).
+  const anthropic = !provider?.kind || provider.kind === 'anthropic'
+  const autoModel = set.model === AUTO
+  const autoEffort = set.effort === AUTO
   const save = async () => {
     setBusy(true)
     setError('')
@@ -197,22 +206,50 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
         <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="agent-model-row">
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 200px' }}>
             Provider
-            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width={200} />
+            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => {
+                const kind = ov.providers.find((p) => p.id === v)?.kind
+                const keepsAuto = !kind || kind === 'anthropic'
+                setSet({ ...set, provider: v === 'default' ? undefined : v, ...(autoModel && !keepsAuto ? { model: undefined, floorModel: undefined } : {}) })
+              }}
+              testId="agent-provider"
+              width={200}
+            />
           </label>
           {/* --- AI settings, round 2 (Phase 12, wave 5): the provider's models in a dropdown, and the model's context. --- */}
           {/* --- FU-01: listed as the drawer opens and again when the provider changes; typed only when they cannot be listed. --- */}
-          <ModelPicker
-            label="Model"
-            listOnly
-            value={set.model || provider?.model || ''}
-            disabled={!set.model}
-            onChange={(model, listed) => setSet({ ...set, model: model || undefined, contextWindow: listed?.contextWindow || set.contextWindow })}
-            load={() => fetchModels(providerId)}
-            from={providerId}
-            suggestions={ov.models.map((m) => m.id)}
-            testId="agent-model"
-          />
-          {!!set.model && (
+          {autoModel ? (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
+              Model
+              <span className="rk-field" style={{ width: 260 }} data-testid="agent-model-auto">
+                <input readOnly value={`Auto: ${(ov.autoModels ?? AUTO_MODELS).map(modelLabel).join(', ')}`} />
+              </span>
+            </label>
+          ) : (
+            <ModelPicker
+              label="Model"
+              listOnly
+              value={set.model || provider?.model || ''}
+              disabled={!set.model}
+              onChange={(model, listed) => setSet({ ...set, model: model || undefined, contextWindow: listed?.contextWindow || set.contextWindow })}
+              load={() => fetchModels(providerId)}
+              from={providerId}
+              suggestions={ov.models.map((m) => m.id)}
+              testId="agent-model"
+            />
+          )}
+          {/* --- Effort (phase-13.1-ai, AI-43): beside the model. --- */}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 150px' }}>
+            Effort
+            <Select
+              label="Effort"
+              value={set.effort ?? ''}
+              options={EFFORTS.map((e) => [e.id, e.label] as [string, string])}
+              onChange={(v) => setSet({ ...set, effort: (v || undefined) as Effort | undefined, ...(v === AUTO || autoModel ? {} : { floorEffort: undefined }) })}
+              testId="agent-effort"
+              width={150}
+            />
+          </label>
+          {!!set.model && !autoModel && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
               Context window (tokens)
               <span className="rk-field" style={{ width: 150 }}>
@@ -233,13 +270,69 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
           <input
             type="checkbox"
             checked={!set.model}
-            onChange={(e) => setSet({ ...set, model: e.target.checked ? undefined : provider?.model || ov.defaultModel, contextWindow: e.target.checked ? undefined : set.contextWindow })}
+            onChange={(e) => setSet({ ...set, model: e.target.checked ? undefined : provider?.model || ov.defaultModel, contextWindow: e.target.checked ? undefined : set.contextWindow, floorModel: undefined })}
             data-testid="agent-default-model"
           />
           <span>
             Use the default model instead ({provider?.model || ov.defaultModel} on {provider?.name ?? 'the default provider'})
           </span>
         </label>
+        {/* --- Auto for the model (AI-44): only on an Anthropic provider, whose models Auto knows. --- */}
+        {anthropic && (
+          <label className="rk-tcheck" data-wrap="true" style={{ color: 'var(--fg)' }}>
+            <input
+              type="checkbox"
+              checked={autoModel}
+              onChange={(e) => setSet({ ...set, model: e.target.checked ? AUTO : undefined, contextWindow: undefined, floorModel: undefined })}
+              data-testid="agent-auto-model"
+            />
+            <span>Auto: let the console pick the model among {(ov.autoModels ?? AUTO_MODELS).map(modelLabel).join(', ')}</span>
+          </label>
+        )}
+        {(autoModel || autoEffort) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="agent-auto">
+            <span className="rk-fhint" data-testid="agent-auto-line">
+              Auto picks {autoEffort ? 'the effort for every message' : ''}
+              {autoEffort && autoModel ? ' and ' : ''}
+              {autoModel ? 'the model when a conversation or a run starts, moving it up once at most' : ''}: a job’s run by what started it (a P0 or P1 case, a production cluster, an alert, a schedule),
+              a conversation by the classifier ({ov.classifier ? (ov.providers.find((p) => p.id === ov.classifier)?.name ?? ov.classifier) : 'off: medium on Claude Sonnet 5.5'}). Never xhigh or max without an open P0 or P1 case;
+              one level lower past 80% of the day’s budget. Each pick is shown with the run or the answer.
+            </span>
+            <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {autoEffort && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
+                  Lowest effort Auto may pick
+                  <Select
+                    label="Lowest effort Auto may pick"
+                    value={set.floorEffort ?? ''}
+                    options={[['', 'None'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]}
+                    onChange={(v) => setSet({ ...set, floorEffort: v || undefined })}
+                    testId="agent-floor-effort"
+                    width={150}
+                  />
+                </label>
+              )}
+              {autoModel && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
+                  Lowest model Auto may pick
+                  <Select
+                    label="Lowest model Auto may pick"
+                    value={set.floorModel ?? ''}
+                    options={[['', 'None'], ...(ov.autoModels ?? AUTO_MODELS).map((m) => [m, modelLabel(m)] as [string, string])]}
+                    onChange={(v) => setSet({ ...set, floorModel: v || undefined })}
+                    testId="agent-floor-model"
+                    width={190}
+                  />
+                </label>
+              )}
+            </div>
+          </div>
+        )}
+        {!!set.effort && set.effort !== AUTO && !anthropic && (
+          <span className="rk-fhint" data-testid="agent-effort-hint">
+            {provider?.kind === 'openai' ? 'On an OpenAI-compatible provider, Low turns the model’s thinking off and any other level on.' : 'Sent where the model takes it; a model that takes no effort is sent none.'}
+          </span>
+        )}
         <ContextLine agent={agent} />
         {sherlock && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>

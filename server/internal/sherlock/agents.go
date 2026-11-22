@@ -65,6 +65,50 @@ type Agent struct {
 	// MaxTokens bounds one reply when the model's context is known to be
 	// small; 0 is the engine's Options.MaxTokens.
 	MaxTokens int
+	// --- Effort and Auto (phase-13.1-ai, AI-43 to AI-48) ---
+	// Effort is the effort it answers at: a level, or "" for its model's
+	// own default.
+	Effort string
+	// Auto, when set, picks its effort for each message and its model when
+	// a conversation starts (Chooser); Model and Effort are what it
+	// answers with until it has picked. A job's run is picked before the
+	// agent is run, by rules, and has none.
+	Auto Chooser
+	// PickBy and PickWhy say how Effort and Model were picked, for a run's
+	// record: rules, classifier or fixed; "" when they were set.
+	PickBy  string
+	PickWhy string
+}
+
+// topEffort is the top-level effort of an agent's requests: its own,
+// when Auto does not pick it message by message.
+func topEffort(a *Agent) *OutputConfig {
+	if a.Auto != nil || a.Effort == "" {
+		return nil
+	}
+	return &OutputConfig{Effort: a.Effort}
+}
+
+// applyChoice puts a pick in force on an agent: its model, when it picked
+// one, and its effort; Auto is done with it.
+func applyChoice(a *Agent, ch Choice) {
+	if ch.Model != "" {
+		a.Model = ch.Model
+		if ch.Price.ID != "" {
+			a.Price = ch.Price
+		}
+	}
+	a.Effort, a.Auto, a.PickBy, a.PickWhy = ch.Effort, nil, ch.By, ch.Why
+}
+
+// choose is a pick for a task an agent works on alone (a hand-over, a
+// test or a replay); its classifier's cost counts on the agent's ledger.
+func (s *Service) choose(ctx context.Context, a *Agent, text, inherit string) Choice {
+	ch := a.Auto.Choose(ctx, ChooseInput{Text: text, DayShare: DayShare(s.opts.Settings().Caps, s.opts.Ledger.Now(ctx), a), Inherit: inherit})
+	if ch.CostUSD > 0 {
+		s.opts.Ledger.AddFor(context.Background(), a.ID, ch.Provider, ch.CostUSD, false)
+	}
+	return ch
 }
 
 // maxTokens bounds one reply of an agent: its own bound, never above the
@@ -411,6 +455,9 @@ type Hand struct {
 	Usage    *Usage  `json:"usage,omitempty"`
 	CostUSD  float64 `json:"costUSD,omitempty"`
 	Hands    []*Hand `json:"hands,omitempty"`
+	// Effort is the effort the receiver worked at, "" for its model's
+	// default (AI-48).
+	Effort string `json:"effort,omitempty"`
 }
 
 func copyHands(in []*Hand) []*Hand {
@@ -596,7 +643,17 @@ func (s *Service) handOver(ctx context.Context, from *Agent, q Question, r *run,
 		return refuse("Not asked: " + err.Error())
 	}
 	task := clipBytes(strings.TrimSpace(in.Task), MaxHandOverTask)
-	h := &Hand{From: from.ID, FromName: from.Name, To: to.ID, ToName: to.Name, Task: task, Status: "running", Model: to.Model}
+	// A receiver left to Auto is picked for the task: in a job's run from
+	// the effort the run's rules gave the agent that handed it, never by
+	// the classifier (the owner, November 22).
+	if to.Auto != nil {
+		inherit := ""
+		if q.Meter != nil {
+			inherit = from.Effort
+		}
+		applyChoice(&to, s.choose(ctx, &to, task, inherit))
+	}
+	h := &Hand{From: from.ID, FromName: from.Name, To: to.ID, ToName: to.Name, Task: task, Status: "running", Model: to.Model, Effort: to.Effort}
 	r.lock()
 	if r.seq != nil {
 		*r.seq++
@@ -659,6 +716,11 @@ func (s *Service) handOver(ctx context.Context, from *Agent, q Question, r *run,
 type RunResult struct {
 	Text  string
 	Model string
+	// Effort is the effort it ran at, and PickBy and PickWhy how it was
+	// picked when Auto picked it (AI-48).
+	Effort  string
+	PickBy  string
+	PickWhy string
 	// Tools are the tools called, in order, the agents' own included;
 	// HandOvers the agents asked anywhere in the chain.
 	Tools     []string
@@ -677,6 +739,9 @@ type RunResult struct {
 func (s *Service) RunAgent(ctx context.Context, a Agent, q Question, task string) RunResult {
 	if err := s.capsErr(ctx, &a); err != nil {
 		return RunResult{Err: err, Model: a.Model}
+	}
+	if a.Auto != nil {
+		applyChoice(&a, s.choose(ctx, &a, task, ""))
 	}
 	ch := &chain{agents: []string{a.ID}}
 	var hands []*Hand
@@ -706,13 +771,18 @@ const LastRoundNote = "This is your last round: answer now from what you have re
 // the tools' results, also carries LastRoundNote. The history itself is
 // left as it is, so the note is never kept.
 func lastRound(history []Message, round, maxRounds int) []Message {
-	if round != maxRounds-1 || maxRounds < 2 || len(history) == 0 || history[len(history)-1].Role != "user" {
+	at := len(history) - 1
+	// A change of effort after the person's message is not the message.
+	if at > 0 && IsEffortMessage(history[at]) {
+		at--
+	}
+	if round != maxRounds-1 || maxRounds < 2 || at < 0 || history[at].Role != "user" {
 		return history
 	}
 	out := append([]Message(nil), history...)
-	last := out[len(out)-1]
+	last := out[at]
 	last.Content = append(append([]Block(nil), last.Content...), Block{Type: "text", Text: LastRoundNote})
-	out[len(out)-1] = last
+	out[at] = last
 	return out
 }
 
@@ -721,7 +791,7 @@ func lastRound(history []Message, round, maxRounds int) []Message {
 // replay's; a question's own answer runs in Service.answer. Progress
 // shows in h when given.
 func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r *run, h *Hand) RunResult {
-	out := RunResult{Model: a.Model}
+	out := RunResult{Model: a.Model, Effort: a.Effort, PickBy: a.PickBy, PickWhy: a.PickWhy}
 	defs := defsFor(a, q.Tools, r.chain.depth())
 	if n := len(defs); n > 0 {
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
@@ -758,7 +828,7 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 			out.Err = errors.New("too many tool rounds")
 			return out
 		}
-		req := Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: lastRound(history, round, s.opts.MaxRounds), Tools: defs}
+		req := Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: lastRound(history, round, s.opts.MaxRounds), Tools: defs, OutputConfig: topEffort(a)}
 		var roundText strings.Builder
 		resp, err := client.Stream(ctx, req, func(d Delta) {
 			if d.Text == "" || h == nil {
