@@ -144,6 +144,10 @@ console_ready=$(date -d "$(ready 221b)" +%s)
 notice "helm install" "On Kubernetes $MINOR the database was Ready $(( db_ready - start ))s after helm install, and the console $(( console_ready - db_ready ))s after the database."
 [ $(( console_ready - db_ready )) -le 60 ] || { echo "the console was Ready $(( console_ready - db_ready ))s after its database"; exit 1; }
 kubectl -n "$NS" get all,networkpolicy,serviceaccount,pvc
+# The agents on their own read as the user 221b:agents (JB-08): an audit
+# that can read nothing says so and stops (JB-23), so the cluster lets that
+# user read, as an administrator binds a role to it (values.yaml, jobs).
+kubectl create clusterrolebinding e2e-agents --clusterrole=view --user=221b:agents
 # What each person may see is what Kubernetes lets them (P3-02): the
 # administrator everything (SuperAdmin, 221b-super-admin), the viewer
 # everything but Secrets (SuperViewer, 221b-super-viewer), and the developer
@@ -403,7 +407,7 @@ endstep
 step "helm uninstall leaves nothing behind but the database's Secrets, volumes and Patroni's ConfigMaps"
 kubectl -n "$NS" delete pod -l e2e=crashloop --ignore-not-found
 kubectl delete rolebinding -A -l e2e=dev --ignore-not-found
-kubectl delete clusterrolebinding e2e-admin e2e-viewer --ignore-not-found
+kubectl delete clusterrolebinding e2e-admin e2e-viewer e2e-agents --ignore-not-found
 # The Watson tests set the local cluster's environment to production and
 # back: what is shown for it is kept like a connection, in a Secret the
 # chart does not own, which survives an uninstall as connections do.
