@@ -842,7 +842,9 @@ The aim, in the owner's words: select only the provider per agent, "and then it'
 
 *The A5000 measured on November 22* (`~/p13-qwen/` on `rke2cp1`: `bench.py`, `cases.json`, `bench.log`; 54 first messages labelled by Claude, not by a person): `qwen3.8-27b` with vLLM's constrained choice and thinking off agreed 52 of 54 times (96%), never picked a lower level than the label (both misses went up: *Open case C-3* as high, *What changed in the last hour before the alerts* as high), gave the same answer in two runs, and took 0.20 s (median; 0.43 s at most) one at a time, 1.16 s with eight at once; the first call took 1.34 s.
 
-**To decide while building** (the owner's, asked when the work starts): which models Auto picks among for Anthropic and with what signals; whether the jobs' picks are by rules alone or by the classifier too; what Effort means on a provider without it (Qwen on vLLM: thinking on or off, or not applied); whether a change of an agent's Auto settings needs a second SuperAdmin like its instructions; what the agent's page shows of the picks (the last ones, with why and cost).
+**Decided by the owner when the work started (November 22):** Auto picks among **Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5** on Anthropic; **a job's run is picked by rules alone** (what started it), the classifier is for conversations; **Effort on the A5000's Qwen means thinking off at `low` and on above it**; **a change of an agent's Auto settings is saved at once and audited**, with no second SuperAdmin.
+
+**Still to decide while building:** with what signals Auto picks among the three models; whether a change of an agent's Auto settings needs a second SuperAdmin like its instructions; what the agent's page shows of the picks (the last ones, with why and cost).
 
 #### B. Knowledge at scale, with semantic search
 
