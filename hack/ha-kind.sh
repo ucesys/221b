@@ -301,12 +301,27 @@ if [ "$MEMBERS" = 3 ]; then
   # The console's connections to the old primary fail; it opens new ones
   # through the Service, which now selects the new primary.
   check_database "$BASE_URL" api
+  # Each request is tried again for a while: right after a standby takes
+  # over, a request can still get a 503 before the console has reconnected
+  # (CI on main, November 22, 2026: 30 ms after the database answered, the
+  # setting was read and its write got a 503). The read waits up to 60 s
+  # for the setting, the write up to 30 s; what they check is unchanged.
+  kept=
   for _ in $(seq 60); do
-    api "$BASE_URL/api/v1/settings" | has "\"refreshSeconds\":$n" && break
+    if api "$BASE_URL/api/v1/settings" > "$WORK/settings.json" 2> "$WORK/settings.err"; then
+      has "\"refreshSeconds\":$n" "$WORK/settings.json" && { kept=1; break; }
+    fi
     sleep 1
   done
-  api "$BASE_URL/api/v1/settings" | has "\"refreshSeconds\":$n" || { echo "the setting saved before the failover is gone"; exit 1; }
-  api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":5}' "$BASE_URL/api/v1/settings" | has '"refreshSeconds":5'
+  [ -n "$kept" ] || { echo "the setting saved before the failover is gone: $(cat "$WORK/settings.err" "$WORK/settings.json")"; exit 1; }
+  saved=
+  for _ in $(seq 30); do
+    if api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":5}' "$BASE_URL/api/v1/settings" > "$WORK/settings.json" 2> "$WORK/settings.err"; then
+      has '"refreshSeconds":5' "$WORK/settings.json" && { saved=1; break; }
+    fi
+    sleep 1
+  done
+  [ -n "$saved" ] || { echo "a setting could not be saved after the failover: $(cat "$WORK/settings.err" "$WORK/settings.json")"; exit 1; }
   # The old primary comes back as a standby of the new one.
   db_settled 3
   check_both
