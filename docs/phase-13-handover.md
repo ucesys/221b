@@ -824,6 +824,19 @@ The owner's list; to be built, tested and deployed to `221b` like the rest. The 
 
 **To decide while building** (the owner's, asked when the work starts): which models Auto picks among for Anthropic and with what signals; whether the jobs' picks are by rules alone or by the classifier too; what Effort means on a provider without it (Qwen on vLLM: thinking on or off, or not applied); whether a change of an agent's Auto settings needs a second SuperAdmin like its instructions; what the agent's page shows of the picks (the last ones, with why and cost).
 
+### Planned: `phase-13.1-ai`, knowledge at scale with semantic search (the owner, November 22)
+
+Not 0.13, and not the Auto list (0c): a phase of its own, on a branch `phase-13.1-ai`, once the owner says to start. Why: Mycroft's knowledge is built for small sources. Today a file is sent to Mycroft only up to 24 KiB and kept for the search only up to about 29 KiB (24 chunks of 1,200 characters), every replica holds the whole index in memory, the search matches words alone (BM25), and every page Mycroft writes waits for a person; the owner means to add large sources (in-house documentation, full of typos and names written several ways; vendor documentation such as RKE2's). What agents see does not grow with the sources (`ask_knowledge` gives 6 hits): the work is in finding the right passage.
+
+1. **Documents cut by section.** A long Markdown, HTML or Word document is items by heading, not one item cut at 24 KiB, so all of it is read and searched (`requirements.md`, 713 KiB, is read to about 4% today).
+2. **The index in PostgreSQL.** The excerpts and pages in tables with full-text search (`tsvector`, GIN), shared by every replica, in place of the index each replica builds in memory from its local copy (KN-07, KN-11); the per-file excerpt cap goes.
+3. **Hybrid search, semantic search included** (decided by the owner): keyword search (with fuzzy matching, `pg_trgm`, for typos and spellings such as `r740a`/`r740-a`) and semantic search (embeddings with `pgvector`), their rankings merged; keyword search alone still answers when the embedding model cannot be reached. The embedding model on the A5000 by default (free, the documents stay on site), a provider's as an option; re-embedding everything when the model changes, as a job. **The database image needs `pgvector` and `pg_trgm`** (contrib, which the Wolfi image leaves out today): check that Wolfi packages both for PostgreSQL 18, and keep the image's scan and package copy (DB-94).
+4. **Metadata and weighting.** Each passage tagged with its source, product and version; vendor documentation filtered to the versions the clusters run (the console knows each cluster's Kubernetes and RKE2 versions); each source with a weight and a trust level, so the organisation's own runbooks rank above bulk vendor pages and an unreviewed excerpt says so.
+5. **Mycroft writes pages for what matters**, not for every item read: its cost and the Inbox's approvals no longer grow with a source. Its rewriting stays for in-house documents (it also cleans their typos and names).
+6. **Measured.** Before and after each step, a set of real questions with the passage that answers each (from the owner's documents, which this session cannot reach): how often the right passage is among the 6 hits, for keyword, fuzzy and semantic search.
+
+To decide when it starts (the owner's): the embedding model and where it runs; whether vendor documentation is ingested or looked up live per version; the bounds (sections, storage: about 4 KB of vector a section, so 100,000 sections are about 400 MB); the trust levels and who sets them.
+
 ### 1. Verify and ship what is here
 
 - The list under *To see in a cluster next*, and what was never run (three members, a switchover, a failover, a restore to a time).
