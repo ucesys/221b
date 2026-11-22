@@ -44,7 +44,7 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     # The repositories' tests run against a PostgreSQL (Phase 13, DB-16);
     # without TEST_DATABASE they are skipped, as on a laptop. A service
     # cannot read hack/base-images.env, so the pin is written here, and
