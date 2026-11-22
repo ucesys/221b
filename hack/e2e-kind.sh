@@ -165,6 +165,7 @@ docker run -d --rm --name 221b-kubeconfig-db -e POSTGRES_HOST_AUTH_METHOD=trust 
 for _ in $(seq 60); do docker exec 221b-kubeconfig-db pg_isready -q -h 127.0.0.1 && break; sleep 1; done
 docker run -d --rm --name 221b-kubeconfig --network host -v "$WORK/kubeconfig:/kubeconfig:ro" "$IMAGE" \
   -kubeconfig /kubeconfig -cluster-name laptop -listen "127.0.0.1:$KUBECONFIG_PORT" \
+  -release-namespace default -release-fullname laptop \
   -db-host 127.0.0.1 -db-port "$KUBECONFIG_DB_PORT" -db-user postgres -db-name postgres -db-sslmode disable > /dev/null
 for _ in $(seq 120); do curl -fs "http://127.0.0.1:$KUBECONFIG_PORT/readyz" >/dev/null && break; sleep 1; done
 names() { curl -fsS -b "$COOKIES" "$1/api/v1/snapshot?views=nodes" | python3 -c 'import json, sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["views"]["nodes"]["rows"])))'; }
