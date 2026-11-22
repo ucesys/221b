@@ -803,6 +803,20 @@ In this order; each with its tests, its requirement and its lines in the docs. C
    - The default stays Debian until the owner decides.
 4. **The owner's housekeeping on rke2cp1**: the Secret and database dumps under `~/p13-8` to `~/p13-13` deleted; `fs.inotify.max_user_instances=512` made to persist or set back.
 
+### 0c. The next iteration, still 0.13 (the owner, November 22)
+
+The owner's list; to be built, tested and deployed to `221b` like the rest. The aim, in his words: select only the provider per agent, "and then it's all auto".
+
+1. **An effort level for each agent.** Administration › AI › an agent: *Effort* with `low`, `medium`, `high`, `xhigh`, `max` and **Auto**, beside the model. Today the console sends no effort at all, so each model's own default applies (Claude Opus 5.5's is `medium`). Sent as `output_config.effort` to Anthropic's models that take it; for an OpenAI-compatible provider (the A5000's vLLM with Qwen) say what it maps to (thinking on or off, or the provider's own reasoning setting) or that the field does not apply.
+2. **Auto for the effort.** The console picks the level per conversation (Sherlock: once, from its first message) and per run (jobs: from what started it: a P0/P1 case, a production cluster, an alert, a schedule), never message by message (a change mid-conversation costs the prompt cache; see the note below). The pick is recorded on the conversation or the run, with why.
+3. **Auto for the model.** With the provider chosen, the console picks the provider's model by the same signals (for Anthropic, among its Haiku, Sonnet and Opus models; a provider with one model has nothing to pick). Auto model and Auto effort can be on together, so an agent can be set by its provider alone.
+4. **The classifier.** A short request to a provider chosen for it (the A5000 by default where one is configured: free, and the messages stay on site) that answers one constrained word; a timeout (1.5 seconds) after which the agent's fixed defaults apply; limits that Auto never crosses (for example no `xhigh`/`max` without an open P0/P1 case, and the day's budget stepping it down); its own on/off and provider in Administration › AI.
+5. **Measure before it is the default.** Each agent's test cases (the AI test dialog) at two or three levels, cost per finished task; the classifier against real first messages labelled by a person.
+
+*The A5000 measured on November 22* (`~/p13-qwen/` on `rke2cp1`: `bench.py`, `cases.json`, `bench.log`; 54 first messages labelled by Claude, not by a person): `qwen3.8-27b` with vLLM's constrained choice and thinking off agreed 52 of 54 times (96%), never picked a lower level than the label (both misses went up: *Open case C-3* as high, *What changed in the last hour before the alerts* as high), gave the same answer in two runs, and took 0.20 s (median; 0.43 s at most) one at a time, 1.16 s with eight at once; the first call took 1.34 s.
+
+**To decide while building** (the owner's, asked when the work starts): which models Auto picks among for Anthropic and with what signals; whether Auto applies to the jobs by rules alone or by the classifier too; whether a change of an agent's Auto settings needs a second SuperAdmin like its instructions; what the agent's page shows of the picks (the last ones, with why and cost).
+
 ### 1. Verify and ship what is here
 
 - The list under *To see in a cluster next*, and what was never run (three members, a switchover, a failover, a restore to a time).
