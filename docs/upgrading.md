@@ -56,7 +56,7 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories, and from 0.13.0 the session key) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## 0.13.0 (unreleased; Phase 13)
+## 0.13.0 (2026-11-22)
 
 - **A node's own Automation variables are the node's**. The Variables page always kept them under All nodes; only a card or an API request could put one under another fleet. A node that had different own values of one variable under two fleets could not run a script that reads it; after the upgrade it has one, the first by fleet id. Automation › Variables lists such conflicts: look before upgrading if you rely on that stop. After a rollback, the earlier release reads a node's own values under All nodes, where they apply as before.
 - **The console keeps its records in PostgreSQL, and does not run without it** (DB-69). This is the release's main change. `database.mode` is `bundled` by default, and `none` is gone: the chart refuses it and says what to set. **A 0.12 release, or one of mode `none`, gets the bundled database at this upgrade** unless its values say `external`. What to know before:
