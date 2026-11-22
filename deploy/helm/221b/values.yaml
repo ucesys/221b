@@ -48,8 +48,8 @@ allowedHosts: []
 
 # Replicas (P7-02). One is enough for most clusters; two or more keep the
 # console up while a node drains or a pod is replaced. The replicas share
-# sign-ins, settings, accounts and connections through Kubernetes (so
-# connections.store must be secrets), and elect one, through a Lease, to
+# sign-ins, settings, accounts and connections through the database and
+# the release's Secrets, and elect one, through a Lease, to
 # run Sherlock and Watson, whose conversations and approval cards live in
 # its memory; the others pass those requests to it. Losing a replica costs
 # its viewers a reconnect; losing the leader also loses open Sherlock
@@ -76,7 +76,7 @@ replicas:
 # browser the same update at the same moment. Nodes and pods are watched,
 # so the rate adds no load there. This is the starting value; the Settings
 # dialog changes it for everyone and keeps the choice in the console's
-# ConfigMap. 1s to 10m.
+# database. 1s to 10m.
 refresh: 3s
 # Read each node's boot time from its kubelet, for the uptime in the node
 # details. It is read through the API server's node proxy, once per node
@@ -227,7 +227,7 @@ auth:
     # docker run --rm -i <image> hash-password.
     # Or name an existing Secret holding the list under the key users.yaml.
     # Accounts made in the console are kept in a Secret of this namespace
-    # (with connections.store secrets); these stay read-only there.
+    # (<release>-users); these stay read-only there.
     users: []
     #  - email: ops@corp.example
     #    name: Ops
@@ -245,6 +245,20 @@ auth:
   # sign-in whatever happens.
   sessionIdle: 8h
   sessionMax: 168h
+  # How long a session lasts that was made while the session store could
+  # not be written (DB-65). The sessions are kept in the database
+  # (DB-66), so that is the database being
+  # away. Such a session is
+  # kept in its cookie, signed with a key the console makes at its first
+  # start in the Secret <release>-session-key, so every replica can check
+  # it without the store. It counts from sign-in, is not renewed by use,
+  # and becomes an ordinary session at the first request after the store
+  # is back. Until
+  # then it cannot be ended everywhere at once: a sign-out ends it on the
+  # replica that served it, and a password reset on the replicas that hold
+  # it; a local account disabled or deleted loses it at once everywhere.
+  # Keep it short. Between 1m and 24h.
+  outageSession: 30m
   # What each person sees is what Kubernetes lets them see (P3-02): the
   # console reads logs and YAML as them, by impersonation, and asks
   # Kubernetes, per namespace, whether they may list what each tab shows.
@@ -284,19 +298,19 @@ ingress:
     secretName: ""
 
 # Other clusters (P3-04 to P3-09). An administrator adds them in the
-# console; each connection is kept as a Secret in the release namespace,
-# named <release>-cluster-<id>, and the console's Role may manage Secrets
-# there (and only there). store: memory keeps them in memory instead,
-# losing them on restart, and grants nothing on Secrets.
-connections:
-  store: secrets
+# console; each connection is a row of the database, and its credential a
+# Secret in the release namespace, named <release>-cluster-<id>; the
+# console's Role may manage Secrets there (and only there). The
+# applications, the credentials and the sign-in sessions are rows of the
+# database too, with their secrets in Secrets beside. connections.store is
+# gone (DB-97): nothing is kept in memory in their place, and a values
+# file that still sets connections.store: memory is refused.
 
 sherlock:
   # Sherlock answers questions about a cluster through the Claude API
   # (Phase 5). It is off for every cluster until an administrator turns it
   # on in Settings and gives it an API key, which the console keeps in a
-  # Secret of its own namespace (<release>-sherlock) with connections.store
-  # secrets, otherwise in memory until a restart. Nothing is sent to the
+  # Secret of its own namespace (<release>-sherlock). Nothing is sent to the
   # API for a cluster where it is off.
   apiURL: https://api.anthropic.com
   # Another model API, or an enterprise gateway in front of one. Empty is
@@ -338,7 +352,8 @@ agents:
   # easiest from a file:
   #   helm upgrade … --set-file agents.troubleshooter.instructions=troubleshooter.md
   # The agents' providers, models, budgets and versions of instructions are
-  # kept in the ConfigMap <release>-ai.
+  # kept in the database; <release>-ai is where a release before 0.13 kept
+  # them, copied once at the first start with the database.
   sherlock:
     instructions: ""
   troubleshooter:
@@ -370,7 +385,7 @@ secrets:
   # the Namespaces tab lists no Secrets, the YAML view refuses them, the
   # Helm tab is hidden and the Networks tab doesn't check certificates.
   # Two grants stay: the console's Role on the Secrets of its own namespace
-  # (its connections, unless connections.store is memory), and SuperAdmin,
+  # (its connections' credentials and the other secrets), and SuperAdmin,
   # whose definitions both read every Secret (make people SuperViewers to
   # withhold Secrets).
   read: true
@@ -387,8 +402,10 @@ automation:
   # where SuperAdmins keep scripts, approve their versions once and run
   # them on a fleet's nodes over SSH. It runs nothing unless
   # toolbox.ssh.enabled is on too, since it reaches nodes only through
-  # their SSH pairings. Its records live in the ConfigMap
-  # <release>-automation.
+  # their SSH pairings. Its records are kept in the database
+  # (<release>-automation and -automation-runs are where a release before
+  # 0.13 kept them, copied once and deleted at the first start, with this
+  # off too: turned on later, they are there).
   enabled: true
   # runIdentities are the service accounts, by name, that Kubernetes scripts
   # and hooks may run as. Each adds impersonate on that name to the console's
@@ -402,7 +419,8 @@ issues:
   # each report is matched against the known issues, and the reporter is
   # told how it stands until it is resolved. Its API is /api/issues/v1/
   # (docs/issues-api.yaml). Its reports, known issues, services and
-  # settings live in the ConfigMap <release>-issues. Since Phase 12's wave
+  # settings are kept in the database (<release>-issues held them before
+  # 0.13, and is copied once). Since Phase 12's wave
   # 5 a report is a case, and every case (reported, from a finding or an
   # alert, or opened by hand) is kept there: false turns off the report
   # page and the issue API only, and Cases keep working.
@@ -437,8 +455,9 @@ issues:
 cases:
   # The agents' proposals (Phase 12, ADR-99 to ADR-102): every change an
   # agent wants, asked in a chat or on its own, waits as a durable Watson
-  # card in AIOps › Inbox and the cluster's Watson panel, in the ConfigMap
-  # <release>-proposals, until people approve or reject it, it expires (24
+  # card in AIOps › Inbox and the cluster's Watson panel, in the database
+  # (<release>-proposals held them before 0.13, and is copied once), until
+  # people approve or reject it, it expires (24
   # hours, or when its alert resolves), or a newer one replaces it.
   # The roles that may approve proposals, of superAdmin, superViewer,
   # admin and viewer: the approval permission. A SuperAdmin always may; a
@@ -452,18 +471,19 @@ cases:
   # exceptions.
   approverRoles: [superAdmin, admin]
   # --- One flow for findings and cases (Phase 12, wave 6, CF-20, CF-23) ---
-  # Every case is a ConfigMap of its own the console makes and deletes,
-  # <release>-case-<n> (labels app.kubernetes.io/instance=<release> and
-  # 221b.io/case=<n>), with one line per case in <release>-issues. So the
-  # console's Role grants create, list, get, update, patch and delete on
-  # ConfigMaps in its namespace: Kubernetes cannot grant by a name that
-  # does not exist yet, and the console lists only those with its labels.
-  # Keep the console in a namespace of its own.
+  # Every case is a row of the database. A release before 0.13 kept each
+  # in a ConfigMap of its own, <release>-case-<n> (labels
+  # app.kubernetes.io/instance=<release> and 221b.io/case=<n>), which the
+  # first start with the database copies and deletes. So the console's
+  # Role still grants list, get and delete on ConfigMaps in its namespace
+  # (DB-72): Kubernetes cannot grant by a name it does not know, and the
+  # console lists only those with its labels. Keep the console in a
+  # namespace of its own.
   #
   # The clean start: 0.12.0 changed what a case and a finding are, without
   # a migration. Set token to any new text (the date, say) and the leader
-  # deletes the Cases area's records once at start: the cases (the index
-  # and every case's ConfigMap) and known issues; the cases' work, the
+  # deletes the Cases area's records once at start: the cases and known
+  # issues; the cases' work, the
   # exceptions and RCAs; the jobs' runs and findings (the jobs, schedules
   # and instructions stay); the proposed changes agents made for cases or
   # runs (Watson's own cards and the standing approvals stay); Mycroft's
@@ -478,7 +498,7 @@ cases:
   # Standing approvals and notification channels (a generic webhook, Slack
   # and Microsoft Teams incoming webhooks) are set at run time in
   # Administration › Settings › Watson; each channel's address is kept in
-  # the Secret <release>-cases with connections.store secrets. With
+  # the Secret <release>-cases. With
   # networkPolicy.enabled, sherlock.egress opens HTTPS to any address,
   # which covers Slack and Teams; otherwise list the webhooks' addresses
   # under networkPolicy.outboundCIDRs and their ports under outboundPorts.
@@ -492,8 +512,8 @@ cases:
   # they open a case by hand or from a finding, change its priority,
   # complete it with an RCA, which goes to Knowledge, and reopen it. The
   # console-wide roles and those who may edit jobs read them. The cases
-  # are kept in the ConfigMap <release>-casework, which the chart creates
-  # empty; opening one starts the Troubleshooter when the case analysis
+  # are kept in the database (<release>-casework, which the chart still
+  # creates empty, held them before 0.13 and is copied once); opening one starts the Troubleshooter when the case analysis
   # job is on in Cases › Jobs. Nothing to set here.
 
 jobs:
@@ -503,7 +523,8 @@ jobs:
   # investigation of each new report, the Summarizer's daily digest. All
   # are off until a SuperAdmin turns them on there, each with its own
   # budget. Their output is read-only: runs with a report and findings,
-  # kept in the ConfigMap <release>-runs, and proposals that wait for a
+  # kept in the database (<release>-runs held them before 0.13), and
+  # proposals that wait for a
   # person in Cases › Inbox. They read the clusters as the user
   # 221b:agents with the role Administration › AI › Jobs chooses (Viewer by default;
   # bind a role to that user to let them read a namespace, or pick a group
@@ -512,19 +533,198 @@ jobs:
   # Europe/Berlin; each schedule can have its own. Empty is UTC.
   timeZone: ""
 
+# --- The database (Phase 13, docs/database.md) ---
+# The console keeps every record in PostgreSQL, and does not run without
+# it (DB-69). This says which PostgreSQL:
+#   bundled   the default: the chart runs one beside the console, from the
+#             image 221b-postgres (PostgreSQL with Patroni and WAL-G), one
+#             member with a 10 GiB volume of the default storage class.
+#   external  one you run: a managed service, your own Patroni or
+#             CloudNativePG cluster, a central database platform.
+# There is no mode without a database: none, which kept the records in
+# ConfigMaps, was removed in 0.13.0 and is refused. A release that had no
+# database (0.12, or none) gets the bundled one at its upgrade, and the
+# first start copies its ConfigMaps and Secrets in (docs/upgrading.md).
+# Moving between bundled and external later is a migration (a backup export
+# restored into the new one), so the chart refuses to flip the mode of an
+# installed release unless allowModeChange says the data was moved.
+database:
+  mode: bundled
+  allowModeChange: false
+  # How often a replica looks for changes the others made, besides being
+  # told through LISTEN/NOTIFY.
+  pollInterval: 30s
+  # A console does not start without its database: when the database does
+  # not answer at the start, the console tries for two minutes and stops,
+  # the kubelet starts it again, and nothing listens meanwhile (DB-02).
+  # Nothing here changes that. A console that loses its database while it
+  # runs goes on serving sign-in and the pages read live from the clusters.
+
+  bundled:
+    # One member, or three with a commit waiting for one of the two
+    # standbys. Turning it on later adds the standbys while the primary
+    # keeps serving.
+    ha: false
+    # One member is refused in a namespace labelled
+    # 221b.io/environment=production unless this says it is meant.
+    acknowledgeNoHA: false
+    image:
+      # PostgreSQL 18 and Patroni from Wolfi's packages, WAL-G's release
+      # (docs/database.md, "The image"), for linux/amd64 and linux/arm64;
+      # published with the console's image, under the same tags, and signed
+      # the same way (docs/releasing.md).
+      repository: ghcr.io/ucesys/221b-postgres
+      # Defaults to the chart's appVersion; a digest replaces the tag. With
+      # another image.tag for the console (main, pr-N), set the same here.
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    storage:
+      size: 10Gi
+      # Empty uses the cluster's default class.
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    # quorum: with standbys, a commit waits for one of them, so a failover
+    # loses nothing committed; alone, it waits for none. off: never waits.
+    synchronous: quorum
+    maxConnections: 100
+    # The three passwords (keys superuser-password, replication-password,
+    # app-password) and the backups' encryption key (backup-key, 64 hex
+    # digits). Empty: the chart makes the Secret <release>-db once and keeps
+    # it through upgrades and an uninstall, since the volumes outlive both.
+    existingSecret: ""
+    tls:
+      # A Secret with tls.crt, tls.key and ca.crt for the database's
+      # address. Empty: the chart makes a CA and a certificate, valid ten
+      # years, in <release>-db-tls.
+      secretName: ""
+    # A PodMonitor for Patroni's metrics, where the Prometheus Operator is.
+    podMonitor: false
+    backup:
+      # The write-ahead log is archived continuously and a base backup is
+      # taken on the schedule, so the database can be restored to any
+      # moment since the oldest base backup kept.
+      enabled: true
+      # When a base backup is taken: a cron expression of five fields in
+      # UTC (minute hour day-of-month month day-of-week), such as
+      # "0 2 * * *" (every day at 02:00), "0 */6 * * *" (every six hours)
+      # or "0 3 * * 0" (Sundays at 03:00); @daily, @weekly and the like
+      # too. Empty: every day at dailyAt.
+      schedule: ""
+      # UTC, HH:MM: the schedule of before 0.13, still taken when schedule
+      # is empty ("02:00" is "0 2 * * *").
+      dailyAt: "02:00"
+      retainBaseBackups: 7
+      s3:
+        # Empty: the backups go to a second volume instead, which does not
+        # survive losing the namespace's storage. Each member has its own,
+        # so with ha a bucket is the better place (docs/database.md).
+        bucket: ""
+        prefix: 221b
+        # For MinIO and other S3-compatible stores.
+        endpoint: ""
+        region: ""
+        forcePathStyle: false
+        # A Secret with access-key-id and secret-access-key. Empty: the pod's
+        # own AWS identity (serviceAccountAnnotations below).
+        credentialsSecret: ""
+        # The store's addresses and ports, for the network policy.
+        egressCIDRs: []
+        egressPorts: [443]
+      volume:
+        size: 20Gi
+        storageClass: ""
+    restore:
+      # A new installation that starts from the archive instead of empty:
+      # set on the first install only, then remove. It needs the Secret
+      # the backups were made with (its backup-key), and a backup volume
+      # is found only under the same release name and namespace
+      # (docs/database.md, Restore).
+      fromBackup: false
+      # RFC 3339, in quotes and with a time zone ("2026-11-20T02:19:29Z" or
+      # with an offset such as +00:00); empty restores to the newest point.
+      targetTime: ""
+    serviceAccountAnnotations: {}
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    priorityClassName: ""
+
+  external:
+    # The read-write endpoint: for CloudNativePG the cluster's -rw Service,
+    # for Patroni the primary's Service or a load balancer that follows it.
+    host: ""
+    port: 5432
+    # Made beforehand, owned by the user below; the console makes its
+    # tables in it. PostgreSQL 16 or later.
+    database: "221b"
+    user: "app_221b"
+    # The Secret and key holding the password. No name: no password, for a
+    # server that takes the client certificate alone, or with iamAuth.
+    passwordSecret:
+      name: ""
+      key: password
+    # Sign in with a token of the cloud's IAM in place of a password
+    # (DB-83; docs/database.md). The token is made for each new connection
+    # from the console's own identity, so no password is kept anywhere;
+    # it is sent over TLS only, and no passwordSecret is given with it.
+    #   none  a password (passwordSecret) or a client certificate.
+    #   aws   RDS or Aurora PostgreSQL: an RDS IAM authentication token,
+    #         signed with the ServiceAccount's IAM role (IRSA or EKS Pod
+    #         Identity) and valid for 15 minutes. Give aws.region. The role
+    #         needs rds-db:connect on
+    #         arn:aws:rds-db:<region>:<account>:dbuser:<DbiResourceId>/<user>,
+    #         the user GRANT rds_iam, and IRSA the ServiceAccount annotation
+    #         eks.amazonaws.com/role-arn (serviceAccount.annotations).
+    #   gcp   Cloud SQL for PostgreSQL with cloudsql.iam_authentication on:
+    #         an OAuth2 access token of the ServiceAccount's Google identity
+    #         (GKE Workload Identity: the annotation
+    #         iam.gke.io/gcp-service-account: <gsa>@<project>.iam.gserviceaccount.com
+    #         under serviceAccount.annotations, the Google service account
+    #         holding roles/cloudsql.instanceUser). user is the database
+    #         user of that account, <gsa>@<project>.iam. Cloud SQL's
+    #         certificate names the instance, not its address: give
+    #         sslMode verify-ca with the instance's server CA in caSecret.
+    iamAuth: none
+    aws:
+      # The RDS database's region, such as eu-west-1. Required with
+      # iamAuth aws.
+      region: ""
+    # verify-full, verify-ca or require; disable only with allowInsecure.
+    sslMode: verify-full
+    allowInsecure: false
+    # A Secret with ca.crt, the CA the server's certificate is verified
+    # against. Empty: the system's CAs.
+    caSecret: ""
+    # A Secret with tls.crt and tls.key, for a server that asks for a
+    # client certificate.
+    clientCertSecret: ""
+    # Most connections all the console's replicas open between them.
+    maxConnections: 20
+    # A direct address for the listener and the locks when host is a pooler
+    # in transaction mode (PgBouncer), which keeps neither.
+    listenerHost: ""
+    # The database's addresses, for the network policy. Empty allows any
+    # address on the port.
+    egressCIDRs: []
+
 backup:
   # Scheduled backups to S3 (Phase 12, ADR-81): set up on Administration ›
   # Backup, where a SuperAdmin names the bucket, the schedule, retention
   # and encryption. The access key and the passphrase are kept in the
-  # Secret <release>-backup with connections.store secrets (in memory
-  # otherwise); or the console signs with the ServiceAccount's own AWS
+  # Secret <release>-backup; or the console signs with the ServiceAccount's own AWS
   # identity (serviceAccount.annotations for IRSA, or EKS Pod Identity).
   #
   # Every backup, downloaded or sent to S3, carries the console's secrets
   # sealed with the install's backup key (ADR-137): 256 random bits the
   # console makes at its first start in the Secret <release>-backup-key
-  # (with connections.store secrets; in memory there is no key, and a
-  # backup holds placeholders). The Secret is kept when the release is
+  # The Secret is kept when the release is
   # uninstalled (it is not the chart's, and is annotated
   # helm.sh/resource-policy: keep), so a reinstall in the same
   # namespace reads the old backups. The console never shows the key: a
@@ -548,9 +748,9 @@ knowledge:
   # Mycroft's knowledge: the sources a SuperAdmin connects in Administration › AI ›
   # Knowledge (Confluence spaces, git repositories of runbooks, uploaded
   # documents, and what the console knows), and the wiki it keeps in a git
-  # repository or an S3 bucket. Its records are in the ConfigMap
-  # <release>-knowledge, every credential in the Secret <release>-knowledge
-  # (with connections.store secrets). A live source (Administration › AI › Knowledge,
+  # repository or an S3 bucket. Its records are in the database
+  # (<release>-knowledge held them before 0.13, and is copied once), every
+  # credential in the Secret <release>-knowledge. A live source (Administration › AI › Knowledge,
   # mode Live) is never copied: its pages are fetched when an agent
   # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
   #
@@ -576,24 +776,19 @@ knowledge:
   refresh:
     git: 15m
     s3: 5m
-  # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
-  # the wiki while Administration › AI › Knowledge names no store, so Mycroft's wiki
-  # can be tried without a repository or a bucket. Administration › AI › Knowledge
-  # shows it as "ConfigMap (temporary, for testing — will be removed; move
-  # to Git or S3 before relying on it)". It holds at most 900 KiB, and a
-  # write past that is refused; it will be removed, so move the wiki to
-  # Git or S3 there (Move the wiki here) before relying on it. false makes
-  # no such ConfigMap: the wiki is kept nowhere until a store is chosen.
-  configMapStore:
-    enabled: true
+  # While Administration › AI › Knowledge names no Git repository or S3
+  # bucket, the wiki is kept in the console's database (DB-96), 256 MiB at
+  # most (pages, excerpts and the changes waiting for review together); a
+  # write past that is refused whole. The temporary ConfigMap store of
+  # before (<release>-wiki, CF-57) is copied in once and deleted, and
+  # knowledge.configMapStore is gone.
 
 # --- Helm repositories (Phase 12, wave 5, ADR-123 to ADR-125) ---
 helmRepositories:
   # Applications install charts from git, and from the Helm repositories
   # and OCI registries a SuperAdmin lists in Settings › Applications. The
-  # list is kept in the settings ConfigMap; each password or token in the
-  # Secret <release>-helm-repositories (with connections.store secrets),
-  # which the console writes.
+  # list is kept in the database; each password or token in the
+  # Secret <release>-helm-repositories, which the console writes.
   #
   # The repositories' and registries' addresses, as CIDRs (the hosts the
   # charts' archives and a registry's token service are on too). Listed,
@@ -746,8 +941,9 @@ rbac:
   # secrets.read is on. With sign-in it may impersonate any user name
   # (Kubernetes cannot narrow that by rule, so the server alone decides
   # which name it sends; guard its token), only the groups listed in auth,
-  # and create access reviews. A Role to get and
-  # patch its own settings ConfigMap. It has no right on roles or
+  # and create access reviews. A Role on the ConfigMaps of before 0.13
+  # (read once for the copy into the database, then deleted: DB-72), the
+  # temporary wiki store's ConfigMap and its Secrets. It has no right on roles or
   # bindings, and no other writes, except Watson's with sign-in off and
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true

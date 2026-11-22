@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -63,6 +64,10 @@ type Options struct {
 type Service struct {
 	opts   Options
 	engine *sherlock.Service
+
+	// quiet keeps the reads' failures while the database is away to
+	// one line (DB-15).
+	quiet db.Quiet
 
 	mu      sync.Mutex
 	snap    snapshot
@@ -133,18 +138,21 @@ func (s *Service) read(ctx context.Context) snapshot {
 		return s.snap
 	}
 	var next snapshot
+	// With the database away the reads fail every few seconds: said once,
+	// and once when they work again (DB-15).
 	if _, err := load(ctx, s.opts.Backend, ProvidersKey, &next.providers); err != nil {
-		s.opts.Logger.Warn("reading the AI providers failed", "err", err)
+		s.quiet.Failed(s.opts.Logger, "reading the AI providers failed", err)
 		return s.snap
 	}
 	if _, err := load(ctx, s.opts.Backend, AgentsKey, &next.agents); err != nil {
-		s.opts.Logger.Warn("reading the AI agents failed", "err", err)
+		s.quiet.Failed(s.opts.Logger, "reading the AI agents failed", err)
 		return s.snap
 	}
 	if _, err := load(ctx, s.opts.Backend, PromptsKey, &next.prompts); err != nil {
-		s.opts.Logger.Warn("reading the AI instructions failed", "err", err)
+		s.quiet.Failed(s.opts.Logger, "reading the AI instructions failed", err)
 		return s.snap
 	}
+	s.quiet.Worked(s.opts.Logger, "the AI configuration is read again")
 	s.snap, s.readAt = next, now
 	return next
 }
@@ -344,7 +352,7 @@ func (s *Service) allSecrets(snap snapshot) []string {
 func (s *Service) usable(p Provider) string {
 	if p.Provider.Normalized(s.opts.DefaultURL).Auth == sherlock.AuthHeader && s.KeysFor(p.ID).Key() == "" && !KeylessOK(p) {
 		if p.ID == DefaultProvider {
-			return "Sherlock has no API key. An administrator adds one in Settings."
+			return "Sherlock has no API key. An administrator adds one in Administration › AI › Providers."
 		}
 		return fmt.Sprintf("The provider %s has no credential. An administrator adds one in Administration › AI › Providers.", p.Name)
 	}

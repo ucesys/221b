@@ -4,11 +4,7 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import type { Settings } from '../src/api/types'
-import { inKind, kubectl, sleep } from './cluster'
-
-const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
-const NAMESPACE = process.env.E2E_NAMESPACE ?? '221b'
-const CONFIGMAP = 'k8s-console-221b'
+import { sleep } from './cluster'
 
 // The console's own state is what to wait for, not the page's load event,
 // which Firefox in CI has been seen never firing for a second console open
@@ -24,14 +20,6 @@ async function openSettings(page: Page) {
   const settings = page.getByTestId('settings-page')
   await expect(settings).toBeVisible()
   return settings
-}
-
-/** What the server keeps: the ConfigMap's settings.json, through kubectl or the simulator. */
-async function savedSettings(): Promise<string> {
-  if (inKind) return kubectl('-n', NAMESPACE, 'get', 'configmap', CONFIGMAP, '-o', 'jsonpath={.data.settings\\.json}')
-  const res = await fetch(`${SIM}/api/v1/namespaces/${NAMESPACE}/configmaps/${CONFIGMAP}`)
-  const cm = (await res.json()) as { data?: Record<string, string> }
-  return cm.data?.['settings.json'] ?? ''
 }
 
 test.afterEach(async ({ request }) => {
@@ -117,7 +105,7 @@ test('the refresh rate is kept on the server and reaches every open console', as
   const rates = dialog.getByRole('group', { name: 'Refresh rate' })
   await expect(rates.getByRole('button', { name: '3 s' })).toHaveAttribute('aria-pressed', 'true')
   await expect(dialog.getByTestId('settings-status')).toContainText('Now every 3 s')
-  await expect(dialog.getByTestId('settings-status')).toContainText('Kept on the server in its ConfigMap')
+  await expect(dialog.getByTestId('settings-status')).toContainText('Kept on the server in its database')
 
   // Like every Settings section, it waits for Save (6.3 review).
   await rates.getByRole('button', { name: '10 s' }).click()
@@ -126,12 +114,11 @@ test('the refresh rate is kept on the server and reaches every open console', as
   await dialog.getByTestId('settings-save').click()
   await expect(dialog.getByTestId('settings-status')).toContainText('Now every 10 s')
 
-  // The server has it, and so does its ConfigMap.
+  // The server has it, kept in its database (DB-69).
   const saved = (await (await request.get('/api/v1/settings')).json()) as Settings
   expect(saved.refreshSeconds).toBe(10)
-  expect(saved.storage).toBe('configmap')
+  expect(saved.storage).toBe('database')
   expect(saved.changedAt).toBeTruthy()
-  await expect.poll(savedSettings).toContain('"refreshSeconds":10')
 
   // The Pending grace period: 2 minutes until changed, saved the same way.
   const grace = dialog.getByRole('group', { name: 'Alert on a pending pod after' })

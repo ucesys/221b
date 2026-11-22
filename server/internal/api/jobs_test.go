@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fake"
@@ -149,6 +153,54 @@ func TestReaderIdentity(t *testing.T) {
 		t.Fatalf("the toolbox reads as %+v", tsess.User)
 	}
 	if _, err := h.ReaderFor(context.Background(), "elsewhere", &sess); err == nil {
+		t.Fatal("a cluster that is not there")
+	}
+}
+
+// The reader identity is blind when Kubernetes lets it list none of what
+// an audit reads, across the cluster or in any namespace (JB-23); the
+// console itself never is.
+func TestReaderBlindJB23(t *testing.T) {
+	src := &source{Source: fake.New("n1"), logs: map[string][]string{}, deny: map[string]bool{}}
+	for _, ns := range []string{"web", "db"} {
+		src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
+	}
+	_, h, svc := jobsSetup(t, func(o *Options) {
+		o.Cluster = src
+		o.Store = live.New(src, live.Options{})
+		o.Access = access.NewCache(access.Options{TTL: time.Minute})
+	})
+	sess, _, err := svc.Reader(roles.Viewer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if b, err := h.ReaderBlind(ctx, "local", &sess); b || err != nil {
+		t.Fatalf("a reader that may read everything is blind: %v %v", b, err)
+	}
+	for _, rd := range readerReads {
+		src.deny[rd[1]+"/"] = true
+	}
+	var namespaces []string
+	for _, o := range src.Objects("namespaces", "") {
+		namespaces = append(namespaces, o.(metav1.Object).GetName())
+		src.deny["pods/"+o.(metav1.Object).GetName()] = true
+	}
+	if len(namespaces) == 0 {
+		t.Fatal("the fake cluster has no namespaces")
+	}
+	if b, err := h.ReaderBlind(ctx, "local", &sess); !b || err != nil {
+		t.Fatalf("a reader that may list nothing is not blind: %v %v", b, err)
+	}
+	if b, _ := h.ReaderBlind(ctx, "local", nil); b {
+		t.Fatal("the console itself is blind")
+	}
+	// One namespace it may read is enough.
+	src.allow("pods", namespaces[len(namespaces)-1])
+	if b, err := h.ReaderBlind(ctx, "local", &sess); b || err != nil {
+		t.Fatalf("a reader of one namespace is blind: %v %v", b, err)
+	}
+	if _, err := h.ReaderBlind(ctx, "elsewhere", &sess); err == nil {
 		t.Fatal("a cluster that is not there")
 	}
 }

@@ -2,6 +2,7 @@ package casework
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -87,6 +89,9 @@ type Options struct {
 // Service keeps the cases' work and routes the runs' findings.
 type Service struct {
 	o Options
+	// catchUpQuiet keeps the catch-up's reads of the proposed changes quiet
+	// while the database is away (DB-15).
+	catchUpQuiet db.Quiet
 
 	mu sync.Mutex
 	// active are the cases whose analysis runs on this replica.
@@ -575,28 +580,23 @@ func (s *Service) analyzing(ctx context.Context) map[int]bool {
 
 // List lists the cases, in their order.
 func (s *Service) List(ctx context.Context, c Caller, f Filter) ([]Brief, error) {
-	views, err := s.o.Issues.CaseViews(ctx, c.issue(), issues.Filter{Status: issues.Status(f.Status), Outcome: issues.Outcome(f.Outcome), Open: f.Open, Pending: f.Pending,
+	// The cases listed and no other: a query in the database (DB-88).
+	views, lines, err := s.o.Issues.CaseViews(ctx, c.issue(), issues.Filter{Status: issues.Status(f.Status), Outcome: issues.Outcome(f.Outcome), Open: f.Open, Pending: f.Pending,
 		Cluster: f.Cluster, Priority: f.Priority, Source: f.Source, Agents: f.Agents, People: f.People, Owner: f.Owner, Unassigned: f.Unassigned, Type: f.Type, Involved: f.Involved, Query: f.Q})
 	if err != nil {
 		return nil, err
 	}
-	lines, err := s.o.Issues.Index(ctx)
+	counts, err := s.o.Issues.NoActionCounts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	nofix := countNoFix(lines)
+	nofix := noFixCounts(counts)
 	busy, changes := s.analyzing(ctx), s.changeStages(ctx)
-	involved := map[int]bool{}
 	me := c.key()
-	for _, l := range lines {
-		if l.Involves(me) {
-			involved[l.Number] = true
-		}
-	}
 	out := make([]Brief, 0, len(views))
-	for _, v := range views {
+	for i, v := range views {
 		b := brief(v, busy[v.Number], nofix, changes[caseID(v.Number)])
-		b.Involved = involved[v.Number]
+		b.Involved = lines[i].Involves(me)
 		out = append(out, b)
 	}
 	named := s.clusterNamer()
@@ -983,8 +983,12 @@ func (s *Service) noteSent(ctx context.Context, n int, e Event, parts ...string)
 	s.noteAs(ctx, n, e, true, parts...)
 }
 
+// noteAs adds e to the work on case n. Work it leaves as it was is not
+// saved (DB-88): a note added to a case whose draft held nothing of it
+// is the message's row alone.
 func (s *Service) noteAs(ctx context.Context, n int, e Event, onlyDrafted bool, parts ...string) {
 	err := s.updateWork(ctx, n, func(w *Work) error {
+		before, _ := json.Marshal(w)
 		now := s.now()
 		line := e
 		drafted := clearSent(w, e.By, now, parts...)
@@ -993,6 +997,9 @@ func (s *Service) noteAs(ctx context.Context, n int, e Event, onlyDrafted bool, 
 		}
 		if line.What != "" && (!onlyDrafted || drafted != "") {
 			addEvent(w, line)
+		}
+		if after, _ := json.Marshal(w); string(after) == string(before) {
+			return errUnchanged
 		}
 		w.Updated = now
 		return nil

@@ -14,6 +14,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -133,6 +134,11 @@ func cardStatus(err error) int {
 
 // cardError answers a failure in the store's words.
 func cardError(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error
+	// (DB-15); the capital below made it a 500.
+	if db.Refuse(w, err) {
+		return
+	}
 	msg := err.Error()
 	for _, e := range []error{cards.ErrInvalid, cards.ErrState, cards.ErrOwn, cards.ErrForbidden, cards.ErrStale, cards.ErrFull} {
 		msg = strings.Replace(msg, e.Error()+": ", "", 1)

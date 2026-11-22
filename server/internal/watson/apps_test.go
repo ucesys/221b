@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 )
 
 // gitChart makes a repository with a small chart at charts/web, tagged
@@ -91,7 +92,7 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
 	tg, _ := simTarget(t)
 	tg.Cluster = "local"
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	tg.Apps = store
 	repo := gitChart(t)
 	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.0.0", RefKind: apps.RefTag}
@@ -158,6 +159,18 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	if _, code := run("helm uninstall hello -n web"); code == 0 {
 		t.Error("uninstalling twice succeeded")
 	}
+	// An application never installed (its install failed before a
+	// release was made) is removed by forgetting its record (the ninth
+	// cluster test).
+	if err := store.Save(context.Background(), apps.Record{Cluster: "local", Namespace: "web", Name: "never", Source: src}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run("helm uninstall never -n web"); code != 0 || !strings.Contains(out, "the application's record was removed") {
+		t.Errorf("removing an application never installed: exit %d\n%s", code, out)
+	}
+	if _, _, err := store.Get(context.Background(), "local", "web", "never"); err == nil {
+		t.Error("the record of an application never installed stays")
+	}
 
 	// Without a record, --app says so; without --git, the source is missing.
 	if out, code := run("helm install other --path charts/web --ref main -n web --app"); code == 0 || !strings.Contains(out, "no application web/other") {
@@ -190,7 +203,7 @@ func appLines(t *testing.T, store apps.Store) func(line string) (string, int) {
 // commands and the rest stay for the next Redeploy, and the token stays
 // with its repository.
 func TestADeployWithoutAppKeepsTheRecord(t *testing.T) {
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	run := appLines(t, store)
 	ctx := context.Background()
 	repo := gitChart(t)
@@ -268,7 +281,7 @@ func (s *changedDuringDeploy) Get(ctx context.Context, cluster, namespace, name 
 // A save made during a long upgrade stands: the deploy changes the record
 // as it is when the deploy ends, and only its own fields.
 func TestASaveDuringADeployStands(t *testing.T) {
-	mem := apps.NewMemoryStore()
+	mem := appstest.Store(t)
 	store := &changedDuringDeploy{Store: mem}
 	run := appLines(t, store)
 	ctx := context.Background()
@@ -298,7 +311,7 @@ func TestASaveDuringADeployStands(t *testing.T) {
 // A dependency the chart's values turn on and the repository does not
 // vendor is refused; turned off, it is no matter.
 func TestADeployOfAChartMissingAnEnabledDependencyIsRefused(t *testing.T) {
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	run := appLines(t, store)
 	repo := gitChart(t, map[string]string{
 		"charts/web/Chart.yaml":  "apiVersion: v2\nname: web\nversion: 1.0.0\ndependencies:\n  - name: postgresql\n    version: 15.x.x\n    repository: https://charts.example\n    condition: postgresql.enabled\n",
@@ -321,7 +334,7 @@ func TestAHelmDryRunCannotCarrySecretValues(t *testing.T) {
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
 	tg, _ := simTarget(t)
 	tg.Cluster = "local"
-	tg.Apps = apps.NewMemoryStore()
+	tg.Apps = appstest.Store(t)
 	asJSON := rest.CopyConfig(tg.Config)
 	asJSON.ContentType = "application/json"
 	k := kubernetes.NewForConfigOrDie(asJSON)

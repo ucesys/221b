@@ -33,10 +33,9 @@ type View struct {
 	Identity bool `json:"identity"`
 	Model    bool `json:"model"`
 	Console  bool `json:"console"`
-	// ConfigMapStore says the temporary ConfigMap store can be chosen
-	// (CF-57). While the settings name no store and it can, the view's
-	// store is it.
-	ConfigMapStore bool `json:"configMapStore"`
+	// DatabaseStore says the wiki can be kept in the console's database
+	// (DB-96). While the settings name no store, the view's store is it.
+	DatabaseStore bool `json:"databaseStore"`
 	// Pins are the certificates pinned for the sources, by id: their own,
 	// their credential's or their repository's (CR-19).
 	Pins map[string]Pinned `json:"pins,omitempty"`
@@ -51,7 +50,7 @@ func (s *Service) GetView(ctx context.Context, c Caller) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	v := View{Settings: set, Creds: map[string]CredState{}, Documents: map[string][]ItemState{}, Identity: s.o.Identity.Available(), Model: s.o.Model != nil, Console: s.o.Console != nil, ConfigMapStore: s.cmStore != nil}
+	v := View{Settings: set, Creds: map[string]CredState{}, Documents: map[string][]ItemState{}, Identity: s.o.Identity.Available(), Model: s.o.Model != nil, Console: s.o.Console != nil, DatabaseStore: s.dbStore != nil}
 	v.Settings.Store.Kind = s.storeKind(set.Store)
 	v.Pins = s.SourcePins(ctx, set)
 	for _, x := range set.Sources {
@@ -109,9 +108,9 @@ func (s *Service) storeWith(ctx context.Context, in StoreInput) (Store, StoreSet
 	if err := st.Validate(); err != nil {
 		return nil, st, err
 	}
-	if s.storeKind(st) == StoreConfigMap {
-		// The temporary store (CF-57) needs no keys.
-		store, err := s.openStore(StoreSettings{Kind: StoreConfigMap}, Creds{})
+	if s.storeKind(st) == StoreDatabase {
+		// The database store (DB-96) needs no keys.
+		store, err := s.openStore(StoreSettings{Kind: StoreDatabase}, Creds{})
 		return store, st, err
 	}
 	if st.Kind == "" {
@@ -168,8 +167,12 @@ func (s *Service) SaveStore(ctx context.Context, c Caller, in StoreInput) (Store
 	if err := st.Validate(); err != nil {
 		return StoreSettings{}, err
 	}
-	if st.Kind == StoreConfigMap && s.cmStore == nil {
-		return StoreSettings{}, invalid("this console has no ConfigMap for the wiki (the chart's <release>-wiki, -wiki-configmap): choose Git or S3")
+	if st.Kind == StoreConfigMap {
+		// The name of before (CF-57) is saved as what it is now (DB-96).
+		st.Kind = StoreDatabase
+	}
+	if st.Kind == StoreDatabase && s.dbStore == nil {
+		return StoreSettings{}, invalid("this console keeps no wiki in its database: choose Git or S3")
 	}
 	set, err := s.Settings(ctx)
 	if err != nil {
@@ -217,10 +220,10 @@ func describeStore(st StoreSettings, keys CredsChange) string {
 		if st.SSE != "" {
 			d += ", encrypted " + st.SSE
 		}
-	case StoreConfigMap:
-		d = "the wiki is kept in the ConfigMap <release>-wiki, temporary, for testing"
+	case StoreDatabase, StoreConfigMap:
+		d = "the wiki is kept in the console's database"
 	case "":
-		d = "the wiki is kept where the console keeps it by default: the temporary ConfigMap store when the chart made it, otherwise nowhere"
+		d = "the wiki is kept where the console keeps it by default: its database"
 	default:
 		d = "the wiki is kept nowhere"
 	}

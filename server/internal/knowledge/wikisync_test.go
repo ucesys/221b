@@ -376,3 +376,29 @@ func TestNightlyFullReadKN28(t *testing.T) {
 		}
 	}
 }
+
+// A removed source's credential leaves no empty key in the Secret
+// `<release>-knowledge`: the key goes, and the Secret stays (DB-61; the
+// ninth cluster test).
+func TestARemovedSourceLeavesNoEmptyKey(t *testing.T) {
+	f := newFixture(t)
+	f.conf.AddSpace("OPS")
+	tok := "read-token-123456"
+	if _, err := f.s.SaveSource(ctx, admin, Source{ID: "ops", Name: "OPS", Kind: SourceConfluence, BaseURL: f.conf.URL, Flavor: "datacenter", Space: "OPS"}, &tok, true); err != nil {
+		t.Fatal(err)
+	}
+	sec := f.s.o.Secrets.(*MemorySecret)
+	if _, _, found, _ := sec.LoadKey(ctx, sourceKey("ops")); !found {
+		t.Fatal("the source's token was not kept")
+	}
+	if err := f.s.RemoveSource(ctx, admin, "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, found, _ := sec.LoadKey(ctx, sourceKey("ops")); found {
+		t.Fatalf("the removed source's key stays, %d bytes", len(b))
+	}
+	// Removing it again, with no key, changes nothing.
+	if err := f.s.dropCreds(ctx, sourceKey("ops")); err != nil {
+		t.Fatal(err)
+	}
+}

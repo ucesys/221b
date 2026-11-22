@@ -157,6 +157,23 @@ func (s *SecretKey) DeleteKeyIf(ctx context.Context, key, version string) error 
 	return nil
 }
 
+// Keys names the Secret's keys, never their values: none when there is
+// no Secret.
+func (s *SecretKey) Keys(ctx context.Context) ([]string, error) {
+	sec, err := s.secrets.Get(ctx, s.name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the Secret %s: %w", s.ref, err)
+	}
+	keys := make([]string, 0, len(sec.Data))
+	for k := range sec.Data {
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
 // Sizes are how many bytes the Secret's data holds, its keys' names
 // counted, and how many of them are one key's (0 when it has none), for a
 // writer that keeps it under the 1 MiB a Secret holds.

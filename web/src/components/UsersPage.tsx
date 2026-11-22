@@ -105,7 +105,7 @@ export function UsersPage({ route, now, cluster, onToast }: AdminProps) {
       )}
       {data && !data.persistent && data.canCreate && (
         <p className="rk-t" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} role="status">
-          Local users created here are kept in memory and are lost when the console restarts. Keep them in a Secret with <span className="rk-mono">connections.store</span>, or define them in <span className="rk-mono">values.yaml</span>.
+          Local users created here are kept in memory and are lost when the console restarts. Keep them in a Secret with <span className="rk-mono">-users-secret</span> (the chart always does), or define them in <span className="rk-mono">values.yaml</span>.
         </p>
       )}
       <section className="rk-card" aria-label="Users" style={{ overflow: 'hidden' }}>

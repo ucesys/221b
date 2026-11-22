@@ -8,9 +8,28 @@ export class CallError extends Error {
     message: string,
     readonly status: number,
     readonly body?: Record<string, unknown>,
+    /** The answer says the console's database is unavailable (DB-15): what was asked for is not known, which is not the same as there being none. */
+    readonly databaseAway = false,
   ) {
     super(message)
     this.name = 'CallError'
+  }
+}
+
+/**
+ * How an answer says the database is unavailable (DB-15): a header the
+ * server sets on every such 503, whatever the words are. A part that is
+ * off answers 503 too, without it.
+ */
+export const DATABASE_HEADER = 'X-221b-Database'
+export const saysDatabaseAway = (res: Response) => res.headers?.get?.(DATABASE_HEADER) === 'unavailable'
+
+const awayListeners = new Set<() => void>()
+/** Calls fn whenever an answer says the database is unavailable, so that what shows its state reads it again at once; returns how to stop. */
+export function onDatabaseAway(fn: () => void): () => void {
+  awayListeners.add(fn)
+  return () => {
+    awayListeners.delete(fn)
   }
 }
 
@@ -36,7 +55,9 @@ export async function call<T>(url: string, init: RequestInit = {}, background = 
     } catch {
       // Not JSON: keep the status.
     }
-    throw new CallError(msg, res.status, body)
+    const away = saysDatabaseAway(res)
+    if (away) for (const fn of awayListeners) fn()
+    throw new CallError(msg, res.status, body, away)
   }
   return (await res.json()) as T
 }

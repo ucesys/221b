@@ -14,6 +14,12 @@ import (
 // RestConfig builds the client configuration for a connection from its
 // spec and credential.
 func RestConfig(s Spec, c Credential) (*rest.Config, error) {
+	// What the connection lacks is said whole: a connection whose Secret
+	// is gone lacks its CA certificate as well as its token, and both
+	// are given again.
+	if missing := lacks(s, c); len(missing) > 0 {
+		return nil, errors.New("the connection has no " + strings.Join(missing, " and no "))
+	}
 	var cfg *rest.Config
 	switch s.Auth {
 	case AuthToken:
@@ -97,4 +103,28 @@ func RestConfig(s Spec, c Credential) (*rest.Config, error) {
 	cfg.UserAgent = "221b/" + version.Version
 	cfg.QPS, cfg.Burst = 50, 100
 	return cfg, nil
+}
+
+// lacks names what a connection needs to sign in that its credential
+// does not hold.
+func lacks(s Spec, c Credential) []string {
+	var out []string
+	switch s.Auth {
+	case AuthToken:
+		if strings.TrimSpace(c.Token) == "" {
+			out = append(out, "token")
+		}
+	case AuthKubeconfig:
+		if strings.TrimSpace(c.Kubeconfig) == "" {
+			out = append(out, "kubeconfig")
+		}
+	case AuthCert:
+		if c.CertPEM == "" || c.KeyPEM == "" {
+			out = append(out, "client certificate and key")
+		}
+	}
+	if s.CA == CAPEM && s.Auth != AuthKubeconfig && strings.TrimSpace(c.CAPEM) == "" {
+		out = append(out, "CA certificate")
+	}
+	return out
 }

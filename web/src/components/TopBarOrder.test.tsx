@@ -5,7 +5,7 @@ import { setPref } from '../lib/prefs'
 import { parseHash } from '../lib/router'
 import type { InboxCounts } from './aiops/useInbox'
 import { inboxCounts } from './aiops/useInbox'
-import { suggestionRow, type InboxRow } from './aiops/inboxRows'
+import { approvalRow, suggestionRow, type InboxRow } from './aiops/inboxRows'
 import { bellOf, TopBar } from './TopBar'
 
 // What the Inbox has pending for the person, as each test sets it.
@@ -160,6 +160,53 @@ describe('the bell is the Inbox’s (CF-80)', () => {
     ])
     expect(c).toMatchObject({ total: 5, p0: 1, p1: 2 })
     expect(c.byKind).toMatchObject({ case: 4, proposal: 1, approval: 0 })
+  })
+
+  it('counts what the person asked for and someone else decides, which makes the bell yellow (IN-11)', () => {
+    const version = { kind: 'script', state: 'pending', what: 'reserve v2', requestedBy: 'Ann', requestedAt: '2026-11-02T00:00:00Z', script: 'reserve', version: 2 } as const
+    // Their own, waiting for another SuperAdmin: listed and counted, as everything pending in the Inbox is.
+    const own = inboxCounts([approvalRow({ ...version, own: true, waitingFor: 'another SuperAdmin' })])
+    expect(own).toMatchObject({ total: 1, p0: 0, p1: 0 })
+    expect(own.byKind.approval).toBe(1)
+    expect(bellOf(own)).toEqual({ state: 'waiting', text: '1 waiting for you: open AIOps › Inbox' })
+    // The approver's row of the same version counts the same.
+    const theirs = inboxCounts([approvalRow(version)])
+    expect(theirs.byKind.approval).toBe(1)
+    expect(bellOf(theirs)).toEqual({ state: 'waiting', text: '1 waiting for you: open AIOps › Inbox' })
+    // Beside one that waits for them to decide, both count.
+    expect(inboxCounts([approvalRow({ ...version, own: true, waitingFor: 'another SuperAdmin' }), approvalRow({ ...version, script: 'other', what: 'other v1', version: 1 })]).total).toBe(2)
+    // Decided, it is no longer pending and leaves the count.
+    expect(inboxCounts([approvalRow({ ...version, state: 'approved', own: true, waitingFor: 'another SuperAdmin' })]).total).toBe(0)
+  })
+
+  it('shows a mark that the count is not known, on the tab and on the bell, while the Inbox cannot be read (DB-15)', () => {
+    // The numbers are of what was last read: nothing shows them.
+    counts = { total: 3, byKind: { case: 2, proposal: 1, approval: 0, known: 0, knowledge: 0, rule: 0 }, p0: 1, p1: 0, unknown: true }
+    expect(bellOf(counts)).toEqual({ state: 'unknown', text: 'What waits for you is not known: the database is unavailable. Open AIOps › Inbox' })
+    // Nothing read at all: still unknown, never "Nothing waiting for you".
+    expect(bellOf({ ...none, unknown: true }).state).toBe('unknown')
+    bar()
+    const tab = document.querySelector('[data-cases-tab=inbox]') as HTMLElement
+    const mark = screen.getByTestId('inbox-count-unknown')
+    expect(tab.contains(mark)).toBe(true)
+    expect(mark.textContent).toBe('?')
+    expect(mark.getAttribute('aria-label')).toBe('What waits for you is not known: the database is unavailable')
+    expect(tab.textContent).toBe('Inbox?')
+    const bell = screen.getByTestId('inbox-bell')
+    expect(bell.getAttribute('data-state')).toBe('unknown')
+    expect(bell.getAttribute('aria-label')).toBe('What waits for you is not known: the database is unavailable. Open AIOps › Inbox')
+    // Not red for the P0 it last knew of, and a question mark that a screen reader skips for the name.
+    expect(bell.style.color).toBe('')
+    expect(screen.getByTestId('inbox-bell-unknown').textContent).toBe('?')
+    expect(screen.getByTestId('inbox-bell-unknown').getAttribute('aria-hidden')).toBe('true')
+    cleanup()
+    // Known again: the number, and no mark.
+    counts = { ...counts, unknown: false }
+    bar()
+    expect(screen.queryByTestId('inbox-count-unknown')).toBeNull()
+    expect(screen.queryByTestId('inbox-bell-unknown')).toBeNull()
+    expect((document.querySelector('[data-cases-tab=inbox]') as HTMLElement).textContent).toBe('Inbox3')
+    expect(screen.getByTestId('inbox-bell').getAttribute('data-state')).toBe('p01')
   })
 
   it('counts a suggested validation rule, which makes the bell yellow (CF-87)', () => {

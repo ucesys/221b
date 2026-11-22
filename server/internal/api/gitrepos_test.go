@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
@@ -29,7 +30,7 @@ import (
 func TestGitRepositoriesInSettingsRepositories(t *testing.T) {
 	apps.AllowLocalRepos = true
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
-	raw := apps.NewMemoryStore()
+	raw := appstest.Store(t)
 	creds := credentials.New(credentials.Options{})
 	repos := apps.NewRepos(apps.RepoOptions{Credentials: creds})
 	store := apps.WithRepositories(raw, repos)

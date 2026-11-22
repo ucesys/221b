@@ -74,10 +74,36 @@ func (e *RunEnv) budgetErr() error {
 	return nil
 }
 
+// runMeter counts one Ask's model calls on its run as each ends (JB-10):
+// the asked agent's rounds and those of every agent it hands work to.
+type runMeter struct {
+	e *RunEnv
+	// counted says the runner counted a call here.
+	counted bool
+}
+
+func (m *runMeter) Spend(in, out int, usd float64) {
+	m.e.mu.Lock()
+	defer m.e.mu.Unlock()
+	m.e.cost += usd
+	m.e.tokens.In += in
+	m.e.tokens.Out += out
+	m.counted = true
+}
+
+func (m *runMeter) Stop() error {
+	m.e.mu.Lock()
+	defer m.e.mu.Unlock()
+	return m.e.budgetErr()
+}
+
 // Ask runs the job's agent on a cluster with a task, as the reader
-// identity, and counts what it spent. It refuses once the run's or the
-// day's budget is spent (JB-10): a call under way is not cut short, so a
-// run can pass its budget by what its last call cost.
+// identity, and counts what it spent. No model call starts once the
+// run's or the day's budget is spent (JB-10): the agent's rounds, and
+// the agents it hands work to, are counted on the run as each call ends,
+// and the next call is refused, in a hand-over too. A call under way is
+// not cut short, so a run passes its budget by at most what one call
+// cost: the run's calls are made one at a time.
 func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, error) {
 	e.mu.Lock()
 	err := e.budgetErr()
@@ -91,11 +117,16 @@ func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, er
 	if e.Kind.Agent == "" {
 		return AgentResult{}, errors.New("this job has no agent")
 	}
-	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings, ForReporters: e.Kind.ForReporters})
+	m := &runMeter{e: e}
+	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings,
+		ForReporters: e.Kind.ForReporters, Meter: m})
 	e.mu.Lock()
-	e.cost += res.CostUSD
-	e.tokens.In += res.Tokens.In
-	e.tokens.Out += res.Tokens.Out
+	if !m.counted {
+		// A runner that counts nothing on the meter is counted when it ends.
+		e.cost += res.CostUSD
+		e.tokens.In += res.Tokens.In
+		e.tokens.Out += res.Tokens.Out
+	}
 	if res.Model != "" {
 		e.model = res.Model
 	}
@@ -375,10 +406,29 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	rctx, cancel := context.WithTimeout(cctx, s.o.RunTimeout)
 	var out Outcome
 	var rerr error
-	if k.Run == nil {
+	// An audit reads only the clusters its identity can read (JB-23): the
+	// others are said, and none counts as read.
+	blind := s.blind(rctx, k, env)
+	env.Clusters = slices.DeleteFunc(env.Clusters, func(c string) bool { return slices.Contains(blind, c) })
+	switch {
+	case len(blind) > 0 && len(env.Clusters) == 0:
+		rerr = errNoAccess
+	case k.Run == nil:
 		rerr = errors.New("this kind of job has nothing to run")
-	} else {
+	default:
 		out, rerr = k.Run(rctx, env)
+	}
+	if len(blind) > 0 {
+		names := make([]string, len(blind))
+		for i, c := range blind {
+			names[i] = s.clusterName(c)
+		}
+		env.Note("the agents' identity (221b:agents) cannot read any namespace of %s, so nothing there was looked at: %s", strings.Join(names, ", "), NoAccessHint)
+		for _, c := range blind {
+			if !slices.Contains(out.Failed, c) {
+				out.Failed = append(out.Failed, c)
+			}
+		}
 	}
 	timedOut := errors.Is(rctx.Err(), context.DeadlineExceeded)
 	var byPerson *cancelled
@@ -400,6 +450,8 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	case byPerson != nil:
 		r.Status = StatusCancelled
 		notes = append(notes, "cancelled by "+byPerson.by.Label())
+	case errors.Is(rerr, errNoAccess):
+		r.Status = StatusNoAccess
 	case rerr == nil:
 		r.Status = StatusOK
 	case errors.Is(rerr, ErrBudget):
@@ -425,12 +477,15 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	// Each finding becomes a case or joins one (CF-01); the fixes the run
 	// re-checked inside its scope are verified (W-1).
 	r.Routed = Routed{}
-	if s.o.Router != nil && len(k.Checks) > 0 {
+	if s.o.Router != nil && len(k.Checks) > 0 && r.Status != StatusNoAccess {
 		res := s.o.Router.Route(sctx, RouteInput{Run: r.ID, Job: j.ID, Kind: k.ID, Label: r.Label, Clusters: r.Clusters, OK: r.Status == StatusOK, Findings: r.Findings,
-			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys})
+			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys, Covered: out.Covered})
 		r.Findings, r.Routed, r.VerifiedCases, r.NewChecks, r.NotRechecked = res.Findings, res.Routed, res.Verified, res.NewChecks, res.NotRechecked
 		if res.NotRechecked > 0 {
 			notes = append(notes, notRecheckedNote(res.NotRechecked))
+		}
+		if len(res.Covered) > 0 {
+			notes = append(notes, fmt.Sprintf("the agent left out what %s covered, counted as %s", strings.Join(res.Covered, ", "), plural(len(res.Covered), "its match", "their matches")))
 		}
 		// Not routed, it is kept so and routed on a later look (W-8).
 		if res.NotRouted != "" {
@@ -459,6 +514,31 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	// The alert it handled is acknowledged in the job's name (CF-79).
 	s.ackAlert(sctx, j, r, ev)
 	return r, out, rerr
+}
+
+// errNoAccess is a run whose identity could read none of its clusters.
+var errNoAccess = errors.New("the agents' identity cannot read the clusters")
+
+// blind are the clusters of an audit's run that the reader identity
+// cannot read (JB-23): asked before the run, of kinds whose agent's
+// findings go into cases. A cluster the answer is unknown for is read.
+func (s *Service) blind(ctx context.Context, k Kind, env *RunEnv) []string {
+	rc, ok := s.o.Agents.(ReadChecker)
+	if !ok || k.Agent == "" || len(k.Checks) == 0 {
+		return nil
+	}
+	var out []string
+	for _, c := range env.Clusters {
+		b, err := rc.Blind(ctx, c, env.settings)
+		if err != nil {
+			s.o.Logger.Warn("whether the agents' identity can read a cluster is not known", "job", env.Job.ID, "cluster", c, "err", err)
+			continue
+		}
+		if b {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // addSpend counts a run's cost on the job's day, and notes the moment the
@@ -647,7 +727,7 @@ var idPattern = regexp.MustCompile(`^(C|KI)-[1-9][0-9]{0,8}$`)
 func (s *Service) audit(j Job, k Kind, r Run) {
 	outcome := audit.OutcomeOK
 	switch r.Status {
-	case StatusFailed, StatusInterrupted:
+	case StatusFailed, StatusInterrupted, StatusNoAccess:
 		outcome = audit.OutcomeFailed
 	case StatusBudget, StatusSkipped, StatusMissed, StatusCancelled:
 		outcome = audit.OutcomeDenied
@@ -707,8 +787,9 @@ func (s *Service) Run(ctx context.Context) {
 // Tick looks once (JB-06): on the leader, each job's scheduled time come
 // within the grace starts a run; one missed by more, or while its last run
 // is still going, is let go and noted. The time is claimed before the run
-// starts, over the version read, so a new leader, or an old one that has
-// not yet seen it lost the Lease, does not run it again. It also watches
+// starts (in schedule_claims with a database, DB-80), so a new leader, or
+// an old one that has not yet seen it lost the Lease, does not run it
+// again. It also watches
 // the alerts and lets go of runs a replica left behind.
 func (s *Service) Tick(ctx context.Context) {
 	if !s.leads() {
@@ -720,9 +801,10 @@ func (s *Service) Tick(ctx context.Context) {
 	s.sweep(ctx)
 	rec, err := s.loadJobs(ctx)
 	if err != nil {
-		s.o.Logger.Warn("the jobs cannot be read", "err", err)
+		s.quiet.Failed(s.o.Logger, "the jobs cannot be read", err)
 		return
 	}
+	s.quiet.Worked(s.o.Logger, "the jobs are read again")
 	s.reroute(ctx, rec)
 	// The alerts are read once per look, by whoever wants them: the alert
 	// jobs, and the cases' safety net (CF-78).
@@ -771,17 +853,8 @@ func (s *Service) Tick(ctx context.Context) {
 		case s.busy(j.ID) && j.SkipOverlap:
 			status, why = StatusSkipped, fmt.Sprintf("skipped: the run before %s was still going", due.In(loc).Format("2 Jan 15:04 MST"))
 		}
-		claimed := false
-		if err := s.updateJobs(ctx, func(r *jobsRecord) error {
-			if claimed = r.Handled[j.ID].Before(due); !claimed {
-				return errUnchanged
-			}
-			if r.Handled == nil {
-				r.Handled = map[string]time.Time{}
-			}
-			r.Handled[j.ID] = due.UTC()
-			return nil
-		}); err != nil || !claimed {
+		claimed, err := s.claim(ctx, j.ID, due)
+		if err != nil || !claimed {
 			if err != nil {
 				s.o.Logger.Warn("a job's time cannot be claimed", "job", j.ID, "err", err)
 			}
@@ -798,6 +871,27 @@ func (s *Service) Tick(ctx context.Context) {
 			_, _, _ = s.execute(s.base, j, k, trig, nil, !j.SkipOverlap, nil)
 		}(j, k)
 	}
+}
+
+// claim claims a job's scheduled time, and says whether this replica was
+// first: through schedule_claims in the database (DB-80), else over the
+// version of the jobs' record read.
+func (s *Service) claim(ctx context.Context, job string, due time.Time) (bool, error) {
+	if s.claims != nil {
+		return s.claims.ClaimSlot(ctx, job, due.UTC(), s.instance)
+	}
+	claimed := false
+	err := s.updateJobs(ctx, func(r *jobsRecord) error {
+		if claimed = r.Handled[job].Before(due); !claimed {
+			return errUnchanged
+		}
+		if r.Handled == nil {
+			r.Handled = map[string]time.Time{}
+		}
+		r.Handled[job] = due.UTC()
+		return nil
+	})
+	return claimed, err
 }
 
 // sweep lets go of runs that a replica left under way: past the run's
@@ -834,9 +928,10 @@ func (s *Service) sweep(ctx context.Context) {
 		return nil
 	})
 	if err != nil {
-		s.o.Logger.Warn("the runs cannot be swept", "err", err)
+		s.sweepQuiet.Failed(s.o.Logger, "the runs cannot be swept", err)
 		return
 	}
+	s.sweepQuiet.Worked(s.o.Logger, "the runs are swept again")
 	for _, r := range gone {
 		s.record(audit.Event{Action: ActionRun, Who: audit.Who{Subject: "221b", Name: "job " + r.Job}, Target: r.Job, Outcome: audit.OutcomeFailed, Detail: r.ID + " " + r.Label + ": " + r.Note})
 	}
@@ -911,7 +1006,7 @@ func (s *Service) Fire(ev Event) int {
 	}
 	rec, err := s.loadJobs(s.base)
 	if err != nil {
-		s.o.Logger.Warn("the jobs cannot be read", "err", err)
+		s.quiet.Failed(s.o.Logger, "the jobs cannot be read", err)
 		return 0
 	}
 	return s.fire(rec, ev)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -156,6 +157,12 @@ func merge(out *Outcome, env *RunEnv, check func(string) error, cluster, heading
 	out.Proposals = append(out.Proposals, changes...)
 	for _, n := range notes {
 		env.Note("%s", n)
+	}
+	for _, id := range p.Covered {
+		c := Covered{Cluster: cluster, Exception: id}
+		if !slices.Contains(out.Covered, c) {
+			out.Covered = append(out.Covered, c)
+		}
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/nodessh"
 )
 
@@ -75,7 +76,7 @@ type hostView struct {
 }
 
 func viewOfHost(h nodessh.Host) hostView {
-	return hostView{Name: h.Name, Address: h.Address, Port: h.Port, LoginUser: h.LoginUser, Labels: h.Labels, State: h.State, Fingerprint: h.Fingerprint, KeyChanged: h.Mismatch != "",
+	return hostView{Name: h.Name, Address: h.Address, Port: h.Port, LoginUser: h.LoginUser, State: h.State, Fingerprint: h.Fingerprint, KeyChanged: h.Mismatch != "",
 		AddedBy: h.AddedBy, AddedAt: h.AddedAt, TrustedBy: h.TrustedBy, TrustedAt: h.TrustedAt, PairedBy: h.PairedBy, PairedAt: h.PairedAt}
 }
 
@@ -117,6 +118,10 @@ func hostStatus(err error) int {
 // hostError answers a failure in the words it has: the service's errors
 // say what to do and hold no credential.
 func hostError(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	msg := err.Error()
 	for _, p := range []error{nodessh.ErrInvalid, nodessh.ErrConflict, nodessh.ErrNoHost} {
 		msg = strings.TrimPrefix(msg, p.Error()+": ")
@@ -175,7 +180,7 @@ func (s *Server) postHost(w http.ResponseWriter, r *http.Request) {
 		in.LoginUser = s.opts.Sessions.Config().SSH.LoginUser
 	}
 	who := s.watsonWho(r)
-	h, err := s.opts.Hosts.AddHost(r.Context(), nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser, Labels: in.Labels}, who.Name)
+	h, err := s.opts.Hosts.AddHost(r.Context(), nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser}, who.Name)
 	if err != nil {
 		hostError(w, err)
 		return
@@ -278,6 +283,9 @@ func (s *Server) postHostPair(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !errors.Is(err, nodessh.ErrInvalid) && !errors.Is(err, nodessh.ErrNoHost) {
 			s.recordHost(r, audit.ActionHostPair, cluster, name, audit.OutcomeFailed, fmt.Sprintf("pairing host %s with the account %s failed: %v", name, user, err))
+		}
+		if db.Refuse(w, err) {
+			return
 		}
 		code := hostStatus(err)
 		msg := err.Error()

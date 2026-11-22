@@ -13,6 +13,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/confluence"
+	"github.com/ucesys/221b/server/internal/db"
 )
 
 // Prefix is where the API is served (every route runs on the leader,
@@ -117,6 +118,10 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 
 // fail answers an error with the status it means.
 func fail(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	var ce *confluence.Error
 	switch {
 	case errors.Is(err, ErrNotFound):

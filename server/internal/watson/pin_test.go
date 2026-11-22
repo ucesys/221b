@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 )
 
 // moveBranch commits on the branch the repository is on.
@@ -53,11 +54,11 @@ func serveCommits(t *testing.T, dir string) {
 	}
 }
 
-func pinSetup(t *testing.T, o Options) (*Service, Cluster, *apps.MemoryStore) {
+func pinSetup(t *testing.T, o Options) (*Service, Cluster, apps.Store) {
 	t.Helper()
 	apps.AllowLocalRepos = true
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	o.Apps = store
 	svc, cl, _, _, _ := setup(t, o)
 	return svc, cl, store
@@ -315,7 +316,7 @@ func TestACordonCardSaysItCouldNotReadThePodsAndStaysValid(t *testing.T) {
 func TestADeployCardStillPinsWhenTheReleaseCannotBeRead(t *testing.T) {
 	apps.AllowLocalRepos = true
 	t.Cleanup(func() { apps.AllowLocalRepos = false })
-	svc, cl, _, _, _ := setup(t, Options{Apps: apps.NewMemoryStore()})
+	svc, cl, _, _, _ := setup(t, Options{Apps: appstest.Store(t)})
 	forbidding(t, &cl, func(r *http.Request) bool { return strings.Contains(r.URL.Path, "/secrets") })
 	repo := gitChart(t)
 	it := card(t, svc, cl, manager(alice()), "helm upgrade hello --git "+repo+" --path charts/web --ref master -n web")

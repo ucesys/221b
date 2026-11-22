@@ -339,12 +339,14 @@ func TestSecretStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestManagerAddsUpdatesAndRemoves(t *testing.T) {
+func TestManagerAddsUpdatesAndRemoves(t *testing.T) { eachStore(t, testManagerAddsUpdatesAndRemoves) }
+
+func testManagerAddsUpdatesAndRemoves(t *testing.T, store clusters.Store) {
 	_, srv := simServer(t)
 	_, other := simServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m := clusters.New(clusters.NewMemoryStore(), clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
+	m := clusters.New(store, clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +395,7 @@ func TestManagerAddsUpdatesAndRemoves(t *testing.T) {
 	if err != nil || r.Tone != "warn" || r.Nodes != 3 {
 		t.Fatalf("test draft: %v %+v", err, r)
 	}
-	r, err = m.TestSaved(ctx, "analytics-dev")
+	r, err = m.TestSaved(ctx, "analytics-dev", "ann")
 	if err != nil || r.Nodes != 3 {
 		t.Fatalf("test saved: %v %+v", err, r)
 	}
@@ -445,10 +447,13 @@ func TestManagerAddsUpdatesAndRemoves(t *testing.T) {
 // A kubeconfig without a current context is saved with the context the
 // check chose, so the connection starts with it.
 func TestKubeconfigWithoutCurrentContext(t *testing.T) {
+	eachStore(t, testKubeconfigWithoutCurrentContext)
+}
+
+func testKubeconfigWithoutCurrentContext(t *testing.T, store clusters.Store) {
 	_, other := simServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := clusters.NewMemoryStore()
 	m := clusters.New(store, clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -469,13 +474,14 @@ func TestKubeconfigWithoutCurrentContext(t *testing.T) {
 
 // A CA pasted without new credentials is the connection's CA from then on:
 // tested as it stands, saved beside the credential it does not replace.
-func TestACAPastedAloneIsHonoured(t *testing.T) {
+func TestACAPastedAloneIsHonoured(t *testing.T) { eachStore(t, testACAPastedAloneIsHonoured) }
+
+func testACAPastedAloneIsHonoured(t *testing.T, store clusters.Store) {
 	s := sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7})
 	srv := httptest.NewTLSServer(s)
 	t.Cleanup(srv.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := clusters.NewMemoryStore()
 	m := clusters.New(store, clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)

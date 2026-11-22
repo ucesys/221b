@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/api"
@@ -20,8 +21,34 @@ import (
 
 // The console's metrics and memory.
 
-// gauges are the console's metrics, read when they are scraped.
+// gaugesFresh is how old a figure that is asked of the database may be on
+// the metrics endpoint before it is asked again, behind the scrape.
+const gaugesFresh = 15 * time.Second
+
+// refreshGauges asks again, behind a scrape and never in it, for the two
+// figures that are kept in the database (with one) or the API server: the
+// signed-in sessions and Sherlock's spend. One at a time, each call with
+// its own short time; a scrape reports what the last one found.
+func (w *wiring) refreshGauges() {
+	now := time.Now().UnixNano()
+	if last := w.gaugesAt.Load(); now-last < int64(gaugesFresh) || !w.gaugesAt.CompareAndSwap(last, now) {
+		return
+	}
+	go func() {
+		w.authSvc.Sessions().Count()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		w.sherlockSvc.Ledger().Now(ctx)
+	}()
+}
+
+// gauges are the console's metrics, read when they are scraped. Nothing
+// here asks the database, or anything else that can be away, and waits:
+// every figure is read from memory, so that the scrape that says the
+// database is away is answered (DB-15).
 func (w *wiring) gauges() []api.Gauge {
+	w.refreshGauges()
+	spend, spendUnsaved := w.sherlockSvc.Ledger().Known()
 	info := w.cluster.Info()
 	nodeCount, podCount, nodeEvents, podEvents := w.cluster.Counts()
 	up := 0.0
@@ -32,7 +59,7 @@ func (w *wiring) gauges() []api.Gauge {
 	if info.Metrics == kube.MetricsAvailable {
 		metricsUp = 1
 	}
-	gauges := []api.Gauge{}
+	gauges := w.databaseGauges()
 	for _, o := range w.stored {
 		sizes := o.Sizes()
 		for _, key := range slices.Sorted(maps.Keys(sizes)) {
@@ -40,7 +67,7 @@ func (w *wiring) gauges() []api.Gauge {
 		}
 	}
 	unsaved := 0.0
-	if w.sherlockSvc.Ledger().SaveError() != "" {
+	if spendUnsaved != "" {
 		unsaved = 1
 	}
 	gauges = append(gauges, api.Gauge{Name: "b221_sherlock_spend_unsaved", Help: "1 when Sherlock's spend could not be saved: it is counted on this replica only, and a restart forgets it.", Value: unsaved})
@@ -54,13 +81,13 @@ func (w *wiring) gauges() []api.Gauge {
 		{Name: "b221_pod_watch_events_total", Help: "Pod watch events received.", Value: float64(podEvents), Counter: true},
 		{Name: "b221_go_memory_bytes", Help: "Memory the Go runtime has mapped, in bytes.", Value: goMemory()},
 		{Name: "b221_resident_memory_bytes", Help: "Resident memory of the process, in bytes.", Value: residentMemory()},
-		{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(w.authSvc.Sessions().Count())},
+		{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(w.authSvc.Sessions().Counted())},
 		{Name: "b221_people_access", Help: "People whose access to a cluster is kept, per person and cluster.", Value: float64(peopleCount(w.people))},
 		{Name: "b221_audit_dropped_total", Help: "Audit records the webhook queue had no room for.", Value: float64(w.auditLog.Dropped()), Counter: true},
 		{Name: "b221_sherlock_conversations", Help: "Sherlock conversations kept, one per session and cluster.", Value: float64(w.sherlockSvc.Count())},
 		{Name: "b221_sherlock_answering", Help: "Sherlock answers in progress.", Value: float64(w.sherlockSvc.Running())},
-		{Name: "b221_sherlock_spend_today_usd", Help: "What Sherlock has cost today (UTC), in US dollars.", Value: w.sherlockSvc.Ledger().Now(context.Background()).DayUSD},
-		{Name: "b221_sherlock_spend_month_usd", Help: "What Sherlock has cost this month (UTC), in US dollars.", Value: w.sherlockSvc.Ledger().Now(context.Background()).MonthUSD},
+		{Name: "b221_sherlock_spend_today_usd", Help: "What Sherlock has cost today (UTC), in US dollars.", Value: spend.DayUSD},
+		{Name: "b221_sherlock_spend_month_usd", Help: "What Sherlock has cost this month (UTC), in US dollars.", Value: spend.MonthUSD},
 	}...)
 	cached := w.cluster.CachedObjects()
 	kinds := make([]string, 0, len(cached))

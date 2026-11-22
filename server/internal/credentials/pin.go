@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -104,18 +103,13 @@ func (s *Service) Trust(ctx context.Context, id, typed, sha256, by string) (Cred
 		return Credential{}, certpin.Cert{}, err
 	}
 	pin := certpin.PinOf(cert, by, s.o.Now())
-	err = s.update(ctx, func(ix *index) error {
-		i := slices.IndexFunc(ix.Credentials, func(o Credential) bool { return o.ID == id })
-		if i < 0 {
-			return fmt.Errorf("%w %q", ErrNotFound, id)
-		}
+	c, err = s.o.Repo.Update(ctx, id, func(cur *Credential) error {
 		// Changed while its certificate was looked at: the pin is for the
 		// address as it was, not one of the endpoint now.
-		if !ix.Credentials[i].Covers(target) {
-			return invalid("%s changed meanwhile, and %s is not under its endpoint now: test it again", ix.Credentials[i].Name, target)
+		if !cur.Covers(target) {
+			return invalid("%s changed meanwhile, and %s is not under its endpoint now: test it again", cur.Name, target)
 		}
-		ix.Credentials[i].PinnedCert, ix.Credentials[i].LastTest = pin, nil
-		c = ix.Credentials[i]
+		cur.PinnedCert, cur.LastTest = pin, nil
 		return nil
 	})
 	return c, cert, err
@@ -125,16 +119,12 @@ func (s *Service) Trust(ctx context.Context, id, typed, sha256, by string) (Cred
 // is verified normally again. It returns the credential as it was.
 func (s *Service) Forget(ctx context.Context, id string) (Credential, error) {
 	var old Credential
-	err := s.update(ctx, func(ix *index) error {
-		i := slices.IndexFunc(ix.Credentials, func(o Credential) bool { return o.ID == id })
-		if i < 0 {
-			return fmt.Errorf("%w %q", ErrNotFound, id)
-		}
-		old = ix.Credentials[i]
+	_, err := s.o.Repo.Update(ctx, id, func(cur *Credential) error {
+		old = *cur
 		if old.PinnedCert == nil {
 			return invalid("%s has no pinned certificate", old.Name)
 		}
-		ix.Credentials[i].PinnedCert, ix.Credentials[i].LastTest = nil, nil
+		cur.PinnedCert, cur.LastTest = nil, nil
 		return nil
 	})
 	return old, err

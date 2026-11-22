@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -247,6 +248,10 @@ func (s *Service) row(username string, by Session) UserRow {
 
 // refuseChange turns an account error into the response.
 func refuseChange(w http.ResponseWriter, err error) {
+	// The database away: a 503 in the console's words, by the error (DB-15).
+	if db.Refuse(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		fail(w, http.StatusNotFound, sentence(err.Error()))

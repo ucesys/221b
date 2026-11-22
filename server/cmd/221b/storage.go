@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/rest"
@@ -16,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/casework"
+	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -59,8 +62,8 @@ const (
 	// start's marker, and the accepted exceptions (package lessons); the
 	// cases, with their RCAs, are ConfigMaps of their own (wave 6).
 	objCasework = "casework"
-	// objWiki is the temporary wiki store's (CF-57): the wiki itself, in
-	// one key, while Administration › AI › Knowledge names no store.
+	// objWiki is the temporary wiki store's of before (CF-57): the wiki
+	// itself, in one key, copied into the database's wiki store (DB-96).
 	objWiki = "wiki"
 	// objectBudget is what the keys of one ConfigMap may add up to, below
 	// its 1 MiB with room for the object's own fields.
@@ -142,10 +145,6 @@ var layout = map[string]map[string]kv.Limit{
 		knowledge.DraftsKey:   {Bytes: knowledge.DefaultDraftsBytes, Hint: "approve or reject the wiki's waiting changes"},
 		knowledge.StatusKey:   {Bytes: knowledge.DefaultStatusBytes},
 	},
-	// --- The temporary wiki store (CF-57) ---
-	objWiki: {
-		knowledge.WikiKey: {Bytes: knowledge.DefaultWikiBytes, Hint: "move the wiki to Git or S3 in Administration › AI › Knowledge"},
-	},
 	// --- Case work (Phase 12) ---
 	objCasework: {
 		casework.SettingsKey: {Bytes: casework.DefaultSettingsBytes},
@@ -168,6 +167,39 @@ var layout = map[string]map[string]kv.Limit{
 	},
 }
 
+// sourceRef is the "namespace/name" of the ConfigMap of before that held
+// obj's record sets: <fullname>-<obj> in the release's namespace, and
+// <fullname> for the settings. It is the one place the copies' sources are
+// named (decided by the owner on November 21, 2026: no flag names one).
+// Empty when the release is not known (a console run by hand): nothing to
+// copy.
+func sourceRef(cfg config.Config, obj string) string {
+	if cfg.ReleaseNamespace == "" || cfg.ReleaseFullname == "" {
+		return ""
+	}
+	name := cfg.ReleaseFullname
+	if obj != objSettings {
+		name += "-" + obj
+	}
+	return cfg.ReleaseNamespace + "/" + name
+}
+
+// caseSources are the cases' own ConfigMaps of before (Phase 12, wave 6,
+// CF-20): "namespace/prefix" of their names, <fullname>-case-<n>, and the
+// app.kubernetes.io/instance label a console before 0.13 gave them, the
+// Helm release's name (that of -self-release, which the chart passes),
+// else the fullname. Empty when the release is not known.
+func caseSources(cfg config.Config) (prefix, instance string) {
+	if cfg.ReleaseNamespace == "" || cfg.ReleaseFullname == "" {
+		return "", ""
+	}
+	instance = cfg.ReleaseFullname
+	if ns, name, ok := strings.Cut(cfg.SelfRelease, "/"); ok && ns == cfg.ReleaseNamespace && name != "" {
+		instance = name
+	}
+	return cfg.ReleaseNamespace + "/" + cfg.ReleaseFullname + "-case-", instance
+}
+
 // limits are an object's limits, leaving out the keys it holds only until
 // they move (Bytes 0), which another object bounds.
 func limits(obj string) map[string]kv.Limit {
@@ -188,20 +220,33 @@ func limited(cm *kube.ConfigMapStorage, obj string, log *slog.Logger) *kv.Limite
 	return &kv.Limited{Backend: cm, Name: cm.Ref(), Limits: limits(obj), Logger: log}
 }
 
-// openConfigMap opens a ConfigMap the chart makes, trying for a while: a
-// name given that cannot be read stops the console rather than leave a
-// replica keeping records somewhere its peers do not look.
-func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
+// openSource opens a ConfigMap a release before 0.13 kept records in, the
+// one-time copies' source (DB-72). One that is not there is nil: it was
+// never made (an installation that started at 0.13), or the console
+// deleted it once the database held what it held, and there is nothing to
+// copy from it. Any other failure to read it is tried for a while and then
+// stops the console: a copy must not be taken for made when its source
+// could not be read.
+func openSource(ctx context.Context, cfg *rest.Config, ref string) (*kube.ConfigMapStorage, error) {
+	if ref == "" {
+		return nil, nil
+	}
 	cm, err := kube.NewConfigMapStorage(cfg, ref)
 	if err != nil {
 		return nil, err
 	}
 	for try := 0; ; try++ {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = cm.Exists(pctx)
+		_, version, lerr := cm.LoadKey(pctx, "-")
 		cancel()
-		if err == nil || try == 4 {
-			break
+		switch {
+		case version != "":
+			return cm, nil
+		case errors.Is(lerr, kv.ErrNotFound):
+			return nil, nil
+		}
+		if try == 4 {
+			return nil, fmt.Errorf("the ConfigMap %s, which a release before 0.13 kept records in, cannot be read to copy them into the database: %w", cm.Ref(), lerr)
 		}
 		select {
 		case <-time.After(2 * time.Second):
@@ -209,32 +254,43 @@ func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.Con
 			return nil, ctx.Err()
 		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap, -automation-runs-configmap, -issues-configmap, -proposals-configmap, -runs-configmap, -knowledge-configmap, -wiki-configmap and -casework-configmap against the chart)", err)
-	}
-	return cm, nil
 }
 
-// settingsBackend is the settings ConfigMap with the audit log and the
-// session records routed to ConfigMaps of their own when named.
-func settingsBackend(ctx context.Context, cfg *rest.Config, settingsCM *kube.ConfigMapStorage, auditRef, sessionsRef string, log *slog.Logger) (kv.Backend, storedObjects, error) {
-	base := limited(settingsCM, objSettings, log)
-	objects := storedObjects{base}
+// settingsBackend is the copies' source of the settings and what was kept
+// beside them: the settings ConfigMap, with the audit log and the session
+// records routed to ConfigMaps of their own when named, each nil when it
+// is not there (openSource). Nil when none is.
+func settingsBackend(ctx context.Context, cfg *rest.Config, settingsRef, auditRef, sessionsRef string, log *slog.Logger) (kv.Backend, storedObjects, error) {
+	var objects storedObjects
+	var base kv.Backend
+	settingsCM, err := openSource(ctx, cfg, settingsRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	if settingsCM != nil {
+		l := limited(settingsCM, objSettings, log)
+		base, objects = l, append(objects, l)
+	}
 	routes := map[string]kv.Backend{}
 	for _, o := range []struct{ ref, obj, key string }{{auditRef, objAudit, audit.StoreKey}, {sessionsRef, objSessions, sessions.HistoryKey}} {
-		if o.ref == "" {
-			continue
-		}
-		cm, err := openConfigMap(ctx, cfg, o.ref)
+		cm, err := openSource(ctx, cfg, o.ref)
 		if err != nil {
 			return nil, nil, err
+		}
+		if cm == nil {
+			continue
 		}
 		l := limited(cm, o.obj, log)
 		objects = append(objects, l)
 		routes[o.key] = l
 	}
-	if len(routes) == 0 {
+	switch {
+	case len(routes) == 0:
 		return base, objects, nil
+	case base == nil:
+		// The audit log or the session records in their own ConfigMap,
+		// and no settings ConfigMap: nothing else to read.
+		base = &kv.Memory{}
 	}
 	return &kv.Routed{Default: base, Routes: routes}, objects, nil
 }

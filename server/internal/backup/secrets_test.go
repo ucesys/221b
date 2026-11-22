@@ -268,3 +268,32 @@ func TestSecretsComeBackWithTheSameKeyOnly(t *testing.T) {
 		t.Fatalf("an unreadable key opens nothing: %+v", c)
 	}
 }
+
+// Unseal takes a field sealed since a later version: opened with this
+// install's key, as it is when in clear (a file from before), and not at
+// all for the placeholder, another key's value or an install without one;
+// it lists nothing to set again.
+func TestUnsealTakesAFileOfBeforeAsItIs(t *testing.T) {
+	a, b := &Env{key: keyOf(t, keyA)}, &Env{key: keyOf(t, keyB)}
+	sealed := a.Seal("db.pass=s3cret")
+	for _, c := range []struct {
+		env    *Env
+		in     string
+		want   string
+		opened bool
+	}{
+		{a, sealed, "db.pass=s3cret", true},
+		{a, "replicas: 2", "replicas: 2", true},
+		{a, "", "", true},
+		{a, Placeholder, "", false},
+		{b, sealed, "", false},
+		{&Env{}, sealed, "", false},
+	} {
+		if got, ok := c.env.Unseal(c.in); got != c.want || ok != c.opened {
+			t.Fatalf("Unseal(%q) = %q, %v", c.in, got, ok)
+		}
+	}
+	if len(a.ToSetAgain())+len(b.ToSetAgain()) != 0 {
+		t.Fatal("Unseal listed a secret to set again")
+	}
+}

@@ -34,7 +34,19 @@ jobs:
     name: Screenshots
     if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
+    # The simulator's console keeps its records in PostgreSQL (DB-69): make
+    # screenshots uses this one through DEV_DATABASE, pinned like CI's
+    # (hack/check-base-images.sh).
+    services:
+      postgres:
+        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,12 +60,19 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Browser
+      - name: Packages
         working-directory: web
-        run: npm ci --no-fund && npx playwright install --with-deps chromium
+        run: npm ci --no-fund
+      - name: Browser
+        timeout-minutes: 30
+        uses: ./.github/actions/playwright
+        with:
+          browser: chromium
       - name: Take the screenshots
         id: shots
         continue-on-error: true
+        env:
+          DEV_DATABASE: 127.0.0.1:55432
         run: make screenshots 2>&1 | tee "$RUNNER_TEMP/shots.log"; exit "${PIPESTATUS[0]}"
       - name: Keep them
         if: steps.shots.outcome == 'success'

@@ -4,7 +4,7 @@ import { useView } from '../../api/live'
 import type { FleetRow } from '../../api/types'
 import type { EditorSeed } from '../FleetEditor'
 import { fleetOf, reqText } from '../../lib/fleets'
-import { ownValues, variableSaves, scopeRows, type Override, type VariableEdit, type VariableRow } from '../../lib/variables'
+import { ownValues, variableSaves, scopeRows, shownValue, type Override, type VariableEdit, type VariableRow } from '../../lib/variables'
 import { Chevron, PencilIcon, PlusIcon } from '../Icons'
 import { VariableChangesPanel, ImpactList } from './VariableChanges'
 import { FleetEdit } from './FleetEdit'
@@ -454,7 +454,7 @@ export function VariablesSection({
                             )}
                           </td>
                           <td className="rk-mono" style={{ overflowWrap: 'anywhere' }}>
-                            {r.conflict ? 'conflict' : r.value}
+                            {r.conflict ? 'conflict' : shownValue(r.value, r.sensitive)}
                           </td>
                           <td>{r.from}</td>
                           <td data-testid="param-flags">

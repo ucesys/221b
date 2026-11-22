@@ -91,6 +91,9 @@ func (st *Store) NewWaitingRun(ctx context.Context, w WaitingRun) (WaitingRun, e
 	if w.Impact == nil {
 		w.Impact = []ImpactItem{}
 	}
+	if st.runs != nil {
+		return st.runs.NewRequest(ctx, w)
+	}
 	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
 		for _, x := range rec.Runs {
 			if w.Request != "" && x.Request == w.Request && x.Cluster == w.Cluster && x.By.Same(w.By) {
@@ -112,12 +115,26 @@ func (st *Store) NewWaitingRun(ctx context.Context, w WaitingRun) (WaitingRun, e
 		}
 		return nil
 	})
+	if err != nil {
+		return w, err
+	}
+	// As it is kept: a sensitive value among its own is its digest (DB-71).
+	list, err := st.WaitingRuns(ctx, w.Cluster)
+	for _, x := range list {
+		if x.ID == w.ID {
+			return x, err
+		}
+	}
+	w.Params = nil
 	return w, err
 }
 
 // WaitingRuns lists the run requests of a cluster, newest first; every
 // cluster's when cluster is "".
 func (st *Store) WaitingRuns(ctx context.Context, cluster string) ([]WaitingRun, error) {
+	if st.runs != nil {
+		return st.runs.Requests(ctx, cluster)
+	}
 	var rec changesRecord
 	if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
 		return nil, err
@@ -166,6 +183,32 @@ func (st *Store) DecideWaitingRun(ctx context.Context, cluster string, id int, a
 	if len(comment) > MaxComment {
 		return WaitingRun{}, fmt.Errorf("%w: a comment is at most %d characters", ErrInvalid, MaxComment)
 	}
+	decide := func(w *WaitingRun) error {
+		if w.State == ChangeExpired {
+			return expiredErr(*w)
+		}
+		if w.State != ChangeWaiting {
+			return fmt.Errorf("%w: run request %d is %s", ErrInvalid, id, w.State)
+		}
+		if approve && who.Same(w.By) {
+			return fmt.Errorf("%w: you asked for this run; another admin approves it", ErrOwnWork)
+		}
+		now := st.now().UTC()
+		w.State, w.DecidedBy, w.DecidedAt, w.Comment = ChangeRejected, &who, &now, comment
+		if approve {
+			w.State, w.Run = ChangeApproved, run
+		}
+		return nil
+	}
+	if st.runs != nil {
+		was, is, err := st.runs.DecideRequest(ctx, cluster, id, decide)
+		if err == nil {
+			// What it waited with leaves the Secret, unless something else
+			// still names it (DB-71).
+			st.collect(ctx, gone(liveIn(&changesRecord{Runs: []WaitingRun{was}}), nil))
+		}
+		return is, err
+	}
 	var out WaitingRun
 	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
 		for i := range rec.Runs {
@@ -173,19 +216,8 @@ func (st *Store) DecideWaitingRun(ctx context.Context, cluster string, id int, a
 			if w.ID != id || w.Cluster != cluster {
 				continue
 			}
-			if w.State == ChangeExpired {
-				return expiredErr(*w)
-			}
-			if w.State != ChangeWaiting {
-				return fmt.Errorf("%w: run request %d is %s", ErrInvalid, id, w.State)
-			}
-			if approve && who.Same(w.By) {
-				return fmt.Errorf("%w: you asked for this run; another admin approves it", ErrOwnWork)
-			}
-			now := st.now().UTC()
-			w.State, w.DecidedBy, w.DecidedAt, w.Comment = ChangeRejected, &who, &now, comment
-			if approve {
-				w.State, w.Run = ChangeApproved, run
+			if err := decide(w); err != nil {
+				return err
 			}
 			out = *w
 			return nil
@@ -206,6 +238,13 @@ func expiredErr(w WaitingRun) error {
 func (st *Store) ExpireWaitingRuns(ctx context.Context, after time.Duration, said string) ([]WaitingRun, error) {
 	var out []WaitingRun
 	now := st.now().UTC()
+	if st.runs != nil {
+		was, is, err := st.runs.ExpireRequests(ctx, after, said, now)
+		if err == nil && len(was) > 0 {
+			st.collect(ctx, gone(liveIn(&changesRecord{Runs: was}), nil))
+		}
+		return is, err
+	}
 	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
 		out = nil
 		for i := range rec.Runs {

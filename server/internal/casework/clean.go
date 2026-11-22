@@ -44,9 +44,12 @@ import (
 // CleanStores are the raw records a clean start reads: each a ConfigMap
 // (or the case ConfigMaps). One left nil is skipped.
 type CleanStores struct {
-	// Issues is <release>-issues; Cases the case ConfigMaps.
-	Issues kv.Backend
-	Cases  kv.Objects
+	// Issues is <release>-issues; Cases the case ConfigMaps, or with a
+	// database the cases' rows: CasesInDatabase says which, for the words
+	// of the cases' line.
+	Issues          kv.Backend
+	Cases           kv.Objects
+	CasesInDatabase bool
 	// Casework is <release>-casework: the cases' settings, the checks,
 	// the exceptions, the RCAs and the marker.
 	Casework kv.Backend
@@ -135,7 +138,30 @@ func CleanStart(ctx context.Context, st CleanStores, token string, dryRun bool, 
 		if err != nil {
 			return out, err
 		}
-		c.item(CleanItem{Object: "case ConfigMaps", What: "cases' ConfigMaps (the issue service's record and the work on each)", Count: len(names)})
+		// An RCA is kept with its case's work (CF-44) and goes with it:
+		// they are counted here, so that the log says how many went.
+		rcas := 0
+		for _, n := range names {
+			keys, _, err := st.Cases.Load(ctx, n)
+			if errors.Is(err, kv.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return out, err
+			}
+			var w struct {
+				RCA *json.RawMessage `json:"rca"`
+			}
+			if json.Unmarshal(keys[issues.WorkKey], &w) == nil && w.RCA != nil {
+				rcas++
+			}
+		}
+		object, what := "case ConfigMaps", "cases' ConfigMaps (the issue service's record and the work on each)"
+		if st.CasesInDatabase {
+			object, what = "cases", "cases in the database (each with its messages, the work on it and its conversation)"
+		}
+		c.item(CleanItem{Object: object, What: what, Count: len(names)})
+		c.item(CleanItem{Object: object, What: "RCAs (each kept with its case's work, and gone with its case)", Count: rcas})
 		if !dryRun {
 			for _, n := range names {
 				if err := st.Cases.Delete(ctx, n); err != nil {
@@ -146,9 +172,14 @@ func CleanStart(ctx context.Context, st CleanStores, token string, dryRun bool, 
 	}
 	// The cases' records beside them.
 	c.drop(st.Casework, "casework", cleanExceptionsKey, "exceptions", countOf("items"))
-	c.drop(st.Casework, "casework", cleanRCAsKey, "RCAs", countOf("items"))
+	// rcas.json is of builds before wave 6e, and is never in a database.
+	c.drop(st.Casework, "casework", cleanRCAsKey, "RCAs kept before wave 6e", countOf("items"))
 	c.drop(st.Casework, "casework", cleanFixesKey, "fixes", countOf("items"))
 	c.drop(st.Casework, "casework", ChecksKey, "clusters' check ids seen", countOf("clusters"))
+	// What the runs found under each check, with the runs already counted:
+	// the runs go below and their ids start again at run-1, so a run kept
+	// as counted would make a new run of that id count nothing.
+	c.drop(st.Casework, "casework", FoundKey, "what the runs found under each check", countOf("ids"))
 	c.keepSettings(st.Casework)
 	// The runs and their findings; the jobs stay.
 	c.drop(st.Runs, "runs", cleanRunsKey, "runs (and their findings)", countOf("runs"))
@@ -361,11 +392,9 @@ func (c *cleaner) filterCards(b kv.Backend) {
 		kept = append(kept, card)
 	}
 	gone := len(list) - len(kept)
-	if gone == 0 {
-		return
-	}
+	// A line also when there is none to delete, as for the other kinds.
 	c.item(CleanItem{Object: "cases", Key: cleanCardsKey, What: "proposed changes agents made for cases or runs", Count: gone})
-	if c.dry {
+	if c.dry || gone == 0 {
 		return
 	}
 	if kept == nil {

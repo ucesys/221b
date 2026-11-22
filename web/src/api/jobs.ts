@@ -45,7 +45,7 @@ export interface Trigger {
   key?: string
 }
 
-export type RunStatus = 'running' | 'ok' | 'failed' | 'skipped' | 'missed' | 'budget' | 'interrupted' | 'cancelled'
+export type RunStatus = 'running' | 'ok' | 'failed' | 'skipped' | 'missed' | 'budget' | 'interrupted' | 'cancelled' | 'noAccess'
 
 // --- Jobs and findings, round 2 (Phase 12, wave 5, JR-01 to JR-11) ---
 
@@ -76,7 +76,10 @@ export interface RunBrief {
   findings: number
   /** Why its findings were not routed into cases (W-8). */
   notRouted?: string
+  /** The proposed changes it filed. */
   proposals: number
+  /** Those it made that were not filed (CF-27: they resolve no case); the run's page says why. */
+  notFiled?: number
   costUSD: number
   model?: string
   health?: RunHealth
@@ -405,6 +408,7 @@ export const STATUS: Record<RunStatus, [string, 'ok' | 'warn' | 'err' | undefine
   budget: ['Budget spent', 'warn'],
   interrupted: ['Interrupted', 'err'],
   cancelled: ['Cancelled', 'warn'],
+  noAccess: ['Cannot read the cluster', 'err'],
 }
 
 const HEALTH_TONE: Record<RunHealth, 'ok' | 'warn' | 'err'> = { critical: 'err', warning: 'warn', info: 'ok', none: 'ok', failed: 'err' }

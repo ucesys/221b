@@ -440,38 +440,40 @@ func TestCheckDependenciesAsksHelmWhichAreEnabled(t *testing.T) {
 }
 
 // A record from Get is saved only over what Get read: two saves that
-// started from the same copy do not silently lose one.
+// started from the same copy do not silently lose one, in memory, in the
+// Secrets and in the database alike.
 func TestASaveHoldsToTheRecordItRead(t *testing.T) {
-	store := apps.NewMemoryStore()
-	ctx := context.Background()
-	rec := apps.Record{Cluster: "c", Namespace: "web", Name: "shop"}
-	if err := store.Save(ctx, rec, nil); err != nil {
-		t.Fatal(err)
-	}
-	mine, _, _ := store.Get(ctx, "c", "web", "shop")
-	theirs, _, _ := store.Get(ctx, "c", "web", "shop")
-	theirs.Values = "theirs: true\n"
-	if err := store.Save(ctx, theirs, nil); err != nil {
-		t.Fatal(err)
-	}
-	mine.Values = "mine: true\n"
-	if err := store.Save(ctx, mine, nil); !errors.Is(err, apps.ErrConflict) {
-		t.Fatalf("a stale save: %v", err)
-	}
-	if got, _, _ := store.Get(ctx, "c", "web", "shop"); got.Values != "theirs: true\n" {
-		t.Fatalf("got %q", got.Values)
-	}
-	// One with no version, a restored backup, is a plain save.
-	rec.Values = "restored: true\n"
-	if err := store.Save(ctx, rec, nil); err != nil {
-		t.Fatal(err)
-	}
-	// One read before the record went does not bring it back.
-	stale, _, _ := store.Get(ctx, "c", "web", "shop")
-	if err := store.Delete(ctx, "c", "web", "shop"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save(ctx, stale, nil); !errors.Is(err, apps.ErrConflict) {
-		t.Fatalf("a save of a deleted record: %v", err)
-	}
+	eachStore(t, func(t *testing.T, store apps.Store) {
+		ctx := context.Background()
+		rec := apps.Record{Cluster: "c", Namespace: "web", Name: "shop"}
+		if err := store.Save(ctx, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		mine, _, _ := store.Get(ctx, "c", "web", "shop")
+		theirs, _, _ := store.Get(ctx, "c", "web", "shop")
+		theirs.Values = "theirs: true\n"
+		if err := store.Save(ctx, theirs, nil); err != nil {
+			t.Fatal(err)
+		}
+		mine.Values = "mine: true\n"
+		if err := store.Save(ctx, mine, nil); !errors.Is(err, apps.ErrConflict) {
+			t.Fatalf("a stale save: %v", err)
+		}
+		if got, _, _ := store.Get(ctx, "c", "web", "shop"); got.Values != "theirs: true\n" {
+			t.Fatalf("got %q", got.Values)
+		}
+		// One with no version, a restored backup, is a plain save.
+		rec.Values = "restored: true\n"
+		if err := store.Save(ctx, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		// One read before the record went does not bring it back.
+		stale, _, _ := store.Get(ctx, "c", "web", "shop")
+		if err := store.Delete(ctx, "c", "web", "shop"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(ctx, stale, nil); !errors.Is(err, apps.ErrConflict) {
+			t.Fatalf("a save of a deleted record: %v", err)
+		}
+	})
 }

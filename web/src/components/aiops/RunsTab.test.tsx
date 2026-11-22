@@ -4,7 +4,7 @@ import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
 import { findingTitles } from './RunDetail'
-import { RunsTab } from './RunsTab'
+import { RunsTab, runSummary } from './RunsTab'
 
 vi.mock('../../api/jobs', async (original) => ({
   ...(await original<typeof import('../../api/jobs')>()),
@@ -201,6 +201,19 @@ describe('AIOps › Runs', () => {
     expect(within(rows[0]!).getByTestId('run-ended').textContent).not.toBe('—')
   })
 
+  it('says an audit could not read its cluster, in red with what to do, never as nothing found (JB-23)', async () => {
+    const note = "the agents' identity (221b:agents) cannot read any namespace of prod, so nothing there was looked at: set Administration › AI › Jobs › reader role, or bind a role to 221b:agents in the cluster"
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [{ ...brief, status: 'noAccess', health: 'failed', severities: {}, findings: 0, proposals: 0, note, failedClusters: ['prod'] }], total: 1 })
+    render(<RunsTab route={route()} />)
+    const [row] = await screen.findAllByTestId('run-row')
+    const status = within(row!).getByTestId('run-status-cell')
+    expect(status.textContent).toBe('Cannot read the cluster')
+    expect(status.getAttribute('data-tone')).toBe('err')
+    expect(within(row!).getByTestId('run-health-cell').textContent).toBe('Failed')
+    expect(row!.textContent).toContain('cannot read any namespace of prod')
+    expect(row!.textContent).not.toContain('None found')
+  })
+
   it('says a note said many times once, with how many (JR-02)', async () => {
     const refuse = 'a proposed command Watson would refuse was left out: kubectl delete is refused on production'
     vi.mocked(api.fetchRun).mockResolvedValue({ ...run, note: [refuse, refuse, refuse, refuse].join('; ') })
@@ -297,5 +310,14 @@ describe('AIOps › Runs since wave 6c (CF-33, CF-39, CF-40)', () => {
     expect([...table.querySelectorAll('th')].map((h) => h.textContent)).not.toContain('Cost')
     expect(table.textContent).not.toContain('$')
     expect(detail.textContent).not.toContain('$')
+  })
+})
+
+describe('a run in a few words', () => {
+  it('counts the proposed changes not filed apart from those filed (CF-27)', () => {
+    const r = { id: 'run-240', job: 'nightly-audit', status: 'ok', started: '2026-11-22T02:26:53Z', findings: 34, proposals: 0, notFiled: 1, costUSD: 2.47 } as unknown as api.RunBrief
+    expect(runSummary(r)).toBe('34 findings, 1 proposed change not filed')
+    expect(runSummary({ ...r, proposals: 2, notFiled: 0 })).toBe('34 findings, 2 proposed changes')
+    expect(runSummary({ ...r, proposals: 1, notFiled: 2 })).toBe('34 findings, 1 proposed change, 2 proposed changes not filed')
   })
 })

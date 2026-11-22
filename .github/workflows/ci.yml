@@ -1,10 +1,15 @@
 # Every pull request and every push to main: lint, unit tests, the browser
-# build, license checks, the image with its size and vulnerability gates,
-# the chart installed in kind on each maintained Kubernetes minor with the
-# browser tests, and the scale test with kwok. Images are published to
-# GitHub Container Registry from main, from version tags, from this
-# repository's pull requests and from runs started by hand on a branch
-# (branch-<name>, never main).
+# build, license checks, the two images (the console's, and 221b-postgres,
+# the bundled database's) with their size and vulnerability gates, the
+# chart installed in kind with its bundled database on each maintained
+# Kubernetes minor with the browser tests, and the scale test with kwok.
+# The console keeps its records in PostgreSQL and does not run without it
+# (DB-69): every job that runs a console runs a PostgreSQL too. Both images
+# are published to GitHub Container Registry, under the same tags, from
+# main, from this repository's pull requests and from runs started by hand
+# on a branch (branch-<name>, never main); for a version tag the console's
+# image is published here and the database's by release.yml, beside the
+# copy of its packages.
 name: CI
 
 on:
@@ -30,12 +35,31 @@ env:
   NODE_VERSION: '24'
   HELM_VERSION: 'v4.3.0'
   IMAGE: ghcr.io/ucesys/221b
+  # The bundled database's image (deploy/postgres, built from Wolfi's
+  # packages by hack/wolfi-postgres.sh), published beside the console's
+  # under the same tags: the chart runs it at its appVersion.
+  DB_IMAGE: ghcr.io/ucesys/221b-postgres
 
 jobs:
   go:
     name: Go
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
+    # The repositories' tests run against a PostgreSQL (Phase 13, DB-16);
+    # without TEST_DATABASE they are skipped, as on a laptop. A service
+    # cannot read hack/base-images.env, so the pin is written here, and
+    # hack/check-base-images.sh checks it is POSTGRES_IMAGE.
+    services:
+      postgres:
+        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      TEST_DATABASE: 127.0.0.1:55432
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,9 +72,15 @@ jobs:
         run: make lint-go 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Unit and integration tests
         run: make test-go 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      # The agents', the jobs' and the case work's own tests again, with
+      # their records in the database's tables (Phase 13, DB-40, DB-42, DB-43).
+      - name: The services' tests over the database
+        run: make test-go-store 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Sherlock's evaluation, against the fake Claude API
         # The nightly run asks the real API (sherlock-eval.yml); here the
-        # cases are found in the simulator and asked end to end.
+        # cases are found in the simulator and asked end to end. The
+        # console's database is a throwaway PostgreSQL the script starts in
+        # Docker, apart from the tests' service.
         run: hack/sherlock-eval.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Licenses
         working-directory: server
@@ -99,14 +129,29 @@ jobs:
   browsers:
     # Each browser's suite runs in three shards, one job each: serially a
     # browser took 25 to 43 minutes. Every shard starts its own simulator
-    # and console, so shards share no state.
+    # and console, so shards share no state. The job has room for both steps'
+    # own limits: a slow mirror once held the browser's packages back 29
+    # minutes, and the cancelled job held back the release's image.
     name: Browser tests (${{ matrix.name }} ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     # Firefox's page loads stall in CI, failing a different test each run:
     # its job still shows red, but does not fail the run or hold back an
     # image. Chromium and WebKit must pass.
     continue-on-error: ${{ matrix.browser == 'firefox' }}
+    # The simulator's console keeps its records in this PostgreSQL (DB-69),
+    # an empty one for each shard: make e2e-sim uses it through
+    # DEV_DATABASE in place of starting one in Docker, so it is pinned like
+    # the Go job's and is up before the first step.
+    services:
+      postgres:
+        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
     strategy:
       fail-fast: false
       matrix:
@@ -132,11 +177,15 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Browsers
+      - name: Packages
         working-directory: web
-        run: npm ci --no-fund && npx playwright install --with-deps "$BROWSER"
-        env:
-          BROWSER: ${{ matrix.browser }}
+        run: npm ci --no-fund
+      - name: Browsers
+        # Fails the step, not the job, like the tests below.
+        timeout-minutes: 30
+        uses: ./.github/actions/playwright
+        with:
+          browser: ${{ matrix.browser }}
       - name: End-to-end tests against a simulated cluster
         # A step that runs out of time fails; a job that does is cancelled,
         # which continue-on-error does not cover, so a stalled Firefox shard
@@ -145,6 +194,7 @@ jobs:
         env:
           E2E_BROWSERS: ${{ matrix.browser }}
           E2E_ARGS: --shard=${{ matrix.shard }}/3
+          DEV_DATABASE: 127.0.0.1:55432
         run: make e2e-sim 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
@@ -190,16 +240,24 @@ jobs:
       # Phase 12: every source a prompt copies from is recorded, with its license.
       - name: Prompt sources
         run: hack/check-prompt-sources.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      # Every base image of both Dockerfiles, and the PostgreSQL the jobs
+      # run, pinned to a digest of the tag its source names.
+      - name: Base images pinned
+        run: hack/check-base-images.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      # Phase 13: who takes the bundled database's base backup, and that its
+      # container stops when told to.
+      - name: The database's backup container
+        run: hack/check-db-backup.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Shell scripts
-        run: shellcheck -x --severity=warning hack/*.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+        run: shellcheck -x --severity=warning hack/*.sh deploy/postgres/*.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
         run: hack/annotate.sh "Chart" "$RUNNER_TEMP/ci.log"
 
   image:
-    name: Image
+    name: Images
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -243,26 +301,65 @@ jobs:
           # Distroless: there is no shell to run.
           if docker run --rm --entrypoint /bin/sh "$IMAGE:ci" -c true 2>/dev/null; then echo "The image has a shell." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; fi
           docker run --rm --read-only "$IMAGE:ci" -h 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      - name: Build the database's image
+        # 221b-postgres (deploy/postgres): PostgreSQL and Patroni from Wolfi's
+        # packages, assembled by apko from the committed lock (the same lock
+        # gives the same base, checked against the Dockerfile's digest), WAL-G's
+        # release, the bundled database's (DB-69). Always built here, for
+        # linux/amd64, the platform the kind jobs run; the Go image and the
+        # BuildKit frontend are the console's pins. hack/wolfi-postgres.sh
+        # fetches its tools at pinned versions, each checked by its SHA-256.
+        run: |
+          version="ci-${GITHUB_SHA::12}"
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && version="${GITHUB_REF_NAME#v}"
+          export DB_LABELS="org.opencontainers.image.revision=$GITHUB_SHA
+          org.opencontainers.image.version=$version"
+          DB_IMAGE="$DB_IMAGE:ci" PLATFORM=linux/amd64 hack/wolfi-postgres.sh image 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          exit "${PIPESTATUS[0]}"
+      - name: The database's image's size, user and contents
+        run: |
+          size=$(docker image inspect "$DB_IMAGE:ci" --format '{{.Size}}')
+          echo "::notice title=Database image size::$(( size / 1000 / 1000 )) MB ($size bytes)"
+          [ "$size" -lt 600000000 ] || { echo "The database's image is $size bytes; the limit is 600 MB." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; }
+          # The chart's securityContext runs it as 999, the owner of the data.
+          [ "$(docker image inspect "$DB_IMAGE:ci" --format '{{.Config.User}}')" = "999:999" ]
+          docker run --rm --read-only --entrypoint postgres "$DB_IMAGE:ci" --version 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          docker run --rm --read-only --entrypoint patroni "$DB_IMAGE:ci" --version 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          docker run --rm --read-only --entrypoint wal-g "$DB_IMAGE:ci" --version 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         id: grype
-      - name: Vulnerability scan (fails on high or critical)
+      - name: Vulnerability scan of both images (fails on high or critical)
+        # Both images by one rule: any high or critical finding fails it,
+        # with a fix or without, and every finding is listed. The console's
+        # is distroless; the database's is built from Wolfi's packages,
+        # which had none high or critical when it became the image (an
+        # unfixed one there is fixed by moving the lock, make postgres-lock).
         env:
           GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
+          # Each finding as one line: SEVERITY ID in PACKAGE VERSION, fixed in ...
+          line='"\(.vulnerability.severity) \(.vulnerability.id) in \(.artifact.name) \(.artifact.version), fixed in \(.vulnerability.fix.versions | join(" or "))"'
           set +e
           "$GRYPE" "docker:$IMAGE:ci" --fail-on high -o table -o "json=$RUNNER_TEMP/grype.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           code=${PIPESTATUS[0]}
+          "$GRYPE" "docker:$DB_IMAGE:ci" --fail-on high -o table -o "json=$RUNNER_TEMP/grype-db.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          dbcode=${PIPESTATUS[0]}
           set -e
-          # Every finding, whatever its severity, as one line each.
-          jq -r '.matches[] | "\(.vulnerability.severity) \(.vulnerability.id) in \(.artifact.name) \(.artifact.version), fixed in \(.vulnerability.fix.versions | join(" or "))"' \
-            "$RUNNER_TEMP/grype.json" | sort -u > "$RUNNER_TEMP/findings.txt" || true
-          if [ -s "$RUNNER_TEMP/findings.txt" ]; then
-            echo "::warning title=Vulnerability findings::$(sed ':a;N;$!ba;s/\n/%0A/g' "$RUNNER_TEMP/findings.txt")"
+          for f in grype grype-db; do
+            jq -r ".matches[] | $line" "$RUNNER_TEMP/$f.json" | sort -u > "$RUNNER_TEMP/findings-$f.txt" || true
+          done
+          if [ -s "$RUNNER_TEMP/findings-grype.txt" ]; then
+            echo "::warning title=Vulnerability findings in the console's image::$(sed ':a;N;$!ba;s/\n/%0A/g' "$RUNNER_TEMP/findings-grype.txt")"
+          fi
+          if [ -s "$RUNNER_TEMP/findings-grype-db.txt" ]; then
+            echo "::warning title=Vulnerability findings in the database's image, $(wc -l < "$RUNNER_TEMP/findings-grype-db.txt")::$(head -40 "$RUNNER_TEMP/findings-grype-db.txt" | sed ':a;N;$!ba;s/\n/%0A/g')"
           fi
           if [ "$code" -ne 0 ]; then exit "$code"; fi
-          echo "::notice title=Vulnerability scan::No high or critical vulnerability in the image."
+          if [ "$dbcode" -ne 0 ]; then exit "$dbcode"; fi
+          echo "::notice title=Vulnerability scan::No high or critical vulnerability in either image."
       - name: Save
-        run: docker save "$IMAGE:ci" | gzip > bin/image.tar.gz
+        # Both images in one file: the jobs below load them together.
+        run: docker save "$IMAGE:ci" "$DB_IMAGE:ci" | gzip > bin/image.tar.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image
@@ -270,13 +367,14 @@ jobs:
           retention-days: 3
       - name: Report
         if: failure()
-        run: hack/annotate.sh "Image" "$RUNNER_TEMP/ci.log"
+        run: hack/annotate.sh "Images" "$RUNNER_TEMP/ci.log"
 
   e2e:
     name: kind e2e (Kubernetes ${{ matrix.k8s }})
     needs: image
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The bundled database is made before the console listens.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -293,14 +391,19 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Browser
+      - name: Packages
         working-directory: web
-        run: npm ci --no-fund && npx playwright install --with-deps chromium
+        run: npm ci --no-fund
+      - name: Browser
+        timeout-minutes: 30
+        uses: ./.github/actions/playwright
+        with:
+          browser: chromium
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: image
           path: bin
-      - name: Load the image
+      - name: Load the images
         run: gunzip -c bin/image.tar.gz | docker load
       # The simulator's fake Claude API, which Sherlock's tests talk to.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -310,7 +413,7 @@ jobs:
       - name: Install, test, upgrade and uninstall in kind
         env:
           K8S: ${{ matrix.k8s }}
-        run: IMAGE="$IMAGE:ci" hack/e2e-kind.sh "$K8S" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+        run: IMAGE="$IMAGE:ci" DB_IMAGE="$DB_IMAGE:ci" hack/e2e-kind.sh "$K8S" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
         run: |
@@ -328,12 +431,13 @@ jobs:
 
   # Two replicas in kind, losing a follower and then the leader: the
   # session, the event streams, Sherlock and Watson through either replica,
-  # and the settings shared between them (P7-02).
+  # and the settings shared between them (P7-02); the bundled database with
+  # three members, one on each node, losing its primary (DB-69).
   ha:
     name: Two replicas
     needs: image
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -345,10 +449,10 @@ jobs:
         with:
           name: image
           path: bin
-      - name: Load the image
+      - name: Load the images
         run: gunzip -c bin/image.tar.gz | docker load
       - name: Lose a follower, then the leader
-        run: IMAGE="$IMAGE:ci" hack/ha-kind.sh 1.37 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+        run: IMAGE="$IMAGE:ci" DB_IMAGE="$DB_IMAGE:ci" hack/ha-kind.sh 1.37 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
         run: |
@@ -359,7 +463,7 @@ jobs:
     name: Scale (500 nodes, 15,000 pods)
     needs: image
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -372,17 +476,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Browser
+      - name: Packages
         working-directory: web
-        run: npm ci --no-fund && npx playwright install --with-deps chromium
+        run: npm ci --no-fund
+      - name: Browser
+        timeout-minutes: 30
+        uses: ./.github/actions/playwright
+        with:
+          browser: chromium
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: image
           path: bin
-      - name: Load the image
+      - name: Load the images
         run: gunzip -c bin/image.tar.gz | docker load
       - name: Scale test with kwok
-        run: IMAGE="$IMAGE:ci" hack/scale-kind.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+        run: IMAGE="$IMAGE:ci" DB_IMAGE="$DB_IMAGE:ci" hack/scale-kind.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
         run: |
@@ -398,7 +507,7 @@ jobs:
     name: Upgrade from earlier releases
     needs: image
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: read
@@ -445,7 +554,7 @@ jobs:
         with:
           name: image
           path: bin
-      - name: Load the image
+      - name: Load the images
         if: steps.from.outputs.tags != ''
         run: gunzip -c bin/image.tar.gz | docker load
       - name: Upgrade, roll back and upgrade again in kind
@@ -457,7 +566,7 @@ jobs:
         run: |
           echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null
           for tag in $TAGS; do
-            IMAGE="$IMAGE:ci" hack/upgrade-kind.sh "$tag" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            IMAGE="$IMAGE:ci" DB_IMAGE="$DB_IMAGE:ci" hack/upgrade-kind.sh "$tag" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           done
       - name: Report
         if: failure()
@@ -466,7 +575,7 @@ jobs:
           hack/annotate.sh "Upgrade" "$RUNNER_TEMP/ci.log" 4000
 
   publish:
-    name: Publish image
+    name: Publish images
     needs: [go, web, browsers, chart, image, e2e, ha, scale, upgrade]
     # Main, and pull requests from this repository (not forks), so a pull
     # request can be tried on a test cluster before it merges; a run started
@@ -483,10 +592,13 @@ jobs:
       (needs.browsers.result == 'success' || (github.event_name == 'pull_request' && needs.browsers.result == 'failure')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     # id-token and attestations sign what is published: a cosign signature
     # made with the workflow's own identity, and SLSA build provenance and
-    # an SPDX SBOM kept as GitHub attestations beside the image (#79).
+    # an SPDX SBOM kept as GitHub attestations beside each image (#79). The
+    # database's image is published under the console's tags, built,
+    # signed and attested the same way; for a version tag release.yml
+    # publishes it, with the copy of its packages.
     permissions:
       contents: read
       packages: write
@@ -539,8 +651,13 @@ jobs:
           fi
           tags=()
           for r in "${refs[@]}"; do tags+=(-t "$r"); done
-          # What the signing steps below sign, by digest once it is pushed.
-          echo "ref=${refs[0]}" >> "$GITHUB_OUTPUT"
+          # What the signing steps below sign, by digest once it is pushed;
+          # the database's image takes the same tags.
+          {
+            echo "ref=${refs[0]}"
+            echo "tags=${refs[*]#"$IMAGE:"}"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
           # A release's image is never replaced: a rerun after it was
           # published keeps it as it is, and only signs it again.
           if [[ "$GITHUB_REF" == refs/tags/v* ]] && docker manifest inspect "$IMAGE:$version" >/dev/null 2>&1; then
@@ -620,6 +737,63 @@ jobs:
         run: |
           cosign sign --yes "$IMAGE@$DIGEST" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           echo "::notice title=Signed::$IMAGE@$DIGEST, with build provenance and an SBOM attested"
+      - name: Build and push the database's image for linux/amd64 and linux/arm64
+        # Built from the committed lock for both platforms, none under
+        # emulation (the Dockerfile's last stage runs nothing). A version
+        # tag's is release.yml's: it builds it with the copy of its packages
+        # and signs both, so nothing here runs for a tag.
+        id: dbpush
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          PUBLISHED: ${{ steps.push.outputs.tags }}
+          VERSION: ${{ steps.push.outputs.version }}
+        run: |
+          refs=()
+          for t in $PUBLISHED; do refs+=("$DB_IMAGE:$t"); done
+          echo "ref=${refs[0]}" >> "$GITHUB_OUTPUT"
+          export DB_LABELS="org.opencontainers.image.revision=$GITHUB_SHA
+          org.opencontainers.image.version=$VERSION"
+          hack/wolfi-postgres.sh publish "${refs[@]}" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          exit "${PIPESTATUS[0]}"
+      - name: The database's digest published
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        id: dbdigest
+        env:
+          REF: ${{ steps.dbpush.outputs.ref }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $REF"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        with:
+          image: ${{ env.DB_IMAGE }}@${{ steps.dbdigest.outputs.digest }}
+          format: spdx-json
+          output-file: bin/sbom-postgres.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: The database's SBOM attestation
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.DB_IMAGE }}
+          subject-digest: ${{ steps.dbdigest.outputs.digest }}
+          sbom-path: bin/sbom-postgres.spdx.json
+          push-to-registry: true
+      - name: The database's build provenance
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.DB_IMAGE }}
+          subject-digest: ${{ steps.dbdigest.outputs.digest }}
+          push-to-registry: true
+      - name: Sign the database's image
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          DIGEST: ${{ steps.dbdigest.outputs.digest }}
+        run: |
+          cosign sign --yes "$DB_IMAGE@$DIGEST" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          echo "::notice title=Signed::$DB_IMAGE@$DIGEST, with build provenance and an SBOM attested"
       - name: Report
         if: failure()
         run: hack/annotate.sh "Publish" "$RUNNER_TEMP/ci.log"

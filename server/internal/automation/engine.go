@@ -145,11 +145,16 @@ type Spec struct {
 	Fleet       string
 	FleetName   string
 	// Nodes are the targets in order; Values each one's parameters.
-	Nodes     []string
-	Values    map[string]map[string]string
-	Overrides map[string]string
-	Rollout   Rollout
-	Who       Who
+	Nodes  []string
+	Values map[string]map[string]string
+	// Fleets are the fleets the nodes are in, with their values for the
+	// script's parameters, and NodeFleets each node's fleets by id: kept
+	// with the run, so it says where its values came from.
+	Fleets     []RunFleet
+	NodeFleets map[string][]string
+	Overrides  map[string]string
+	Rollout    Rollout
+	Who        Who
 	// Secrets are each node's secret values, never recorded: Values holds
 	// their references.
 	Secrets map[string]map[string]string
@@ -191,7 +196,7 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	r := Run{Script: sp.Script, Version: sp.Version.N, Hash: sp.Version.Hash, DryRun: sp.DryRun, Privilege: sp.Version.Header.Privilege,
 		Cluster: sp.Cluster, ClusterName: sp.ClusterName, Fleet: sp.Fleet, FleetName: sp.FleetName, Overrides: sp.Overrides, Rollout: sp.Rollout,
 		By: sp.Who, State: RunRunning, Started: now, Beat: now, Target: sp.Version.Header.Target, Config: sp.Config, Identity: sp.Identity, Basis: sp.Basis, HookRefs: sp.HookRefs, RetryOf: sp.RetryOf,
-		Request: sp.Request, ValuesApproved: sp.ValuesApproved}
+		Request: sp.Request, ValuesApproved: sp.ValuesApproved, Fleets: sp.Fleets}
 	for _, ap := range sp.Version.Approvals {
 		r.Approvers = append(r.Approvers, ap.By)
 	}
@@ -203,7 +208,7 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	}
 	for bi, batch := range Batches(sp.Nodes, sp.Rollout) {
 		for _, n := range batch {
-			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n], RebootMinutes: sp.RebootMinutes[n]})
+			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n], RebootMinutes: sp.RebootMinutes[n], Fleets: sp.NodeFleets[n]})
 		}
 	}
 	r, err := e.opts.Store.NewRun(ctx, r)
@@ -298,8 +303,9 @@ func (e *Engine) Runs(ctx context.Context) ([]Run, error) {
 	return list, nil
 }
 
-// Get returns one run and the output of each of its nodes this console
-// still has.
+// Get returns one run and the output of each of its nodes: as it runs
+// here, or as the store keeps it (DB-87), or as this console still has
+// it, in memory or in its output directory.
 func (e *Engine) Get(ctx context.Context, id int) (Run, map[string]string, bool, error) {
 	e.mu.Lock()
 	a, ok := e.active[id]
@@ -314,23 +320,23 @@ func (e *Engine) Get(ctx context.Context, id int) (Run, map[string]string, bool,
 		}
 		return a.run.Copy(), out, true, nil
 	}
-	list, err := e.opts.Store.Runs(ctx)
-	if err != nil {
+	r, found, err := e.opts.Store.Run(ctx, id)
+	if err != nil || !found {
 		return Run{}, nil, false, err
 	}
-	for _, r := range list {
-		if r.ID == id {
-			out := map[string]string{}
-			for n, s := range kept {
-				out[n] = s
-			}
-			if len(out) == 0 && e.opts.OutputDir != "" {
-				out = readOutputs(e.opts.OutputDir, id)
-			}
-			return r, out, true, nil
+	out := map[string]string{}
+	for n, s := range kept {
+		out[n] = s
+	}
+	if len(out) == 0 {
+		if out, err = e.opts.Store.Outputs(ctx, id); err != nil {
+			return Run{}, nil, false, err
 		}
 	}
-	return Run{}, nil, false, nil
+	if len(out) == 0 && e.opts.OutputDir != "" {
+		out = readOutputs(e.opts.OutputDir, id)
+	}
+	return r, out, true, nil
 }
 
 // save writes the run's state; a failure is logged, the run goes on. A
@@ -612,6 +618,17 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 	changed := false
 	for _, raw := range lines {
 		line, err := ExpandKube(raw, env)
+		if err != nil {
+			// A secret or sensitive value is in memory for the script alone:
+			// a kubectl line is recorded whole, so it is given none.
+			a.mu.Lock()
+			for _, m := range kubeVarRE.FindAllStringSubmatch(raw, -1) {
+				if _, withheld := a.secrets[node][m[1]]; withheld {
+					err = fmt.Errorf("the line reads %s, a secret or sensitive value: such a value is never put into a kubectl line, which the output and the audit log keep whole", m[1])
+				}
+			}
+			a.mu.Unlock()
+		}
 		if err == nil {
 			var action KubeAction
 			if action, err = KubeActionOf(line); err == nil && !h.Allowed(action) {
@@ -820,6 +837,27 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	e.setNode(a, node, func(n *NodeResult) {
 		n.State, n.Exit, n.Msg, n.Error, n.Ended, n.Tail, n.Cordoned = res.State, res.Exit, res.Msg, res.Error, &ended, tailText, cordoned
 	})
+	e.keepNode(a, node, store.String())
+}
+
+// keepNode records a node's part as it ended, with its whole output,
+// which the mask has already blanked (DB-87); a failure is logged, and the
+// run's next save still carries the node's part.
+func (e *Engine) keepNode(a *activeRun, node, output string) {
+	a.mu.Lock()
+	id := a.run.ID
+	var n NodeResult
+	for _, x := range a.run.Nodes {
+		if x.Node == node {
+			n = x
+		}
+	}
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := e.opts.Store.PutNode(ctx, id, n, output); err != nil {
+		e.opts.Logger.Warn("keeping a node's part of an automation run failed", "run", id, "node", node, "err", err)
+	}
 }
 
 func sortedKeys(m map[string]string) []string {

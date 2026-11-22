@@ -160,6 +160,15 @@ func sentence(m string) string {
 // looked up on every request, which costs nothing; a directory person's
 // groups are read again when they have stood for AccessTTL.
 func (s *Service) live(sess Session) (Session, bool) {
+	// A session made while the session store was away says who the person
+	// is and nothing of what they may do (DB-65): that is worked out here,
+	// on every request, from the configuration and the account as they are
+	// now. One of a way of signing in this console does not have is
+	// refused.
+	if sess.Signed && !s.signsIn(sess.Method) {
+		s.sessions.Delete(sess.ID)
+		return Session{}, false
+	}
 	switch sess.Method {
 	case string(ModeLocal):
 		if s.accounts == nil {
@@ -178,7 +187,30 @@ func (s *Service) live(sess Session) (Session, bool) {
 			return s.rereadGroups(sess, false)
 		}
 	}
+	if sess.Signed {
+		s.grant(s.sourceOf(sess.Method), sess.User, nil).apply(&sess)
+		if sess.Method == string(ModeLDAP) && len(sess.Roles) == 0 {
+			// In none of the groups listed for a role, as at sign-in (RB-21).
+			s.sessions.Delete(sess.ID)
+			return Session{}, false
+		}
+	}
 	return sess, true
+}
+
+// signsIn says whether this console signs people in that way: the local
+// accounts with local and LDAP sign-in, the directory with LDAP, the
+// provider with OIDC.
+func (s *Service) signsIn(method string) bool {
+	switch s.cfg.Mode {
+	case ModeLocal:
+		return method == string(ModeLocal)
+	case ModeLDAP:
+		return method == string(ModeLocal) || method == string(ModeLDAP)
+	case ModeOIDC:
+		return method == string(ModeOIDC)
+	}
+	return false
 }
 
 // rereadGroups reads a directory person's groups again. A directory that

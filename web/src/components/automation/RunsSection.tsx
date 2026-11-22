@@ -1,12 +1,13 @@
 // Run History and a run's drawer: its nodes, their output and what is left to do.
 import { useEffect, useRef, useState } from 'react'
-import { boundTo, cancelRun, countsText, fetchRun, isWaiting, profileName, NODE_LABEL, nodeTone, runTone, retryRun, type NodeState, type Run, type RunDetail } from '../../api/automation'
+import { boundTo, cancelRun, countsText, fetchRun, isWaiting, profileName, NODE_LABEL, nodeTone, requestTone, runTone, retryRun, type HistoryEntry, type NodeState, type Run, type RunDetail, type WaitingRun } from '../../api/automation'
 import { fmtTs } from '../../lib/format'
 import { useSorted, type SortCol } from '../../lib/useSorted'
 import { SortTh } from './SortTh'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
 import { SearchIcon } from '../Icons'
+import { Select } from '../Select'
 import { runToolAction } from '../../api/toolbox'
 import { errText, Pill } from './parts'
 import { ConstantBadge, EmptyChip, VariableChip } from './ValueTag'
@@ -221,7 +222,7 @@ export function RunDrawer({ id, now, onRetried, onClose, onToast, onEnded }: { i
                     data-testid="run-node"
                   >
                     <td className="rk-mono">{n.node}</td>
-                    <td>{n.batch + 1}</td>
+                    <td>{n.batch}</td>
                     <td>
                       <Pill tone={nodeTone(n.state)}>{NODE_LABEL[n.state]}</Pill>
                       {(n.msg || n.error) && (
@@ -316,27 +317,79 @@ export function RunDrawer({ id, now, onRetried, onClose, onToast, onEnded }: { i
   )
 }
 
-export const RUN_SORT: SortCol<Run>[] = [
-  { id: 'id', sortValue: (r) => r.id, defaultDir: 'desc' },
-  { id: 'script', sortValue: (r) => r.script },
-  {
-    id: 'where',
-    sortValue: (r) => `${r.clusterName || r.cluster} ${r.fleetName || r.fleet}`,
-  },
-  { id: 'by', sortValue: (r) => r.by.name },
-  { id: 'state', sortValue: (r) => r.state },
-  { id: 'nodes', sortValue: (r) => r.nodes.length, defaultDir: 'desc' },
-  { id: 'started', sortValue: (r) => r.started, defaultDir: 'desc' },
+/** What an entry of Run History sorts and searches by: a run's own fields, or a request's. */
+const entryScript = (e: HistoryEntry) => (e.kind === 'run' ? e.run.script : e.request.script)
+const entryWhere = (e: HistoryEntry) => (e.kind === 'run' ? `${e.run.clusterName || e.run.cluster} › ${e.run.fleetName || e.run.fleet}` : `${e.request.clusterName || e.request.cluster} › ${e.request.fleetName || e.request.fleet}`)
+const entryBy = (e: HistoryEntry) => (e.kind === 'run' ? e.run.by.name : e.request.by.name)
+const entryNodes = (e: HistoryEntry) => (e.kind === 'run' ? e.run.nodes.length : e.request.targets.length)
+const entryID = (e: HistoryEntry) => (e.kind === 'run' ? e.run.id : e.request.id)
+
+export const RUN_SORT: SortCol<HistoryEntry>[] = [
+  { id: 'id', sortValue: (e) => e.at, defaultDir: 'desc' },
+  { id: 'script', sortValue: entryScript },
+  { id: 'where', sortValue: entryWhere },
+  { id: 'by', sortValue: entryBy },
+  { id: 'state', sortValue: (e) => e.state },
+  { id: 'nodes', sortValue: entryNodes, defaultDir: 'desc' },
+  { id: 'started', sortValue: (e) => e.at, defaultDir: 'desc' },
   {
     id: 'took',
-    sortValue: (r, now) => (r.ended ? Date.parse(r.ended) : now) - Date.parse(r.started),
+    sortValue: (e, now) => (e.kind === 'run' ? (e.run.ended ? Date.parse(e.run.ended) : now) - Date.parse(e.run.started) : -1),
     defaultDir: 'desc',
   },
 ]
 
-export function RunsSection({ runs, now, onOpen }: { runs: Run[]; now: number; onOpen: (id: number) => void }) {
+/** The states Run History filters by (AU-24): the runs', then the requests'. */
+const STATES: [string, string][] = [
+  ['', 'Any state'],
+  ['running', 'Running'],
+  ['succeeded', 'Succeeded'],
+  ['failed', 'Failed'],
+  ['stopped', 'Stopped'],
+  ['cancelled', 'Cancelled'],
+  ['interrupted', 'Interrupted'],
+  ['waiting', 'Waiting for approval'],
+  ['rejected', 'Rejected'],
+  ['withdrawn', 'Withdrawn'],
+  ['expired', 'Expired'],
+]
+
+/** Where a waiting request is approved: its row in AIOps › Inbox. */
+export const requestHref = (w: WaitingRun) => `#/aiops/inbox/approval/${encodeURIComponent(`run-${w.cluster}-${w.id}`)}`
+
+/** What became of a request, in words: who rejected or withdrew it and why, or that it expired. */
+export function requestText(e: Extract<HistoryEntry, { kind: 'request' }>): string {
+  const w = e.request
+  const why = w.comment ? `: ${w.comment}` : ''
+  switch (e.state) {
+    case 'waiting':
+      return `waits for approval of ${w.changed.join(', ')}`
+    case 'rejected':
+      return `rejected by ${w.decidedBy?.name ?? 'someone'}${why}`
+    case 'withdrawn':
+      return `withdrawn by ${w.decidedBy?.name ?? w.by.name}${why}`
+    case 'expired':
+      return `expired${why}`
+    case 'approved':
+      return `approved by ${w.decidedBy?.name ?? 'someone'}${w.run ? `: run ${w.run}` : ''}`
+  }
+}
+
+/**
+ * Automation › Run History (AU-24, DB-37): every run and every request
+ * for a run whose own values wait for approval, newest first, with a
+ * filter by state; a rejected request says who rejected it and why, a
+ * waiting one links to its approval.
+ */
+export function RunsSection({ entries, now, onOpen }: { entries: HistoryEntry[]; now: number; onOpen: (id: number) => void }) {
   const [q, setQ] = useState('')
-  const picked = runs.filter((r) => !q || r.script.includes(q.toLowerCase()) || (r.fleetName ?? r.fleet).toLowerCase().includes(q.toLowerCase()) || r.by.name.toLowerCase().includes(q.toLowerCase()) || String(r.id) === q)
+  const [state, setState] = useState('')
+  const lq = q.toLowerCase()
+  const picked = entries.filter(
+    (e) =>
+      (!state || e.state === state) &&
+      (!q || entryScript(e).includes(lq) || (e.kind === 'run' ? (e.run.fleetName ?? e.run.fleet) : (e.request.fleetName ?? e.request.fleet)).toLowerCase().includes(lq) || entryBy(e).toLowerCase().includes(lq) || String(entryID(e)) === q),
+  )
   const { sort, onSort, shown } = useSorted('runs', RUN_SORT, picked, { col: 'id', dir: 'desc' }, now)
   const th = (col: string, label: string) => <SortTh col={col} label={label} sort={sort} onSort={onSort} />
   return (
@@ -355,8 +408,9 @@ export function RunsSection({ runs, now, onOpen }: { runs: Run[]; now: number; o
           <span className="rk-sr">Find a run</span>
           <input type="search" placeholder="Find a script, fleet, person or #" value={q} onChange={(e) => setQ(e.target.value)} data-testid="runs-search" />
         </label>
+        <Select label="State" value={state} options={STATES} onChange={setState} testId="runs-state" />
       </div>
-      {runs.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="tb-hint" data-testid="runs-empty">
           Nothing has run yet. Dry run a script from Scripts to see what it would change.
         </p>
@@ -376,36 +430,74 @@ export function RunsSection({ runs, now, onOpen }: { runs: Run[]; now: number; o
               </tr>
             </thead>
             <tbody>
-              {shown.map((r) => (
-                <tr key={r.id} onClick={() => onOpen(r.id)} style={{ cursor: 'pointer' }} data-testid="run-row">
-                  <td>
-                    <button className="rk-link" onClick={() => onOpen(r.id)}>
-                      {r.id}
-                    </button>
-                  </td>
-                  <td>
-                    <span className="rk-mono">{r.script}</span> v{r.version}
-                    {r.dryRun && (
-                      <>
-                        {' '}
-                        <Pill>dry run</Pill>
-                      </>
-                    )}
-                  </td>
-                  <td>
-                    {r.clusterName || r.cluster} › {r.fleetName || r.fleet}
-                  </td>
-                  <td>{r.by.name}</td>
-                  <td>
-                    <Pill tone={runTone(r.state)}>{r.state}</Pill>
-                  </td>
-                  <td>{countsText(tally(r))}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{fmtTs(r.started)}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{duration(r.started, r.ended, now)}</td>
-                </tr>
-              ))}
+              {shown.map((e) =>
+                e.kind === 'run' ? (
+                  <tr key={`run-${e.run.id}`} onClick={() => onOpen(e.run.id)} style={{ cursor: 'pointer' }} data-testid="run-row">
+                    <td>
+                      <button className="rk-link" onClick={() => onOpen(e.run.id)}>
+                        {e.run.id}
+                      </button>
+                    </td>
+                    <td>
+                      <span className="rk-mono">{e.run.script}</span> v{e.run.version}
+                      {e.run.dryRun && (
+                        <>
+                          {' '}
+                          <Pill>dry run</Pill>
+                        </>
+                      )}
+                    </td>
+                    <td>{entryWhere(e)}</td>
+                    <td>{e.run.by.name}</td>
+                    <td>
+                      <Pill tone={runTone(e.run.state)}>{e.run.state}</Pill>
+                      {e.run.valuesApproved && (
+                        <span className="tb-hint" style={{ display: 'block', fontSize: 12 }} data-testid="run-request-of">
+                          request {e.run.valuesApproved.request}, approved by {e.run.valuesApproved.by.name}
+                        </span>
+                      )}
+                    </td>
+                    <td>{countsText(tally(e.run))}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtTs(e.run.started)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{duration(e.run.started, e.run.ended, now)}</td>
+                  </tr>
+                ) : (
+                  <tr key={`request-${e.request.cluster}-${e.request.id}`} data-testid="run-request-row" data-state={e.state}>
+                    <td style={{ whiteSpace: 'nowrap' }}>request {e.request.id}</td>
+                    <td>
+                      <span className="rk-mono">{e.request.script}</span> v{e.request.version}
+                    </td>
+                    <td>{entryWhere(e)}</td>
+                    <td>{e.request.by.name}</td>
+                    <td>
+                      <Pill tone={requestTone(e.state)}>{e.state === 'waiting' ? 'waiting for approval' : e.state}</Pill>
+                      <span className="tb-hint" style={{ display: 'block', fontSize: 12 }} data-testid="run-request-what">
+                        {requestText(e)}
+                        {e.state === 'waiting' && (
+                          <>
+                            {' · '}
+                            <a className="rk-link" href={requestHref(e.request)} data-testid="run-request-approval">
+                              its approval
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    </td>
+                    <td>
+                      {e.request.targets.length} {e.request.targets.length === 1 ? 'node' : 'nodes'}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtTs(e.request.at)}</td>
+                    <td>—</td>
+                  </tr>
+                ),
+              )}
             </tbody>
           </table>
+          {shown.length === 0 && (
+            <p className="tb-hint" style={{ padding: '10px 14px', margin: 0 }} data-testid="runs-none">
+              Nothing in this state.
+            </p>
+          )}
         </div>
       )}
     </>

@@ -714,11 +714,3 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
-
-// LabelHost replaces a registered host's labels (Hosts.SetLabels).
-func (s *Service) LabelHost(ctx context.Context, cluster, name string, labels map[string]string) (Host, error) {
-	if s.opts.Hosts == nil {
-		return Host{}, errors.New("this console keeps no hosts")
-	}
-	return s.opts.Hosts.SetLabels(ctx, cluster, name, labels)
-}

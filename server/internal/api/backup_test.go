@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
@@ -48,7 +49,7 @@ func unzip(t *testing.T, body string) string {
 // back and says what is left to do by hand.
 func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	ctx := context.Background()
-	store, kvb, auditStore := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	store, kvb, auditStore := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	var shared Settings
 	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV, o.Version = store, kvb, "0.10.2 (test)"
@@ -97,9 +98,17 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if f.Settings == nil || f.Settings.RefreshSeconds != 7 {
 		t.Fatalf("the settings: %+v", f.Settings)
 	}
-	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].RepoToken != clusters.Placeholder || f.Apps[0].Values != "replicas: 2" || len(f.Apps[0].Commands) != 1 {
+	// Without a key the values and the commands' parameters are the
+	// placeholder, as every secret is (X-01).
+	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].RepoToken != clusters.Placeholder || f.Apps[0].Values != backup.Placeholder || len(f.Apps[0].Commands) != 1 || f.Apps[0].Commands[0].Params[0] != backup.Placeholder {
 		t.Fatalf("the applications: %+v", f.Apps)
 	}
+	if strings.Contains(body, "replicas: 2") || strings.Contains(body, "replicas=5") {
+		t.Fatalf("the backup holds the application's values:\n%s", body)
+	}
+	// What follows restores a file from before 0.13, which held them in
+	// clear: it restores as it did.
+	f.Apps[0].Values, f.Apps[0].Commands[0].Params = "replicas: 2", []string{"replicas=5"}
 	var spend sherlock.Spend
 	_ = json.Unmarshal(f.SherlockSpend, &spend)
 	if len(f.ToolboxSessions) != 1 || f.ToolboxSessions[0].ID != "s1" || spend.MonthUSD != 9 {
@@ -113,7 +122,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	}
 
 	// Into another console.
-	store2, kvb2, auditStore2 := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	store2, kvb2, auditStore2 := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	var shared2 Settings
 	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV = store2, kvb2
@@ -338,7 +347,7 @@ func TestARestoreChecksWhatItBringsBack(t *testing.T) {
 		`"gone/d":{"cluster":"gone","node":"d","loginUser":"ops","port":22,"hostKeys":["` + key + `"]}}`)
 	f.Audit = []audit.Event{{Action: "settings.update", Outcome: "ok", Detail: "from the old console"}}
 
-	appStore, kvb, auditStore := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	appStore, kvb, auditStore := appstest.Store(t), &kv.Memory{}, &audit.MemoryStore{}
 	dst := automation.NewStore(&kv.Memory{}, nil)
 	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
 		o.Apps, o.KV = appStore, kvb

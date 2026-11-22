@@ -134,7 +134,7 @@ func TestAPinFollowsTheCredentialAsItIsNow(t *testing.T) {
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
-	s = New(Options{HTTP: pinService(t).o.HTTP, Dial: dial})
+	s = open(t, Options{HTTP: pinService(t).o.HTTP, Dial: dial})
 	c := token(t, s, "self-signed", srv.URL, SendAs{}, "tok-1")
 	id = c.ID
 	if _, _, err := s.Trust(ctx, c.ID, "", fp, "ann"); !errors.Is(err, ErrInvalid) {
@@ -146,7 +146,7 @@ func TestAPinFollowsTheCredentialAsItIsNow(t *testing.T) {
 
 	// A Forget between a change's read and its write stays forgotten.
 	mem := &hookedSecret{MemorySecret: &MemorySecret{}}
-	s = New(Options{Secrets: mem, HTTP: pinService(t).o.HTTP, Dial: pinService(t).o.Dial})
+	s = open(t, Options{Secrets: mem, HTTP: pinService(t).o.HTTP, Dial: pinService(t).o.Dial})
 	c = token(t, s, "self-signed", srv.URL, SendAs{}, "tok-1")
 	if _, _, err := s.Trust(ctx, c.ID, "", fp, "ann"); err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func TestARestoredCredentialKeepsItsIDUnderAnotherName(t *testing.T) {
 		t.Fatalf("%q", notes)
 	}
 	long := strings.Repeat("é", 50)
-	if name := restoredName(nil, long); len(name) > 100 || !utf8.ValidString(name) || !strings.HasSuffix(name, " (restored)") {
+	if name := suffixedName(nil, long, restoredSuffix); len(name) > 100 || !utf8.ValidString(name) || !strings.HasSuffix(name, " (restored)") {
 		t.Fatalf("%q", name)
 	}
 }
@@ -249,7 +249,7 @@ func TestTheUpgradesNamesAndDescriptionsAreBounded(t *testing.T) {
 // that shrinks it goes, and a removed credential's key leaves it.
 func TestTheCredentialsSecretStaysUnderItsBound(t *testing.T) {
 	mem := &MemorySecret{}
-	s := New(Options{Secrets: mem})
+	s := open(t, Options{Secrets: mem})
 	big := strings.Repeat("x", 16<<10)
 	var made []Credential
 	var err error

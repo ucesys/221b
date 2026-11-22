@@ -46,7 +46,7 @@ func newService(t *testing.T, hc *http.Client) (*Service, *clock) {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	return New(Options{HTTP: hc, Now: c.now}), c
+	return open(t, Options{HTTP: hc, Now: c.now}), c
 }
 
 func token(t *testing.T, s *Service, name, endpoint string, sa SendAs, tok string) Credential {

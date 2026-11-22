@@ -18,14 +18,18 @@ import (
 
 // --- Administration › Credentials (0.12.1, CR-01 to CR-14) ---
 
-// wireCredentials opens the credentials: their list and secrets in the
-// Secret <release>-credentials when the console keeps its connections in
-// Secrets, in memory otherwise. The applications, the Helm repositories
-// and Mycroft's sources say which ones they use (Used by): the API
-// registers the first two, the knowledge the last.
-func (w *wiring) wireCredentials() error {
-	var secrets credentials.SecretStore = &credentials.MemorySecret{}
-	if w.cfg.ConnectionsSecrets != "" {
+// wireCredentials opens the credentials: their secrets in the Secret
+// <release>-credentials, with their list in the database (DB-60); never
+// in memory (DB-97). The
+// applications, the Helm repositories and Mycroft's sources say which
+// ones they use (Used by): the API registers the first two, the knowledge
+// the last.
+func (w *wiring) wireCredentials(ctx context.Context) error {
+	if w.cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	var secrets credentials.SecretStore
+	{
 		ns, prefix, _ := strings.Cut(w.cfg.ConnectionsSecrets, "/")
 		sk, err := kube.NewSecretKey(w.restCfg, ns, prefix+"-credentials", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "credentials", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
@@ -33,8 +37,39 @@ func (w *wiring) wireCredentials() error {
 		}
 		secrets = sk
 	}
-	w.creds = credentials.New(credentials.Options{Secrets: secrets, Logger: w.log.With("component", "credentials")})
+	w.creds = credentials.New(credentials.Options{Secrets: secrets, Repo: w.credentialsList(ctx, secrets), Logger: w.log.With("component", "credentials")})
 	return nil
+}
+
+// credentialsList is where the credentials' list is kept: the database's
+// rows (DB-60), when the secrets are kept in a Secret. What the Secret of
+// a release before 0.13 held under "index" is copied once and then leaves
+// it (DB-61); the secrets stay there, untouched.
+//
+// The secrets are always in their Secret (DB-97).
+func (w *wiring) credentialsList(ctx context.Context, secrets credentials.SecretStore) credentials.Repo {
+	w.moveFromSecrets(ctx, credentials.ListImportID, "the credentials' list",
+		func(ctx context.Context) (int, error) { return credentials.CopyList(ctx, w.database, secrets) },
+		func(ctx context.Context) (int, error) {
+			removed, err := credentials.RemoveList(ctx, secrets)
+			if removed {
+				return 1, err
+			}
+			return 0, err
+		})
+	list := credentials.NewPGRepo(w.database)
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if noRow, noSecret, err := credentials.Unmatched(cctx, list, secrets); err != nil {
+		w.dbLog().Warn("the credentials' list and their secrets could not be compared", "err", err)
+	} else if len(noRow) > 0 || len(noSecret) > 0 {
+		w.dbLog().Warn("the credentials' list in the database and the secrets in their Secret do not match: a secret without a credential is kept and never used (a SuperAdmin removes it with DELETE /api/v1/credential-secrets/{id}), and a credential without its secret cannot be used until it is given again in Administration › Credentials",
+			"secrets_without_credential", noRow, "credentials_without_secret", noSecret)
+	}
+	return list
 }
 
 // appCredentials move the applications' tokens of before 0.12.1 to

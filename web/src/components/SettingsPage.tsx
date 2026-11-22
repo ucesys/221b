@@ -293,7 +293,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const currentGrace = settings?.pendingGraceSeconds ?? DEFAULT_GRACE
   const pickedGrace = graceDraft ?? currentGrace
   const [bannersDraft, setBannersDraft] = useState<boolean | undefined>(undefined)
-  const currentBanners = settings?.alertBanners ?? true
+  const currentBanners = settings?.alertBanners ?? false
   const pickedBanners = bannersDraft ?? currentBanners
   const [fleetsDraft, setFleetsDraft] = useState<boolean | undefined>(undefined)
   const currentFleets = settings?.fleetsPage ?? true
@@ -373,7 +373,14 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const choices: number[] = [...REFRESH_CHOICES]
   if (current && !choices.includes(current)) choices.push(current)
   choices.sort((a, b) => a - b)
-  const kept = settings?.storage === 'configmap' ? 'Kept on the server in its ConfigMap, so it survives restarts.' : settings ? 'Kept on the server until it restarts; it was started without a ConfigMap to keep settings in.' : ''
+  const kept =
+    settings?.storage === 'database'
+      ? 'Kept on the server in its database, so it survives restarts.'
+      : settings?.storage === 'configmap'
+        ? 'Kept on the server in its ConfigMap, so it survives restarts.'
+        : settings
+          ? 'Kept on the server until it restarts.'
+          : ''
   return (
     <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Refresh rate">
@@ -459,7 +466,7 @@ function BannersSection({ picked, disabled, onPick }: { picked: boolean; disable
         </button>
       </div>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        For everyone: the banners at the top of every tab that list what the Alerts tab has. Hidden, the Alerts tab’s name still turns red or amber. Banners about the connection itself always show.
+        For everyone: the banners at the top of every tab that list what the Alerts tab has. Hidden by default; hidden, the Alerts tab’s name still turns red or amber. Banners about the connection itself always show.
       </p>
     </section>
   )

@@ -20,6 +20,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cardid"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/scrub"
 )
@@ -86,11 +87,10 @@ type SecretStore interface {
 	SaveKeyIf(ctx context.Context, key string, b []byte, version string) error
 }
 
-// Limits are what the keys may hold: their limits in the ConfigMap.
+// Limits are what the keys may hold: their limits in the ConfigMap. The
+// changes and their conversations have none since they are rows (DB-79).
 type Limits struct {
-	CardsBytes, StandingBytes, NotifyBytes int
-	// ChatsBytes bounds the waiting proposals' conversations (CF-61).
-	ChatsBytes int
+	StandingBytes, NotifyBytes int
 }
 
 // Options configure the store.
@@ -122,7 +122,14 @@ type Options struct {
 // Store keeps the cards.
 type Store struct {
 	opts Options
-	// mu orders this replica's writes; the versions order everyone's.
+	// sweepQuiet keeps the sweep's reads quiet while the database is away
+	// (DB-15).
+	sweepQuiet db.Quiet
+	// changes keeps the cards, convs their conversations (DB-79).
+	changes Changes
+	convs   Conversations
+	// mu orders this replica's writes of the standing approvals and the
+	// channels; the versions order everyone's.
 	mu sync.Mutex
 	// emu guards execs and records.
 	emu     sync.RWMutex
@@ -138,10 +145,8 @@ type Store struct {
 	// onChange hears each card whose state changed (CF-29), set once
 	// with OnChange; guarded by emu.
 	onChange func(Card)
-	// chatMu orders this replica's writes of the conversations (CF-61);
 	// forget drops a decided proposal's from Sherlock's memory, set once
 	// with SetForget, guarded by emu.
-	chatMu sync.Mutex
 	forget func(session string) int
 }
 
@@ -159,22 +164,16 @@ func New(o Options) *Store {
 	if o.Cluster == nil {
 		o.Cluster = func(id string) (ClusterInfo, bool) { return ClusterInfo{Name: id}, id != "" }
 	}
-	if o.Limits.CardsBytes <= 0 {
-		o.Limits.CardsBytes = DefaultCardsBytes
-	}
 	if o.Limits.StandingBytes <= 0 {
 		o.Limits.StandingBytes = DefaultStandingBytes
 	}
 	if o.Limits.NotifyBytes <= 0 {
 		o.Limits.NotifyBytes = DefaultNotifyBytes
 	}
-	if o.Limits.ChatsBytes <= 0 {
-		o.Limits.ChatsBytes = DefaultChatsBytes
-	}
 	if o.HTTP == nil {
 		o.HTTP = &http.Client{Timeout: 10 * time.Second}
 	}
-	s := &Store{opts: o, execs: map[string]Executor{}, records: map[string]Record{}}
+	s := &Store{opts: o, execs: map[string]Executor{}, records: map[string]Record{}, changes: changesIn(o.Backend), convs: conversationsIn(o.Backend)}
 	s.execs[KindRecord] = recordExecutor{s}
 	return s
 }
@@ -360,48 +359,14 @@ func (c *Card) canon() {
 
 // loadCards reads the cards, their ids the one way (CF-56).
 func (s *Store) loadCards(ctx context.Context) (record, error) {
-	rec, _, err := loadJSON[record](ctx, s.opts.Backend, CardsKey)
-	rec.canon()
-	return rec, err
+	return s.changes.All(ctx)
 }
 
 // --- end of PC-<n>.
 
+// changeCards edits every card at once: what is rare and changes many.
 func (s *Store) changeCards(ctx context.Context, edit func(*record) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return changeJSON(ctx, s.opts.Backend, CardsKey, func(rec *record) error {
-		rec.canon()
-		if err := edit(rec); err != nil {
-			return err
-		}
-		prune(rec, s.opts.Limits.CardsBytes)
-		return nil
-	})
-}
-
-// prune keeps every open card and the newest decided ones, as many as
-// fit, with room to spare for the ConfigMap's own fields.
-func prune(rec *record, limit int) {
-	finished := 0
-	for i := len(rec.Cards) - 1; i >= 0; i-- {
-		if !rec.Cards[i].Finished() {
-			continue
-		}
-		if finished++; finished > keepFinished {
-			rec.Cards = slices.Delete(rec.Cards, i, i+1)
-		}
-	}
-	for {
-		if b, _ := json.Marshal(rec); len(b) <= limit-limit/16 {
-			return
-		}
-		i := slices.IndexFunc(rec.Cards, Card.Finished)
-		if i < 0 {
-			return
-		}
-		rec.Cards = slices.Delete(rec.Cards, i, i+1)
-	}
+	return s.changes.Change(ctx, edit)
 }
 
 func addEvent(c *Card, at time.Time, what, by string, a Actor) {
@@ -414,24 +379,10 @@ func addEvent(c *Card, at time.Time, what, by string, a Actor) {
 	}
 }
 
-// edit changes one card, named in either form (CF-56).
+// edit changes one card, named in either form (CF-56), and writes no
+// other (DB-79).
 func (s *Store) edit(ctx context.Context, id string, f func(*Card) error) (Card, error) {
-	var out Card
-	id = cardid.Canon(id)
-	err := s.changeCards(ctx, func(rec *record) error {
-		for i := range rec.Cards {
-			if rec.Cards[i].ID == id {
-				if err := f(&rec.Cards[i]); err != nil {
-					out = rec.Cards[i]
-					return err
-				}
-				out = rec.Cards[i]
-				return nil
-			}
-		}
-		return ErrNotFound
-	})
-	return out, err
+	return s.changes.Edit(ctx, cardid.Canon(id), f)
 }
 
 // ---------- reading ----------
@@ -475,17 +426,7 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Card, error) {
 // Get returns one card, named in either form: PC-16, or the c16 of
 // before (CF-56).
 func (s *Store) Get(ctx context.Context, id string) (Card, error) {
-	rec, err := s.loadCards(ctx)
-	if err != nil {
-		return Card{}, err
-	}
-	id = cardid.Canon(id)
-	for _, c := range rec.Cards {
-		if c.ID == id {
-			return c, nil
-		}
-	}
-	return Card{}, ErrNotFound
+	return s.changes.Get(ctx, cardid.Canon(id))
 }
 
 // ---------- proposing ----------
@@ -802,40 +743,34 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 	addEvent(&c, now, what, p.Source.SetBy, proposer)
 	var replaced []Card
 	var kept *Card
-	err := s.changeCards(ctx, func(rec *record) error {
+	err := s.changes.Add(ctx, func(open []Card, next int) (*Card, []Card, error) {
 		replaced, kept = nil, nil
 		// The same change an agent proposed waits already: it is kept,
 		// with the approvals it has, and says it was proposed again
 		// (CF-110). Replacing it took a first approval away each time the
 		// nightly audit proposed it again.
 		if requester == nil && watsonItem == "" && c.DedupKey != "" {
-			for i := range rec.Cards {
-				if x := &rec.Cards[i]; x.Open() && x.DedupKey == c.DedupKey && sameChange(*x, c) {
+			for i := range open {
+				if x := &open[i]; x.DedupKey == c.DedupKey && sameChange(*x, c) {
 					if c.Expires.After(x.Expires) {
 						x.Expires = c.Expires
 					}
 					addEvent(x, now, againText+strings.TrimPrefix(what, "proposed "), p.Source.SetBy, proposer)
 					k := *x
 					kept = &k
-					return nil
+					return nil, []Card{k}, nil
 				}
 			}
 		}
-		open := 0
-		for _, x := range rec.Cards {
-			if x.Open() {
-				open++
-			}
+		if len(open) >= MaxOpen {
+			return nil, nil, fmt.Errorf("%w: %d proposed changes wait already; decide some first", ErrFull, len(open))
 		}
-		if open >= MaxOpen {
-			return fmt.Errorf("%w: %d proposed changes wait already; decide some first", ErrFull, open)
-		}
-		rec.Next++
-		c.ID = cardid.Of(rec.Next)
+		c.ID = cardid.Of(next)
+		c.Replaces = ""
 		if c.DedupKey != "" {
-			for i := range rec.Cards {
-				x := &rec.Cards[i]
-				if x.Open() && (x.DedupKey == c.DedupKey || keyedBefore(*x, c.DedupKey)) {
+			for i := range open {
+				x := &open[i]
+				if x.DedupKey == c.DedupKey || keyedBefore(*x, c.DedupKey) {
 					x.State, x.ReplacedBy = Replaced, c.ID
 					addEvent(x, now, replacedText+c.ID, "", SystemActor)
 					c.Replaces = x.ID
@@ -844,8 +779,7 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 				}
 			}
 		}
-		rec.Cards = append(rec.Cards, c)
-		return nil
+		return &c, replaced, nil
 	})
 	if err != nil {
 		return Card{}, err
@@ -1324,9 +1258,10 @@ func (s *Store) expire(ctx context.Context, id, why string) (Card, error) {
 func (s *Store) Sweep(ctx context.Context) {
 	rec, err := s.loadCards(ctx)
 	if err != nil {
-		s.opts.Logger.Warn("the proposals could not be read", "err", err)
+		s.sweepQuiet.Failed(s.opts.Logger, "the proposals could not be read", err)
 		return
 	}
+	s.sweepQuiet.Worked(s.opts.Logger, "the proposals are read again")
 	// The conversations of proposals decided elsewhere, or gone, go too
 	// (CF-61).
 	s.sweepChats(ctx, rec)

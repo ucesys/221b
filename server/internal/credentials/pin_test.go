@@ -14,7 +14,7 @@ import (
 
 func pinService(t *testing.T) *Service {
 	t.Helper()
-	return New(Options{HTTP: &http.Client{Transport: &http.Transport{}, Timeout: 10 * time.Second}, Dial: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, Now: func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) }})
+	return open(t, Options{HTTP: &http.Client{Transport: &http.Transport{}, Timeout: 10 * time.Second}, Dial: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, Now: func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) }})
 }
 
 // CR-15 to CR-19: an untrusted certificate is shown by Test, trusted

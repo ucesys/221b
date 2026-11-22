@@ -138,6 +138,8 @@ func whyNot(err error) string {
 		return "the case analysis job is paused, or does not cover this cluster (AIOps › Jobs)"
 	case errors.Is(err, jobs.ErrBudget):
 		return "the case analysis job's budget is spent: " + strings.TrimPrefix(err.Error(), jobs.ErrBudget.Error()+": ")
+	case errors.Is(err, jobs.ErrRunning):
+		return "the case analysis job was busy with other cases"
 	}
 	return err.Error()
 }
@@ -149,6 +151,12 @@ func (s *Service) finish(n int, run jobs.Run, out jobs.Outcome, rerr error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.base), 15*time.Second)
 	defer cancel()
 	now := s.now()
+	// A skip is kept as one run for the day's skips of the job (jobs'
+	// noteRun), named after the first case skipped: another case's is
+	// not this case's run, and its history names none (CW-06).
+	if run.Status == jobs.StatusSkipped && run.Ref != "case:"+caseID(n) {
+		run.ID = ""
+	}
 	a, _ := out.Data.(*Analysis)
 	var filed []string
 	for _, p := range run.Proposals {
@@ -199,6 +207,8 @@ func (s *Service) finish(n int, run jobs.Run, out jobs.Outcome, rerr error) {
 		x.Updated = now
 		name := firstOf(run.ID, "the analysis")
 		switch {
+		case errors.Is(rerr, jobs.ErrRunning) && a == nil:
+			what = fmt.Sprintf("%s was skipped: %s", upper(name), whyNot(rerr))
 		case rerr != nil && a == nil:
 			what = fmt.Sprintf("%s did not finish: %s", upper(name), whyNot(rerr))
 		case fix:

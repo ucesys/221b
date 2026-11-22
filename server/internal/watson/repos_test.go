@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/apps/repotest"
 )
 
@@ -52,7 +53,7 @@ func TestHelmInstallFromARepositoryAndARegistryAgainstTheSimulator(t *testing.T)
 	f, repos := chartRegistry(t)
 	tg, _ := simTarget(t)
 	tg.Cluster = "local"
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	tg.Apps, tg.Repos = store, repos
 	run := func(line string) (string, int) {
 		c, err := Parse(line)

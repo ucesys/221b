@@ -139,9 +139,13 @@ func (x Source) trust() certpin.Trust { return certpin.Trust{CAPEM: x.CAPEM, Pin
 const (
 	StoreGit = "git"
 	StoreS3  = "s3"
-	// StoreConfigMap is the temporary store in the ConfigMap <release>-wiki
-	// (CF-57): the default while the settings name none, for trying the
-	// wiki; it will be removed.
+	// StoreDatabase is the wiki's store in the console's database (DB-96):
+	// the default while the settings name none.
+	StoreDatabase = "database"
+	// StoreConfigMap is the name of before of the store the settings name
+	// none for: the temporary store in the ConfigMap <release>-wiki (CF-57),
+	// which the database store replaced (DB-96). Settings and runs saved so
+	// are taken for the database store.
 	StoreConfigMap = "configmap"
 )
 
@@ -153,8 +157,8 @@ const (
 
 // StoreSettings say where the wiki is kept.
 type StoreSettings struct {
-	// Kind is StoreGit, StoreS3 or StoreConfigMap; "" is none yet, which
-	// is the ConfigMap store when the chart made its ConfigMap.
+	// Kind is StoreGit, StoreS3 or StoreDatabase; "" is none yet, which
+	// is the database store (StoreConfigMap, of before, is too).
 	Kind string `json:"kind"`
 	// A git repository: its HTTPS address, branch and the user its token
 	// goes with.
@@ -357,7 +361,7 @@ func (st StoreSettings) Validate() error {
 		return invalid("the refresh is between 1 minute and a day")
 	}
 	switch st.Kind {
-	case "", StoreConfigMap:
+	case "", StoreDatabase, StoreConfigMap:
 	case StoreGit:
 		if err := httpsURL("the repository's address", st.URL, false); err != nil {
 			return err
@@ -386,7 +390,7 @@ func (st StoreSettings) Validate() error {
 			return invalid("a KMS key goes with SSE-KMS")
 		}
 	default:
-		return invalid("the wiki is kept in git, s3 or configmap")
+		return invalid("the wiki is kept in git, s3 or the database")
 	}
 	return nil
 }

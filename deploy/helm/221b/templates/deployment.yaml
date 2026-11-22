@@ -3,6 +3,7 @@
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
 {{- include "b221.validate" . }}
+{{- include "b221.validateDatabase" . }}
 {{- if and (eq .Values.auth.mode "oidc") (or (not .Values.auth.oidc.issuer) (not .Values.auth.oidc.clientID)) }}
 {{- fail "OIDC sign-in needs auth.oidc.issuer and auth.oidc.clientID" }}
 {{- end }}
@@ -12,9 +13,6 @@
 {{- if not (has (toString .Values.antiAffinity) (list "" "soft" "hard")) }}
 {{- fail (printf "antiAffinity must be soft, hard or empty, not %q" (toString .Values.antiAffinity)) }}
 {{- end }}
-{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.connections.store "memory") }}
-{{- fail "replicaCount above 1 needs connections.store=secrets: the replicas share sign-ins, accounts and connections through Secrets" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,6 +20,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "b221.labels" . | nindent 4 }}
+  annotations:
+    # Where this release keeps its records, so an upgrade that would point
+    # it at another database is noticed (database.allowModeChange).
+    221b.io/database-mode: {{ include "b221.dbMode" . | quote }}
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 3
@@ -102,6 +104,18 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            # The release that runs the console: its namespace and the
+            # chart's fullname, which name every ConfigMap a release before
+            # 0.13 kept its records in, <fullname>-<what> (DB-72), and the
+            # Secrets it keeps secrets in, <fullname>-cluster-<id> and the
+            # others beside (DB-97). The console copies each ConfigMap once
+            # into the database and deletes it.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: RELEASE_FULLNAME
+              value: {{ include "b221.fullname" . | quote }}
             # Answers and commands in progress finish inside this when the
             # pod stops.
             - name: TERMINATION_GRACE
@@ -120,32 +134,76 @@ spec:
             - name: WARM_STANDBY
               value: {{ ternary (toString $replicas.warmStandby) "true" (hasKey $replicas "warmStandby") | quote }}
             # The refresh rate until someone changes it in Settings, which
-            # keeps the choice in the ConfigMap named here.
+            # keeps the choice in the database.
             - name: REFRESH
               value: {{ .Values.refresh | quote }}
-            - name: SETTINGS_CONFIGMAP
-              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
-            - name: AUDIT_CONFIGMAP
-              value: {{ printf "%s/%s-audit" .Release.Namespace (include "b221.fullname" .) | quote }}
-            - name: SESSIONS_CONFIGMAP
-              value: {{ printf "%s/%s-sessions" .Release.Namespace (include "b221.fullname" .) | quote }}
-            # The AI agents (Phase 12): their records, and the chart's
-            # baseline instructions mounted as files.
-            - name: AI_CONFIGMAP
-              value: {{ printf "%s/%s-ai" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- $dbMode := include "b221.dbMode" . }}
+            {{- if eq $dbMode "bundled" }}
+            # The database (Phase 13): the chart's own, at its read-write
+            # Service, verified against the CA the chart made for it.
+            - name: DB_HOST
+              value: {{ printf "%s.%s.svc" (include "b221.dbName" .) .Release.Namespace | quote }}
+            - name: DB_PASSWORD_FILE
+              value: /etc/221b/db/password
+            - name: DB_SSLMODE
+              value: verify-full
+            - name: DB_CA_FILE
+              value: /etc/221b/db-ca/ca.crt
+            - name: DB_POLL_INTERVAL
+              value: {{ .Values.database.pollInterval | quote }}
+            {{- else if eq $dbMode "external" }}
+            {{- $e := .Values.database.external }}
+            # The database (Phase 13): one the operator runs.
+            - name: DB_HOST
+              value: {{ $e.host | quote }}
+            - name: DB_PORT
+              value: {{ $e.port | quote }}
+            - name: DB_NAME
+              value: {{ $e.database | quote }}
+            - name: DB_USER
+              value: {{ $e.user | quote }}
+            {{- if $e.passwordSecret.name }}
+            - name: DB_PASSWORD_FILE
+              value: /etc/221b/db/password
+            {{- end }}
+            {{- if and $e.iamAuth (ne $e.iamAuth "none") }}
+            # No password: a token of the cloud's IAM for each connection (DB-83).
+            - name: DB_IAM_AUTH
+              value: {{ $e.iamAuth | quote }}
+            {{- if eq $e.iamAuth "aws" }}
+            - name: DB_AWS_REGION
+              value: {{ $e.aws.region | quote }}
+            {{- end }}
+            {{- end }}
+            - name: DB_SSLMODE
+              value: {{ $e.sslMode | quote }}
+            {{- if $e.caSecret }}
+            - name: DB_CA_FILE
+              value: /etc/221b/db-ca/ca.crt
+            {{- end }}
+            {{- if $e.clientCertSecret }}
+            - name: DB_CLIENT_CERT_FILE
+              value: /etc/221b/db-client/tls.crt
+            - name: DB_CLIENT_KEY_FILE
+              value: /etc/221b/db-client/tls.key
+            {{- end }}
+            # The replicas share what the database allows the console.
+            - name: DB_MAX_CONNECTIONS
+              value: {{ div (int $e.maxConnections) (int .Values.replicaCount) | quote }}
+            {{- with $e.listenerHost }}
+            - name: DB_LISTENER_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: DB_POLL_INTERVAL
+              value: {{ .Values.database.pollInterval | quote }}
+            {{- end }}
+            # The AI agents (Phase 12): the chart's baseline instructions
+            # mounted as files.
             - name: AGENTS_DIR
               value: /etc/221b/agents
-            # Mycroft's knowledge (Phase 12): its records in
-            # <release>-knowledge, the wiki's local copy in an emptyDir.
+            # Mycroft's knowledge (Phase 12): the wiki's local copy in an
+            # emptyDir.
             {{- $knowledge := .Values.knowledge | default dict }}
-            - name: KNOWLEDGE_CONFIGMAP
-              value: {{ printf "%s/%s-knowledge" .Release.Namespace (include "b221.fullname" .) | quote }}
-            {{- if ne (toString (dig "configMapStore" "enabled" true $knowledge)) "false" }}
-            # The temporary wiki store (CF-57), while Administration › AI › Knowledge
-            # names no store.
-            - name: WIKI_CONFIGMAP
-              value: {{ printf "%s/%s-wiki" .Release.Namespace (include "b221.fullname" .) | quote }}
-            {{- end }}
             - name: KNOWLEDGE_DIR
               value: /var/lib/221b/knowledge
             - name: KNOWLEDGE_REFRESH_GIT
@@ -154,27 +212,17 @@ spec:
               value: {{ (($knowledge.refresh | default dict).s3 | default "5m") | quote }}
             # Automation (Phase 11 part 2): on with automation.enabled, and
             # runs only where toolbox.ssh.enabled is on too. A values file
-            # from before the setting has no automation block: on.
+            # from before the setting has no automation block: on. Its
+            # ConfigMaps of before are copied and deleted either way.
             {{- $automation := .Values.automation | default dict }}
-            {{- if ne (toString (dig "enabled" true $automation)) "false" }}
             - name: AUTOMATION
-              value: "true"
-            - name: AUTOMATION_CONFIGMAP
-              value: {{ printf "%s/%s-automation" .Release.Namespace (include "b221.fullname" .) | quote }}
-            - name: AUTOMATION_RUNS_CONFIGMAP
-              value: {{ printf "%s/%s-automation-runs" .Release.Namespace (include "b221.fullname" .) | quote }}
-            {{- else }}
-            - name: AUTOMATION
-              value: "false"
-            {{- end }}
+              value: {{ ternary "false" "true" (eq (toString (dig "enabled" true $automation)) "false") | quote }}
             # The issue service (Phase 12): the report page with
             # issues.enabled; its records, every case among them (wave 5),
-            # in <release>-issues either way.
+            # in the database either way.
             {{- $issues := .Values.issues | default dict }}
             - name: ISSUES
               value: {{ ternary "true" "false" (eq (include "b221.issuesOn" .) "true") | quote }}
-            - name: ISSUES_CONFIGMAP
-              value: {{ printf "%s/%s-issues" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: ISSUES_REPORT_ROLES
               value: {{ join "," ($issues.reportRoles | default (list "superAdmin" "superViewer" "admin" "viewer")) | quote }}
             - name: ISSUES_OPERATOR_ROLES
@@ -185,25 +233,13 @@ spec:
             - name: ISSUES_REPORT_URL
               value: {{ . | quote }}
             {{- end }}
-            # The agents' proposed changes (Phase 12): durable Watson cards in
-            # <release>-proposals (CF-104), approved by cases.approverRoles.
-            - name: PROPOSALS_CONFIGMAP
-              value: {{ printf "%s/%s-proposals" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # The agents' proposed changes (Phase 12), approved by
+            # cases.approverRoles.
             - name: CASES_APPROVER_ROLES
               value: {{ join "," ((.Values.cases | default dict).approverRoles | default (list "superAdmin" "admin")) | quote }}
-            # --- Case work (Phase 12): the cases' settings, exceptions and
-            # RCAs in <release>-casework.
-            - name: CASEWORK_CONFIGMAP
-              value: {{ printf "%s/%s-casework" .Release.Namespace (include "b221.fullname" .) | quote }}
-            # --- One flow for findings and cases (Phase 12, wave 6): each
-            # case in a ConfigMap of its own, <release>-case-<n>, and the
-            # clean start.
-            - name: CASE_CONFIGMAPS
-              value: {{ printf "%s/%s-case-" .Release.Namespace (include "b221.fullname" .) | quote }}
-            - name: CASE_INSTANCE
-              value: {{ .Release.Name | quote }}
             # The release that runs this console: Watson's cards for it say
-            # so, and refuse an upgrade that drops its values.
+            # so, and refuse an upgrade that drops its values. Its name is
+            # also the label the cases' ConfigMaps of before carry.
             - name: SELF_RELEASE
               value: {{ printf "%s/%s" .Release.Namespace .Release.Name | quote }}
             {{- with (dig "cleanStart" dict (.Values.cases | default dict)) }}
@@ -211,12 +247,6 @@ spec:
               value: {{ .token | default "" | quote }}
             - name: CASES_CLEAN_START_DRY_RUN
               value: {{ .dryRun | default false | quote }}
-            {{- end }}
-            {{- if eq .Values.connections.store "secrets" }}
-            # The connections to other clusters, one Secret each, named
-            # after the release: <release>-cluster-<id>.
-            - name: CONNECTIONS_SECRETS
-              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
             {{- end }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
@@ -240,17 +270,10 @@ spec:
             - name: SHERLOCK_LOCK_PROVIDER
               value: "true"
             {{- end }}
-            # --- Jobs (Phase 12): the jobs, runs and findings in
-            # <release>-runs, and the time zone a new schedule starts in.
-            - name: RUNS_CONFIGMAP
-              value: {{ printf "%s/%s-runs" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # --- Jobs (Phase 12): the time zone a new schedule starts in.
             {{- with (dig "timeZone" "" (.Values.jobs | default dict)) }}
             - name: JOBS_TIME_ZONE
               value: {{ . | quote }}
-            {{- end }}
-            {{- if eq .Values.connections.store "secrets" }}
-            - name: SHERLOCK_SECRET
-              value: {{ printf "%s/%s-sherlock" .Release.Namespace (include "b221.fullname" .) | quote }}
             {{- end }}
             {{- with .Values.sherlock.existingSecret }}
             - name: SHERLOCK_API_KEY
@@ -347,6 +370,9 @@ spec:
               value: {{ .Values.auth.sessionIdle | quote }}
             - name: SESSION_MAX
               value: {{ .Values.auth.sessionMax | quote }}
+            # A session made while the session store is away (DB-65).
+            - name: SESSION_OUTAGE
+              value: {{ .Values.auth.outageSession | default "30m" | quote }}
             {{- if .Values.audit.webhook.url }}
             # The audit webhook (P3-10).
             - name: AUDIT_WEBHOOK_URL
@@ -376,6 +402,30 @@ spec:
               readOnly: true
             - name: knowledge
               mountPath: /var/lib/221b/knowledge
+            {{- if eq $dbMode "bundled" }}
+            - name: db-password
+              mountPath: /etc/221b/db
+              readOnly: true
+            - name: db-ca
+              mountPath: /etc/221b/db-ca
+              readOnly: true
+            {{- else if eq $dbMode "external" }}
+            {{- if .Values.database.external.passwordSecret.name }}
+            - name: db-password
+              mountPath: /etc/221b/db
+              readOnly: true
+            {{- end }}
+            {{- if .Values.database.external.caSecret }}
+            - name: db-ca
+              mountPath: /etc/221b/db-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.database.external.clientCertSecret }}
+            - name: db-client
+              mountPath: /etc/221b/db-client
+              readOnly: true
+            {{- end }}
+            {{- end }}
             {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
             - name: transcripts
               mountPath: /var/lib/221b/transcripts
@@ -394,6 +444,16 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # The console does not listen until it has reached its database
+          # (two minutes of trying) and brought its schema up to
+          # date (five at most), so the liveness probe waits for the start.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 90
           livenessProbe:
             httpGet:
               path: /healthz
@@ -420,6 +480,48 @@ spec:
         - name: agents
           configMap:
             name: {{ include "b221.fullname" . }}-agents
+        {{- if eq $dbMode "bundled" }}
+        # The console's own password for the database, and the CA its
+        # certificate is verified against; a rotated Secret is read at the
+        # next connection.
+        - name: db-password
+          secret:
+            secretName: {{ include "b221.dbSecret" . }}
+            items:
+              - key: app-password
+                path: password
+        - name: db-ca
+          secret:
+            secretName: {{ include "b221.dbTLSSecret" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- else if eq $dbMode "external" }}
+        {{- $e := .Values.database.external }}
+        {{- if $e.passwordSecret.name }}
+        - name: db-password
+          secret:
+            secretName: {{ $e.passwordSecret.name }}
+            items:
+              - key: {{ $e.passwordSecret.key }}
+                path: password
+        {{- end }}
+        {{- with $e.caSecret }}
+        - name: db-ca
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        {{- with $e.clientCertSecret }}
+        - name: db-client
+          secret:
+            secretName: {{ . }}
+            # The driver refuses a key others can read.
+            defaultMode: 0440
+        {{- end }}
+        {{- end }}
         # The wiki's local copy (Phase 12): each replica's own, read again
         # at start.
         - name: knowledge

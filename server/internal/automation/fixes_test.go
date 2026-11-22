@@ -161,8 +161,77 @@ func TestAConditionIsSeenInEveryFormOfTest(t *testing.T) {
 	}
 }
 
-// Only the newest change on a fleet can be approved, and approving it
-// applies it over the values it was asked against.
+// A newer change of the fleet that alters something else does not hold an
+// older one (DB-34; the eighth cluster test's F1): the older is approved
+// whether the newer is applied or still waits, and both are in afterwards.
+func TestANewerChangeOfSomethingElseDoesNotHoldAnOlderOne(t *testing.T) {
+	ctx := context.Background()
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	v0 := FleetVariables{Values: map[string]string{"MODE": "a", "SIZE": "1"}}
+	for _, newer := range []string{ChangeApplied, ChangeWaiting} {
+		st := NewStore(&kv.Memory{}, nil)
+		if err := st.SetVariables(ctx, "c", "db", v0); err != nil {
+			t.Fatal(err)
+		}
+		// As a ConfigMap keeps a change: the fleet's variables whole.
+		old, _ := st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: ChangeWaiting, Before: v0, After: FleetVariables{Values: map[string]string{"MODE": "b", "SIZE": "1"}}})
+		other, _ := st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: newer, Before: v0, After: FleetVariables{Values: map[string]string{"MODE": "a", "SIZE": "2"}}})
+		if newer == ChangeApplied {
+			if err := st.SetVariables(ctx, "c", "db", FleetVariables{Values: map[string]string{"MODE": "a", "SIZE": "2"}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		list, err := st.Changes(ctx, "c")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range list {
+			if c.Overtaken != "" {
+				t.Fatalf("newer %s: change %d reads as overtaken: %s", newer, c.ID, c.Overtaken)
+			}
+		}
+		if _, err := st.DecideChange(ctx, "c", old.ID, true, "", sam); err != nil {
+			t.Fatalf("newer %s: the older change of another value was held: %v", newer, err)
+		}
+		if newer == ChangeWaiting {
+			if _, err := st.DecideChange(ctx, "c", other.ID, true, "", sam); err != nil {
+				t.Fatalf("the newer change after the older one: %v", err)
+			}
+		}
+		if got, _ := st.Variables(ctx, "c"); got["db"].Values["MODE"] != "b" || got["db"].Values["SIZE"] != "2" {
+			t.Fatalf("newer %s: both are not in: %+v", newer, got["db"].Values)
+		}
+	}
+}
+
+// A name's value and its sensitive mark are one thing: a waiting change
+// of the mark is held by a newer change of the value (the tenth cluster
+// test's F2), since whoever approves it was shown the value of before.
+func TestANewerChangeOfAValueHoldsAnOlderChangeOfItsMark(t *testing.T) {
+	ctx := context.Background()
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	v0 := FleetVariables{Values: map[string]string{"MODE": "1"}, Sensitive: []string{"MODE"}}
+	st := NewStore(&kv.Memory{}, nil)
+	if err := st.SetVariables(ctx, "c", "db", v0); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: ChangeWaiting, Before: v0, After: FleetVariables{Values: map[string]string{"MODE": "1"}}})
+	v1 := FleetVariables{Values: map[string]string{"MODE": "5"}, Sensitive: []string{"MODE"}}
+	st.NewChange(ctx, VariableChange{Cluster: "c", Fleet: "db", By: ann, State: ChangeApplied, Before: v0, After: v1})
+	if err := st.SetVariables(ctx, "c", "db", v1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideChange(ctx, "c", old.ID, true, "", sam); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "is newer") {
+		t.Fatalf("the mark's change was approved over a newer value: %v", err)
+	}
+	if got, _ := st.Variables(ctx, "c"); len(got["db"].Sensitive) != 1 {
+		t.Fatalf("the mark went: %+v", got["db"])
+	}
+}
+
+// Of the changes on a fleet that alter the same thing only the newest can
+// be approved, and approving it applies it over the values it was asked
+// against.
 func TestOnlyTheNewestChangeOnAFleetCanBeApproved(t *testing.T) {
 	ctx := context.Background()
 	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}

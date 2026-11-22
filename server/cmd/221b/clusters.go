@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -47,30 +48,32 @@ func (w *wiring) wireLocalCluster() error {
 // among them, and the Helm applications kept beside them.
 func (w *wiring) wireClusters(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
-	// The other clusters (P3-04 to P3-09): their connections live in
-	// Secrets in the console's own namespace when running in a cluster,
-	// otherwise in memory. The cluster the console was started against is
-	// the connection "local".
-	var connStore clusters.Store = clusters.NewMemoryStore()
+	// The other clusters (P3-04 to P3-09): each connection is a row of the
+	// database, and its credential is a Secret in the console's own
+	// namespace (DB-64), named after the release; nothing is kept in
+	// memory in their place (DB-97). The cluster the console was started
+	// against is the connection "local".
+	var connStore clusters.Store
 	// The Helm applications (Phase 10) are kept beside the connections.
-	var appStore apps.Store = apps.NewMemoryStore()
-	if cfg.ConnectionsSecrets != "" {
+	var appStore apps.Store
+	if cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	{
 		ns, prefix, ok := strings.Cut(cfg.ConnectionsSecrets, "/")
 		if !ok || ns == "" || prefix == "" {
-			return fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
+			return fmt.Errorf("the release's Secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
 		}
 		ss, err := clusters.NewSecretStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
-		connStore = ss
+		connStore = w.connections(ctx, ss)
 		as, err := apps.NewSecretStore(w.restCfg, ns, prefix)
 		if err != nil {
 			return err
 		}
-		appStore = as
-	} else {
-		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
+		appStore = w.applications(ctx, as)
 	}
 	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: w.activity})
 	// SetLocal runs the local cluster's watches, pollers and store as the
@@ -78,8 +81,126 @@ func (w *wiring) wireClusters(ctx context.Context) error {
 	if err := manager.SetLocal(ctx, localSpec(cfg, w.restCfg, w.mode), w.cluster, w.store); err != nil {
 		return fmt.Errorf("local connection: %w", err)
 	}
+	if _, ok := connStore.(*clusters.PGStore); ok {
+		// What another replica saves or removes is here at once; the sync
+		// every few seconds stays, so nothing depends on the notice.
+		w.database.Subscribe(clusters.Topic, manager.SyncSoon)
+	}
 	w.appStore, w.manager = appStore, manager
 	return nil
+}
+
+// moveAgainEvery is how often a copy of the connections that failed at
+// the start is tried again while the console runs.
+const moveAgainEvery = 30 * time.Second
+
+// connections is where the cluster connections are kept when the console
+// may keep Secrets: each is a row of clusters (DB-64) and its Secret holds
+// its credential alone. What the Secrets of a release before 0.13 held of
+// the connections ("spec.json") is copied once, and then leaves the
+// Secrets whose connection has a row: no Secret is deleted, no key of a
+// credential is touched, and a Secret whose record could not be copied is
+// left whole.
+//
+// A copy that fails does not stop the start, and the Secrets stay as they
+// were; but the console would then show the local cluster alone until its
+// next start, so the copy is tried again while it runs, and the
+// connections start when it is made (Manager.Run).
+
+func (w *wiring) connections(ctx context.Context, secrets *clusters.SecretStore) clusters.Store {
+	log := w.dbLog()
+	const what = "the cluster connections"
+	copy := func(ctx context.Context) (int, error) { return clusters.CopyFromSecrets(ctx, w.database, secrets, log) }
+	drop := func(ctx context.Context) (int, error) { return clusters.DropSpecs(ctx, w.database, secrets, log) }
+	w.moveFromSecrets(ctx, clusters.ImportID, what, copy, drop)
+	connLog := log
+	if w.log != nil {
+		connLog = w.log.With("component", "clusters")
+	}
+	store := clusters.NewPGStore(w.database, secrets, connLog)
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if copied, err := w.database.Imported(cctx, clusters.ImportID); err != nil || !copied {
+		// It failed, the database could not say, or another replica is at
+		// it this moment: this one looks again until the copy is made.
+		every := w.moveAgainEvery
+		if every <= 0 {
+			every = moveAgainEvery
+		}
+		go func() {
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				tctx, cancel := context.WithTimeout(ctx, time.Minute)
+				n, err := copy(tctx)
+				copied, _ := w.database.Imported(tctx, clusters.ImportID)
+				cancel()
+				if err != nil || !copied {
+					continue
+				}
+				log.Info("the cluster connections are in the database now; their credentials stay in their Secrets", "copied_here", n)
+				w.removeCopiedFromSecrets(ctx, clusters.ImportID, what, drop)
+				return
+			}
+		}()
+		return store
+	}
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	if noSecret, noRow, err := store.Unmatched(cctx); err != nil {
+		log.Warn("the connections in the database and their Secrets could not be compared", "err", err)
+	} else if len(noSecret) > 0 || len(noRow) > 0 {
+		log.Warn("the connections in the database and their Secrets do not match: a connection without its Secret has nothing to sign in with until it is edited and given a credential, and a Secret without a connection is kept and never read",
+			"connections_without_secret", noSecret, "secrets_without_connection", noRow)
+	}
+	return store
+}
+
+// applications is where the applications are kept when the console may
+// keep Secrets: their records are rows (DB-62) and only their values,
+// parameters and commands' parameters stay in their Secrets. What the
+// Secrets of a release before 0.13 held of the records is copied once,
+// and the Secrets are then rewritten to hold the secret part alone
+// (DB-63): no Secret is deleted but that of an application with nothing
+// secret and no token, and one whose record could not be copied is left
+// whole.
+
+func (w *wiring) applications(ctx context.Context, secrets *apps.SecretStore) apps.Store {
+	log := w.dbLog()
+	w.moveFromSecrets(ctx, apps.ImportID, "the applications",
+		func(ctx context.Context) (int, error) { return apps.CopyFromSecrets(ctx, w.database, secrets, log) },
+		func(ctx context.Context) (int, error) { return apps.RewriteSecrets(ctx, w.database, secrets, log) })
+	appLog := log
+	if w.log != nil {
+		appLog = w.log.With("component", "applications")
+	}
+	store := apps.NewPGStore(w.database, secrets, appLog)
+	// The two halves that do not go together, said once at the start: a
+	// database restored to an earlier time, or a write cut short. Nothing
+	// is removed on that guess.
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	// A Secret that holds nothing secret and no token, as a console before
+	// step 0051 made for every application, is deleted: that is certain.
+	// A Secret that is not there is only said, below.
+	if n, err := store.DropEmptySecrets(cctx); err != nil {
+		log.Warn("the application Secrets that hold nothing could not all be deleted; the next start tries again", "deleted", n, "err", err)
+	} else if n > 0 {
+		log.Info("application Secrets that held nothing secret were deleted: their applications have nothing to keep in one", "deleted", n)
+	}
+	if noSecret, noRow, err := store.Unmatched(cctx); err != nil {
+		log.Warn("the applications in the database and their Secrets could not be compared", "err", err)
+	} else if len(noSecret) > 0 || len(noRow) > 0 {
+		log.Warn("the applications in the database and their Secrets do not match: an application without its Secret reads with no values until it is saved again, and a Secret without an application is kept and never read",
+			"applications_without_secret", noSecret, "secrets_without_application", noRow)
+	}
+	return store
 }
 
 // localSpec describes the cluster the console was started against as a

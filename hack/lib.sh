@@ -94,3 +94,88 @@ install_metrics_server() {
 # match, and under pipefail the command writing to it then fails, as a
 # large render or a long curl answer does.
 has() { grep "$@" > /dev/null; }
+
+# The kind scripts install the chart with its bundled database (DB-69):
+# there is no console without one. Both images must be in the local docker
+# before a cluster takes them with `kind load`: IMAGE (the console's) and
+# DB_IMAGE (221b-postgres, deploy/postgres, built by hack/wolfi-postgres.sh).
+# CI passes the images it built and scanned; on a laptop an unset one is
+# built here, and one named but not there is built under that name.
+CONSOLE_DEV_IMAGE=ghcr.io/ucesys/221b:kind-dev
+DB_DEV_IMAGE=ghcr.io/ucesys/221b-postgres:kind-dev
+# The console's NodePort on the host (hack/kind.yaml); another port where
+# 8080 is taken.
+HOST_PORT=${HOST_PORT:-8080}
+# How long helm waits for an install or upgrade: the database's pod first
+# (its image, its volume, initdb), then the console, whose first start
+# makes the schema and copies what it finds before it listens.
+HELM_TIMEOUT=${HELM_TIMEOUT:-600s}
+
+# build_images: sets IMAGE and DB_IMAGE, building what is not there.
+build_images() {
+  IMAGE=${IMAGE:-$CONSOLE_DEV_IMAGE}
+  DB_IMAGE=${DB_IMAGE:-$DB_DEV_IMAGE}
+  if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    DOCKER_BUILDKIT=1 docker build --build-arg VERSION="kind-$(git -C "$ROOT" rev-parse --short=12 HEAD)" -t "$IMAGE" "$ROOT"
+  fi
+  if ! docker image inspect "$DB_IMAGE" > /dev/null 2>&1; then
+    # Its base is assembled by apko from Wolfi's packages (docs/database.md).
+    DB_IMAGE="$DB_IMAGE" PLATFORM=linux/amd64 "$ROOT/hack/wolfi-postgres.sh" image
+  fi
+  echo "the console's image $IMAGE, the database's $DB_IMAGE"
+}
+
+# kind_config: prints the path of hack/kind.yaml with the console's
+# NodePort on HOST_PORT.
+kind_config() {
+  local out=$WORK/kind-$HOST_PORT.yaml
+  sed "s/hostPort: 8080$/hostPort: $HOST_PORT/" "$ROOT/hack/kind.yaml" > "$out"
+  grep -q "hostPort: $HOST_PORT$" "$out"
+  echo "$out"
+}
+
+# load_images CLUSTER: both images into every node of the cluster.
+load_images() {
+  kind load docker-image "$IMAGE" --name "$1"
+  kind load docker-image "$DB_IMAGE" --name "$1"
+}
+
+# db_values: sets DB_VALUES, the chart's values that run the bundled
+# database from DB_IMAGE as loaded, never pulled. After build_images.
+db_values() {
+  DB_VALUES=(--set "database.bundled.image.repository=${DB_IMAGE%:*}" --set "database.bundled.image.tag=${DB_IMAGE##*:}"
+    --set database.bundled.image.pullPolicy=Never)
+}
+
+# The newest step of the schema this build applies.
+last_step() {
+  find "$ROOT/server/internal/db/migrations" -name '[0-9]*.sql' -printf '%f\n' | sort | tail -1 | sed 's/^0*\([0-9]*\)_.*/\1/'
+}
+
+# check_database URL CURL...: the console at URL, through the signed-in
+# curl given (a SuperAdmin's), keeps its records in its database: it
+# answers, and its schema is at this build's last step.
+check_database() {
+  local url=$1 want
+  shift
+  want=$(last_step)
+  for _ in $(seq 30); do
+    "$@" "$url/api/v1/database" > "$WORK/database.json" 2>/dev/null && has '"available":true' "$WORK/database.json" && break
+    sleep 1
+  done
+  python3 - "$want" "$WORK/database.json" <<'PY'
+import json, sys
+want, path = int(sys.argv[1]), sys.argv[2]
+d = json.load(open(path))
+assert d.get("configured") and d.get("available"), d
+assert d.get("schemaVersion") == want, f"schema at step {d.get('schemaVersion')}, want {want}"
+print(f"the database answers, its schema at step {want}")
+PY
+}
+
+# db_sql NAMESPACE POD SQL: a query in the console's database, run as
+# PostgreSQL's superuser inside a member of the bundled database; prints
+# the rows unaligned, a field separator of |.
+db_sql() {
+  kubectl -n "$1" exec "$2" -c postgres -- psql -X -q -At -U postgres -d 221b -c "$3"
+}

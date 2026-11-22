@@ -93,12 +93,12 @@ export interface LiveCheck {
   error?: string
 }
 
-/** The temporary ConfigMap store's name wherever a person sees it (CF-57). */
-export const CONFIGMAP_STORE_LABEL = 'ConfigMap (temporary, for testing — will be removed; move to Git or S3 before relying on it)'
+/** The database store's name wherever a person sees it (DB-96). */
+export const DATABASE_STORE_LABEL = 'The console’s database'
 
 export interface StoreSettings {
-  /** configmap is the temporary store (CF-57): the default while none is saved, when the chart made its ConfigMap. */
-  kind: '' | 'git' | 's3' | 'configmap'
+  /** database is the console's database (DB-96): the default while none is saved. */
+  kind: '' | 'git' | 's3' | 'database'
   url?: string
   branch?: string
   username?: string
@@ -198,8 +198,8 @@ export interface KnowledgeView {
   identity: boolean
   model: boolean
   console: boolean
-  /** Whether the temporary ConfigMap store can be chosen (CF-57). */
-  configMapStore?: boolean
+  /** Whether the wiki can be kept in the console's database (DB-96). */
+  databaseStore?: boolean
   /** The certificates pinned for the sources, by id: their own, their credential's or their repository's (CR-19). */
   pins?: Record<string, PinnedWith>
 }
@@ -455,7 +455,7 @@ export interface AddLimits {
 
 /** What the Wiki needs first: whether a wiki is kept, what the person may do, the sources and what was added. */
 export interface WikiState {
-  store: '' | 'git' | 's3' | 'configmap' | string
+  store: '' | 'git' | 's3' | 'database' | string
   model: boolean
   pages: number
   excerpts: number
@@ -466,7 +466,7 @@ export interface WikiState {
   sources: SourceBrief[]
   added: AddedItem[]
   limits: AddLimits
-  /** The ConfigMap store's room, in bytes, when the wiki is kept there (KN-37). */
+  /** The database store's room, in bytes, when the wiki is kept there (KN-37, DB-96). */
   usage?: { used: number; limit: number }
 }
 

@@ -21,13 +21,34 @@ const (
 	RunsKey = "runs.json"
 )
 
-// Defaults of what the runs keep (JB-14): the newest runs, at most so many
-// and so many bytes; the oldest go first, those with open findings last.
+// Defaults of what the runs keep (JB-14): the newest runs, at most so
+// many; the oldest go first. DefaultRunsBytes and DefaultJobsBytes are the
+// limits of the ConfigMap of before, for what reports on it until it is
+// copied: the runs are no longer bound in bytes (DB-80).
 const (
 	DefaultMaxRuns   = 400
 	DefaultRunsBytes = 720 << 10
 	DefaultJobsBytes = 64 << 10
 )
+
+// Claims claims a job's scheduled time, where the jobs are kept in the
+// database (DB-80; JobsPG): through schedule_claims, so that a time runs
+// once whichever replica that leads gets there first.
+type Claims interface {
+	ClaimSlot(ctx context.Context, job string, slot time.Time, by string) (bool, error)
+}
+
+// claimsIn finds where a service's backend claims the scheduled times:
+// the database's, when the key of the jobs is kept there; none otherwise,
+// and the times are claimed in the jobs' record.
+func claimsIn(b kv.Backend) Claims {
+	if k, ok := b.(*kv.Keyed); ok {
+		if c, ok := k.Keys[JobsKey].(Claims); ok {
+			return c
+		}
+	}
+	return nil
+}
 
 // What one run keeps at most.
 const (
@@ -166,9 +187,8 @@ func (s *Service) updateRuns(ctx context.Context, f func(*runsRecord) error) err
 	return update(ctx, s.o.Backend, RunsKey, f, func(r *runsRecord) []byte { return s.fitRuns(r) })
 }
 
-// fitRuns trims the runs to their count and bytes (JB-14): the oldest
-// ended run goes first (its findings live on in their cases). A run under
-// way stays.
+// fitRuns trims the runs to their count (JB-14): the oldest ended run
+// goes first (its findings live on in their cases). A run under way stays.
 func (s *Service) fitRuns(r *runsRecord) []byte {
 	drop := func() bool {
 		for i := len(r.Runs) - 1; i >= 0; i-- {
@@ -182,12 +202,8 @@ func (s *Service) fitRuns(r *runsRecord) []byte {
 	}
 	for len(r.Runs) > s.o.MaxRuns && drop() {
 	}
-	for {
-		b, _ := json.Marshal(r)
-		if len(b) <= s.o.RunsBytes || !drop() {
-			return b
-		}
-	}
+	b, _ := json.Marshal(r)
+	return b
 }
 
 // clip cuts a text an agent wrote to at most n characters, with anything

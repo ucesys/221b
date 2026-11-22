@@ -68,7 +68,7 @@ func TestTheHostsHaveRoomInTheSettings(t *testing.T) {
 	for i := range nodessh.MaxHosts {
 		name := fmt.Sprintf("backup-server-%03d.example.internal", i)
 		m["k8s-production-eu/"+name] = nodessh.Host{Cluster: "k8s-production-eu", Name: name, Address: "10.120.14." + strconv.Itoa(i), Port: 22, LoginUser: "root",
-			Labels: map[string]string{"site": "frankfurt-2", "role": "backup", "team": "storage-ops"}, State: nodessh.HostPaired, AddedBy: "Pat Example", AddedAt: at,
+			State: nodessh.HostPaired, AddedBy: "Pat Example", AddedAt: at,
 			HostKey: key, Fingerprint: "SHA256:7mZ9dQ1yW3Qh3dS2x6Lr2gF0aH0dJk3Xv8tC5nB1pQo", TrustedBy: "Pat Example", TrustedAt: &at, Offered: key, PairedBy: "Pat Example", PairedAt: &at}
 	}
 	b, _ := json.Marshal(m)
@@ -124,11 +124,13 @@ func TestGettingStartedHasRoomInTheSettings(t *testing.T) {
 	}
 }
 
-// The temporary wiki store (CF-57) has a ConfigMap of its own, bounded to
-// what the store refuses past, so its own words come first.
-func TestTheWikiStoreIsBoundedInItsOwnConfigMap(t *testing.T) {
-	l := limits(objWiki)
-	if len(l) != 1 || l[knowledge.WikiKey].Bytes != knowledge.DefaultWikiBytes || knowledge.DefaultWikiBytes != 900<<10 {
-		t.Fatalf("the wiki's ConfigMap: %+v", l)
+// The wiki is kept in no ConfigMap (DB-96): the temporary store's of
+// before has no room of its own, and the database store's bound is said.
+func TestTheWikiHasNoConfigMapStore(t *testing.T) {
+	if l := limits(objWiki); len(l) != 0 {
+		t.Fatalf("the wiki's ConfigMap of before has room: %+v", l)
+	}
+	if knowledge.DefaultWikiStoreBytes != 256<<20 {
+		t.Fatalf("the wiki's store in the database holds %d bytes", knowledge.DefaultWikiStoreBytes)
 	}
 }

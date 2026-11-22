@@ -575,6 +575,7 @@ func TestTheCleanStartTouchesOnlyTheCasesArea(t *testing.T) {
 		"cases.json":      `{"next":1,"work":{"1":{}}}`,
 		"rcas.json":       `{"next":1,"items":[{"id":"RCA-1"}]}`,
 		ChecksKey:         `{"clusters":{"prod":["pod.no-limits"]}}`,
+		FoundKey:          `{"ids":{"pod.no-limits":{"findings":1,"runs":1}},"counted":["run-1"],"tracked":true}`,
 		SettingsKey:       `{"settings":{"keepAgentClosedDays":30,"lookBackDays":90,"exceptionStaleDays":90,"exceptionsPerAgent":50,"newCasesPerRun":50},"duplicatesOfAgentCases":4,"analyzing":{"1":"2026-11-01T00:00:00Z"}}`,
 	})
 	runsCM := add("runs", map[string]string{
@@ -646,7 +647,7 @@ func TestTheCleanStartTouchesOnlyTheCasesArea(t *testing.T) {
 	after := snapshot()
 	deleted := map[string]bool{"issues/" + issues.IndexKey: true, "issues/" + issues.KnownKey: true, "casework/exceptions.json": true, "casework/rcas.json": true,
 		"issues/issues-reports.json": true, "casework/cases.json": true,
-		"casework/" + ChecksKey: true, "runs/runs.json": true, "knowledge/knowledge-drafts.json": true, "knowledge/knowledge-status.json": true}
+		"casework/" + ChecksKey: true, "casework/" + FoundKey: true, "runs/runs.json": true, "knowledge/knowledge-drafts.json": true, "knowledge/knowledge-status.json": true}
 	changed := map[string]bool{"issues/" + issues.ConfigKey: true, "casework/" + SettingsKey: true, "cards/cards.json": true, "casework/" + CleanKey: true}
 	for k, v := range before {
 		switch {
@@ -714,3 +715,34 @@ func TestTheCleanStartTouchesOnlyTheCasesArea(t *testing.T) {
 func slogTo(b *strings.Builder) *slog.Logger { return slog.New(slog.NewTextHandler(b, nil)) }
 
 func auditTo(b *strings.Builder) *audit.Log { return audit.New(audit.Options{Out: b}) }
+
+// A clean start says what it found of the agents' proposed changes also
+// when there is none to delete, as it does for the other kinds (the sixth
+// cluster test, N3); and it drops what the runs found with the runs, so a
+// new run-1 is not taken as counted already (N2).
+func TestACleanStartNamesTheChangesWhenNoneGoAndDropsTheRunsCounted(t *testing.T) {
+	ctx := context.Background()
+	cards, beside := &kv.Memory{}, &kv.Memory{}
+	cards.SaveKey(ctx, "cards.json", []byte(`{"next":2,"cards":[{"id":"PC-1","source":{"kind":"chat"}}]}`), "")
+	beside.SaveKey(ctx, FoundKey, []byte(`{"ids":{"pod.no-limits":{"findings":2,"runs":1}},"counted":["run-1"],"tracked":true}`), "")
+	res, err := CleanStart(ctx, CleanStores{Casework: beside, Cards: cards}, "2026-11-19", false, time.Now(), slogTo(&strings.Builder{}), nil)
+	if err != nil || !res.Done {
+		t.Fatalf("clean: %+v %v", res, err)
+	}
+	named := map[string]int{}
+	for _, it := range res.Items {
+		named[it.Key] = it.Count
+	}
+	if n, ok := named["cards.json"]; !ok || n != 0 {
+		t.Fatalf("the changes: %v %d in %+v", ok, n, res.Items)
+	}
+	if n, ok := named[FoundKey]; !ok || n != 1 {
+		t.Fatalf("what the runs found: %v %d in %+v", ok, n, res.Items)
+	}
+	if _, _, err := beside.LoadKey(ctx, FoundKey); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("what the runs found is still kept: %v", err)
+	}
+	if b, _, _ := cards.LoadKey(ctx, "cards.json"); !strings.Contains(string(b), "PC-1") {
+		t.Fatalf("the cards changed: %s", b)
+	}
+}

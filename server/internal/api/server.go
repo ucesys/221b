@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -38,6 +39,7 @@ import (
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/imagecheck"
@@ -128,9 +130,12 @@ type Clusters interface {
 	Summary(id string) (clusters.Summary, bool)
 	Add(ctx context.Context, d clusters.Draft) (clusters.Summary, error)
 	Update(ctx context.Context, id string, d clusters.Draft) (clusters.Summary, error)
+	// Held says whether an edit read at rowVersion may still be saved
+	// (ErrConflict when not, DB-92); 0 holds to nothing.
+	Held(ctx context.Context, id string, rowVersion int) error
 	Remove(ctx context.Context, id string) error
 	TestDraft(ctx context.Context, id string, d clusters.Draft) (clusters.TestResult, error)
-	TestSaved(ctx context.Context, id string) (clusters.TestResult, error)
+	TestSaved(ctx context.Context, id, by string) (clusters.TestResult, error)
 	// Sealed and Restore are the backup's: a credential with each secret
 	// sealed for a backup (ADR-137), and a connection brought back with
 	// one, opened or a placeholder.
@@ -178,7 +183,10 @@ type Options struct {
 	UI http.Handler
 	// Gauges adds cluster figures to /metrics.
 	Gauges func() []Gauge
-	Logger *slog.Logger
+	// Database says how the database is (Phase 13); nil for a console that
+	// keeps its records in ConfigMaps.
+	Database func() DatabaseState
+	Logger   *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
 	// Leader, with several replicas, says whether this one reads the
@@ -257,6 +265,9 @@ type Options struct {
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
+	// SessionRecords are the ended sessions' records, for the backup; nil
+	// reads them from KV, where they were before Phase 13.
+	SessionRecords sessions.Archive
 	// Automation runs scripts on nodes, and AutomationStore keeps them
 	// (Phase 11 part 2, ADR-73); nil leaves Automation out.
 	Automation      *automation.Engine
@@ -371,6 +382,11 @@ type Server struct {
 
 	reqMu sync.Mutex
 	reqs  map[reqKey]uint64
+	// quiet are the routes that failed for the database being away (DB-15).
+	quiet map[string]*db.Quiet
+	// expiring keeps the run requests' expiry, asked at every page of the
+	// home, quiet while the database is away (the eleventh cluster test's F1).
+	expiring db.Quiet
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
@@ -605,9 +621,15 @@ func New(o Options) *Server {
 	s.handle("GET /healthz", "healthz", s.healthz)
 	s.handle("GET /readyz", "readyz", s.readyz)
 	s.handle("GET /metrics", "metrics", s.metrics)
+	s.handle("GET /api/v1/database", "database", s.getDatabase)
 	s.handle("GET /", "ui", o.UI.ServeHTTP)
 	return s
 }
+
+// Patterns are the routes registered, as the mux was given them ("GET
+// /api/v1/home"; a service's own are one pattern each, its prefix): for
+// the tests that ask every route something.
+func (s *Server) Patterns() []string { return slices.Clone(s.patterns) }
 
 func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
 	s.patterns = append(s.patterns, pattern)
@@ -855,14 +877,43 @@ func (s *Server) hostAllowed(hostport string) bool {
 	return s.allowedHosts[host]
 }
 
+// statusWriter notes the status a handler answers with. Whatever status a
+// handler, the console's or a service's own, gave a failure, an answer
+// that says the database is unavailable is a 503 (DB-15), so every page
+// that needs the database says so the same way, and a browser can tell it
+// from a fault of the request. Such an answer is known by its mark
+// (db.MarkUnavailable), which an error writer that has the error sets
+// (db.Refuse): the services' own do. A handler that passes only an
+// error's text (jsonError) is still known by db.ErrUnavailable's own
+// sentence in what it writes, for which an error's status is held until
+// its text is written; the answer is then marked too, so that the
+// browser app goes by the mark alone.
 type statusWriter struct {
 	http.ResponseWriter
 	code int
+	// held is an error's status not yet sent; asIs sends every status as
+	// it is given (what the leader answered, which it has looked at).
+	held, asIs bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
-	if w.code == 0 {
-		w.code = code
+	if w.code != 0 {
+		// A second header, as the server would log it.
+		if !w.held {
+			w.ResponseWriter.WriteHeader(code)
+		}
+		return
+	}
+	w.code = code
+	if code >= http.StatusBadRequest && !w.asIs {
+		if db.MarkedUnavailable(w.Header()) {
+			// Marked by whoever had the error: a 503, whatever it was given.
+			w.code = http.StatusServiceUnavailable
+			w.ResponseWriter.WriteHeader(w.code)
+			return
+		}
+		w.held = true
+		return
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
@@ -871,7 +922,22 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.code == 0 {
 		w.code = http.StatusOK
 	}
+	if w.held {
+		if bytes.Contains(b, []byte(db.ErrUnavailable.Error())) {
+			w.code = http.StatusServiceUnavailable
+			db.MarkUnavailable(w.Header())
+		}
+		w.sendHeld()
+	}
 	return w.ResponseWriter.Write(b)
+}
+
+// sendHeld sends an error's status that was held for its text.
+func (w *statusWriter) sendHeld() {
+	if w.held {
+		w.held = false
+		w.ResponseWriter.WriteHeader(w.code)
+	}
 }
 
 // Unwrap lets http.ResponseController reach Flush and deadlines.
@@ -882,6 +948,7 @@ func (s *Server) observe(route string, h http.HandlerFunc) http.Handler {
 		sw := &statusWriter{ResponseWriter: w}
 		start := time.Now()
 		h(sw, r)
+		sw.sendHeld()
 		code := sw.code
 		if code == 0 {
 			code = http.StatusOK
@@ -889,12 +956,37 @@ func (s *Server) observe(route string, h http.HandlerFunc) http.Handler {
 		s.reqMu.Lock()
 		s.reqs[reqKey{route, code}]++
 		s.reqMu.Unlock()
-		if code >= 500 {
+		switch {
+		case code == http.StatusServiceUnavailable && db.MarkedUnavailable(sw.Header()):
+			// The database is away: each route says so once, and once when
+			// it answers again (DB-15), not at every request.
+			s.quietRoute(route, true).Failed(s.opts.Logger, "request failed", db.ErrUnavailable, "method", r.Method, "path", r.URL.Path, "code", code)
+		case code >= 500:
 			s.opts.Logger.Warn("request failed", "method", r.Method, "path", r.URL.Path, "code", code, "duration", time.Since(start))
-		} else {
+		default:
+			if q := s.quietRoute(route, false); q != nil {
+				q.Worked(s.opts.Logger, "requests are answered again", "route", route)
+			}
 			s.opts.Logger.Debug("request", "method", r.Method, "path", r.URL.Path, "code", code, "duration", time.Since(start))
 		}
 	})
+}
+
+// quietRoute is a route's Quiet (DB-15), made with make on its first
+// failure for the database being away; nil for a route that never had
+// one.
+func (s *Server) quietRoute(route string, make bool) *db.Quiet {
+	s.reqMu.Lock()
+	defer s.reqMu.Unlock()
+	q := s.quiet[route]
+	if q == nil && make {
+		if s.quiet == nil {
+			s.quiet = map[string]*db.Quiet{}
+		}
+		q = &db.Quiet{}
+		s.quiet[route] = q
+	}
+	return q
 }
 
 // viewsOf reads the views a request asks for: ?views=nodes,pods. Without
@@ -1139,8 +1231,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if f := st.TimeFormat; f != nil {
 		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
 	}
-	if b := st.AlertBanners; b != nil && !*b {
-		detail += ", alert banners hidden"
+	if b := st.AlertBanners; b != nil && *b {
+		detail += ", alert banners shown"
 	}
 	if !st.ChecksImages() {
 		detail += ", newer images not checked"

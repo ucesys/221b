@@ -81,6 +81,12 @@ type Config struct {
 	// SessionStore keeps the sessions where every replica sees them
 	// (P7-02); nil keeps them in this process's memory.
 	SessionStore SharedStore
+	// OutageSession is how long a session made while the session store is
+	// away lasts, from sign-in, without renewal (DB-65): half an hour when
+	// zero. SessionKey signs those sessions; nil makes a key of this
+	// process only, which no other replica can check.
+	OutageSession time.Duration
+	SessionKey    *SessionKey
 	// Directory is the LDAP server, for ModeLDAP.
 	Directory Directory
 	// SyncInterval is how often the directory's groups are read again.
@@ -175,6 +181,8 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.SessionStore != nil {
 		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
 	}
+	s.sessions.Outage(cfg.SessionKey, cfg.OutageSession)
+	s.cfg.OutageSession = s.sessions.OutageLasts()
 	switch cfg.Mode {
 	case ModeNone:
 		role, err := AnonymousRole(string(cfg.Anonymous))
@@ -336,7 +344,35 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, s.anonymous))
 	}
 	if sess, ok := s.sessionOf(r); ok {
-		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
+		// A session made while the session store was away becomes a stored
+		// one at its first request after the store is back (DB-65). Not on
+		// a stream: its answer may carry no cookie, and it stays open.
+		// The stored session ends when the signed one would have: the
+		// exchange gives no more than the signed session had.
+		ended := false
+		if sess.Signed && !streams(r) {
+			if stored, made, ok := s.sessions.Exchange(sess); ok {
+				s.setSession(w, r, stored)
+				// What handles the request from here on, the leader it may
+				// be forwarded to as well, finds the stored session.
+				carry(r, stored.ID)
+				if made {
+					s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
+						"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+				}
+				sess = *stored
+			} else if s.sessions.Revoked(sess) {
+				// The store holds the ending of this session: it was signed
+				// out, or ended by an administrator, where this replica did
+				// not see it.
+				ended = true
+			}
+		}
+		if !ended {
+			return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
+		}
+		// An open path's handler looks for the session itself, and finds
+		// none.
 	}
 	if openPath(r.URL.Path) {
 		return r
@@ -370,6 +406,24 @@ func background(r *http.Request) bool {
 	return r.Header.Get(backgroundHeader) != "" || strings.Contains(r.Header.Get("Accept"), "text/event-stream") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
+// carry puts a session's cookie in a request in place of the one it came
+// with.
+func carry(r *http.Request, id string) {
+	cookies := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, c := range cookies {
+		if c.Name != cookieSession {
+			r.AddCookie(c)
+		}
+	}
+	r.AddCookie(&http.Cookie{Name: cookieSession, Value: id})
+}
+
+// streams says whether a request opens an event stream or a WebSocket.
+func streams(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/event-stream") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
 func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	c, err := r.Cookie(cookieSession)
 	if err != nil || c.Value == "" {
@@ -392,8 +446,17 @@ func secure(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
+// setSession sets the session's cookie: its ID, or for a session made
+// while the session store was away the signed session itself. The browser
+// keeps it no longer than the session lasts.
 func (s *Service) setSession(w http.ResponseWriter, r *http.Request, sess *Session) {
-	http.SetCookie(w, &http.Cookie{Name: cookieSession, Value: sess.ID, Path: "/", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.cfg.SessionMax / time.Second)})
+	maxAge := int(s.cfg.SessionMax / time.Second)
+	// A signed session, and the stored one it is exchanged for, end when
+	// the signed one expires: the browser keeps neither any longer.
+	if left := int(sess.Expires.Sub(s.now()) / time.Second); sess.Signed || left < maxAge {
+		maxAge = max(left, 1)
+	}
+	http.SetCookie(w, &http.Cookie{Name: cookieSession, Value: sess.ID, Path: "/", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 
 // clearCookie removes a cookie; the path must be the one it was set with.
@@ -466,12 +529,16 @@ type pageData struct {
 	Error    string
 	// Notice says what went right: a password changed (6.4).
 	Notice string
-	Next   string
-	Email  string
-	Local  bool
-	OIDC   bool
-	Off    bool
-	Form   string
+	// Temporary says the person is signed in with a session made while the
+	// session store was away, and how long it lasts (DB-65): the page then
+	// shows that and a way on, and no form.
+	Temporary string
+	Next      string
+	Email     string
+	Local     bool
+	OIDC      bool
+	Off       bool
+	Form      string
 }
 
 func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg string, code int) {
@@ -511,7 +578,17 @@ func (s *Service) getSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusFound)
 		return
 	}
-	if _, ok := s.sessionOf(r); ok {
+	// The gate has looked already, and may have given the session a new
+	// cookie this request does not carry.
+	sess, ok := SessionFrom(r.Context())
+	if !ok {
+		sess, ok = s.sessionOf(r)
+	}
+	if ok {
+		if sess.Signed {
+			s.renderTemporary(w, r, sess)
+			return
+		}
 		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusFound)
 		return
 	}
@@ -520,6 +597,80 @@ func (s *Service) getSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.renderSignIn(w, r, "", http.StatusOK)
+}
+
+// tooLargeText is what a person is told whose session, made while the
+// session store is away, would not fit a cookie.
+const tooLargeText = "You cannot be signed in just now. The session store is unavailable, and you are in too many groups for a session kept in the browser instead. A local account can sign in. Try again when the store is back."
+
+// spoken writes a length of time as a person says it.
+func spoken(d time.Duration) string {
+	unit := func(n int64, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %ss", n, one)
+	}
+	switch {
+	case d >= time.Hour && d%time.Hour == 0:
+		return unit(int64(d/time.Hour), "hour")
+	case d >= time.Minute && d%time.Minute == 0:
+		return unit(int64(d/time.Minute), "minute")
+	}
+	return d.String()
+}
+
+// temporaryText is what a person is told who signed in while the session
+// store was away (DB-65).
+func (s *Service) temporaryText(sess Session) string {
+	return "You are signed in. The session store was unavailable when you signed in, so this session lasts " + spoken(s.cfg.OutageSession) +
+		" and cannot be extended: at " + sess.Expires.UTC().Format("15:04 UTC") + " you will be asked to sign in again."
+}
+
+// renderTemporary shows the sign-in page to someone signed in with a
+// session made while the session store was away: what that means, and the
+// way on to the page they asked for.
+func (s *Service) renderTemporary(w http.ResponseWriter, r *http.Request, sess Session) {
+	d := pageData{Title: s.cfg.Title, Mode: s.cfg.Mode, Temporary: s.temporaryText(sess), Next: safeNext(r.URL.Query().Get("next"))}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := s.page.Execute(w, d); err != nil {
+		s.log.Warn("rendering the sign-in page", "err", err)
+	}
+}
+
+// begin starts a person's session at sign-in and sets its cookie. When the
+// session cannot be started it answers with the sign-in page and reports
+// false.
+func (s *Service) begin(w http.ResponseWriter, r *http.Request, sess Session) (*Session, bool) {
+	started, err := s.sessions.Open(sess)
+	if err != nil {
+		s.record(r, audit.ActionSignInFailed, sess.User, audit.OutcomeFailed, "the session store is unavailable, and the person's groups do not fit a session kept in its cookie")
+		s.log.Warn("a sign-in was refused: the session store is away, and the person's groups do not fit a cookie", "user", sess.User.Username, "method", sess.Method, "groups", len(sess.User.Groups))
+		s.renderSignIn(w, r, tooLargeText, http.StatusServiceUnavailable)
+		return nil, false
+	}
+	s.setSession(w, r, started)
+	return started, true
+}
+
+// landing is where a person goes once signed in: the page they asked for,
+// or first the sign-in page, which says what a session made while the
+// session store was away is.
+func landing(started *Session, next string) string {
+	if started.Signed {
+		return "/signin?next=" + url.QueryEscape(next)
+	}
+	return next
+}
+
+// outageNote is added to a sign-in's audit record when the session was
+// made while the session store was away.
+func (s *Service) outageNote(started *Session) string {
+	if !started.Signed {
+		return ""
+	}
+	return "; the session store was unavailable, so the session is kept in its cookie and lasts " + spoken(s.cfg.OutageSession)
 }
 
 // from is the address a request came from, for the audit log.
@@ -643,24 +794,29 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{Subject: "local:" + acct.Username, Username: acct.Username, Email: acct.Email, Name: acct.Name, Groups: append([]string(nil), acct.Groups...)}
-	s.start(w, r, Session{User: user, Method: string(ModeLocal)}, roles.Local, acct.Super, "local account")
-	s.accounts.SignedIn(acct.Username, s.now())
+	if s.start(w, r, Session{User: user, Method: string(ModeLocal)}, roles.Local, acct.Super, "local account") {
+		s.accounts.SignedIn(acct.Username, s.now())
+	}
 }
 
 // start gives a person their session: roles worked out, cookie set, audit
-// record written, and on to the page they asked for.
-func (s *Service) start(w http.ResponseWriter, r *http.Request, sess Session, src roles.Source, supers []roles.ID, how string) {
+// record written, and on to the page they asked for. It reports false when
+// the session could not be started, and the person has been told.
+func (s *Service) start(w http.ResponseWriter, r *http.Request, sess Session, src roles.Source, supers []roles.ID, how string) bool {
 	g := s.grant(src, sess.User, supers)
 	g.apply(&sess)
-	started := s.sessions.Start(sess)
-	s.setSession(w, r, started)
+	started, ok := s.begin(w, r, sess)
+	if !ok {
+		return false
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	if len(g.Dropped) > 0 {
 		s.record(r, audit.ActionNameRefused, sess.User, audit.OutcomeDenied, "reserved group names dropped: "+strings.Join(g.Dropped, ", "))
 	}
-	s.record(r, audit.ActionSignIn, sess.User, audit.OutcomeOK, how)
-	s.log.Info("signed in", "user", sess.User.Username, "method", sess.Method, "admin", started.Admin, "roles", len(started.Roles))
-	http.Redirect(w, r, safeNext(r.PostFormValue("next")), http.StatusSeeOther)
+	s.record(r, audit.ActionSignIn, sess.User, audit.OutcomeOK, how+s.outageNote(started))
+	s.log.Info("signed in", "user", sess.User.Username, "method", sess.Method, "admin", started.Admin, "roles", len(started.Roles), "store_away", started.Signed)
+	http.Redirect(w, r, landing(started, safeNext(r.PostFormValue("next"))), http.StatusSeeOther)
+	return true
 }
 
 // signInDirectory signs a person in with the directory (RB-21, RB-22).
@@ -804,14 +960,16 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	g := s.grant(roles.OIDC, user, nil)
 	sess := Session{User: user, Method: string(ModeOIDC)}
 	g.apply(&sess)
-	started := s.sessions.Start(sess)
-	s.setSession(w, r, started)
+	started, ok := s.begin(w, r, sess)
+	if !ok {
+		return
+	}
 	if len(g.Dropped) > 0 {
 		s.record(r, audit.ActionNameRefused, user, audit.OutcomeDenied, "reserved group names dropped: "+strings.Join(g.Dropped, ", "))
 	}
-	s.record(r, audit.ActionSignIn, user, audit.OutcomeOK, "OIDC, "+s.provider.Name())
-	s.log.Info("signed in", "user", user.Username, "method", "oidc", "admin", started.Admin, "groups", len(user.Groups))
-	http.Redirect(w, r, safeNext(st.Next), http.StatusSeeOther)
+	s.record(r, audit.ActionSignIn, user, audit.OutcomeOK, "OIDC, "+s.provider.Name()+s.outageNote(started))
+	s.log.Info("signed in", "user", user.Username, "method", "oidc", "admin", started.Admin, "groups", len(user.Groups), "store_away", started.Signed)
+	http.Redirect(w, r, landing(started, safeNext(st.Next)), http.StatusSeeOther)
 }
 
 // signOut ends the session.
@@ -820,9 +978,16 @@ func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign out from the console itself", http.StatusForbidden)
 		return
 	}
-	if sess, ok := s.sessionOf(r); ok {
+	sess, ok := s.sessionOf(r)
+	if ok {
 		s.sessions.Delete(sess.ID)
 		s.record(r, audit.ActionSignOut, sess.User, audit.OutcomeOK, "")
+	}
+	// The gate may have started, for this very request, a stored session
+	// in place of one made while the session store was away: that one ends
+	// too.
+	if cur, has := SessionFrom(r.Context()); has && cur.ID != "" && cur.ID != sess.ID && s.cfg.Mode != ModeNone {
+		s.sessions.Delete(cur.ID)
 	}
 	clearCookie(w, r, cookieSession, "/")
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {

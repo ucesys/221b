@@ -257,6 +257,29 @@ func (e *Env) Open(inFile, name, where string) (string, error) {
 	return "", nil
 }
 
+// Unseal is a field of the file that a part sealed only since a later
+// version (an application's values, since 0.13): the value when the file
+// holds it sealed with this install's key, the value as it is when the
+// file holds it in clear (a file from before), and false when it holds
+// the placeholder or a value sealed with another key, or this install
+// has none. It lists nothing: the part says what was not brought back.
+func (e *Env) Unseal(inFile string) (string, bool) {
+	switch {
+	case inFile == "":
+		return "", true
+	case inFile == Placeholder:
+		return "", false
+	case SealedValue(inFile):
+		if e.key == nil {
+			return "", false
+		}
+		v, err := e.key.OpenValue(inFile)
+		return v, err == nil
+	default:
+		return inFile, true
+	}
+}
+
 // SetAgain lists a secret a restore did not bring back, under the part
 // being restored.
 func (e *Env) SetAgain(name, where string) {

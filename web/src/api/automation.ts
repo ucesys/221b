@@ -389,6 +389,12 @@ export const approveVersion = (name: string, n: number) => call<Script>(`${nameU
 export const revokeVersion = (name: string, n: number) => call<Script>(`${nameURL(name)}/versions/${n}/revoke`, post({}))
 export const rejectVersion = (name: string, n: number, comment: string) => call<Script>(`${nameURL(name)}/versions/${n}/reject`, post({ comment }))
 export const fetchRuns = (background = false) => call<{ runs: Run[] | null }>(`${BASE}/runs`, {}, background).then((r) => r.runs ?? [])
+/** A request's state in Run History (AU-24): a rejection by whoever asked is a withdrawal; an approved one is shown as the run it started. */
+export type RequestState = 'waiting' | 'rejected' | 'withdrawn' | 'expired' | 'approved'
+/** A row of Run History (AU-24, DB-37): a run, or a request for a run whose own values wait for approval. */
+export type HistoryEntry = { kind: 'run'; state: RunState; at: string; run: Run } | { kind: 'request'; state: RequestState; at: string; request: WaitingRun }
+/** Run History: the runs and the run requests, newest first. */
+export const fetchHistory = (background = false) => call<{ entries: HistoryEntry[] | null }>(`${BASE}/history`, {}, background).then((r) => r.entries ?? [])
 export const fetchRun = (id: number, background = false) => call<RunDetail>(`${BASE}/runs/${id}`, {}, background)
 export const cancelRun = (id: number) => call<{ cancelled: boolean }>(`${BASE}/runs/${id}/cancel`, { method: 'POST' })
 export const fetchFleets = (cluster: string = LOCAL) => call<AutomationFleets>(apiPath('automation/fleets', cluster))
@@ -546,8 +552,10 @@ export interface ApprovalRow {
   comment?: string
   /** Someone else decided what this person asked for. */
   mine?: boolean
-  /** This person asked for what waits, and may approve it themselves. */
+  /** This person asked for what waits: theirs to approve themselves, to withdraw, or only to read (waitingFor). */
   own?: boolean
+  /** On a row of the person's own that they can neither approve nor reject, who decides it: "another SuperAdmin", "a second person" (IN-11). */
+  waitingFor?: string
   /** Why a waiting change can only be rejected now. */
   overtaken?: string
   /** The run an approved run request started. */
@@ -813,6 +821,20 @@ export function allows(fp: FleetVariables | undefined, privilege: Privilege | ''
 }
 
 export type Tone = 'ok' | 'warn' | 'err' | 'info' | undefined
+
+/** A request's tone in Run History: waiting is news, rejected a refusal, withdrawn and expired let go. */
+export function requestTone(s: RequestState): Tone {
+  switch (s) {
+    case 'waiting':
+      return 'info'
+    case 'rejected':
+      return 'err'
+    case 'approved':
+      return 'ok'
+    default:
+      return 'warn'
+  }
+}
 
 export function runTone(s: RunState): Tone {
   switch (s) {

@@ -502,7 +502,7 @@ export interface Settings {
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
-  storage: 'configmap' | 'memory'
+  storage: 'database' | 'configmap' | 'memory'
   changedAt?: string
 }
 

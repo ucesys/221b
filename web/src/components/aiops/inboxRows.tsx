@@ -73,6 +73,8 @@ export interface InboxRow {
   pending: boolean
   /** Waits for this person to decide: an approval they did not ask for, a card they may approve. */
   forMe?: boolean
+  /** The person's own, which someone else decides: who, in words ("another SuperAdmin"). Listed while it waits, and counted like every pending row (IN-11). */
+  waitingFor?: string
   /** Since when it has waited; once done, when it was done. */
   since: string
   /** Whether the kind is assigned to someone: cases and known-issue drafts. */
@@ -245,10 +247,18 @@ export function approvalId(r: ApprovalRow): string {
   return `${r.kind}-${hash(`${r.cluster ?? ''}|${r.fleet ?? ''}|${r.what}|${r.requestedAt ?? ''}`)}`
 }
 
-/** An approval: pending until decided; for this person when they did not ask for it. */
+/** What a row of the person's own says while someone else decides it (IN-11): "Waiting for another SuperAdmin". */
+export const waitingForText = (who: string) => `Waiting for ${who}`
+
+/**
+ * An approval: pending until decided; for this person when they did not
+ * ask for it. What they asked for and cannot decide (IN-11) says who it
+ * waits for in place of Pending.
+ */
 export function approvalRow(r: ApprovalRow): InboxRow {
   const id = approvalId(r)
   const pending = r.state === 'pending'
+  const waitingFor = pending && r.own && r.waitingFor ? r.waitingFor : undefined
   return {
     key: `approval:${id}`,
     kind: 'approval',
@@ -257,10 +267,11 @@ export function approvalRow(r: ApprovalRow): InboxRow {
     title: r.what,
     cluster: r.kind === 'script' ? undefined : r.cluster || undefined,
     clusterName: r.kind === 'script' ? undefined : r.clusterName || r.cluster || undefined,
-    status: APPROVAL_STATE[r.state].text,
-    tone: APPROVAL_STATE[r.state].tone,
+    status: waitingFor ? waitingForText(waitingFor) : APPROVAL_STATE[r.state].text,
+    tone: waitingFor ? 'info' : APPROVAL_STATE[r.state].tone,
     pending,
     forMe: pending && !r.own,
+    waitingFor,
     since: pending ? (r.requestedAt ?? '') : (r.approvedAt ?? r.requestedAt ?? ''),
     assignable: false,
     mine: !!(r.mine || r.own),

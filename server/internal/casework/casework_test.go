@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -100,9 +102,14 @@ type world struct {
 	fixes   *fixes.Service
 	audit   *bytes.Buffer
 	backend *kv.Memory
-	objects *kv.MemoryObjects
-	now     time.Time
-	runs    int
+	// store is where the service keeps its keys: backend, or the database's
+	// tables over it.
+	store   kv.Backend
+	objects kv.Objects
+	// issueStore is what the issue service reads and writes through.
+	issueStore kv.Backend
+	now        time.Time
+	runs       int
 }
 
 var (
@@ -132,6 +139,21 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 		props: &jobs.MemoryProposer{}, audit: &bytes.Buffer{}, backend: backend, objects: &kv.MemoryObjects{},
 		now: time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)}
 	log := audit.New(audit.Options{Out: w.audit})
+	// TEST_STORE=database runs every test of this package with
+	// the checks, the rules and what the runs found in the database's
+	// tables (Phase 13).
+	// So are the cases: each an object of rows with the work on it and its
+	// conversation, and the issue service's index, known issues and
+	// settings as one set.
+	var store, issueStore kv.Backend = backend, issueBackend
+	if os.Getenv("TEST_STORE") == "database" {
+		d := dbtest.Open(t)
+		store = &kv.Keyed{Keys: map[string]kv.Backend{ChecksKey: NewChecksPG(d), RulesKey: NewRulesPG(d), FoundKey: NewFoundPG(d)}, Rest: backend}
+		set := issues.NewSetPG(d)
+		issueStore = &kv.Keyed{Keys: map[string]kv.Backend{issues.IndexKey: set, issues.KnownKey: set, issues.ConfigKey: set}, Rest: issueBackend}
+		w.objects = issues.NewCasesPG(d, CaseParts())
+	}
+	w.store = store
 	kinds := jobs.NewRegistry()
 	clusters := func() []jobs.Cluster {
 		return []jobs.Cluster{{ID: "local", Name: "local"}, {ID: "prod", Name: "Production"}}
@@ -139,10 +161,11 @@ func setupOn(t *testing.T, backend, issueBackend *kv.Memory) *world {
 	w.jobs = jobs.New(jobs.Options{Kinds: kinds, Agents: w.agents, Proposer: w.props, Audit: log, Logger: logger, Clusters: clusters, CommandOK: func(string) error { return nil }})
 	t.Cleanup(w.jobs.Stop)
 	clock := func() time.Time { return w.now }
-	w.iss = issues.New(issues.Options{Backend: issueBackend, Cases: w.objects, Logger: logger, Now: clock})
+	w.issueStore = issueStore
+	w.iss = issues.New(issues.Options{Backend: issueStore, Cases: w.objects, Logger: logger, Now: clock})
 	w.lessons = lessons.New(lessons.Options{Audit: log, Logger: logger, Now: clock})
 	w.fixes = fixes.New(fixes.Options{Audit: log, Logger: logger, Now: clock})
-	w.svc = New(Options{Backend: w.backend, Issues: w.iss, Jobs: w.jobs, Lessons: w.lessons, Fixes: w.fixes, Clusters: clusters, Audit: log, Logger: logger, Now: clock,
+	w.svc = New(Options{Backend: store, Issues: w.iss, Jobs: w.jobs, Lessons: w.lessons, Fixes: w.fixes, Clusters: clusters, Audit: log, Logger: logger, Now: clock,
 		CommandOK: func(line string) error {
 			if strings.Contains(line, "delete namespace") {
 				return errors.New("Watson does not delete namespaces")
@@ -486,5 +509,36 @@ func TestAReplyMovesTheCaseCF67(t *testing.T) {
 	draft := r.Messages[len(r.Messages)-1].ID
 	if v, err = w.svc.SendDraft(ctx, noted, draft, "", olivia); err != nil || v.Status != issues.StatusInProgress || lastLine(v) != "Reply sent, now In progress" {
 		t.Errorf("the agent's draft sent: %+v %+v %v", v.Brief, v.History, err)
+	}
+}
+
+// A case whose analysis was skipped because the job was busy is told so
+// with no other case's run: the day's skips are one run, named after the
+// first case skipped, which only that case lists (CW-06; the seventh
+// cluster test's N5).
+func TestASkippedAnalysisNamesNoOtherCasesRun(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	for _, title := range []string{"The shop is slow", "The cart is slow"} {
+		if _, err := w.svc.Create(ctx, NewCase{Title: title, Cluster: "prod", Priority: pr(2)}, olivia); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skipped := jobs.Run{ID: "run-7", Job: jobs.KindCase, Status: jobs.StatusSkipped, Ref: "case:C-1", Note: "skipped: the job had too many events waiting for its runs"}
+	w.svc.finish(1, skipped, jobs.Outcome{}, jobs.ErrRunning)
+	w.svc.finish(2, skipped, jobs.Outcome{}, jobs.ErrRunning)
+	first, second := w.get(t, "C-1"), w.get(t, "C-2")
+	if len(first.Runs) != 1 || first.Runs[0] != "run-7" {
+		t.Errorf("the first case skipped lists the run: %v", first.Runs)
+	}
+	if len(second.Runs) != 0 {
+		t.Errorf("the second case lists another case's run: %v", second.Runs)
+	}
+	last := second.History[len(second.History)-1].What
+	if strings.Contains(last, "run-7") || last != "The analysis was skipped: the case analysis job was busy with other cases" {
+		t.Errorf("the second case's history: %q", last)
+	}
+	if second.Analysis == nil || second.Analysis.Run != "" {
+		t.Errorf("the second case's analysis: %+v", second.Analysis)
 	}
 }

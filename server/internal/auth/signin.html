@@ -15,6 +15,11 @@
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>
     </div>
     <h1 id="si-title">{{.Title}}</h1>
+    {{if .Temporary}}
+    <p class="si-sub">The cluster console.</p>
+    <p class="si-ok" role="status" data-testid="signin-temporary">{{.Temporary}}</p>
+    <a class="si-btn" href="{{.Next}}" data-testid="signin-continue">Continue</a>
+    {{else}}
     <p class="si-sub">The cluster console. Sign in to continue.</p>
     {{if .Error}}<p class="si-error" role="alert" data-testid="signin-error">{{.Error}}</p>{{end}}
     {{if .Notice}}<p class="si-ok" role="status" data-testid="signin-notice">{{.Notice}}</p>{{end}}
@@ -36,6 +41,7 @@
     {{if .Off}}
     <p class="si-note">Sign-in is off on this console.</p>
     <a class="si-btn" href="/">Open the console</a>
+    {{end}}
     {{end}}
   </div>
 </main>

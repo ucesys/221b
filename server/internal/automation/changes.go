@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -243,15 +242,31 @@ func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChang
 		}
 		return nil
 	})
-	return c, err
+	if err != nil {
+		return c, err
+	}
+	// As it is kept: a sensitive value it sets is its digest from here on
+	// (DB-71), and what is answered never holds the value.
+	var rec changesRecord
+	if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
+		return VariableChange{ID: c.ID, Cluster: c.Cluster, Fleet: c.Fleet, State: c.State}, err
+	}
+	for _, x := range rec.Changes {
+		if x.ID == c.ID {
+			x.Overtaken = Overtaken(rec.Changes, x)
+			return x, nil
+		}
+	}
+	return VariableChange{ID: c.ID, Cluster: c.Cluster, Fleet: c.Fleet, State: c.State}, nil
 }
 
 // DecideChange approves or rejects a waiting change; whoever asked for it
-// cannot approve it, and a rejection says why. Approving applies it, and
-// only the newest change on a fleet can be approved: each carries all the
-// fleet's values as they were when it was asked for, so an older one would
-// undo a newer one. Its values go in only over the ones it was asked
-// against.
+// cannot approve it, and a rejection says why. Approving applies what the
+// change alters (Items) and leaves the rest of the fleet's variables as
+// they are. Of the changes on a fleet that alter the same thing only the
+// newest can be approved, and only while what it alters is still as it
+// was when it was asked for; a newer change that alters something else
+// does not hold it.
 func (st *Store) DecideChange(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
 	comment = strings.TrimSpace(comment)
 	if !approve && comment == "" {
@@ -271,25 +286,24 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		}
 		// The values first: should marking it approved then fail, approving
 		// it again finds them in and only marks it.
-		err = change(ctx, st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
-			cur := vr.Clusters[cluster][c.Fleet]
+		// A change is what it alters: the fleet's values, marks, ceiling and
+		// reboot time it names, and the own values of the nodes it names.
+		// Those are compared and set, and nothing else of the fleet's.
+		items := Items(c.Before, c.After)
+		nodes := NamedNodes(c.Before, c.After)
+		// The values it sets are the asker's: the change names who
+		// approved them.
+		err = change(SetBy(ctx, c.By), st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
+			vr.nodesOwn()
+			cur := View(vr.Clusters[cluster], c.Fleet, nodes)
+			done, moved := weigh(cur, items)
 			switch {
-			case cur.Same(c.After):
+			case done:
 				return errNoChange
-			case !cur.Same(c.Before):
-				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(differences(c.Before, cur), ", ")))
+			case len(moved) > 0:
+				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(moved, ", ")))
 			}
-			if vr.Clusters == nil {
-				vr.Clusters = map[string]map[string]FleetVariables{}
-			}
-			if vr.Clusters[cluster] == nil {
-				vr.Clusters[cluster] = map[string]FleetVariables{}
-			}
-			if c.After.Empty() {
-				delete(vr.Clusters[cluster], c.Fleet)
-			} else {
-				vr.Clusters[cluster][c.Fleet] = c.After
-			}
+			vr.put(cluster, c.Fleet, applyItems(cur, items), nodes)
 			return nil
 		})
 		if err != nil {
@@ -345,17 +359,44 @@ func approvable(rec changesRecord, cluster string, id int, who Who) (VariableCha
 	return *c, nil
 }
 
-// NewerChange is the newest change on c's fleet asked for after c, a
-// rejected one aside, which changed nothing; nil when there is none.
+// NewerChange is the newest change on c's fleet asked for after c that
+// alters something c alters too, a rejected one aside, which changed
+// nothing; nil when there is none. A change is what it alters (DB-34), so
+// a newer change of the fleet that names none of c's values, marks,
+// ceiling or reboot times neither undoes c nor is undone by it. A name's
+// value and its sensitive mark are one thing here: whoever approves the
+// mark's change approves it of the value they were shown (the tenth
+// cluster test's F2).
 func NewerChange(changes []VariableChange, c VariableChange) *VariableChange {
+	mine := map[string]bool{}
+	for _, it := range Items(c.Before, c.After) {
+		mine[alters(it)] = true
+	}
 	var newer *VariableChange
 	for i := range changes {
 		x := &changes[i]
-		if x.Cluster == c.Cluster && x.Fleet == c.Fleet && x.ID > c.ID && x.State != ChangeRejected && (newer == nil || x.ID > newer.ID) {
-			newer = x
+		if x.Cluster != c.Cluster || x.Fleet != c.Fleet || x.ID <= c.ID || x.State == ChangeRejected || (newer != nil && x.ID < newer.ID) {
+			continue
+		}
+		for _, it := range Items(x.Before, x.After) {
+			if mine[alters(it)] {
+				newer = x
+				break
+			}
 		}
 	}
 	return newer
+}
+
+// alters names the thing an item alters, for telling whether two changes
+// alter the same thing: a fleet's value and the sensitive mark of its
+// name are one, every other kind is its own.
+func alters(it ChangeItem) string {
+	kind := it.Kind
+	if kind == "sensitive" {
+		kind = "value"
+	}
+	return kind + "\x00" + it.Node + "\x00" + it.Name
 }
 
 // Overtaken says why an older change can no longer be approved, "" when it
@@ -379,7 +420,7 @@ func (n VariableChange) overtakes(c VariableChange) string {
 	case ChangeApproved:
 		state = "approved"
 	}
-	return fmt.Sprintf("Change %d can't be approved: change %d on fleet %s is newer (by %s, %s, %s). Only the newest change on a fleet can be approved. Each change carries all the fleet's values as they were when it was asked for, so %s. Reject change %d, and ask for it again if it is still needed.",
+	return fmt.Sprintf("Change %d can't be approved: change %d on fleet %s is newer (by %s, %s, %s). It alters something this change alters too, and of such changes only the newest can be approved, so %s. Reject change %d, and ask for it again if it is still needed.",
 		c.ID, n.ID, c.fleetName(), n.By.Name, n.At.UTC().Format("2 Jan 15:04 UTC"), state, undo, c.ID)
 }
 
@@ -388,24 +429,6 @@ func (c VariableChange) fleetName() string {
 		return c.FleetName
 	}
 	return c.Fleet
-}
-
-// differences names what differs between two fleets' parameters.
-func differences(a, b FleetVariables) []string {
-	out := ChangedVariables(a, b)
-	if a.CeilingOrDefault() != b.CeilingOrDefault() {
-		out = append(out, "the privilege ceiling")
-	}
-	if !slices.Equal(slices.Sorted(slices.Values(a.Sensitive)), slices.Sorted(slices.Values(b.Sensitive))) {
-		out = append(out, "the sensitive marks")
-	}
-	if RebootChanged(a, b) {
-		out = append(out, "the reboot timeout")
-	}
-	if len(out) == 0 {
-		out = append(out, "the values")
-	}
-	return out
 }
 
 // Suspended names the waiting change that holds a version on a fleet, or 0.

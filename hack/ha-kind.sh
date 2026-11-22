@@ -9,21 +9,32 @@
 # (replicas.warmStandby=false): the follower caches nothing, and losing
 # the leader costs the new one a list (ADR-70).
 #
-#   IMAGE=ghcr.io/ucesys/221b:dev hack/ha-kind.sh 1.37
+# The console keeps its records in the bundled database (DB-69), here with
+# three members (database.bundled.ha), one on each of the cluster's three
+# nodes: the control plane's taint is tolerated for it, since a member
+# must have a node of its own. Its primary is lost too: Patroni makes a
+# standby the primary, and the console, through the database's Service,
+# keeps its records and the setting saved before. A cluster of fewer than
+# three nodes gets one member, and that loss is not tested.
 #
-# Needs docker, kubectl, helm and python3. Set KEEP=1 to keep the cluster.
+#   IMAGE=ghcr.io/ucesys/221b:dev DB_IMAGE=ghcr.io/ucesys/221b-postgres:dev hack/ha-kind.sh 1.37
+#
+# IMAGE and DB_IMAGE are built when not in the local docker (hack/lib.sh).
+# CLUSTER names the kind cluster (221b-ha), HOST_PORT the console's port on
+# the host (8080). Needs docker, kubectl, helm and python3. Set KEEP=1 to
+# keep the cluster.
 set -euo pipefail
 # shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 MINOR=${1:-1.37}
-IMAGE=${IMAGE:?set IMAGE to the image to test, already in the local docker}
 CLUSTER=${CLUSTER:-221b-ha}
 NS=221b
 RELEASE=k8s-console
 FULLNAME=k8s-console-221b
+DBNAME=$FULLNAME-db
 LEASE=$FULLNAME-leader
-BASE_URL=http://127.0.0.1:8080
+BASE_URL=http://127.0.0.1:$HOST_PORT
 E2E_USER=admin@corp.example
 E2E_PASSWORD=e2e-password-12
 COOKIES=$WORK/ha-cookies
@@ -56,7 +67,8 @@ for p in json.load(sys.stdin)["items"]:
 }
 holder() { kubectl -n "$NS" get lease "$LEASE" -o jsonpath='{.spec.holderIdentity}' 2>/dev/null | cut -d@ -f1; }
 
-NEXT_PORT=18100
+# Port-forwards to single pods take the ports after this one.
+NEXT_PORT=${PF_PORT:-18100}
 # forward POD: sets PORT to a local port that reaches that pod only.
 forward() {
   local pod=$1
@@ -168,7 +180,29 @@ lose() {
   [ "$fails" -le $((total / 4)) ] || { echo "too many failed requests: $fails of $total"; return 1; }
 }
 
+# The bundled database's members, Ready, and which leads (Patroni labels
+# the primary's pod role=primary).
+db_ready() { kubectl -n "$NS" get statefulset "$DBNAME" -o jsonpath='{.status.readyReplicas}'; }
+db_primary() { kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b-db,role=primary -o jsonpath='{.items[*].metadata.name}'; }
+# db_settled N: N members Ready, one primary, and the others streaming
+# from it.
+db_settled() {
+  local i
+  for i in $(seq 120); do
+    if [ "$(db_ready)" = "$1" ] && [ "$(db_primary | wc -w)" = 1 ]; then
+      if [ "$1" = 1 ] || [ "$(db_sql "$NS" "$(db_primary)" "select count(*) from pg_stat_replication where state = 'streaming'")" = $(($1 - 1)) ]; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  echo "the database did not settle: $(db_ready) of $1 Ready, primary $(db_primary)"
+  return 1
+}
+
 install_kind "$MINOR"
+build_images
+db_values
 
 cleanup() {
   local code=$?
@@ -180,6 +214,7 @@ cleanup() {
       kubectl -n "$NS" get lease "$LEASE" -o yaml
       kubectl -n "$NS" describe pods
       kubectl get events -A --sort-by=.lastTimestamp | tail -40
+      kubectl -n "$NS" logs -l app.kubernetes.io/name=221b-db --tail=100 --all-containers --prefix
       kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=200 --all-containers --prefix
     } > "$WORK/diagnostics.log" 2>&1 || true
     if [ -z "${GITHUB_ACTIONS:-}" ]; then cat "$WORK/diagnostics.log"; fi
@@ -192,14 +227,25 @@ trap cleanup EXIT
 
 step "Create a kind cluster with Kubernetes $MINOR"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$ROOT/hack/kind.yaml" --wait 120s
-kind load docker-image "$IMAGE" --name "$CLUSTER"
+kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$(kind_config)" --wait 120s
+load_images "$CLUSTER"
 endstep
 
-step "helm install with two replicas"
+step "helm install with two replicas and the bundled database"
 kubectl create namespace "$NS"
 kubectl label namespace "$NS" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest
 hash=$(printf '%s' "$E2E_PASSWORD" | docker run --rm -i "$IMAGE" hash-password)
+# Three members where there are three nodes, one on each.
+MEMBERS=1
+DB_HA=(--set database.bundled.ha=false)
+if [ "$(kubectl get nodes --no-headers | wc -l)" -ge 3 ]; then
+  MEMBERS=3
+  DB_HA=(--set database.bundled.ha=true
+    --set 'database.bundled.tolerations[0].key=node-role.kubernetes.io/control-plane'
+    --set 'database.bundled.tolerations[0].operator=Exists' --set 'database.bundled.tolerations[0].effect=NoSchedule')
+else
+  notice "Database" "Fewer than three nodes: one member, and losing it is not tested."
+fi
 helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set clusterName=kind-ha --set replicaCount=2 \
   --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=Never \
@@ -207,17 +253,24 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set auth.mode=local \
   --set "auth.local.users[0].email=$E2E_USER" --set "auth.local.users[0].passwordHash=$hash" \
   --set 'auth.local.users[0].roles[0]=superAdmin' \
-  --wait --timeout 120s
+  "${DB_VALUES[@]}" "${DB_HA[@]}" \
+  --wait --timeout "$HELM_TIMEOUT"
 settled
+db_settled "$MEMBERS"
 kubectl -n "$NS" get pods -o wide
-kubectl -n "$NS" get pdb,lease
-echo "leader: $(holder)"
+kubectl -n "$NS" get pdb,lease,pvc
+echo "leader: $(holder); the database's primary: $(db_primary), of $MEMBERS"
+if [ "$MEMBERS" = 3 ]; then
+  [ "$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b-db -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l)" = 3 ] ||
+    { echo "the three members are not on three nodes"; exit 1; }
+fi
 endstep
 
 step "Sign in once, through the Service"
 for _ in $(seq 30); do curl -fs "$BASE_URL/readyz" > /dev/null && break; sleep 1; done
 signin
 check_both
+check_database "$BASE_URL" api
 endstep
 
 step "Lose a follower"
@@ -231,8 +284,38 @@ lose "$(holder)" leader
 check_both
 endstep
 
+if [ "$MEMBERS" = 3 ]; then
+  step "Lose the database's primary: a standby takes over, and the console keeps its records"
+  n=$((RANDOM % 50 + 60))
+  api -X PUT -H 'Content-Type: application/json' -d "{\"refreshSeconds\":$n}" "$BASE_URL/api/v1/settings" > /dev/null
+  old=$(db_primary)
+  start=$(date +%s)
+  kubectl -n "$NS" delete pod "$old" --wait=false
+  for _ in $(seq 90); do
+    now=$(db_primary)
+    [ -n "$now" ] && [ "$now" != "$old" ] && break
+    sleep 1
+  done
+  if [ -z "$now" ] || [ "$now" = "$old" ]; then echo "no standby took over from $old"; exit 1; fi
+  notice "Database" "Deleting the primary $old: $now was the primary $(( $(date +%s) - start ))s later."
+  # The console's connections to the old primary fail; it opens new ones
+  # through the Service, which now selects the new primary.
+  check_database "$BASE_URL" api
+  for _ in $(seq 60); do
+    api "$BASE_URL/api/v1/settings" | has "\"refreshSeconds\":$n" && break
+    sleep 1
+  done
+  api "$BASE_URL/api/v1/settings" | has "\"refreshSeconds\":$n" || { echo "the setting saved before the failover is gone"; exit 1; }
+  api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":5}' "$BASE_URL/api/v1/settings" | has '"refreshSeconds":5'
+  # The old primary comes back as a standby of the new one.
+  db_settled 3
+  check_both
+  endstep
+fi
+
 step "Cold standbys (replicas.warmStandby=false): the follower caches nothing, and losing the leader costs one list"
-helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set replicas.warmStandby=false --wait --timeout 120s
+# --reuse-values keeps the values of the install, the database's among them.
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set replicas.warmStandby=false --wait --timeout "$HELM_TIMEOUT"
 settled
 WARM=0
 check_both

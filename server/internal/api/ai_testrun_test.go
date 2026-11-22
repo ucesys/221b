@@ -11,6 +11,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
@@ -64,6 +65,73 @@ func TestAIMakeLiveUntestedAPI(t *testing.T) {
 	}
 	if found < 2 {
 		t.Fatalf("the request and its approval are not recorded as untested:\n%s", aud.String())
+	}
+}
+
+// A draft approved by a second SuperAdmin keeps its row (DB-81, DB-91;
+// the twelfth cluster test's F2): asked for on a production cluster and
+// approved by another, the version in force is the draft's row of
+// prompt_versions, with its id, its request's number and its request's
+// key, and the request's row is kept, decided.
+func TestADraftApprovedKeepsItsRowAndItsRequest(t *testing.T) {
+	d := dbtest.Open(t)
+	srv, ops, _, _, _, _ := aiSetupOn(t, nil, d)
+	ops2 := signIn(t, srv, "ops2@corp.example")
+	setLocalEnv(t, srv, ops, "production")
+	ctx := context.Background()
+	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor/draft", `{"house":"Weigh PCI findings first."}`, 200, nil)
+	var waiting struct {
+		Request twoperson.Request `json:"request"`
+	}
+	aiJSON(t, ops, http.MethodPost, srv.URL+"/api/v1/ai/agents/auditor/live", `{"untested":true,"reason":"hotfix"}`, http.StatusAccepted, &waiting)
+	var draft, key string
+	var number int
+	if err := d.Pool().QueryRow(ctx, `SELECT prompt_version_id::text, request_number, coalesce(approval_request_id::text, '')
+		FROM prompt_versions WHERE agent_id = 'auditor' AND state = 'draft'`).Scan(&draft, &number, &key); err != nil {
+		t.Fatal(err)
+	}
+	var request string
+	if err := d.Pool().QueryRow(ctx, "SELECT approval_request_id::text FROM approval_requests WHERE kind = 'prompt' AND request_number = $1", waiting.Request.ID).Scan(&request); err != nil {
+		t.Fatal(err)
+	}
+	if number != waiting.Request.ID || key != request {
+		t.Fatalf("the waiting draft names request %d with key %q; the request is %d, %q", number, key, waiting.Request.ID, request)
+	}
+	aiJSON(t, ops2, http.MethodPost, srv.URL+"/api/v1/admin/requests/"+itoa(waiting.Request.ID)+"/approve", "", 200, nil)
+	var state string
+	if err := d.Pool().QueryRow(ctx, `SELECT state, request_number, coalesce(approval_request_id::text, '') FROM prompt_versions WHERE prompt_version_id = $1`, draft).
+		Scan(&state, &number, &key); err != nil {
+		t.Fatalf("the draft's row is gone: %v", err)
+	}
+	if state != "version" || number != waiting.Request.ID || key != request {
+		t.Fatalf("the draft's row is %s, request %d, key %q; want a version of request %d, %q", state, number, key, waiting.Request.ID, request)
+	}
+	var drafts, decided int
+	if err := d.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM prompt_versions WHERE agent_id = 'auditor' AND state = 'draft'),
+		(SELECT count(*) FROM approval_requests WHERE approval_request_id::text = $1 AND state = 'approved')`, request).Scan(&drafts, &decided); err != nil {
+		t.Fatal(err)
+	}
+	if drafts != 0 || decided != 1 {
+		t.Fatalf("%d drafts left; the request kept and approved: %d", drafts, decided)
+	}
+	var v ai.InstructionsView
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/instructions", "", 200, &v)
+	if v.Live != 1 || v.Draft != nil || len(v.Versions) == 0 || v.Versions[0].Request != waiting.Request.ID {
+		t.Fatalf("%+v", v)
+	}
+	// The history names the request too, in the list and whole (the
+	// thirteenth cluster test's N2).
+	var h struct {
+		Entries []ai.HistoryEntry `json:"entries"`
+	}
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/history", "", 200, &h)
+	if len(h.Entries) == 0 || h.Entries[0].N != 1 || h.Entries[0].Request != waiting.Request.ID {
+		t.Fatalf("the history does not name request %d: %+v", waiting.Request.ID, h.Entries)
+	}
+	var item ai.HistoryText
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/history/live/1", "", 200, &item)
+	if item.Request != waiting.Request.ID {
+		t.Fatalf("version 1 whole does not name request %d: %+v", waiting.Request.ID, item.HistoryEntry)
 	}
 }
 

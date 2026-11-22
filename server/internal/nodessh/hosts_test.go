@@ -250,7 +250,7 @@ func newHostEnv(t *testing.T) hostEnv {
 	})
 	h := newSSHHost(t)
 	env := hostEnv{svc: svc, host: h, backend: b, log: &log, login: user(t)}
-	if _, err := svc.AddHost(context.Background(), Host{Cluster: "local", Name: "backup-1", Address: "127.0.0.1", Port: h.port(), LoginUser: env.login, Labels: map[string]string{"role": "backup"}}, "Pat"); err != nil {
+	if _, err := svc.AddHost(context.Background(), Host{Cluster: "local", Name: "backup-1", Address: "127.0.0.1", Port: h.port(), LoginUser: env.login}, "Pat"); err != nil {
 		t.Fatal(err)
 	}
 	return env
@@ -293,7 +293,7 @@ func (e hostEnv) leaks(t *testing.T, where string, texts ...string) {
 func TestAHostIsRegisteredUnderANameOfItsOwn(t *testing.T) {
 	ctx := context.Background()
 	svc := New(Options{CA: NewCA(nil), Pairings: NewPairings(&kv.Memory{}), Hosts: NewHosts(&kv.Memory{}), IsNode: func(_, name string) bool { return name == "worker-1" }})
-	h, err := svc.AddHost(ctx, Host{Cluster: "local", Name: " backup-1 ", Address: "10.0.0.9", LoginUser: "root", Labels: map[string]string{"role": "backup"}}, "Pat")
+	h, err := svc.AddHost(ctx, Host{Cluster: "local", Name: " backup-1 ", Address: "10.0.0.9", LoginUser: "root"}, "Pat")
 	if err != nil || h.Name != "backup-1" || h.Port != 22 || h.State != HostPending || h.AddedBy != "Pat" || h.HostKey != "" {
 		t.Fatalf("added %+v, %v", h, err)
 	}
@@ -308,7 +308,7 @@ func TestAHostIsRegisteredUnderANameOfItsOwn(t *testing.T) {
 	}
 	// A pending host added again at its address is taken up again, with
 	// what is given now (asked November 5, 2026).
-	again, err := svc.AddHost(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", Port: 2222, LoginUser: "root", Labels: map[string]string{"role": "backup"}}, "Sam")
+	again, err := svc.AddHost(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", Port: 2222, LoginUser: "root"}, "Sam")
 	if err != nil || again.Port != 2222 || again.AddedBy != "Sam" || again.State != HostPending {
 		t.Fatalf("added again: %+v %v", again, err)
 	}
@@ -319,7 +319,6 @@ func TestAHostIsRegisteredUnderANameOfItsOwn(t *testing.T) {
 		"an address:port":    {Name: "b", Address: "10.0.0.1:22", LoginUser: "root"},
 		"a port too high":    {Name: "b", Address: "10.0.0.1", Port: 70000, LoginUser: "root"},
 		"a login user":       {Name: "b", Address: "10.0.0.1", LoginUser: "root; rm -rf /"},
-		"a label":            {Name: "b", Address: "10.0.0.1", LoginUser: "root", Labels: map[string]string{"bad key!": "x"}},
 	} {
 		x.Cluster = "local"
 		if _, err := svc.AddHost(ctx, x, "Pat"); !errors.Is(err, ErrInvalid) {
@@ -330,7 +329,7 @@ func TestAHostIsRegisteredUnderANameOfItsOwn(t *testing.T) {
 	if _, err := svc.AddHost(ctx, Host{Cluster: "other", Name: "backup-1", Address: "backup-1.example.com", LoginUser: "root"}, "Pat"); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := svc.Hosts(ctx, "local"); len(list) != 1 || list[0].Labels["role"] != "backup" {
+	if list, _ := svc.Hosts(ctx, "local"); len(list) != 1 || list[0].Name != "backup-1" {
 		t.Fatalf("listed %+v", list)
 	}
 }

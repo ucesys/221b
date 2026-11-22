@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -54,8 +57,21 @@ type world struct {
 	engine *sherlock.Service
 	fake   *fakeclaude.Fake
 	set    *fakeSettings
-	kv     *kv.Memory
+	kv     kv.Backend
 	audit  *bytes.Buffer
+}
+
+// testStore is where a test's console keeps the AI keys: memory, or the
+// database's tables over memory when TEST_STORE is "database", which
+// runs every test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{ProvidersKey: NewProvidersPG(d), AgentsKey: NewAgentsPG(d), PromptsKey: NewPromptsPG(d),
+		TestsKey: NewTestsPG(d), PilotKey: NewPilotPG(d)}, Rest: &kv.Memory{}}
 }
 
 // setup is a console with the agents over a fake Claude API, Sherlock on
@@ -76,7 +92,7 @@ func setupWith(t *testing.T, baselines map[string]string, wrap func(http.Handler
 	}
 	api := httptest.NewServer(h)
 	t.Cleanup(api.Close)
-	w := &world{fake: fake, kv: &kv.Memory{}, audit: &bytes.Buffer{}}
+	w := &world{fake: fake, kv: testStore(t), audit: &bytes.Buffer{}}
 	w.set = &fakeSettings{sh: settings.Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200, Clusters: map[string]bool{"local": true}}}
 	keys := sherlock.NewKeys(nil, "", nil)
 	if err := keys.Set(context.Background(), "sk-ant-test-key-0123456789", "test"); err != nil {
@@ -443,6 +459,72 @@ func TestAHandOverChainStopsAtABudget(t *testing.T) {
 	res = w.run(t, Sherlock, "[[chain auditor]]")
 	if !errors.As(res.Err, &capErr) || res.Hands[0].Status != "refused" {
 		t.Fatalf("asked over its cap: %v %+v", res.Err, res.Hands)
+	}
+}
+
+// testMeter counts a run's model calls and stops it at limit (none at 0).
+type testMeter struct {
+	mu    sync.Mutex
+	limit float64
+	calls int
+	usd   float64
+}
+
+var errMeterSpent = errors.New("the run's budget is spent")
+
+func (m *testMeter) Spend(_, _ int, usd float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	m.usd += usd
+}
+
+func (m *testMeter) Stop() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.limit > 0 && m.usd >= m.limit {
+		return errMeterSpent
+	}
+	return nil
+}
+
+// A run on its own with a meter (a job's, JB-10) counts every model call
+// of its chain on the meter, the hand-overs' too (the twelfth cluster
+// test's F1: the Change planner's calls for a nightly audit were not
+// counted on the run), and starts no call once the meter says stop: not
+// a round of the agent's, not a hand-over.
+func TestARunsMeterCountsItsChainAndStopsIt(t *testing.T) {
+	w := setup(t, nil)
+	run := func(m *testMeter) sherlock.RunResult {
+		t.Helper()
+		q := sherlock.Question{Key: sherlock.Key{Cluster: "local"}, Cluster: "local", Meter: m}
+		a, err := w.ai.Agent(Sherlock, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.engine.RunAgent(context.Background(), a, q, "[[chain troubleshooter,auditor]]")
+	}
+	before := w.engine.Ledger().Now(context.Background()).DayUSD
+	m := &testMeter{}
+	res := run(m)
+	spent := w.engine.Ledger().Now(context.Background()).DayUSD - before
+	// Sherlock's two calls, the Troubleshooter's two, the Auditor's one.
+	if res.Err != nil || m.calls != 5 || math.Abs(m.usd-spent) > 1e-9 || m.usd <= res.CostUSD {
+		t.Fatalf("the meter counted %d calls, $%v; the chain spent $%v, Sherlock's own $%v: %v", m.calls, m.usd, spent, res.CostUSD, res.Err)
+	}
+	// A limit the first call passes: the hand-over it asks for is refused,
+	// and Sherlock stops before its next round.
+	m = &testMeter{limit: 1e-9}
+	res = run(m)
+	if !errors.Is(res.Err, errMeterSpent) || m.calls != 1 || len(res.Hands) != 0 {
+		t.Fatalf("past its budget the run made %d calls, %d hand-overs: %v", m.calls, len(res.Hands), res.Err)
+	}
+	// A limit the hand-over's first call passes: the Troubleshooter stops
+	// before its next round, and Sherlock with it.
+	m = &testMeter{limit: 1.5 * res.CostUSD}
+	res = run(m)
+	if !errors.Is(res.Err, errMeterSpent) || m.calls != 2 || len(res.Hands) != 1 || res.Hands[0].Status != "failed" {
+		t.Fatalf("past its budget in a hand-over the run made %d calls: %v %+v", m.calls, res.Err, res.Hands)
 	}
 }
 

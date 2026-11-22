@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -60,6 +62,10 @@ type Ledger struct {
 	now     func() time.Time
 	log     *slog.Logger
 
+	// quiet keeps the reads' failures while the database is away to one
+	// line (DB-15).
+	quiet db.Quiet
+
 	mu sync.Mutex
 	// saved is what the backend held when last read or written, at readAt.
 	saved  Spend
@@ -70,6 +76,65 @@ type Ledger struct {
 	// unsaved is why the last save failed, "" once one succeeds: what is
 	// counted here is lost on a restart until then.
 	unsaved string
+	// rows, when set, is where the spend is kept in place of the backend:
+	// each cost a row (Phase 13), and costs are what was counted here and
+	// is not saved yet, as rows.
+	rows  SpendRows
+	costs []Cost
+
+	// known is the spend and the save's error as the ledger last had them,
+	// for whoever must not wait for the ledger (Known).
+	known atomic.Pointer[knownSpend]
+}
+
+// knownSpend is what Known returns.
+type knownSpend struct {
+	spend   Spend
+	unsaved string
+}
+
+// remember keeps what the ledger has now for Known; called with mu held.
+func (l *Ledger) remember() {
+	l.known.Store(&knownSpend{spend: plus(rolled(l.saved, l.now()), l.pending), unsaved: l.unsaved})
+}
+
+// Known is the spend so far and why it could not be saved ("" when it
+// was), as the ledger last had them: it reads nothing and waits for
+// nothing, not even for a read of the saved spend that is under way. The
+// metrics read it; Now is the spend a cap is checked against.
+func (l *Ledger) Known() (Spend, string) {
+	k := l.known.Load()
+	if k == nil {
+		return Spend{}, ""
+	}
+	return rolled(k.spend, l.now()), k.unsaved
+}
+
+// Cost is one cost counted: of an agent and the provider it was spent on,
+// "" for none, and whether it is a new question's.
+type Cost struct {
+	At       time.Time
+	Agent    string
+	Provider string
+	USD      float64
+	Asked    bool
+}
+
+// SpendRows keeps the spend as rows that are only ever added, one a cost,
+// and sums them (the database's ai_spend). No save meets another's: two
+// replicas add their own rows.
+type SpendRows interface {
+	// Sum is the spend of t's day and month (UTC).
+	Sum(ctx context.Context, t time.Time) (Spend, error)
+	// Add keeps costs, all or none.
+	Add(ctx context.Context, costs []Cost) error
+}
+
+// UseRows keeps the spend in rows from here on; before the ledger is used.
+func (l *Ledger) UseRows(rows SpendRows) {
+	l.mu.Lock()
+	l.rows = rows
+	l.mu.Unlock()
 }
 
 // SaveError says why the spend could not be saved, "" when it was.
@@ -187,6 +252,10 @@ func (s Spend) empty() bool {
 
 // read loads the saved spend and its version.
 func (l *Ledger) read(ctx context.Context) (Spend, string, error) {
+	if l.rows != nil {
+		s, err := l.rows.Sum(ctx, l.now())
+		return s, "", err
+	}
 	b, version, err := l.backend.LoadKey(ctx, SpendKey)
 	switch {
 	case errors.Is(err, kv.ErrNotFound):
@@ -212,9 +281,10 @@ func (l *Ledger) refreshLocked(ctx context.Context) {
 	}
 	s, _, err := l.read(ctx)
 	if err != nil {
-		l.log.Warn("reading the Sherlock spend failed", "err", err)
+		l.quiet.Failed(l.log, "reading the Sherlock spend failed", err)
 		return
 	}
+	l.quiet.Worked(l.log, "the Sherlock spend is read again")
 	l.saved, l.readAt = s, now
 }
 
@@ -231,6 +301,7 @@ func (l *Ledger) Reload() {
 func (l *Ledger) Now(ctx context.Context) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	l.refreshLocked(ctx)
 	return plus(rolled(l.saved, l.now()), l.pending)
 }
@@ -245,6 +316,7 @@ func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
 func (l *Ledger) AddFor(ctx context.Context, agent, provider string, usd float64, asked bool) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	l.refreshLocked(ctx)
 	t := l.now()
 	l.pending = rolled(l.pending, t)
@@ -256,6 +328,9 @@ func (l *Ledger) AddFor(ctx context.Context, agent, provider string, usd float64
 	}
 	l.pending.Agents = addShare(l.pending.Agents, agent, usd, asked)
 	l.pending.Providers = addShare(l.pending.Providers, provider, usd, asked)
+	if l.rows != nil {
+		l.costs = append(l.costs, Cost{At: t, Agent: agent, Provider: provider, USD: usd, Asked: asked})
+	}
 	return plus(rolled(l.saved, t), l.pending)
 }
 
@@ -283,6 +358,7 @@ func addShare(m map[string]AgentSpend, id string, usd float64, asked bool) map[s
 func (l *Ledger) Save(ctx context.Context) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.remember()
 	defer func() {
 		if err != nil {
 			l.unsaved = err.Error()
@@ -291,6 +367,16 @@ func (l *Ledger) Save(ctx context.Context) (err error) {
 		}
 	}()
 	if l.pending.empty() {
+		return nil
+	}
+	if l.rows != nil {
+		// Rows are added, never written over: what another replica added
+		// meanwhile is read at the next refresh.
+		if err := l.rows.Add(ctx, l.costs); err != nil {
+			return err
+		}
+		t := l.now()
+		l.saved, l.pending, l.costs = plus(rolled(l.saved, t), rolled(l.pending, t)), Spend{}, nil
 		return nil
 	}
 	for attempt := 1; ; attempt++ {

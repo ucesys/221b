@@ -99,7 +99,9 @@ type backupCredential struct {
 }
 
 // backupApp is an application's record; RepoToken is its repository
-// token, sealed, or the placeholder.
+// token, sealed, or the placeholder. The values file, each parameter and
+// each command's parameter are sealed in place, as secrets are (X-01,
+// DB-62): a file from before 0.13 has them in clear.
 type backupApp struct {
 	apps.Record
 	RepoToken string `json:"repoToken,omitempty"`
@@ -314,7 +316,7 @@ func (s *Server) registerBackupParts() {
 			}
 		}})
 	r.Register(backup.Part{Name: "apps", Label: "Helm applications", Order: 40,
-		How: "are added or replaced: source, values, parameters, commands; a repository token of before 0.12.1 comes back when the backup's key opens it and this console has none, and moves to a credential at the next start; a credential is named by id. One this console would refuse is left out and named",
+		How: "are added or replaced: source, values, parameters, commands; the values file, the parameters and the commands' parameters are sealed with the backup's key, and an application whose key this console does not have is left as it is here, or not added, and listed; a repository token of before 0.12.1 comes back when the backup's key opens it and this console has none, and moves to a credential at the next start; a credential is named by id. One this console would refuse is left out and named",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			if s.opts.Apps == nil {
 				return nil, nil
@@ -325,7 +327,7 @@ func (s *Server) registerBackupParts() {
 			}
 			var out []backupApp
 			for _, rec := range recs {
-				a := backupApp{Record: rec}
+				a := backupApp{Record: sealApp(rec, env)}
 				// A record that names its credential (CR-11) carries no
 				// token: the credentials' part holds the secret.
 				if rec.CredMigrated {
@@ -450,6 +452,12 @@ func (s *Server) registerBackupParts() {
 		How:     "are merged with those here",
 		LeftOut: []string{"the Toolbox's session recordings, which are in the transcript store"},
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.SessionRecords != nil {
+				if list := s.opts.SessionRecords.List(); len(list) > 0 {
+					return list, nil
+				}
+				return nil, nil
+			}
 			var list []sessions.Record
 			if _, ok := s.loadKV(ctx, sessions.HistoryKey, &list); ok {
 				return list, nil
@@ -557,6 +565,9 @@ func (s *Server) registerBackupParts() {
 			var err error
 			if a.Scripts, err = st.Scripts(ctx); err == nil {
 				if a.Variables, err = st.AllVariables(ctx); err == nil {
+					err = sealVariables(ctx, st, a.Variables, env)
+				}
+				if err == nil {
 					var profiles []automation.RunProfile
 					if profiles, err = st.Profiles(ctx); err == nil {
 						for _, p := range profiles {
@@ -578,7 +589,7 @@ func (s *Server) registerBackupParts() {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return skip(env, "Automation: %v", err)
 			}
-			return helper(env, "automation", func(rep *restoreReport) { s.restoreAutomation(requestOf(ctx), a, env.Taken, rep) })
+			return helper(env, "automation", func(rep *restoreReport) { s.restoreAutomation(requestOf(ctx), a, env, rep) })
 		}})
 }
 
@@ -770,7 +781,16 @@ func (s *Server) restoreApps(ctx context.Context, list []backupApp, env *backup.
 	}
 	n := 0
 	for _, a := range list {
-		rec := a.Record
+		rec, ok := openApp(a.Record, env)
+		if !ok {
+			// Sealed with a key this console does not have, or written
+			// without one: the application is not restored half, with
+			// no values, for an upgrade to deploy it so; one here is
+			// left as it is.
+			note("application %s/%s is not restored: its values and parameters are sealed with a key this console does not have", rec.Namespace, rec.Name)
+			env.SetAgain(fmt.Sprintf("the values and parameters of the application %s/%s", rec.Namespace, rec.Name), "Applications › Helm › Add application (or restore with the backup's key)")
+			continue
+		}
 		if s.opts.Clusters != nil {
 			if _, ok := s.opts.Clusters.Summary(rec.Cluster); !ok {
 				note("application %s/%s: no connection %q here; add the connection first", rec.Namespace, rec.Name, rec.Cluster)
@@ -1069,6 +1089,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 // mergeSessions adds the backup's session records to those kept, by id,
 // and keeps as many as the toolbox does.
 func (s *Server) mergeSessions(ctx context.Context, add []sessions.Record) (int, error) {
+	if s.opts.SessionRecords != nil {
+		return s.opts.SessionRecords.Merge(ctx, add)
+	}
 	keep := tb.Default().History.Keep
 	if s.opts.Sessions != nil {
 		keep = s.opts.Sessions.Config().History.Keep
@@ -1208,7 +1231,8 @@ func (s *Server) restorePairings(ctx context.Context, list map[string]nodessh.Pa
 // it is reviewed here again. Fleet parameters on a production cluster wait
 // for another SuperAdmin's approval, as a change made by hand does when it
 // matters; elsewhere they apply at once.
-func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken time.Time, rep *restoreReport) {
+func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, env *backup.Env, rep *restoreReport) {
+	taken := env.Taken
 	note := func(format string, args ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, args...)) }
 	st := s.opts.AutomationStore
 	if st == nil {
@@ -1284,23 +1308,38 @@ func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken ti
 			}
 			production = sum.Env == clusters.EnvProduction
 		}
-		have, err := st.Variables(ctx, cluster)
-		if err != nil {
-			note("Automation parameters of cluster %q: %v", cluster, err)
-			continue
-		}
 		fleetIDs := make([]string, 0, len(a.Variables[cluster]))
 		for f := range a.Variables[cluster] {
 			fleetIDs = append(fleetIDs, f)
 		}
 		sort.Strings(fleetIDs)
 		for _, fleet := range fleetIDs {
-			next, before := a.Variables[cluster][fleet], have[fleet]
+			// A node's own values are the node's: a fleet of the archive
+			// sets those of the nodes it names (an archive from before
+			// 0.13 kept them under the node's fleets), All nodes every
+			// node's. Read again for each fleet, since the one before may
+			// have set a node's.
+			have, err := st.Variables(ctx, cluster)
+			if err != nil {
+				note("Automation parameters of cluster %q: %v", cluster, err)
+				break
+			}
+			// A sensitive value is sealed in the file (DB-71): one this
+			// install's key opens is set, and goes to the Secret as any
+			// sensitive value set by hand; one it cannot open is left out
+			// and listed to set again. A file from before 0.13 has them in
+			// clear, and they are set as they are.
+			next := openVariables(a.Variables[cluster][fleet], env, s.fleetName(cluster, fleet), cluster)
+			nodes := automation.NamedNodes(next)
+			if fleet == automation.AllNodes {
+				nodes = nil
+			}
+			before := automation.View(have, fleet, nodes)
 			if err := automation.ValidateVariables(next); err != nil {
 				note("Automation parameters of fleet %s: %v", fleet, err)
 				continue
 			}
-			if reflect.DeepEqual(next, before) {
+			if next.Same(before) && !automation.RebootChanged(before, next) {
 				continue
 			}
 			changed := automation.ChangedVariables(before, next)
@@ -1319,7 +1358,7 @@ func (s *Server) restoreAutomation(r *http.Request, a backupAutomation, taken ti
 				n++
 				continue
 			}
-			if err := st.SetVariables(ctx, cluster, fleet, next); err != nil {
+			if err := st.SetVariablesFor(ctx, cluster, fleet, next, nodes); err != nil {
 				note("Automation parameters of fleet %s: %v", fleet, err)
 				continue
 			}
@@ -1343,4 +1382,158 @@ func (s *Server) fleetName(cluster, id string) string {
 		}
 	}
 	return id
+}
+
+// sealVariables writes the sensitive values of the variables into a
+// backup as secrets are written (X-01, DB-71): each is read from its
+// Secret and sealed with the install's key, or is the placeholder when
+// the install keeps no key or the Secret does not keep the value. What
+// stands for a sensitive value in the console, its digest, is never
+// written: it means nothing to another install.
+func sealVariables(ctx context.Context, st *automation.Store, all map[string]map[string]automation.FleetVariables, env *backup.Env) error {
+	for cluster, fleets := range all {
+		want := map[string]bool{}
+		each := func(f func(v string) string) {
+			for _, fp := range fleets {
+				for name, v := range fp.Values {
+					fp.Values[name] = f(v)
+				}
+				for _, m := range fp.Nodes {
+					for name, v := range m {
+						m[name] = f(v)
+					}
+				}
+			}
+		}
+		each(func(v string) string {
+			if automation.IsHidden(v) {
+				want[v] = true
+			}
+			return v
+		})
+		if len(want) == 0 {
+			continue
+		}
+		digests := make([]string, 0, len(want))
+		for d := range want {
+			digests = append(digests, d)
+		}
+		sort.Strings(digests)
+		kept, err := st.Reveal(ctx, cluster, digests)
+		if err != nil {
+			return fmt.Errorf("the sensitive values of cluster %s: %w", cluster, err)
+		}
+		each(func(v string) string {
+			if !automation.IsHidden(v) {
+				return v
+			}
+			if plain, ok := kept[v]; ok && plain != "" {
+				return env.Seal(plain)
+			} else if ok {
+				return ""
+			}
+			return backup.Placeholder
+		})
+	}
+	return nil
+}
+
+// openVariables is a fleet's variables from a backup with the sealed
+// values opened: one that cannot be opened is left out, and env lists it
+// to set again.
+func openVariables(fp automation.FleetVariables, env *backup.Env, fleet, cluster string) automation.FleetVariables {
+	open := func(m map[string]string, where string) map[string]string {
+		if m == nil {
+			return nil
+		}
+		out := map[string]string{}
+		for name, v := range m {
+			switch {
+			case v == backup.Placeholder || backup.SealedValue(v):
+				plain, err := env.Open(v, "the value of "+name+" on "+where+" of cluster "+cluster, "Automation › Variables")
+				if err != nil || plain == "" {
+					continue
+				}
+				out[name] = plain
+			case automation.IsHidden(v):
+				env.SetAgain("the value of "+name+" on "+where+" of cluster "+cluster, "Automation › Variables")
+			default:
+				out[name] = v
+			}
+		}
+		return out
+	}
+	out := fp
+	out.Values = open(fp.Values, "fleet "+fleet)
+	if fp.Nodes != nil {
+		out.Nodes = map[string]map[string]string{}
+		for node, m := range fp.Nodes {
+			if vals := open(m, "node "+node); len(vals) > 0 {
+				out.Nodes[node] = vals
+			}
+		}
+	}
+	return out
+}
+
+// sealApp is an application's record as a backup writes it: the values
+// file, each parameter and each command's parameter sealed with the
+// install's key, or the placeholder without one (X-01). The names stay
+// with the sealed parameters only as part of what is sealed.
+func sealApp(rec apps.Record, env *backup.Env) apps.Record {
+	each := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, p := range in {
+			out[i] = env.Seal(p)
+		}
+		return out
+	}
+	rec.Values = env.Seal(rec.Values)
+	rec.Params = each(rec.Params)
+	if rec.Commands != nil {
+		cmds := make([]apps.Command, len(rec.Commands))
+		for i, c := range rec.Commands {
+			c.Params = each(c.Params)
+			cmds[i] = c
+		}
+		rec.Commands = cmds
+	}
+	return rec
+}
+
+// openApp is an application's record from a backup with its values,
+// parameters and commands' parameters opened: false when any of them is
+// the placeholder or sealed with a key this install does not have. A file
+// from before 0.13 holds them in clear, and they are taken as they are.
+func openApp(rec apps.Record, env *backup.Env) (apps.Record, bool) {
+	ok := true
+	one := func(v string) string {
+		plain, opened := env.Unseal(v)
+		ok = ok && opened
+		return plain
+	}
+	each := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, p := range in {
+			out[i] = one(p)
+		}
+		return out
+	}
+	rec.Values = one(rec.Values)
+	rec.Params = each(rec.Params)
+	if rec.Commands != nil {
+		cmds := make([]apps.Command, len(rec.Commands))
+		for i, c := range rec.Commands {
+			c.Params = each(c.Params)
+			cmds[i] = c
+		}
+		rec.Commands = cmds
+	}
+	return rec, ok
 }

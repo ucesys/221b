@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ScriptSummary } from '../../api/automation'
 import { href } from '../../lib/router'
-import { nameProblems, scriptsUsing, type Override, type VariableEdit, type VariableRow } from '../../lib/variables'
+import { isHidden, nameProblems, scriptsUsing, shownValue, type Override, type VariableEdit, type VariableRow } from '../../lib/variables'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
 import { TrashIcon } from '../Icons'
@@ -35,7 +35,10 @@ export function VariableDrawer({
   onClose: () => void
 }) {
   const [name, setName] = useState(row?.name ?? '')
-  const [value, setValue] = useState(row?.value ?? '')
+  // A sensitive value is never shown, nor its digest: the field starts empty, and left empty it
+  // keeps the value set now, which the digest stands for when it goes back to the server (DB-71).
+  const kept = row?.sensitive || isHidden(row?.value) ? (row?.value ?? '') : undefined
+  const [value, setValue] = useState(kept === undefined ? (row?.value ?? '') : '')
   const [sensitive, setSensitive] = useState(row?.sensitive ?? false)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -45,7 +48,8 @@ export function VariableDrawer({
   const old = row?.own ? row.name : undefined
   const problems = name ? nameProblems(rows, name, row?.name) : []
   const renamed = !!old && name !== old
-  const changed = !row || !!row.conflict || renamed || value !== (row.value ?? '') || sensitive !== row.sensitive
+  const sent = kept !== undefined && value === '' ? kept : value
+  const changed = !row || !!row.conflict || renamed || sent !== (row.value ?? '') || sensitive !== row.sensitive
   const readers = scriptsUsing(scripts, name)
   const leftBehind = renamed ? scriptsUsing(scripts, old) : []
   const run = (f: () => Promise<void>) => {
@@ -72,7 +76,7 @@ export function VariableDrawer({
               {err}
             </p>
           )}
-          <button className="rk-btn" data-on disabled={busy || !name || problems.length > 0 || !changed} onClick={() => run(() => onSave({ old, name, value, sensitive }, reason))} data-testid="param-save">
+          <button className="rk-btn" data-on disabled={busy || !name || problems.length > 0 || !changed} onClick={() => run(() => onSave({ old, name, value: sent, sensitive }, reason))} data-testid="param-save">
             {row ? 'Save' : 'Add variable'}
           </button>
           <button className="rk-btn" onClick={onClose}>
@@ -101,9 +105,24 @@ export function VariableDrawer({
         <label className="rk-flabel">
           Value
           <span className="rk-field">
-            <input value={value} onChange={(e) => setValue(e.target.value)} data-testid="param-value" />
+            <input
+              value={value}
+              type={kept !== undefined || sensitive ? 'password' : 'text'}
+              autoComplete="new-password"
+              placeholder={kept === undefined ? undefined : kept ? 'Set: type a new value to replace it' : 'Not set: type a value'}
+              onChange={(e) => setValue(e.target.value)}
+              data-testid="param-value"
+            />
           </span>
-          <span className="rk-fhint">Plain text kept in the console’s ConfigMap: never put a password or token here.</span>
+          {kept !== undefined || sensitive ? (
+            <span className="rk-fhint" data-testid="param-value-hint">
+              {kept ? 'Set. ' : ''}A sensitive value is kept in the cluster’s Secret, never in the console’s database, and no page shows it. {kept ? 'Leave this empty to keep it; what you type replaces it.' : ''}
+            </span>
+          ) : (
+            <span className="rk-fhint" data-testid="param-value-hint">
+              Kept as plain text in the console’s database, where whoever reads Automation sees it: mark it sensitive for a password or token.
+            </span>
+          )}
         </label>
         {problems.length > 0 && (
           <ul className="tb-err" style={{ margin: 0, paddingLeft: 18 }} data-testid="param-problems">
@@ -140,7 +159,7 @@ export function VariableDrawer({
         </label>
         {row?.overwrites && (
           <p className="tb-hint" style={{ margin: 0 }} data-testid="param-overwrites">
-            Overwrites <span className="rk-mono">{row.overwrites.value}</span> from {row.overwrites.from}.
+            Overwrites <span className="rk-mono">{shownValue(row.overwrites.value, row.sensitive)}</span> from {row.overwrites.from}.
           </p>
         )}
         {row && row.over.length > 0 && (
@@ -166,7 +185,7 @@ export function VariableDrawer({
                       </button>
                     </td>
                     <td className="rk-mono" style={{ overflowWrap: 'anywhere' }}>
-                      {o.conflict ? <span style={{ color: 'var(--err)' }}>conflict</span> : o.value}
+                      {o.conflict ? <span style={{ color: 'var(--err)' }}>conflict</span> : shownValue(o.value, row.sensitive)}
                     </td>
                     <td>{o.conflict ? o.conflict.join(' and ') : o.from}</td>
                     <td style={{ textAlign: 'right' }}>

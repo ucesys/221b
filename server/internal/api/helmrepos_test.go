@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/apps/repotest"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/credentials"
@@ -35,7 +36,7 @@ func TestHelmRepositoriesAndAnApplicationFromOne(t *testing.T) {
 	f.Add("shop", "1.1.0", map[string]string{"values.yaml": "color: green\n", "templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}-cm\n"})
 	creds := credentials.New(credentials.Options{})
 	repos := apps.NewRepos(apps.RepoOptions{Client: f.Client(), Credentials: creds})
-	store := apps.NewMemoryStore()
+	store := appstest.Store(t)
 	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
 	t.Cleanup(simSrv.Close)
 	srv, c, m, auditOut, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {

@@ -294,6 +294,18 @@ describe('every table registers under its id (P6U-01, P6U-11)', () => {
     expect(tbl.hidden).toEqual(['extra'])
     expect(JSON.stringify(v).length).toBeLessThanOrEqual(2000)
   })
+
+  it('keeps a table of long names with fewer of them rather than leaving it out (P6U-01)', () => {
+    const rows = Array.from({ length: 110 }, (_, i) => ({ name: `k8s-console-221b-db-config-with-a-long-name-${i}`, ns: '221b', n: i }))
+    setRouteForTests('#/namespaces/221b')
+    renderHook(() => useTable({ id: 'long-names', columns: COLS, rows, terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
+    const v = viewState()
+    const tbl = v.tables?.find((x) => x.id === 'long-names')
+    expect(tbl, 'the table is in the view state').toBeTruthy()
+    expect(tbl!.names.length).toBeGreaterThan(0)
+    expect(tbl!.names.length).toBeLessThan(50)
+    expect(JSON.stringify(v).length).toBeLessThanOrEqual(2000)
+  })
 })
 
 describe('Sherlock points at a case or a run in AIOps (SR-09)', () => {

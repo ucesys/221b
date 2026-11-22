@@ -84,16 +84,24 @@ type draftJSON struct {
 	OIDCClientID     string `json:"clientID,omitempty"`
 	OIDCClientSecret string `json:"clientSecret,omitempty"`
 	OIDCScopes       string `json:"scopes,omitempty"`
+	// RowVersion is the version of the connection the editor read: an
+	// edit is saved only over it (DB-92).
+	RowVersion int `json:"rowVersion,omitempty"`
 }
 
 func (in draftJSON) draft() clusters.Draft {
 	return clusters.Draft{
-		Spec:       clusters.Spec{ID: in.ID, Name: in.Name, Env: in.Env, Description: in.Description, Server: in.Server, CA: in.CA, Auth: in.Auth, Mode: in.Mode},
-		Credential: clusters.Credential{Token: in.Token, Kubeconfig: in.Kubeconfig, Context: in.Context, CertPEM: in.CertPEM, KeyPEM: in.KeyPEM, CAPEM: in.CAPEM, OIDCIssuer: in.OIDCIssuer, OIDCClientID: in.OIDCClientID, OIDCClientSecret: in.OIDCClientSecret, OIDCScopes: in.OIDCScopes},
+		Spec:        clusters.Spec{ID: in.ID, Name: in.Name, Env: in.Env, Description: in.Description, Server: in.Server, CA: in.CA, Auth: in.Auth, Mode: in.Mode},
+		Credential:  clusters.Credential{Token: in.Token, Kubeconfig: in.Kubeconfig, Context: in.Context, CertPEM: in.CertPEM, KeyPEM: in.KeyPEM, CAPEM: in.CAPEM, OIDCIssuer: in.OIDCIssuer, OIDCClientID: in.OIDCClientID, OIDCClientSecret: in.OIDCClientSecret, OIDCScopes: in.OIDCScopes},
+		EditVersion: in.RowVersion,
 	}
 }
 
 // clusterError answers a validation error with its field, or a plain one.
+// ConnectionChanged is the answer to an edit of a connection that was
+// saved by someone else since the editor read it (409, DB-92).
+const ConnectionChanged = "This connection was changed by someone else since you opened it. Close the editor and open it again to see the change, then make yours."
+
 func clusterError(w http.ResponseWriter, err error) {
 	var v *clusters.ValidationError
 	switch {
@@ -103,6 +111,8 @@ func clusterError(w http.ResponseWriter, err error) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": v.Msg, "field": v.Field})
 	case errors.Is(err, clusters.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "no such cluster connection")
+	case errors.Is(err, clusters.ErrConflict):
+		jsonError(w, http.StatusConflict, ConnectionChanged)
 	default:
 		jsonError(w, http.StatusInternalServerError, err.Error())
 	}
@@ -137,6 +147,13 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("cluster")
+	// An edit of a version saved over since is refused before anything
+	// else of it is done, the environment's request included (DB-92).
+	if err := s.opts.Clusters.Held(r.Context(), id, d.EditVersion); err != nil {
+		s.recordCluster(r, audit.ActionClusterUpdate, id, audit.OutcomeFailed, err.Error())
+		clusterError(w, err)
+		return
+	}
 	// Taking a cluster off production waits for another SuperAdmin, when
 	// there is one; the rest of the change is made now.
 	var held string
@@ -221,7 +238,7 @@ func (s *Server) testCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("cluster")
-	res, err := s.opts.Clusters.TestSaved(r.Context(), id)
+	res, err := s.opts.Clusters.TestSaved(r.Context(), id, repoBy(r))
 	if err != nil {
 		clusterError(w, err)
 		return

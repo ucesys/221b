@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
@@ -38,19 +40,44 @@ func (c *clock) Set(t time.Time) {
 	c.mu.Unlock()
 }
 
-// fakeAgents answers every agent's call with a text and a cost.
+// fakeAgents answers every agent's call with a text and a cost. With
+// round set it is an agent of many model calls, as Sherlock's engine
+// runs one: each call costs round and is counted on the run's meter as
+// it ends, the second call hands work to another agent whose one call
+// costs hand (counted on the meter, not in the agent's own cost), and no
+// call starts once the meter says stop.
 type fakeAgents struct {
-	mu    sync.Mutex
-	text  string
-	cost  float64
-	calls []AgentRequest
-	err   error
+	mu          sync.Mutex
+	text        string
+	cost        float64
+	calls       []AgentRequest
+	err         error
+	round, hand float64
+	modelCalls  int
 }
 
 func (f *fakeAgents) Run(ctx context.Context, req AgentRequest) AgentResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
+	if f.round > 0 && req.Meter != nil {
+		own := 0.0
+		for i := 0; i < 10; i++ {
+			if err := req.Meter.Stop(); err != nil {
+				return AgentResult{Model: "claude-test", CostUSD: own, Err: err}
+			}
+			f.modelCalls++
+			own += f.round
+			req.Meter.Spend(100, 20, f.round)
+			if i == 1 && f.hand > 0 {
+				if err := req.Meter.Stop(); err == nil {
+					f.modelCalls++
+					req.Meter.Spend(50, 10, f.hand)
+				}
+			}
+		}
+		return AgentResult{Text: f.text, Model: "claude-test", CostUSD: own}
+	}
 	return AgentResult{Text: f.text, Model: "claude-test", CostUSD: f.cost, Tokens: Tokens{In: 100, Out: 20}, Err: f.err}
 }
 
@@ -65,7 +92,7 @@ func (f *fakeAgents) n() int {
 type world struct {
 	s      *Service
 	clock  *clock
-	kv     *kv.Memory
+	kv     kv.Backend
 	agents *fakeAgents
 	props  *MemoryProposer
 	audit  *bytes.Buffer
@@ -78,9 +105,27 @@ type world struct {
 
 var day1 = time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 
+// testStore is where a test's jobs are kept: memory, or the database's
+// tables over memory when TEST_STORE is "database", which runs every
+// test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{JobsKey: NewJobsPG(d), RunsKey: NewRunsPG(d)}, Rest: &kv.Memory{}}
+}
+
 func setup(t *testing.T) *world {
 	t.Helper()
-	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: &kv.Memory{}, agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
+	return setupWith(t, testStore(t))
+}
+
+// setupWith is a test's world with its jobs kept in b.
+func setupWith(t *testing.T, b kv.Backend) *world {
+	t.Helper()
+	w := &world{clock: &clock{t: day1.Add(time.Hour)}, kv: b, agents: &fakeAgents{text: "All is well.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```", cost: 0.5}, props: &MemoryProposer{}, audit: &bytes.Buffer{}, kinds: NewRegistry()}
 	w.s = w.service(w.kv)
 	w.kinds.Register(Kind{ID: "test", Label: "Test job", Agent: "auditor", AgentName: "Auditor", Schedulable: true, Events: []string{EventAlert},
 		Default: When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "02:00"}},
@@ -342,6 +387,49 @@ func TestBudgetStopsForTheDay(t *testing.T) {
 	}
 }
 
+// A run's budget holds within one call of its agent (JB-10; the twelfth
+// cluster test's F1: a nightly audit capped at $0.60 spent $1.41 in one
+// agent call of six model calls, and its hand-over to the Change planner
+// was not counted on the run). Each model call is counted on the run as
+// it ends, the hand-over's too, and none starts once the run's budget is
+// spent: here $0.25 a call and $0.20 for the hand-over, a budget of $0.60,
+// so the run stops at $0.70, before its third call of $0.25.
+func TestARunsBudgetHoldsWithinItsAgentsCalls(t *testing.T) {
+	w := setup(t)
+	w.agents.round, w.agents.hand = 0.25, 0.2
+	on(t, w.s, "test", Change{Budget: &Budget{RunUSD: 0.6, DayUSD: 10}})
+	ctx := context.Background()
+	if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	r, _ := w.s.GetRun(ctx, runs(t, w.s)[0].ID)
+	if r.Status != StatusBudget || !strings.Contains(r.Note, "run's budget of $0.60 is spent ($0.70)") {
+		t.Fatalf("run: %+v", r)
+	}
+	if r.CostUSD != 0.7 || r.Tokens.In != 250 || r.Tokens.Out != 50 {
+		t.Fatalf("the run counted $%v, tokens %+v; its calls cost $0.70, the hand-over's among them", r.CostUSD, r.Tokens)
+	}
+	w.agents.mu.Lock()
+	n := w.agents.modelCalls
+	w.agents.mu.Unlock()
+	if n != 3 {
+		t.Fatalf("%d model calls; the third would pass the budget and must not start", n)
+	}
+	// The day's budget holds the same way: with $0.70 spent today and a
+	// day's budget of $1.00, the next run makes two calls (to $1.20) and
+	// stops before the hand-over.
+	on(t, w.s, "test", Change{Budget: &Budget{RunUSD: 5, DayUSD: 1}})
+	if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	r, _ = w.s.GetRun(ctx, runs(t, w.s)[0].ID)
+	if r.Status != StatusBudget || !strings.Contains(r.Note, "day's budget of $1.00 is spent") || r.CostUSD != 0.5 {
+		t.Fatalf("run: %+v", r)
+	}
+}
+
 // The alerts there are when a job is turned on are only noted; a new one
 // runs once, and repeats of it update that run instead of piling up, also
 // on a new leader; a paused job takes none.
@@ -410,8 +498,10 @@ func TestAlertRepeatsUpdateOneRun(t *testing.T) {
 	}
 }
 
-// The runs are kept by count and by size: the oldest go first.
-func TestRunsAreKeptByCountAndSize(t *testing.T) {
+// The runs are kept by count: the oldest go first. Their bound in bytes
+// was the ConfigMap's (DB-80): a long report is kept whole, and no run
+// goes for it.
+func TestRunsAreKeptByCount(t *testing.T) {
 	w := setup(t)
 	w.s.o.MaxRuns = 5
 	w.agents.text = "Found one.\n\n```json\n{\"findings\": [{\"severity\": \"warning\", \"title\": \"A finding\"}]}\n```"
@@ -432,16 +522,22 @@ func TestRunsAreKeptByCountAndSize(t *testing.T) {
 	if len(list) != 5 || list[4].ID != "run-4" || list[0].ID != "run-8" {
 		t.Fatalf("kept: %+v", list)
 	}
-	// By size.
-	w.s.o.RunsBytes = 4 << 10
-	w.agents.text = strings.Repeat("A long report. ", 200)
-	if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
-		t.Fatal(err)
+	// No bound in bytes.
+	w.agents.text = strings.Repeat("A long report. ", 600)
+	for i := 0; i < 2; i++ {
+		if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); err != nil {
+			t.Fatal(err)
+		}
+		w.s.Wait()
 	}
-	w.s.Wait()
-	raw, _, _ := w.kv.LoadKey(ctx, RunsKey)
-	if len(raw) > 4<<10 {
-		t.Fatalf("the runs take %d bytes", len(raw))
+	list = runs(t, w.s)
+	if len(list) != 5 || list[0].ID != "run-10" {
+		t.Fatalf("kept %d runs, the newest %s", len(list), list[0].ID)
+	}
+	for _, id := range []string{"run-9", "run-10"} {
+		if r, err := w.s.GetRun(ctx, id); err != nil || len(r.Report) < 8000 {
+			t.Fatalf("%s keeps a report of %d: %v", id, len(r.Report), err)
+		}
 	}
 }
 

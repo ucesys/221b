@@ -2,7 +2,6 @@ package casework
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -60,7 +59,8 @@ const (
 	// FoundKey holds what the runs found under each id: how many
 	// findings, runs and clusters, and for other.<slug> their titles.
 	FoundKey = "cases-rules-found.json"
-	// The most each holds by default.
+	// The most each held in the ConfigMap of before, for what reports on
+	// it until it is copied; FoundKey is bound by count since DB-80.
 	DefaultRulesBytes = 64 << 10
 	DefaultFoundBytes = 128 << 10
 )
@@ -115,9 +115,6 @@ const (
 	maxWhys    = 3
 	maxWhy     = 400
 	maxCounted = 1000
-	// foundBudget is what FoundKey is kept within, under its limit: the
-	// least recently found ids' lists go first, then the ids.
-	foundBudget = DefaultFoundBytes - 8<<10
 	// recountSlack: a record from before the runs counted were named
 	// counted every run that ended this long before its first count, or
 	// later.
@@ -1542,9 +1539,10 @@ func (st *foundStat) noteWhy(d Description) {
 	}
 }
 
-// fitFound keeps FoundKey within maxFound ids and foundBudget bytes: the
-// least recently found ids go first, their lists before the ids
-// themselves.
+// fitFound keeps FoundKey within maxFound ids: the least recently found
+// go first. Its bound in bytes was the ConfigMap's, and went with it
+// (DB-80); each id's lists are bounded on their own (maxRunIDs, maxLatest,
+// maxWhys).
 func fitFound(rec *foundRecord) {
 	oldest := func(f func(st *foundStat) bool) string {
 		out := ""
@@ -1560,18 +1558,6 @@ func fitFound(rec *foundRecord) {
 	}
 	every := func(*foundStat) bool { return true }
 	for len(rec.IDs) > maxFound {
-		delete(rec.IDs, oldest(every))
-	}
-	for {
-		b, _ := json.Marshal(rec)
-		if len(b) <= foundBudget || len(rec.IDs) == 0 {
-			return
-		}
-		if id := oldest(func(st *foundStat) bool { return len(st.Latest)+len(st.Whys)+len(st.RunIDs) > 0 }); id != "" {
-			st := rec.IDs[id]
-			st.Latest, st.Whys, st.RunIDs = nil, nil, nil
-			continue
-		}
 		delete(rec.IDs, oldest(every))
 	}
 }

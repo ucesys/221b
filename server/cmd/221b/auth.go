@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/access"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/ldap"
@@ -85,7 +86,9 @@ func (w *wiring) wireAuthConfig() error {
 		AdminGroups: cfg.AdminGroups,
 		SessionIdle: cfg.SessionIdle,
 		SessionMax:  cfg.SessionMax,
-		Title:       "221B · " + cfg.ClusterName,
+		// A session made while the session store is away (DB-65).
+		OutageSession: cfg.SessionOutage,
+		Title:         "221B · " + cfg.ClusterName,
 	}
 	if cfg.LocalUsersFile != "" {
 		users, err := auth.ReadLocalUsers(cfg.LocalUsersFile)
@@ -125,7 +128,7 @@ func (w *wiring) wireAuthConfig() error {
 
 // wireAuth opens the sign-in: the users created in the console, the
 // sessions and what waits for a second SuperAdmin.
-func (w *wiring) wireAuth() error {
+func (w *wiring) wireAuth(ctx context.Context) error {
 	cfg, log := w.cfg, w.log
 	var err error
 	// The users created in the console are kept in a Secret of the console's
@@ -149,19 +152,55 @@ func (w *wiring) wireAuth() error {
 		}
 		w.authCfg.Accounts = auth.SecretBackend(sk, usersKey)
 	} else if localAccounts {
-		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
+		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -release-namespace and -release-fullname, to keep them in a Secret")
 	}
-	// Sign-ins are kept in Secrets of the console's namespace when running
-	// in a cluster, one per session, so every replica knows them and they
-	// survive a restart (P7-02); otherwise in memory.
-	var sessionStore *kube.SessionStore
-	if cfg.ConnectionsSecrets != "" && w.authCfg.Mode != auth.ModeNone {
+	// Sign-ins are kept where every replica knows them and a restart keeps
+	// them (P7-02): rows of the database (DB-66). Nothing is kept in
+	// memory in their place (DB-97): a console not told its release does
+	// not start.
+	inDatabase := false
+	if cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	{
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
-		sessionStore, err = kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+		// The copy's source and nothing else: the session Secrets of a
+		// release before 0.13 are read once more, for the copy, and
+		// emptied; they are not watched, and none is made from here on.
+		// They are copied with sign-in off too (decided by the owner on
+		// November 21, 2026: what a release before kept is copied and
+		// leaves where it was whatever is on), and then nothing reads the
+		// rows until sign-in is turned on.
+		before, err := kube.NewSessionStore(w.restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return err
 		}
-		w.authCfg.SessionStore = sessionStore
+		store := w.sessionsInDatabase(ctx, before)
+		if w.authCfg.Mode != auth.ModeNone {
+			w.authCfg.SessionStore = store
+			w.inDatabase = append(w.inDatabase, "identity")
+			inDatabase = true
+			// The key that signs a session made while the session store is
+			// away (DB-65): the Secret <release>-session-key, made here at
+			// start when there is none, as the backups' key is, and read again
+			// when a signature does not verify, so a key put back by hand
+			// reaches every replica. Never logged. Without Secrets the key is
+			// this process's own.
+			name := prefix + auth.SessionKeySecretSuffix
+			ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "session-key", "app.kubernetes.io/managed-by": "221b"})
+			if err != nil {
+				return fmt.Errorf("the session key's Secret: %w", err)
+			}
+			key := auth.NewSessionKey(ks, nil)
+			kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := key.Ensure(kctx); err != nil {
+				log.Warn("the session key is not ready: until it is, a sign-in made while the session store is away is known to this replica only", "secret", ns+"/"+name, "err", err)
+			} else {
+				log.Info("session key ready", "secret", ns+"/"+name)
+			}
+			cancel()
+			w.authCfg.SessionKey = key
+		}
 	}
 	// What waits for a second SuperAdmin (review item 14), kept beside the
 	// settings once their storage is open.
@@ -171,21 +210,152 @@ func (w *wiring) wireAuth() error {
 	if err != nil {
 		return err
 	}
-	w.sessionStore, w.twoPerson, w.authSvc = sessionStore, twoPerson, authSvc
+	w.twoPerson, w.authSvc = twoPerson, authSvc
+	if inDatabase {
+		// The database answers again: the sessions ended here meanwhile are
+		// removed from it at once, so the other replicas stop taking them.
+		w.database.OnAvailable(authSvc.Sessions().StoreIsBack)
+	}
+	return nil
+}
+
+// sessionSecrets is what is still done with the session Secrets once the
+// sessions are rows: they are read for the copy, and emptied after it.
+type sessionSecrets interface {
+	All(ctx context.Context) (map[string][]byte, error)
+	Empty(ctx context.Context, key string) (bool, error)
+	DeleteEmpty(ctx context.Context) (int, error)
+}
+
+// sessionsInDatabase keeps the sign-in sessions in the database (DB-66),
+// and moves there the ones their Secrets hold: copied once, so whoever is
+// signed in stays signed in across the upgrade, and then taken out of the
+// Secrets, which are left with no keys (no Secret is deleted because a
+// record set moved, DB-61). Emptying is not tidying: a session's Secret
+// left whole would let a console from before the move take up a session
+// that was ended since. Only what the copy took, or what has expired, is
+// emptied (auth.SessionsToEmpty); a copy that fails empties nothing and
+// does not stop the start; an emptying that fails is tried again every
+// minute (startAuth) and at the next start.
+func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets) auth.SharedStore {
+	idle := w.authCfg.SessionIdle
+	if idle <= 0 {
+		idle = 8 * time.Hour
+	}
+	empty := func(ctx context.Context) (int, error) {
+		recs, err := secrets.All(ctx)
+		if err != nil {
+			return 0, err
+		}
+		// First, before anything is emptied: a console without the
+		// database ran since the copy (a rollback, and now the roll
+		// forward) when a Secret holds a session it started; the sessions
+		// from before the rollback are then ended (answer 2 of the owner,
+		// November 20, 2026). An error empties nothing, so the sign is
+		// there at the next try.
+		if err := w.endAfterRollback(ctx, recs); err != nil {
+			return 0, err
+		}
+		keys, err := auth.SessionsToEmpty(ctx, w.database, recs, idle, time.Now())
+		if err != nil {
+			return 0, err
+		}
+		n := 0
+		var first error
+		defer func() {
+			// Then the Secrets left with no data are deleted (answer 1 of the
+			// owner, November 20, 2026): the one exception to DB-61. Only
+			// once the copy is recorded, which is when this runs.
+			gone, err := secrets.DeleteEmpty(ctx)
+			if gone > 0 {
+				w.dbLog().Info("deleted the empty session Secrets the move left: the sessions are rows of the database", "count", gone)
+			}
+			if err != nil {
+				w.dbLog().Warn("deleting the empty session Secrets failed; the next start tries again", "err", err)
+			}
+		}()
+		for _, key := range keys {
+			emptied, err := secrets.Empty(ctx, key)
+			if err != nil {
+				if first == nil {
+					first = err
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				continue
+			}
+			if emptied {
+				n++
+			}
+		}
+		return n, first
+	}
+	failed := false
+	const what = "the sign-in sessions"
+	w.moveFromSecrets(ctx, auth.SessionsImportID, what,
+		func(ctx context.Context) (int, error) {
+			return auth.CopySessions(ctx, w.database, secrets.All, idle, time.Now())
+		},
+		func(ctx context.Context) (int, error) {
+			n, err := empty(ctx)
+			failed = err != nil
+			return n, err
+		})
+	if failed {
+		w.sessionsLeft = func(ctx context.Context) bool {
+			failed = false
+			w.removeCopiedFromSecrets(ctx, auth.SessionsImportID, what, func(ctx context.Context) (int, error) {
+				n, err := empty(ctx)
+				failed = err != nil
+				return n, err
+			})
+			return !failed
+		}
+	}
+	return auth.NewPGSessions(w.database, nil)
+}
+
+// endAfterRollback ends every stored session when the session Secrets
+// show that a console without the database ran since the copy
+// (auth.EndAfterRollback), says so in one line of the log and one audit
+// event, and does nothing more for the same sign at a later start.
+func (w *wiring) endAfterRollback(ctx context.Context, recs map[string][]byte) error {
+	after, err := auth.EndAfterRollback(ctx, w.database, recs)
+	if err != nil || !after.Done {
+		return err
+	}
+	w.dbLog().Warn("a console without the database ran since the sessions were copied (a rollback): every session kept from before it is ended, and everyone signs in again",
+		"sessions_it_started", after.Signs, "sessions_ended", after.Ended)
+	if w.auditLog != nil {
+		w.auditLog.Record(audit.Event{Action: audit.ActionSessionsEnded, Who: audit.Who{Subject: "221b", Name: "the console"}, Target: "every session",
+			Detail:  fmt.Sprintf("a console without the database ran since the sessions were copied (%d sessions it started are in their Secrets): the %d sessions kept from before are ended, since a sign-out or a password reset made there did not reach them", after.Signs, after.Ended),
+			Outcome: audit.OutcomeOK})
+	}
 	return nil
 }
 
 // startAuth keeps the sessions and accounts shared with the other
 // replicas, and the directory, read.
 func (w *wiring) startAuth(ctx context.Context) {
-	log := w.log
-	if w.sessionStore != nil {
-		go w.sessionStore.Run(ctx)
-		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if !w.sessionStore.Synced(syncCtx) {
-			log.Warn("the shared sessions are not cached yet; reading them one by one")
-		}
-		cancel()
+	if left := w.sessionsLeft; left != nil {
+		// Session Secrets that were copied and could not be emptied at the
+		// start: until they are, a console from before the move could take
+		// up a session ended since.
+		go func() {
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if left(ctx) {
+						return
+					}
+				}
+			}
+		}()
 	}
 	// Accounts created, changed or removed through another replica take
 	// effect here within seconds.

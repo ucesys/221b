@@ -12,6 +12,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/toolbox"
@@ -46,7 +47,7 @@ func (w *wiring) wireSSH(ctx context.Context) error {
 		}
 		caStore, console = sk, nodessh.ConsoleName(ns, prefix)
 	} else {
-		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
+		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (give -release-namespace and -release-fullname to keep it in a Secret)")
 	}
 	// Hosts outside Kubernetes (Phase 12) are kept beside the pairings and
 	// shown on their cluster's Nodes tab as they are read or written.
@@ -64,10 +65,14 @@ func (w *wiring) wireSSH(ctx context.Context) error {
 		// them within a refresh.
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
+		// Said once while the database is away (DB-15).
+		var quiet db.Quiet
 		for {
 			lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			if _, err := hosts.Load(lctx); err != nil {
-				log.Warn("the hosts could not be read", "err", err)
+				quiet.Failed(log, "the hosts could not be read", err)
+			} else {
+				quiet.Worked(log, "the hosts are read again")
 			}
 			cancel()
 			select {

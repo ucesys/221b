@@ -96,6 +96,7 @@ describe('the history dialog (AI-32)', () => {
     expect(defaultPair(entries, 2)).toEqual(['live:1', 'live:2'])
     expect(defaultPair(entries, 9)).toEqual(['live:2', 'draft:5'])
     expect(entryOption({ kind: 'discarded', rev: 8 })).toBe('Draft 8 · discarded')
+    expect(entryOption({ kind: 'live', n: 3, by: 'bob', request: 4 })).toBe('Version 3 · live · bob · approved in request 4')
     expect(entryKey({ kind: 'discarded', rev: 7 })).toBe('draft:7')
     expect(entryKey({ kind: 'live', n: 0 })).toBe('live:0')
   })

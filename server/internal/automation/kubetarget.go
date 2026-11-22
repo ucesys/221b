@@ -28,10 +28,12 @@ type KubeRunner interface {
 }
 
 // Person is who started a run, as Kubernetes knows them; it stays in
-// memory for the run.
+// memory for the run, and a run that waits for approval keeps it (its
+// JSON names it "user" and "groups"; the field names of before, "User"
+// and "Groups", read the same, as Go reads a name in any case).
 type Person struct {
-	User   string
-	Groups []string
+	User   string   `json:"user"`
+	Groups []string `json:"groups,omitempty"`
 }
 
 // KubeLine is a command of a Kubernetes-target script.

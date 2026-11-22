@@ -2,12 +2,22 @@
 # chart's version and have a section in CHANGELOG.md; the chart is
 # packaged and pushed to oci://ghcr.io/ucesys/charts, and a GitHub release
 # is made with that section as its notes, the chart and the 221b command
-# (TB-20, for macOS, Linux and Windows) attached. The image
-# for the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
-# CI's publish job for the same tag, and this waits for it. The chart is
-# signed with cosign, keyless, and has build provenance attested; the 221b
-# command's checksums are signed, and the binaries have build provenance
-# and an SBOM (#79). Nothing published is ever replaced. See
+# (TB-20, for macOS, Linux and Windows) attached. The console's image for
+# the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
+# CI's publish job for the same tag, and this waits for it. From 0.13.0
+# this job builds the bundled database's image,
+# ghcr.io/ucesys/221b-postgres:0.13.0, which the chart runs at its
+# appVersion: its base assembled by apko from Wolfi's packages as the
+# committed lock names them, for linux/amd64 and linux/arm64, scanned,
+# signed and attested like the console's; and it keeps a copy of those
+# packages, ghcr.io/ucesys/221b-postgres-packages:0.13.0, their index
+# signed by a key pair made here for this release alone (the public key
+# travels in the copy, the private one is never stored), the copy signed
+# keylessly by this workflow, so that the release can be built again once
+# Wolfi has deleted its packages (hack/wolfi-postgres.sh rebuild). The
+# chart is signed with cosign, keyless, and has build provenance attested;
+# the 221b command's checksums are signed, and the binaries have build
+# provenance and an SBOM (#79). Nothing published is ever replaced. See
 # docs/releasing.md.
 name: Release
 
@@ -30,6 +40,14 @@ env:
   HELM_VERSION: 'v4.3.0'
   GO_VERSION: '1.26.9'
   CHARTS: oci://ghcr.io/ucesys/charts
+  DB_IMAGE: ghcr.io/ucesys/221b-postgres
+  PACKAGES: ghcr.io/ucesys/221b-postgres-packages
+  # The tools of the steps below, releases at least two weeks old; apko,
+  # melange, crane, oras and cosign of hack/wolfi-postgres.sh are pinned
+  # there with their SHA-256.
+  GRYPE_VERSION: v0.121.2
+  SYFT_VERSION: v1.57.0
+  COSIGN_VERSION: v3.1.4
 
 jobs:
   release:
@@ -74,11 +92,21 @@ jobs:
             echo "::error::CHANGELOG.md has no section \"## $version\". Move the Unreleased notes under it (docs/releasing.md)."
             exit 1
           fi
+          # By default the chart runs the two images of its own version,
+          # which CI publishes for this tag.
+          images=$(helm template release-check deploy/helm/221b --set clusterName=release-check |
+            sed -n 's/^ *image: "\{0,1\}\(ghcr\.io\/ucesys\/[^"]*\)"\{0,1\}$/\1/p' | LC_ALL=C sort -u | tr '\n' ' ')
+          if [ "$images" != "ghcr.io/ucesys/221b-postgres:$version ghcr.io/ucesys/221b:$version " ]; then
+            echo "::error::By default the chart runs $images; it must run ghcr.io/ucesys/221b:$version and ghcr.io/ucesys/221b-postgres:$version (values.yaml: image, database.bundled.image)."
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Wait for CI to publish the image
+      - name: Wait for CI to publish the console's image
         # The image exists only when every gate of CI's run for this tag
-        # passed, so nothing names an image that never comes. A failed run
-        # can be rerun within the wait; past it, rerun this job.
+        # passed, so nothing names an image that never comes. Those gates
+        # ran the database's image built from the same commit and lock for
+        # linux/amd64; this job builds the one it publishes (below). A
+        # failed run can be rerun within the wait; past it, rerun this job.
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,6 +119,105 @@ jobs:
           done
           echo "::error::ghcr.io/ucesys/221b:$VERSION was not published within two hours: CI's run for this tag has not passed."
           exit 1
+      - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        id: grype
+        with:
+          grype-version: ${{ env.GRYPE_VERSION }}
+      - name: Build, scan and push the database's image for linux/amd64 and linux/arm64
+        # The base is apko's build of deploy/postgres/apko.lock.json for both
+        # platforms, checked against the digest the Dockerfile names (the
+        # same lock gives the same base, the one CI's gates ran); no step
+        # runs under emulation. It is pushed under a -candidate tag, each
+        # platform scanned by the rule of CI's image job (any high or
+        # critical finding fails it), and only then tagged as the release.
+        id: db
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: |
+          ref="$DB_IMAGE:$VERSION"
+          # A release's image is never replaced: a rerun after it was
+          # published keeps it as it is, and only signs it again.
+          if docker buildx imagetools inspect "$ref" > /dev/null 2>&1; then
+            echo "::notice title=Published::$ref exists already and is kept as it is; a release's image is never replaced"
+          else
+            export DB_LABELS="org.opencontainers.image.revision=$GITHUB_SHA
+          org.opencontainers.image.version=$VERSION"
+            hack/wolfi-postgres.sh publish "$ref-candidate"
+            for platform in linux/amd64 linux/arm64; do
+              "$GRYPE" "registry:$ref-candidate" --platform "$platform" --fail-on high
+            done
+            docker buildx imagetools create -t "$ref" "$ref-candidate"
+            echo "::notice title=Published::$ref (linux/amd64, linux/arm64)"
+          fi
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $ref"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.DB_IMAGE }}@${{ steps.db.outputs.digest }}
+          syft-version: ${{ env.SYFT_VERSION }}
+          format: spdx-json
+          output-file: bin/sbom-postgres.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: The database's SBOM attestation
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.DB_IMAGE }}
+          subject-digest: ${{ steps.db.outputs.digest }}
+          sbom-path: bin/sbom-postgres.spdx.json
+          push-to-registry: true
+      - name: The database's build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.DB_IMAGE }}
+          subject-digest: ${{ steps.db.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - name: Sign the database's image
+        # Keyless, as the console's image: the certificate names this
+        # workflow and the tag.
+        env:
+          DIGEST: ${{ steps.db.outputs.digest }}
+        run: |
+          cosign sign --yes "$DB_IMAGE@$DIGEST"
+          echo "::notice title=Signed::$DB_IMAGE@$DIGEST, with build provenance and an SBOM attested"
+      - name: The copy of the database's packages, signed by this release's own key
+        # The locked .apk files of both architectures, each checked against
+        # the lock, with an APKINDEX signed by an RSA key pair made here for
+        # this release; the public key goes in the copy (keys/), the
+        # private one is deleted once the indexes are signed and is never
+        # stored or uploaded. The copy is pushed with oras and signed
+        # keylessly by this workflow: a rebuild checks that signature
+        # (this workflow, at a version tag) and then trusts only the key
+        # inside. Checked here as a rebuild checks it. Never replaced: a
+        # rerun keeps the copy pushed, since a new key would not match it.
+        id: packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ref="$PACKAGES:$VERSION"
+          hack/wolfi-postgres.sh tools
+          if bin/tools/crane digest "$ref" > /dev/null 2>&1; then
+            echo "::notice title=Packages::$ref exists already and is kept as it is"
+            digest=$(bin/tools/crane digest "$ref")
+          else
+            keys="$RUNNER_TEMP/packages-key"
+            hack/wolfi-postgres.sh keygen "$keys" "221b-packages-$VERSION"
+            status=0
+            WOLFI_PACKAGES_KEY="$keys/221b-packages-$VERSION.rsa" hack/wolfi-postgres.sh packages || status=$?
+            shred -u "$keys/221b-packages-$VERSION.rsa" 2>/dev/null || true
+            rm -rf "$keys"
+            [ "$status" -eq 0 ] || exit "$status"
+            WOLFI_PACKAGES_REF="$ref" hack/wolfi-postgres.sh push
+            digest=$(cat bin/wolfi/packages.digest)
+          fi
+          hack/wolfi-postgres.sh verify "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Packages::$PACKAGES@$digest, signed by this workflow; its index's key is in the copy"
       - name: Package and push the chart
         id: chart
         env:
@@ -115,7 +242,6 @@ jobs:
           [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $CHARTS/221b:$VERSION"; exit 1; }
           helm registry logout ghcr.io
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign the chart
         # Keyless: the certificate names this workflow and the tag, and the
         # signature is logged in Sigstore's transparency log.
@@ -170,8 +296,8 @@ jobs:
             echo
             echo "The \`221b\` command for port forwards (macOS, Linux, Windows) is attached: rename it to \`221b\` and put it on your PATH."
             echo
-            echo "The image is \`ghcr.io/ucesys/221b:$VERSION\`. Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
+            echo "The images are \`ghcr.io/ucesys/221b:$VERSION\` and the bundled database's \`ghcr.io/ucesys/221b-postgres:$VERSION\` (PostgreSQL and Patroni from Wolfi's packages, for linux/amd64 and linux/arm64). The packages it was built from are kept in \`$PACKAGES:$VERSION\` (\`${{ steps.packages.outputs.digest }}\`), to build it again: [docs/database.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/database.md#building-an-old-release-again). Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
             echo
-            echo "The image and the chart are signed with cosign, keyless, and carry build provenance (and the image an SBOM); the command's \`SHA256SUMS\` is signed, with its bundle attached. How to check them: [docs/releasing.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/releasing.md#verify-a-release)."
+            echo "The images, the copy of the packages and the chart are signed with cosign, keyless, and carry build provenance (and the images an SBOM); the command's \`SHA256SUMS\` is signed, with its bundle attached. How to check them: [docs/releasing.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/releasing.md#verify-a-release)."
           } > "$RUNNER_TEMP/release.md"
           gh release create "$TAG" "bin/221b-$VERSION.tgz" bin/cli/* bin/sbom-221b-command.spdx.json --repo "${{ github.repository }}" --title "221B $VERSION" --notes-file "$RUNNER_TEMP/release.md" --verify-tag

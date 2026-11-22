@@ -1,12 +1,18 @@
 package main
 
 import (
-	"context"
+	"errors"
 	"log/slog"
+	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/leader"
 )
@@ -70,25 +76,138 @@ func TestStoppingFitsTheTerminationGracePeriod(t *testing.T) {
 	}
 }
 
-// persistent is a storage that outlasts a restart, as the ConfigMap does.
-type persistent struct{ kv.Memory }
-
-// The Audit log page says events are in memory exactly when they are.
-func TestTheAuditStoreIsOnlyUsedOverStorageThatPersists(t *testing.T) {
-	mem := audit.New(audit.Options{})
-	if st := keepAudit(mem, &kv.Memory{}, slog.Default()); st != nil || mem.Stored() {
-		t.Fatalf("over memory: store %v, stored %v", st, mem.Stored())
-	}
-	mem.Record(audit.Event{Action: "signin"})
-	if got, _ := mem.Events(context.Background()); len(got) != 1 {
-		t.Fatalf("the page lists %+v", got)
-	}
-	kept := audit.New(audit.Options{})
-	st := keepAudit(kept, &persistent{}, slog.Default())
-	if st == nil || !kept.Stored() {
-		t.Fatalf("over a ConfigMap: store %v, stored %v", st, kept.Stored())
-	}
-	if err := st.Close(context.Background()); err != nil {
+// The audit log is kept in the database (Phase 13), and what the
+// ConfigMap held from the release before is copied over once. (The test
+// that it was kept in memory or in the ConfigMap without a database went
+// with that console: DB-69.)
+func TestTheAuditLogMovesToTheDatabase(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := t.Context()
+	cm := newOldConfigMap("r-audit", nil)
+	old := audit.NewKVStore(cm, slog.Default())
+	old.Add(audit.Event{Time: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Action: "signin", Outcome: "ok"})
+	if err := old.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+	l := audit.New(audit.Options{})
+	w := &wiring{auditLog: l, database: d}
+	st := w.keepAudit(ctx, cm, slog.Default())
+	if _, ok := st.(*audit.PGStore); !ok || !l.Stored() || !slices.Contains(w.inDatabase, "activity") {
+		t.Fatalf("store %T, stored %v, domains %v", st, l.Stored(), w.inDatabase)
+	}
+	l.Record(audit.Event{Action: "settings.update", Outcome: "ok"})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := l.Events(ctx)
+		if err == nil && len(got) == 2 && got[0].Action == "settings.update" && got[1].Action == "signin" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the page lists %+v: %v", got, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The ConfigMap is deleted once the copy, which runs beside the
+	// start, is done (DB-55, DB-72).
+	w.copying.Wait()
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Fatal("the audit log's ConfigMap is still there after its copy")
+	}
+	if err := st.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A service's singleton settings are scopes of its settings table: copied
+// from the ConfigMap once, read and written there from then on. A key no
+// scope or table names is kept nowhere (DB-69): what the ConfigMap holds
+// under it is read, a delete of it deletes nothing (the ConfigMap goes
+// whole, DB-72), and a save is refused, so nothing is kept in a ConfigMap
+// by oversight.
+func TestSingletonSettingsMoveToTheDatabase(t *testing.T) {
+	ctx := t.Context()
+	cm := newOldConfigMap("r", map[string]string{"setup.json": `{"dismissed":["backup"]}`})
+	w := &wiring{log: slog.Default(), database: dbtest.Open(t)}
+	b := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
+	got, version, err := b.LoadKey(ctx, "setup.json")
+	if err != nil || string(got) != `{"dismissed": ["backup"]}` {
+		t.Fatalf("the copy reads %s: %v", got, err)
+	}
+	if _, err := b.SaveKey(ctx, "setup.json", []byte(`{"dismissed":["backup","sso"]}`), version); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing is written to the ConfigMap: it is deleted whole once
+	// everything read from it is copied (DB-72).
+	if old, _, err := cm.LoadKey(ctx, "setup.json"); err != nil || string(old) != `{"dismissed":["backup"]}` {
+		t.Fatalf("the ConfigMap holds %s: %v", old, err)
+	}
+	if _, err := cm.SaveKey(ctx, "left.json", []byte(`1`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, err := b.LoadKey(ctx, "left.json"); err != nil || string(v) != "1" {
+		t.Fatalf("a key no scope names is not read from the ConfigMap: %s %v", v, err)
+	}
+	if _, err := b.SaveKey(ctx, "other.json", []byte(`1`), ""); err == nil {
+		t.Fatal("a key no scope names was saved")
+	}
+	if v, _, err := cm.LoadKey(ctx, "other.json"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("a key no scope names was kept in the ConfigMap: %s %v", v, err)
+	}
+	if err := b.(kv.Deleter).DeleteKey(ctx, "left.json"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, err := cm.LoadKey(ctx, "left.json"); err != nil || string(v) != "1" {
+		t.Fatalf("a delete of a key no scope names wrote to the ConfigMap: %s %v", v, err)
+	}
+	// A second start copies nothing over what was saved since.
+	again := w.inScopes(ctx, cm, map[string]string{"setup.json": "setup"})
+	if got, _, _ := again.LoadKey(ctx, "setup.json"); !strings.Contains(string(got), "sso") {
+		t.Fatalf("a second start reads %s", got)
+	}
+	if w.removeCopiedSources(ctx); !cm.isGone() {
+		t.Fatal("the ConfigMap is still there after its copy")
+	}
+}
+
+// The database is opened before anything that keeps records is made
+// (DB-59): the sign-in's stores, the local cluster, the election, the
+// connections, the settings and the credentials are wired after it, so
+// each can be given the database.
+func TestTheDatabaseIsOpenedBeforeTheStoresAreMade(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(string(src), "\nfunc serve(")
+	if !ok {
+		t.Fatal("main.go has no run")
+	}
+	opened := strings.Index(body, "w.wireDatabase(ctx)")
+	if opened < 0 {
+		t.Fatal("run does not open the database")
+	}
+	for _, later := range []string{"w.wireAuth(ctx)", "w.wireLocalCluster()", "w.startAuth(ctx)", "w.wireLeader(ctx)", "w.wireClusters(ctx)", "w.wireSettings(ctx)", "w.wireCredentials(", "w.manager.Start(ctx)"} {
+		if i := strings.Index(body, later); i < 0 || i < opened {
+			t.Errorf("%s is not after the database is opened (at %d, the database at %d)", later, i, opened)
+		}
+	}
+}
+
+// No two record sets are copied into the database under one name: the
+// jobs' and Automation's runs are both runs.json, each in its ConfigMap,
+// and have names of their own; a name claimed twice stops the start.
+func TestNoTwoRecordSetsAreCopiedUnderOneName(t *testing.T) {
+	if a, j := automation.NewRunsPG(nil).ImportID(), jobs.NewRunsPG(nil).ImportID(); a == j || a == automation.RunsKey || j == jobs.RunsKey {
+		t.Fatalf("automation's runs are copied as %q, the jobs' as %q", a, j)
+	}
+	w := &wiring{}
+	w.claimImport("jobs/runs.json")
+	w.claimImport("automation/runs.json")
+	if len(w.importClash) != 0 {
+		t.Fatalf("two names clash: %v", w.importClash)
+	}
+	w.claimImport("jobs/runs.json")
+	if len(w.importClash) != 1 || w.importClash[0] != "jobs/runs.json" {
+		t.Fatalf("a name claimed twice: %v", w.importClash)
 	}
 }

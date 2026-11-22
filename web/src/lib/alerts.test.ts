@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alertKeyOf, alertReason, badgeOf, bannersOf, byNode, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
+import { alertBannersShown, alertKeyOf, alertReason, badgeOf, bannersOf, byNode, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
 import type { AlertRow } from '../api/types'
 
 const now = Date.parse('2026-10-14T12:00:00Z')
@@ -183,5 +183,15 @@ describe('an alert named by its reason (CF-84)', () => {
     expect(alertKeyOf({ namespace: 'shop', kind: 'PersistentVolumeClaim', name: 'data' })).toBe('pvc:shop/data')
     expect(alertKeyOf({ namespace: 'shop', kind: 'Deployment', name: 'web' })).toBe('')
     expect(alertKeyOf(undefined)).toBe('')
+  })
+})
+
+describe('the alert banners (P4-07)', () => {
+  it('are off unless the settings turn them on', () => {
+    expect(alertBannersShown(undefined)).toBe(false)
+    expect(alertBannersShown(null)).toBe(false)
+    expect(alertBannersShown({})).toBe(false)
+    expect(alertBannersShown({ alertBanners: false })).toBe(false)
+    expect(alertBannersShown({ alertBanners: true })).toBe(true)
   })
 })

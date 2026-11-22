@@ -97,6 +97,15 @@ name of what is wrong. Renders nothing.
 */}}
 {{- define "b221.validate" -}}
 {{- $v := .Values -}}
+{{- /* connections.store is gone (DB-97): the connections, applications,
+       credentials and sign-in sessions are always rows of the database
+       with their secrets in Secrets. A values file that still says
+       memory is refused; secrets, the only way there is, passes. */ -}}
+{{- with (dig "store" "" ($v.connections | default dict)) -}}
+{{- if ne (toString .) "secrets" -}}
+{{- fail (printf "connections.store: %s is gone in 0.13: the connections, applications, credentials and sign-in sessions are always rows of the database with their secrets in Secrets of the release's namespace (DB-97). Remove connections.store from your values" (toString .)) -}}
+{{- end -}}
+{{- end -}}
 {{- if not (has $v.auth.mode (list "none" "local" "oidc" "ldap")) -}}
 {{- fail "auth.mode must be oidc, ldap, local or none" -}}
 {{- end -}}

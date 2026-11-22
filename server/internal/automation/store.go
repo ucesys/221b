@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"regexp"
 	"sort"
@@ -307,6 +308,18 @@ type Store struct {
 	backend kv.Backend
 	now     func() time.Time
 	mu      sync.Mutex
+	// sens keeps the sensitive values (DB-71). inTables says the documents
+	// are rows that hide those values themselves, in the transaction that
+	// writes them; otherwise the store hides them before it saves.
+	// collectIn, set with inTables, reads what still names a value under
+	// the turn of the documents' writers.
+	sens      SensitiveStore
+	inTables  bool
+	collectIn func(ctx context.Context, drop func(live map[string]map[string]bool) error) error
+	log       *slog.Logger
+	// runs keeps the runs and the run requests in a database (KeepRunsIn,
+	// DB-87); nil keeps them in the documents RunsKey and ChangesKey.
+	runs RunRepo
 }
 
 // RunsKeys are the keys that may live apart from the scripts, so neither
@@ -328,7 +341,7 @@ func NewStore(b kv.Backend, now func() time.Time) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{backend: b, now: now}
+	return &Store{backend: b, now: now, sens: fallbackSecrets}
 }
 
 // load reads a key into v; a key never saved leaves v as it is.
@@ -366,10 +379,30 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		if version, err = st.load(ctx, key, &v); err != nil {
 			return err
 		}
+		// What the document names of the sensitive values before the edit:
+		// a value nothing names after it leaves the Secret (DB-71).
+		hides := key == VariablesKey || key == ChangesKey || key == RunsKey
+		var old T
+		if hides && key != RunsKey {
+			old = clone(v)
+		}
 		if err = edit(&v); errors.Is(err, errNoChange) {
 			return nil
 		} else if err != nil {
 			return err
+		}
+		var sealed *sealing
+		if hides && !st.inTables {
+			// A copy: what the caller gave keeps its values, which a run
+			// started with them still reads. The values go to the Secret
+			// first: a save that then fails leaves one that nothing names.
+			v = clone(v)
+			if sealed, err = st.sealDoc(ctx, key, any(&old), any(&v)); err != nil {
+				return err
+			}
+			if err = sealed.put(ctx, st.sens); err != nil {
+				return err
+			}
 		}
 		b, _ := json.Marshal(v)
 		if limit > 0 && len(b) > limit {
@@ -381,9 +414,35 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		if errors.Is(err, kv.ErrFull) {
 			return fmt.Errorf("%w: %w", ErrFull, err)
 		}
+		if err == nil && hides {
+			if sealed != nil {
+				err = st.sealPast(ctx, sealed)
+			}
+			was := gone(liveIn(any(&old)), liveIn(any(&v)))
+			if st.inTables {
+				// The rows were written from a copy of v, which the write hid
+				// and showed itself (a mark taken off): every value v named
+				// before is looked at again, against the rows as they are.
+				was = gone(liveIn(any(&old)), nil)
+			}
+			st.collect(ctx, was)
+		}
 		return err
 	}
 	return err
+}
+
+// liveIn are the digests a document names whose values are still to be
+// read.
+func liveIn(doc any) map[string]map[string]bool {
+	switch d := doc.(type) {
+	case *variablesRecord:
+		d.nodesOwn()
+		return liveDigests(d, nil)
+	case *changesRecord:
+		return liveDigests(nil, d)
+	}
+	return nil
 }
 
 type scriptsRecord struct {

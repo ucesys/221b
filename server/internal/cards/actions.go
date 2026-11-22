@@ -31,7 +31,6 @@ import (
 type HostBook interface {
 	Hosts(ctx context.Context, cluster string) ([]nodessh.Host, error)
 	AddHost(ctx context.Context, h nodessh.Host, by string) (nodessh.Host, error)
-	LabelHost(ctx context.Context, cluster, name string, labels map[string]string) (nodessh.Host, error)
 	RemoveHost(ctx context.Context, cluster, name string) (nodessh.Host, string, error)
 }
 
@@ -50,7 +49,7 @@ type MemberBook interface {
 // ParamBook keeps Automation's parameters; *automation.Store is one.
 type ParamBook interface {
 	Variables(ctx context.Context, cluster string) (map[string]automation.FleetVariables, error)
-	SetVariables(ctx context.Context, cluster, fleet string, fp automation.FleetVariables) error
+	SetVariablesFor(ctx context.Context, cluster, fleet string, fp automation.FleetVariables, nodes []string) error
 }
 
 // Console is what the console actions work on; a nil part leaves its
@@ -71,7 +70,6 @@ type Console struct {
 func (s *Store) RegisterConsole(c Console) {
 	if c.Hosts != nil {
 		s.Register(KindHostAdd, hostAdd{c})
-		s.Register(KindHostLabel, hostLabel{c})
 		s.Register(KindHostRemove, hostRemove{c})
 	}
 	if c.Fleets != nil {
@@ -114,11 +112,14 @@ func labelsText(m map[string]string) string {
 // ---------- hosts ----------
 
 type hostAddArgs struct {
-	Name      string            `json:"name"`
-	Address   string            `json:"address"`
-	Port      int               `json:"port,omitempty"`
-	LoginUser string            `json:"loginUser,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Port      int    `json:"port,omitempty"`
+	LoginUser string `json:"loginUser,omitempty"`
+	// Labels is still accepted from an agent that sends it, and ignored:
+	// hosts carry no labels since Phase 13 (a host is in a fleet by being
+	// listed).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type hostAdd struct{ c Console }
@@ -128,9 +129,9 @@ func (h hostAdd) Admin() bool { return true }
 func (h hostAdd) host(cluster string, a Action) (nodessh.Host, error) {
 	var in hostAddArgs
 	if err := decodeArgs(a.Args, &in); err != nil {
-		return nodessh.Host{}, fmt.Errorf("%w: host.add takes name, address, port, loginUser and labels: %v", ErrInvalid, err)
+		return nodessh.Host{}, fmt.Errorf("%w: host.add takes name, address, port and loginUser: %v", ErrInvalid, err)
 	}
-	x := nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser, Labels: in.Labels}
+	x := nodessh.Host{Cluster: cluster, Name: in.Name, Address: in.Address, Port: in.Port, LoginUser: in.LoginUser}
 	if x.LoginUser == "" && h.c.LoginUser != nil {
 		x.LoginUser = h.c.LoginUser()
 	}
@@ -164,7 +165,7 @@ func findHost(ctx context.Context, b HostBook, cluster, name string) (nodessh.Ho
 // hostPrint is what a host's fingerprint covers: never its key, which is
 // only hashed with the rest.
 func hostPrint(x nodessh.Host) string {
-	return digest([]any{x.Name, x.Address, x.Port, x.LoginUser, x.Labels, x.State, x.Fingerprint})
+	return digest([]any{x.Name, x.Address, x.Port, x.LoginUser, x.State, x.Fingerprint})
 }
 
 func (h hostAdd) Describe(ctx context.Context, cluster string, a Action) (Plan, error) {
@@ -184,9 +185,6 @@ func (h hostAdd) Describe(ctx context.Context, cluster string, a Action) (Plan, 
 		p.Fingerprint = "absent"
 	}
 	line := fmt.Sprintf("Adds host %s at %s, port %d, login user %s", x.Name, x.Address, x.Port, x.LoginUser)
-	if len(x.Labels) > 0 {
-		line += ", labels " + labelsText(x.Labels)
-	}
 	p.Impact = append(p.Impact, line+".", "It stays pending until a person pairs it in Add host, with one credential and one approval of its key; no key and no credential comes with this card.")
 	return p, nil
 }
@@ -203,100 +201,6 @@ func (h hostAdd) Apply(ctx context.Context, c Card, i int, by Approver) (Result,
 	}
 	h.c.record(audit.ActionHostAdd, c, by, "host "+got.Name, audit.OutcomeOK, fmt.Sprintf("host %s added at %s port %d, login user %s; pending until paired", got.Name, got.Address, got.Port, got.LoginUser))
 	return Result{OK: true, Summary: fmt.Sprintf("host %s added, pending: pair it in Add host on its cluster's Nodes tab", got.Name), Ref: "host:" + got.Name}, nil
-}
-
-type hostLabelArgs struct {
-	Name   string            `json:"name"`
-	Set    map[string]string `json:"set,omitempty"`
-	Remove []string          `json:"remove,omitempty"`
-}
-
-type hostLabel struct{ c Console }
-
-func (h hostLabel) Admin() bool { return true }
-
-func (h hostLabel) args(a Action) (hostLabelArgs, error) {
-	var in hostLabelArgs
-	if err := decodeArgs(a.Args, &in); err != nil {
-		return in, fmt.Errorf("%w: host.label takes name, set and remove: %v", ErrInvalid, err)
-	}
-	in.Name = strings.TrimSpace(in.Name)
-	switch {
-	case in.Name == "":
-		return in, fmt.Errorf("%w: name the host", ErrInvalid)
-	case len(in.Set) == 0 && len(in.Remove) == 0:
-		return in, fmt.Errorf("%w: set or remove a label", ErrInvalid)
-	}
-	probe := nodessh.Host{Name: "probe", Address: "10.0.0.1", LoginUser: "root", Labels: in.Set}
-	if err := probe.Validate(); err != nil {
-		return in, fmt.Errorf("%w: %v", ErrInvalid, strings.TrimPrefix(err.Error(), nodessh.ErrInvalid.Error()+": "))
-	}
-	return in, nil
-}
-
-func (h hostLabel) Check(a Action) error { _, err := h.args(a); return err }
-
-func (in hostLabelArgs) next(cur map[string]string) map[string]string {
-	out := maps.Clone(cur)
-	if out == nil {
-		out = map[string]string{}
-	}
-	maps.Copy(out, in.Set)
-	for _, k := range in.Remove {
-		delete(out, k)
-	}
-	return out
-}
-
-func (h hostLabel) Describe(ctx context.Context, cluster string, a Action) (Plan, error) {
-	in, err := h.args(a)
-	if err != nil {
-		return Plan{}, err
-	}
-	p := Plan{Summary: "Label host " + in.Name, Targets: []string{"host " + in.Name}}
-	x, found, err := findHost(ctx, h.c.Hosts, cluster, in.Name)
-	if err != nil {
-		return p, err
-	}
-	if !found {
-		return p, fmt.Errorf("there is no host %s", in.Name)
-	}
-	p.Fingerprint = hostPrint(x)
-	for _, k := range slices.Sorted(maps.Keys(in.Set)) {
-		if old, ok := x.Labels[k]; ok {
-			p.Impact = append(p.Impact, fmt.Sprintf("%s: %s → %s", k, old, in.Set[k]))
-		} else {
-			p.Impact = append(p.Impact, fmt.Sprintf("adds %s=%s", k, in.Set[k]))
-		}
-	}
-	for _, k := range in.Remove {
-		if old, ok := x.Labels[k]; ok {
-			p.Impact = append(p.Impact, fmt.Sprintf("removes %s=%s", k, old))
-		}
-	}
-	p.Impact = append(p.Impact, "Fleets that select hosts by these labels gain or lose "+in.Name+".")
-	return p, nil
-}
-
-func (h hostLabel) Apply(ctx context.Context, c Card, i int, by Approver) (Result, error) {
-	in, err := h.args(c.Actions[i])
-	if err != nil {
-		return Result{}, err
-	}
-	x, found, err := findHost(ctx, h.c.Hosts, c.Cluster, in.Name)
-	if err != nil {
-		return Result{}, err
-	}
-	if !found {
-		return Result{}, fmt.Errorf("there is no host %s", in.Name)
-	}
-	got, err := h.c.Hosts.LabelHost(ctx, c.Cluster, in.Name, in.next(x.Labels))
-	if err != nil {
-		h.c.record(audit.ActionHostLabel, c, by, "host "+in.Name, audit.OutcomeFailed, "labeling host "+in.Name+" failed: "+err.Error())
-		return Result{}, err
-	}
-	h.c.record(audit.ActionHostLabel, c, by, "host "+got.Name, audit.OutcomeOK, fmt.Sprintf("host %s labeled: %s", got.Name, labelsText(got.Labels)))
-	return Result{OK: true, Summary: fmt.Sprintf("host %s now has labels %s", got.Name, labelsText(got.Labels))}, nil
 }
 
 type hostRemoveArgs struct {
@@ -712,6 +616,50 @@ func (in paramsArgs) next(cur automation.FleetVariables) automation.FleetVariabl
 	return out
 }
 
+// sensitive refuses a card that sets a value of a name that is sensitive
+// on the cluster (DB-71): a card's arguments are a record, its plan quotes
+// them and the audit log says what it set, and a sensitive value is in
+// none of those. Unsetting one names no value, and may be done.
+func (in paramsArgs) sensitive(all map[string]automation.FleetVariables) error {
+	names := automation.SensitiveNames(all)
+	var set []string
+	for k := range in.Values {
+		if slices.Contains(names, k) {
+			set = append(set, k)
+		}
+	}
+	for _, m := range in.Nodes {
+		for k := range m {
+			if slices.Contains(names, k) && !slices.Contains(set, k) {
+				set = append(set, k)
+			}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	sort.Strings(set)
+	return fmt.Errorf("%w: %s is sensitive: a card never sets a sensitive variable, since what a card says is recorded; set it on Automation's Variables page", ErrInvalid, strings.Join(set, ", "))
+}
+
+// nodes are the nodes the card names; never nil, which would mean every
+// node.
+func (in paramsArgs) nodes() []string {
+	seen := map[string]bool{}
+	for n := range in.Nodes {
+		seen[n] = true
+	}
+	for n := range in.UnsetNodes {
+		seen[n] = true
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (p params) fleetName(cluster, id string) (string, bool) {
 	for _, f := range p.c.Fleets.Fleets(cluster) {
 		if f.ID == id {
@@ -761,7 +709,10 @@ func (p params) Describe(ctx context.Context, cluster string, a Action) (Plan, e
 	if err != nil {
 		return pl, err
 	}
-	cur := all[in.Fleet]
+	if err := in.sensitive(all); err != nil {
+		return pl, err
+	}
+	cur := automation.View(all, in.Fleet, in.nodes())
 	next := in.next(cur)
 	pl.Fingerprint = digest(cur)
 	pl.Impact = changes("", cur.Values, next.Values)
@@ -795,12 +746,18 @@ func (p params) Apply(ctx context.Context, c Card, i int, by Approver) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	next := in.next(all[in.Fleet])
-	if err := p.c.Params.SetVariables(ctx, c.Cluster, in.Fleet, next); err != nil {
+	if err := in.sensitive(all); err != nil {
+		return Result{}, err
+	}
+	// A node's own values are the node's, kept once whatever fleets it is
+	// in: the card sets those of the nodes it names, and no other node's.
+	cur := automation.View(all, in.Fleet, in.nodes())
+	next := in.next(cur)
+	if err := p.c.Params.SetVariablesFor(automation.SetBy(ctx, automation.Who{Name: by.Name, User: by.Key}), c.Cluster, in.Fleet, next, in.nodes()); err != nil {
 		p.c.record(audit.ActionAutomationParams, c, by, "fleet "+in.Fleet, audit.OutcomeFailed, err.Error())
 		return Result{}, err
 	}
-	changed := changes("", all[in.Fleet].Values, next.Values)
+	changed := changes("", cur.Values, next.Values)
 	p.c.record(audit.ActionAutomationParams, c, by, "fleet "+in.Fleet, audit.OutcomeOK, "parameters set: "+strings.Join(changed, ", "))
 	return Result{OK: true, Summary: "parameters of fleet " + name + " set"}, nil
 }

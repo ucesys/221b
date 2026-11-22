@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -51,8 +52,9 @@ type Settings struct {
 	// DefaultPendingGrace.
 	PendingGraceSeconds *int `json:"pendingGraceSeconds,omitempty"`
 	// AlertBanners says whether every tab but Alerts shows what the Alerts
-	// tab has in banners at the top; nil is true. Off, the Alerts tab's
-	// name still turns red or amber (asked at the second Toolbox review).
+	// tab has in banners at the top; nil is false (off by default since 0.13,
+	// the owner, November 22, 2026). Off, the Alerts tab's name still turns
+	// red or amber (asked at the second Toolbox review).
 	AlertBanners *bool `json:"alertBanners,omitempty"`
 	// FleetsPage says whether the Fleets tab shows; nil is true. Off, the
 	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
@@ -338,7 +340,8 @@ type Storage interface {
 	// over whatever it holds) and returns the new version; ErrConflict when
 	// another writer came first.
 	Save(ctx context.Context, b []byte, version string) (string, error)
-	// Kind names the storage for the browser: "configmap" or "memory".
+	// Kind names the storage for the browser: "database" (the console's,
+	// DB-69), "configmap" or "memory" (tests).
 	Kind() string
 }
 
@@ -440,8 +443,11 @@ func (s State) WithoutFleetNodes() State {
 // copy, so no replica puts back what another one changed; Run picks up
 // the others' changes.
 type Service struct {
-	storage  Storage
-	log      *slog.Logger
+	storage Storage
+	log     *slog.Logger
+	// quiet keeps the reads' failures while the database is away to one
+	// line (DB-15).
+	quiet    db.Quiet
 	defaults Settings
 	// onChange is told about every change, including the initial load.
 	onChange func(State)
@@ -714,12 +720,15 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 		}
 		return
 	case err != nil:
-		s.log.Warn("cannot read the saved settings", "err", err)
+		// With the database away it fails at every look: said once, and
+		// once when it works again (DB-15).
+		s.quiet.Failed(s.log, "cannot read the saved settings", err)
 		if initial {
 			s.onChange(s.Current())
 		}
 		return
 	}
+	s.quiet.Worked(s.log, "the saved settings are read again")
 	s.mu.Lock()
 	same := (version != "" && version == s.version) || string(b) == string(s.loaded)
 	s.version = version

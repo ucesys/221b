@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -116,9 +118,21 @@ type world struct {
 	prod   map[string]bool
 }
 
+// testStore is where a test's cards are kept: memory, or the database's
+// tables over memory when TEST_STORE is "database", which runs every
+// test of this package over the database (Phase 13).
+func testStore(t *testing.T) kv.Backend {
+	t.Helper()
+	if os.Getenv("TEST_STORE") != "database" {
+		return &kv.Memory{}
+	}
+	d := dbtest.Open(t)
+	return &kv.Keyed{Keys: map[string]kv.Backend{CardsKey: NewCardsPG(d), ChatsKey: NewChatsPG(d), StandingKey: NewStandingPG(d), NotifyKey: NewNotifyPG(d)}, Rest: &kv.Memory{}}
+}
+
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{exec: &fakeExec{print: "v1"}, clock: &clock{t: time.Date(2026, 11, 5, 3, 12, 0, 0, time.UTC)}, audit: &syncBuffer{}, backend: &kv.Memory{}, firing: map[string]bool{}, prod: map[string]bool{"prod-1": true}}
+	w := &world{exec: &fakeExec{print: "v1"}, clock: &clock{t: time.Date(2026, 11, 5, 3, 12, 0, 0, time.UTC)}, audit: &syncBuffer{}, backend: testStore(t), firing: map[string]bool{}, prod: map[string]bool{"prod-1": true}}
 	w.st = w.open()
 	return w
 }

@@ -366,6 +366,9 @@ type RouteInput struct {
 	Scope     *Scope
 	Rechecked []Recheck
 	LeftOut   []Key
+	// Covered are the exceptions the agent said covered a problem it did
+	// not report: each counts as its exception's match (FX-04).
+	Covered []Covered
 	// Agent is the name of the job's agent, who the cases it opens name
 	// as their creator; MinPriority the job's lowest priority, below which
 	// a finding opens no case (CF-33, CF-35); nil routes every priority.
@@ -385,6 +388,9 @@ type RouteResult struct {
 	// NotRouted says why nothing was routed (W-8, CF-99): the run keeps its
 	// findings as they came and is routed again on a later look.
 	NotRouted string
+	// Covered are the exceptions counted as matched because the agent said
+	// they covered a problem it did not report.
+	Covered []string
 }
 
 // KeyInUse is a key the cluster's cases, known issues and exceptions

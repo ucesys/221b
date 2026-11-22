@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -63,7 +66,16 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 	}
 	// The AI agents (Phase 12, ADR-74 to ADR-79): Sherlock's provider and
 	// key become the default provider, and every agent starts on its model.
-	aiSvc, err := openAI(ctx, w.restCfg, cfg, w.secretRef, aiOptions{shared: w.shared, keys: w.keys, chartProvider: chartProvider, log: log.With("component", "ai")})
+	aiSvc, err := openAI(ctx, w.restCfg, cfg, w.secretRef, aiOptions{shared: w.shared, keys: w.keys, chartProvider: chartProvider, log: log.With("component", "ai"),
+		// Every key of the agents is rows of the database (DB-39, DB-40):
+		// the providers, the agents' settings, their instructions, their
+		// test cases and the pilots' answers.
+		moved: func(b kv.Backend) kv.Backend {
+			return w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
+				return map[string]movedDoc{ai.ProvidersKey: ai.NewProvidersPG(d), ai.AgentsKey: ai.NewAgentsPG(d), ai.PromptsKey: ai.NewPromptsPG(d),
+					ai.TestsKey: ai.NewTestsPG(d), ai.PilotKey: ai.NewPilotPG(d)}
+			})
+		}})
 	if err != nil {
 		return err
 	}
@@ -80,6 +92,11 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 		}
 		return ""
 	}
+	// What the agents spend: each cost is a row of ai_spend, only ever
+	// added (DB-41).
+	ledger := sherlock.NewLedger(w.spendBackend, nil, log.With("component", "sherlock"))
+	ledger.UseRows(sherlock.NewSpendPG(w.database, nil))
+	w.inDatabase = append(w.inDatabase, "ai")
 	sherlockSvc := sherlock.New(sherlock.Options{
 		Agent:    aiSvc.Agent,
 		OnAnswer: aiSvc.OnAnswer,
@@ -122,7 +139,7 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 				}
 				return chartProvider
 			}},
-		Ledger: sherlock.NewLedger(w.spendBackend, nil, log.With("component", "sherlock")),
+		Ledger: ledger,
 		Settings: func() sherlock.Settings {
 			sh := w.shared.Current().SherlockOrDefault()
 			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut}

@@ -111,8 +111,15 @@ func (s *Server) waitForApproval(w http.ResponseWriter, r *http.Request, l launc
 	if sess, ok := auth.SessionFrom(r.Context()); ok {
 		wr.Method = sess.Method
 	}
+	// The sensitive values it would run with wait in the Secret, under
+	// their digests, until the request is decided or expires (DB-71).
+	if err := s.opts.AutomationStore.KeepValues(r.Context(), l.list.Cluster, l.typed); err != nil {
+		l.refuse(automationStatus(err), err.Error())
+		return
+	}
 	saved, err := s.opts.AutomationStore.NewWaitingRun(r.Context(), wr)
 	if err != nil {
+		s.opts.AutomationStore.ForgetValues(r.Context(), l.list.Cluster, l.typed)
 		l.refuse(automationStatus(err), err.Error())
 		return
 	}
@@ -164,9 +171,10 @@ func (s *Server) expireWaitingRuns(r *http.Request) {
 	after := s.waitingRunFor()
 	gone, err := s.opts.AutomationStore.ExpireWaitingRuns(r.Context(), after, "expired after "+waitText(after))
 	if err != nil {
-		s.opts.Logger.Warn("expiring the run requests failed", "err", err)
+		s.expiring.Failed(s.opts.Logger, "expiring the run requests failed", err)
 		return
 	}
+	s.expiring.Worked(s.opts.Logger, "the run requests are expired again")
 	for _, wr := range gone {
 		if s.opts.Audit != nil {
 			s.opts.Audit.Record(audit.Event{Action: audit.ActionAutomationRun, Cluster: wr.Cluster, Target: wr.Script, Outcome: audit.OutcomeFailed,

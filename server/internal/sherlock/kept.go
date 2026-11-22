@@ -34,11 +34,17 @@ type Keeper interface {
 }
 
 // Bounds of a kept conversation: the messages it shows and keeps (twenty
-// questions with their answers), and the characters of each one's text.
+// questions with their answers), the characters of each one's text and
+// the steps of each; and of a message's hand-overs, nested ones counted:
+// how many are kept, and the characters of their tasks, answers, errors
+// and steps between them, so that a message with its hand-overs stays
+// well within what a keeper holds of one conversation.
 const (
-	KeptMessages = 40
-	KeptText     = 8000
-	keptSteps    = 30
+	KeptMessages  = 40
+	KeptText      = 8000
+	keptSteps     = 30
+	keptHands     = 16
+	keptHandsText = 16000
 )
 
 // SetKeeper gives the service the keeper of the kept conversations.
@@ -148,9 +154,10 @@ func (s *Service) keep(c *Conversation, k Key) {
 }
 
 // keptMsgs are a conversation's messages as they are kept: the last
-// KeptMessages, each text clipped and scrubbed (X-01), without what only
-// the asking window needs (the view it changed, the note, the parts
-// handed to other agents).
+// KeptMessages, each text clipped and scrubbed (X-01), with the parts
+// handed to other agents (bounded and scrubbed too, keptHandOvers) and
+// without what only the asking window needs (the view it changed, the
+// note).
 func keptMsgs(in []*Msg) []Msg {
 	if n := len(in) - KeptMessages; n > 0 {
 		in = in[n:]
@@ -160,13 +167,63 @@ func keptMsgs(in []*Msg) []Msg {
 		cp := *m
 		cp.Text = clipText(scrub.Text(cp.Text), KeptText)
 		cp.Error = clipText(scrub.Text(cp.Error), 500)
-		cp.Note, cp.View, cp.Show, cp.Hands = "", nil, nil, nil
+		cp.Note, cp.View, cp.Show = "", nil, nil
 		cp.Steps = append([]Step(nil), m.Steps...)
 		if len(cp.Steps) > keptSteps {
 			cp.Steps = cp.Steps[:keptSteps]
 		}
 		cp.Refs = append([]Ref(nil), m.Refs...)
+		count, text := keptHands, keptHandsText
+		cp.Hands = keptHandOvers(m.Hands, &count, &text)
 		out = append(out, cp)
+	}
+	return out
+}
+
+// keptHandOvers are a message's hand-overs as they are kept, with their
+// own inside them: who asked whom, how it ended and what it cost as they
+// are; every text scrubbed like a message's (X-01: an agent's answer may
+// quote what it read) and clipped, the task and the answer to KeptText,
+// the error as a message's, the steps to keptSteps. count is how many
+// hand-overs may still be kept, the ones asked first first, and text how
+// many characters of their texts and steps: once it is spent, a hand-over
+// keeps who and how and loses what was said.
+func keptHandOvers(in []*Hand, count, text *int) []*Hand {
+	var out []*Hand
+	for _, h := range in {
+		if h == nil {
+			continue
+		}
+		if *count <= 0 {
+			break
+		}
+		*count--
+		cp := *h
+		clip := func(t string, most int) string {
+			if *text <= 0 {
+				// Nothing of it is kept, so there is nothing to scrub.
+				return clipText(t, 0)
+			}
+			t = clipText(scrub.Text(t), min(most, *text))
+			*text = max(0, *text-len(t))
+			return t
+		}
+		cp.Task, cp.Text, cp.Error = clip(h.Task, KeptText), clip(h.Text, KeptText), clip(h.Error, 500)
+		cp.Steps = nil
+		for _, st := range h.Steps {
+			if len(cp.Steps) == keptSteps || *text <= 0 {
+				break
+			}
+			st.Label = scrub.Text(st.Label)
+			*text = max(0, *text-len(st.Label)-len(st.Tool)-len(st.Status))
+			cp.Steps = append(cp.Steps, st)
+		}
+		if h.Usage != nil {
+			u := *h.Usage
+			cp.Usage = &u
+		}
+		cp.Hands = keptHandOvers(h.Hands, count, text)
+		out = append(out, &cp)
 	}
 	return out
 }

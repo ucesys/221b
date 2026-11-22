@@ -124,11 +124,10 @@ Every sign-in, sign-out and change is in the audit log: one JSON line on the con
 and POSTed to {{ . }}.
 {{- end }}
 
-The refresh rate in its Settings applies to everyone and is kept in the ConfigMap {{ include "b221.fullname" . }}.
-{{- if eq .Values.connections.store "secrets" }}
+The refresh rate in its Settings applies to everyone and is kept in the database.
 
-Other clusters are added from the cluster menu by an administrator. Each connection is kept as a Secret
-named {{ include "b221.fullname" . }}-cluster-<id> in this namespace, which the console may manage Secrets in:
+Other clusters are added from the cluster menu by an administrator. Each connection is a row of the database,
+and its credential a Secret named {{ include "b221.fullname" . }}-cluster-<id> in this namespace, which the console may manage Secrets in:
 keep it in a namespace of its own. List them with
 
   kubectl -n {{ .Release.Namespace }} get secrets -l app.kubernetes.io/component=cluster-connection
@@ -138,10 +137,6 @@ Backups carry their secrets sealed with this install's backup key, in the Secret
 secrets: without it a backup's secrets cannot be recovered. Read it with
 
   kubectl -n {{ .Release.Namespace }} get secret {{ include "b221.fullname" . }}-backup-key -o jsonpath='{.data.key}' | base64 -d
-{{- else }}
-
-Connections to other clusters are kept in memory (connections.store=memory) and lost on restart.
-{{- end }}
 {{- if .Values.secrets.read }}
 
 Secrets are read (secrets.read), so each namespace lists its Secrets by key name and size and the Helm tab
@@ -151,6 +146,31 @@ to Secrets at all, which also hides the Helm tab.
 
 Secrets are not read (secrets.read=false): the ClusterRole grants nothing on Secrets, namespaces list no
 Secrets and there is no Helm tab, since Helm keeps its release records in Secrets.
+{{- end }}
+
+{{- $dbMode := include "b221.dbMode" . }}
+{{- if eq $dbMode "bundled" }}
+
+The console keeps its records in the chart's own database, {{ include "b221.dbName" . }}
+({{ ternary "three members: a commit waits for one of the two standbys" "one member; database.bundled.ha=true makes it three" .Values.database.bundled.ha }}):
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=221b-db -L role
+{{- if and .Values.database.bundled.backup.enabled (not .Values.database.bundled.backup.s3.bucket) }}
+
+Its backups go to a second volume in this cluster, which does not survive losing the cluster's storage.
+Name a bucket in database.bundled.backup.s3 to keep them outside.
+{{- end }}
+{{- if not .Values.database.bundled.backup.enabled }}
+
+The database is NOT backed up (database.bundled.backup.enabled=false).
+{{- end }}
+{{- else if eq $dbMode "external" }}
+
+The console keeps its records in the database at
+{{ .Values.database.external.host }}:{{ .Values.database.external.port }} ({{ .Values.database.external.database }}), which you run and back up.
+{{- if eq .Values.database.external.sslMode "require" }}
+database.external.sslMode=require encrypts the connection without checking who answers; verify-full does both.
+{{- end }}
 {{- end }}
 
 Check what it is allowed to read:

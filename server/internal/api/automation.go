@@ -28,7 +28,7 @@ import (
 
 // allNodes is the fleet of every node of a cluster, for a cluster with no
 // fleets; a fleet's id never starts with an underscore.
-const allNodes = "_all"
+const allNodes = automation.AllNodes
 
 const maxAutomationBody = 64 << 10
 
@@ -48,6 +48,7 @@ func (s *Server) automationRoutes() {
 	s.handle("PUT /api/v1/automation/groups/{name}", "automation-group-save", s.putAutomationGroup)
 	s.handle("DELETE /api/v1/automation/groups/{name}", "automation-group-delete", s.deleteAutomationGroup)
 	s.handle("GET /api/v1/automation/runs", "automation-runs", s.getAutomationRuns)
+	s.handle("GET /api/v1/automation/history", "automation-history", s.getAutomationHistory)
 	s.handle("GET /api/v1/automation/runs/{id}", "automation-run", s.getAutomationRun)
 	s.handle("POST /api/v1/automation/runs/{id}/cancel", "automation-cancel", s.postAutomationCancel)
 	for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
@@ -422,6 +423,19 @@ type automationFleets struct {
 	name      string
 }
 
+// has says whether a node is one of the fleet's.
+func (f automationFleet) has(node string) bool {
+	if f.ID == allNodes {
+		return true
+	}
+	for _, n := range f.Nodes {
+		if n.Name == node {
+			return true
+		}
+	}
+	return false
+}
+
 // layersOf are the fleets a node belongs to, then All nodes.
 func (f automationFleets) layersOf(node string) []automation.Layer {
 	var out []automation.Layer
@@ -485,7 +499,7 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		for _, h := range list {
 			if !known[h.Name] {
 				hosts[h.Name] = h
-				nodes = append(nodes, fleets.Node{Name: h.Name, Labels: h.Labels})
+				nodes = append(nodes, fleets.Node{Name: h.Name})
 			}
 		}
 	}
@@ -533,6 +547,8 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		defs = s.opts.Settings.Current().Fleets[c.ID]
 	}
 	for _, f := range defs {
+		// A fleet's own. A node's own values are the node's, whatever fleets
+		// it is in: All nodes, below, has them.
 		af := automationFleet{ID: f.ID, Name: f.Name, Nodes: []automationNode{}, Params: params[f.ID]}
 		for _, n := range nodes {
 			if f.Takes(n) {
@@ -541,7 +557,7 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 		}
 		out.Fleets = append(out.Fleets, af)
 	}
-	all := automationFleet{ID: allNodes, Name: "All nodes", Nodes: []automationNode{}, Params: params[allNodes]}
+	all := automationFleet{ID: allNodes, Name: "All nodes", Nodes: []automationNode{}, Params: automation.View(params, allNodes, nil)}
 	for _, n := range nodes {
 		all.Nodes = append(all.Nodes, member(n))
 	}
@@ -583,9 +599,10 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("fleet")
 	fleetName := ""
 	found := false
+	var fleet automationFleet
 	for _, f := range list.Fleets {
 		if f.ID == id {
-			found, fleetName = true, f.Name
+			found, fleetName, fleet = true, f.Name, f
 		}
 	}
 	if !found {
@@ -597,12 +614,26 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, automationStatus(err), err.Error())
 		return
 	}
+	// A node's own values are the node's, kept once and shown with All
+	// nodes. All nodes' page sets every node's, also a node's that has left
+	// the cluster. Another fleet sets those of the nodes the request
+	// names, which must be its members, and leaves every other node's.
+	var scope []string
+	if id != allNodes {
+		scope = automation.NamedNodes(next)
+		for _, n := range scope {
+			if !fleet.has(n) {
+				jsonError(w, http.StatusBadRequest, "node "+strconv.Quote(n)+" is not in this fleet: set its own values from a fleet it is in, or from All nodes")
+				return
+			}
+		}
+	}
 	all, err := s.opts.AutomationStore.Variables(r.Context(), list.Cluster)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	before := all[id]
+	before := automation.View(all, id, scope)
 	changed := automation.ChangedVariables(before, next)
 	impact, note := s.weighChange(r, list.Cluster, before, next, changed)
 	if automation.RebootChanged(before, next) {
@@ -614,9 +645,33 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	}
 	// Marked sensitive stays so until a second admin says otherwise, on any
 	// cluster: otherwise one person could unmark it and change it alone.
+	// A variable removed entirely, its mark and every value under its name,
+	// shows nothing that was hidden, and goes as any other removal does
+	// (decided with the owner on November 19, 2026). A value that stays is
+	// the fleet's, a node's the request names, or a member's own that the
+	// request leaves alone.
+	stays := func(name string) bool {
+		if _, ok := next.Values[name]; ok {
+			return true
+		}
+		for _, m := range next.Nodes {
+			if _, ok := m[name]; ok {
+				return true
+			}
+		}
+		if id == allNodes {
+			return false
+		}
+		for n, m := range automation.View(all, id, nil).Nodes {
+			if _, ok := m[name]; ok && fleet.has(n) && !slices.Contains(scope, n) {
+				return true
+			}
+		}
+		return false
+	}
 	unmarked := false
 	for _, name := range before.Sensitive {
-		if !slices.Contains(next.Sensitive, name) {
+		if !slices.Contains(next.Sensitive, name) && stays(name) {
 			unmarked = true
 			changed = append(changed, name+" stops being sensitive")
 			impact = append(impact, automation.ImpactItem{Script: name, Decision: automation.ImpactApproval, Why: "it stops being sensitive", By: "rule"})
@@ -640,7 +695,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		answerJSON(w, r, variablesAnswer{Params: before, Change: &saved})
 		return
 	}
-	if err := s.opts.AutomationStore.SetVariables(r.Context(), list.Cluster, id, next); err != nil {
+	if err := s.opts.AutomationStore.SetVariablesFor(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, next, scope); err != nil {
 		s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeFailed, err.Error())
 		jsonError(w, automationStatus(err), err.Error())
 		return
@@ -659,7 +714,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeOK,
 		fmt.Sprintf("values %s; %d nodes with their own; ceiling %s", strings.Join(names, ", "), len(next.Nodes), next.CeilingOrDefault()))
 	params, _ := s.opts.AutomationStore.Variables(r.Context(), list.Cluster)
-	answerJSON(w, r, variablesAnswer{Params: params[id], Change: kept})
+	answerJSON(w, r, variablesAnswer{Params: automation.View(params, id, scope), Change: kept})
 }
 
 // ---------- runs ----------
@@ -868,8 +923,14 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request, in runRequest,
 				}
 			}
 			if err = automation.ValidateOverrides(in.Params); err == nil {
-				s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse, mode: mode})
-				return
+				// A value the run gives for a name that is sensitive on this
+				// cluster is recorded as its digest from here on (DB-71): the
+				// value itself goes to the run alone, in memory.
+				var typed map[string]string
+				if in.Params, typed, err = s.opts.AutomationStore.HideRunValues(ctx, list.Cluster, in.Params); err == nil {
+					s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse, mode: mode, typed: typed})
+					return
+				}
 			}
 		}
 	}
@@ -891,6 +952,9 @@ type launch struct {
 	retryOf       int
 	refuse        func(int, string)
 	mode          runMode
+	// typed are the sensitive values the run gave itself, by the digest
+	// that stands for each in in.Params: in memory, for this start alone.
+	typed map[string]string
 }
 
 func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
@@ -901,6 +965,7 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	values := map[string]map[string]string{}
 	resolved := map[string]automation.Resolved{}
 	reboot := map[string]int{}
+	layersOf := map[string][]automation.Layer{}
 	kube8s := v.Header.Target == automation.TargetKubernetes
 	// Each node answers to all its fleets, not only the one picked: the
 	// strictest ceiling holds, and a change waiting on any of them holds
@@ -946,6 +1011,7 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		}
 		values[n.Name] = res.Values
 		resolved[n.Name] = res
+		layersOf[n.Name] = layers
 		targets = append(targets, n.Name)
 	}
 	// A binding to a variable no node of the run has stops it, required or
@@ -1004,10 +1070,30 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		answerJSON(w, r, runWeight{Changed: []string{}, Impact: []automation.ImpactItem{}})
 		return
 	}
-	secrets, err := readSecrets(ctx, l.cl, l.who.Person, v.Header, values)
+	// The sensitive values are read from their Secret now, for the run
+	// alone (DB-71): what is recorded of them stays their digests, and the
+	// run gets them as it gets a secret parameter's value, never on a
+	// command line and blanked in its output.
+	plain, sensitive, err := s.revealRunValues(ctx, list.Cluster, in.Params, values, l.typed)
 	if err != nil {
 		refuse(automationStatus(err), err.Error())
 		return
+	}
+	secrets, err := readSecrets(ctx, l.cl, l.who.Person, v.Header, plain)
+	if err != nil {
+		refuse(automationStatus(err), err.Error())
+		return
+	}
+	for node, m := range sensitive {
+		for name, val := range m {
+			if p, ok := v.Header.Param(name); ok && p.Secret {
+				continue
+			}
+			if secrets[node] == nil {
+				secrets[node] = map[string]string{}
+			}
+			secrets[node][name] = val
+		}
 	}
 	clusterName := list.ClusterName()
 	basis := "approved code, no per-run approval"
@@ -1024,8 +1110,11 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	} else if weighed != "" {
 		basis += "; " + weighed
 	}
+	// The fleets the nodes are in now, and what each has for the script's
+	// parameters: kept with the run (DB-38).
+	runFleets, nodeFleets := automation.FleetsOf(v.Header, layersOf, targets)
 	run, err := s.opts.Automation.Start(ctx, automation.Spec{Script: l.sc.Name, Version: v, DryRun: in.DryRun, Cluster: list.Cluster, ClusterName: clusterName,
-		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: automation.Who{Name: l.who.Name, User: l.who.User}, ValuesApproved: valuesApproved,
+		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Fleets: runFleets, NodeFleets: nodeFleets, Overrides: in.Params, Rollout: in.Rollout, Who: automation.Who{Name: l.who.Name, User: l.who.User}, ValuesApproved: valuesApproved,
 		Secrets: secrets, Config: l.config.ID, Identity: l.identity, Person: automation.Person{User: l.who.Person.User, Groups: l.who.Person.Groups}, Basis: basis,
 		Before: l.before, After: l.after, HookRefs: in.Hooks, RetryOf: l.retryOf, RebootMinutes: reboot, Request: in.Request,
 		Recheck: !in.DryRun && list.Production})
@@ -1136,4 +1225,76 @@ func (s *Server) postAutomationCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAutomation(r, audit.ActionAutomationRun, "", strconv.Itoa(id), audit.OutcomeStopped, fmt.Sprintf("run %d cancelled", id))
 	answerJSON(w, r, map[string]bool{"cancelled": true})
+}
+
+// revealRunValues reads the sensitive values a run is about to use: each
+// value of values that is a digest, from what the run was given just now
+// (typed) or from the cluster's Secret. plain is values with those in
+// place, for reading the Secrets a secret parameter names; sensitive are
+// the values read, by node and parameter. A value the Secret does not
+// keep stops the run, with a sentence that names the parameter and never
+// a value: a run never starts with a value missing.
+func (s *Server) revealRunValues(ctx context.Context, cluster string, own map[string]string, values map[string]map[string]string, typed map[string]string) (plain, sensitive map[string]map[string]string, err error) {
+	want := map[string]bool{}
+	for _, m := range values {
+		for _, v := range m {
+			if automation.IsHidden(v) {
+				if _, ok := typed[v]; !ok {
+					want[v] = true
+				}
+			}
+		}
+	}
+	if len(want) == 0 && len(typed) == 0 {
+		return values, map[string]map[string]string{}, nil
+	}
+	kept := map[string]string{}
+	if len(want) > 0 {
+		digests := make([]string, 0, len(want))
+		for d := range want {
+			digests = append(digests, d)
+		}
+		sort.Strings(digests)
+		if kept, err = s.opts.AutomationStore.Reveal(ctx, cluster, digests); err != nil {
+			return nil, nil, err
+		}
+	}
+	plain, sensitive = map[string]map[string]string{}, map[string]map[string]string{}
+	missing := map[string]bool{}
+	for node, m := range values {
+		plain[node] = map[string]string{}
+		for name, v := range m {
+			plain[node][name] = v
+			if !automation.IsHidden(v) {
+				continue
+			}
+			val, ok := typed[v]
+			if !ok {
+				val, ok = kept[v]
+			}
+			switch {
+			case ok:
+				plain[node][name] = val
+				if sensitive[node] == nil {
+					sensitive[node] = map[string]string{}
+				}
+				sensitive[node][name] = val
+			case v == automation.Unmoved || v == automation.UnmovedNew:
+				missing[name+": its sensitive value has not been moved out of the database yet (the console's log says why, and its next start tries again)"] = true
+			case own[name] == v:
+				missing[name+": the value the run gave for it is sensitive, and is not kept once a run has started or been decided; start the run again and give the value"] = true
+			default:
+				missing[name+" on "+node+": a sensitive variable whose value the console does not keep any more; set it again on the Variables page"] = true
+			}
+		}
+	}
+	if len(missing) > 0 {
+		list := make([]string, 0, len(missing))
+		for m := range missing {
+			list = append(list, m)
+		}
+		sort.Strings(list)
+		return nil, nil, fmt.Errorf("%w: sensitive values are missing: %s", automation.ErrInvalid, strings.Join(list, "; "))
+	}
+	return plain, sensitive, nil
 }

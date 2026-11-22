@@ -222,6 +222,14 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	s.mu.RLock()
 	m := s.manifest.clone()
 	s.mu.RUnlock()
+	// goneAtStart are the items gone when the sync began: one gone since
+	// was removed while it ran, and stays gone (MY-12).
+	goneAtStart := map[string]bool{}
+	for k, st := range m.Items {
+		if st.Gone {
+			goneAtStart[k] = true
+		}
+	}
 	secrets := s.secretValues(ctx)
 	sources := map[string]SourceStatus{}
 	var changed []readItem
@@ -423,6 +431,8 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	s.manifestMu.Lock()
 	s.mu.RLock()
 	m.Retired = maps.Clone(s.manifest.Retired)
+	// So are the documents removed while it ran (MY-12).
+	writes = keepRemoved(s.manifest, goneAtStart, m, writes, func(p string) bool { _, ok := files[p]; return ok })
 	s.mu.RUnlock()
 	// So are the items excluded while it ran (KN-45).
 	if cur, err := s.rawSettings(ctx); err == nil {
@@ -452,6 +462,33 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	s.audit(audit.Event{Action: ActionSync, Who: req.Who, Target: firstOf(res.Run, req.Source), Outcome: outcome,
 		Detail: fmt.Sprintf("%s: %d items read, %d unchanged, %d gone; %d pages drafted; %d proposals; %d reported for giving instructions; %d batches to Mycroft, %d items not sent; %d errors", req.By, res.Read, res.Unchanged, res.Gone, res.Pages, res.Proposals, len(res.Reported), len(res.Batches), res.Unsent, len(res.Errors))})
 	return res, nil
+}
+
+// keepRemoved keeps gone, in a manifest about to be written, the items
+// the wiki's manifest (now) says are gone and that were not when the sync
+// began (goneAtStart): an uploaded document removed while the sync ran
+// would otherwise come back with the manifest it read at its start. Its
+// excerpt is emptied instead of written; had says an excerpt is in the
+// wiki. manifestMu is held.
+func keepRemoved(now *Manifest, goneAtStart map[string]bool, m *Manifest, writes []Change, had func(path string) bool) []Change {
+	for key, cur := range now.Items {
+		st := m.Items[key]
+		if !cur.Gone || goneAtStart[key] || st == nil || st.Gone {
+			continue
+		}
+		p := excerptPath(key)
+		written := false
+		writes = slices.DeleteFunc(writes, func(c Change) bool {
+			written = written || c.Path == p
+			return c.Path == p
+		})
+		st.Gone, st.Hash, st.Version = true, "", ""
+		if written || had(p) {
+			b, _ := json.Marshal(Excerpt{Key: key, Chunks: []string{}})
+			writes = append(writes, Change{Path: p, Body: b})
+		}
+	}
+	return writes
 }
 
 // letGo lets go of the uploaded documents' text a sync gave Mycroft: the

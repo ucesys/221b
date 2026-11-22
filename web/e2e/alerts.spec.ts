@@ -12,16 +12,16 @@ const card = (page: Page, key: string) => page.locator(`[data-alert="${key}"]`)
 
 // The injected faults are new pods: they would wait out the Pending grace
 // period (2 minutes by default) before they are alerts. Set to 0 here, and
-// put back after.
+// put back after. The banners are off by default (0.13): turned on here.
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 test.beforeEach(async ({ request }) => {
   const cur = (await (await request.get('/api/v1/settings')).json()) as { refreshSeconds: number }
-  const res = await request.put('/api/v1/settings', { data: { refreshSeconds: cur.refreshSeconds, pendingGraceSeconds: 0 }, headers: SAME })
+  const res = await request.put('/api/v1/settings', { data: { refreshSeconds: cur.refreshSeconds, pendingGraceSeconds: 0, alertBanners: true }, headers: SAME })
   expect(res.status(), await res.text()).toBe(200)
 })
 test.afterEach(async ({ request }) => {
   const cur = (await (await request.get('/api/v1/settings')).json()) as { refreshSeconds: number }
-  await request.put('/api/v1/settings', { data: { refreshSeconds: cur.refreshSeconds, pendingGraceSeconds: 120 }, headers: SAME })
+  await request.put('/api/v1/settings', { data: { refreshSeconds: cur.refreshSeconds, pendingGraceSeconds: 120, alertBanners: false }, headers: SAME })
 })
 
 /** A worker the tests may break: healthy, and not the one 221B runs on. */

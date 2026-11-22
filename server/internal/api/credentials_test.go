@@ -101,6 +101,60 @@ func TestCredentialsAPIForSuperAdminsAndOthers(t *testing.T) {
 	}
 }
 
+// DB-75: a secret of the credentials' Secret that no credential names is
+// listed for a SuperAdmin by id and removed through the API, audited; one a
+// credential names is refused, and others may do neither.
+func TestASecretNoCredentialNamesIsRemoved(t *testing.T) {
+	mem := &credentials.MemorySecret{}
+	creds := credentials.New(credentials.Options{Secrets: mem})
+	srv, c, _, auditOut, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { o.Credentials = creds })
+	base := srv.URL + "/api/v1/credentials"
+	resp, got := send(t, c, http.MethodPost, base, `{"name":"Named","kind":"token","endpoint":"https://github.com/ucesys","secret":{"token":"ghp_named-secret"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %s %s", resp.Status, got)
+	}
+	id := between(got, `"id":"`, `"`)
+	_, version, _, _ := mem.LoadKey(context.Background(), "secret-cr-orphan")
+	if err := mem.SaveKeyIf(context.Background(), "secret-cr-orphan", []byte(`{"token":"ghp_orphan-secret"}`), version); err != nil {
+		t.Fatal(err)
+	}
+	if resp, got := send(t, c, http.MethodGet, srv.URL+"/api/v1/credential-secrets", ""); resp.StatusCode != http.StatusOK || got != `{"secrets":["cr-orphan"]}` {
+		t.Fatalf("the list: %s %s", resp.Status, got)
+	}
+	v := signIn(t, srv, "viewer@corp.example")
+	for _, m := range []string{http.MethodGet, http.MethodDelete} {
+		path := srv.URL + "/api/v1/credential-secrets"
+		if m == http.MethodDelete {
+			path += "/cr-orphan"
+		}
+		if resp, _ := send(t, v, m, path, ""); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("a viewer's %s: %s", m, resp.Status)
+		}
+	}
+	if resp, got := send(t, c, http.MethodDelete, srv.URL+"/api/v1/credential-secrets/"+id, ""); resp.StatusCode != http.StatusConflict || !strings.Contains(got, "the credential Named names this secret") {
+		t.Fatalf("a named secret: %s %s", resp.Status, got)
+	}
+	if resp, _ := send(t, c, http.MethodDelete, srv.URL+"/api/v1/credential-secrets/cr-orphan", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove: %s", resp.Status)
+	}
+	if _, _, found, _ := mem.LoadKey(context.Background(), "secret-cr-orphan"); found {
+		t.Fatal("the secret is still kept")
+	}
+	if _, _, found, _ := mem.LoadKey(context.Background(), "secret-"+id); !found {
+		t.Fatal("the named secret is gone")
+	}
+	if resp, _ := send(t, c, http.MethodDelete, srv.URL+"/api/v1/credential-secrets/cr-orphan", ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("remove again: %s", resp.Status)
+	}
+	if resp, got := send(t, c, http.MethodGet, srv.URL+"/api/v1/credential-secrets", ""); got != `{"secrets":[]}` {
+		t.Fatalf("the list after: %s %s", resp.Status, got)
+	}
+	log := auditOut.String()
+	if !strings.Contains(log, `"action":"credential.secret.remove"`) || !strings.Contains(log, `"target":"cr-orphan"`) || strings.Contains(log, "ghp_") {
+		t.Fatalf("the audit log: %s", log)
+	}
+}
+
 // CR-02: an SSH key's host key is written and never read back: the page
 // gets its type, fingerprint and the key cut short; a change without it
 // keeps it, and a new SSH key needs it. CR-04: an OAuth2 client's token

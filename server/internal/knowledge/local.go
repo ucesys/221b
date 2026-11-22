@@ -42,23 +42,30 @@ func (s *Service) openStore(st StoreSettings, c Creds) (Store, error) {
 			return nil, invalid("%v", err)
 		}
 		return NewS3Store(client, st.Prefix, st.SSE, st.KMSKeyID), nil
-	case StoreConfigMap:
-		if s.cmStore == nil {
-			return nil, invalid("this console has no ConfigMap for the wiki (the chart's <release>-wiki, -wiki-configmap): choose Git or S3")
+	case StoreDatabase, StoreConfigMap:
+		if s.dbStore == nil {
+			return nil, invalid("this console keeps no wiki in its database: choose Git or S3")
 		}
-		return s.cmStore, nil
+		return s.dbStore, nil
 	}
 	return nil, ErrNoStore
 }
 
 // storeKind is the kind of store the settings mean: the one they name, or
-// the temporary ConfigMap store when they name none and the chart made
-// its ConfigMap (CF-57); "" is none.
+// the database store when they name none, or the ConfigMap store of
+// before it replaced (DB-96); "" is none.
 func (s *Service) storeKind(st StoreSettings) string {
-	if st.Kind == "" && s.cmStore != nil {
-		return StoreConfigMap
+	if (st.Kind == "" || st.Kind == StoreConfigMap) && s.dbStore != nil {
+		return StoreDatabase
 	}
 	return st.Kind
+}
+
+// sameStore says whether a run staged in a store of kind was staged in
+// the store of kind now: the ConfigMap store of before is the database
+// store now (DB-96), whose copy brought the staged runs along.
+func sameStore(was, now string) bool {
+	return was == now || (was == StoreConfigMap && now == StoreDatabase)
 }
 
 // dir is where the console keeps what it holds on disk.
@@ -74,9 +81,9 @@ func (s *Service) currentStore(ctx context.Context) (Store, StoreSettings, error
 	if s.o.Store != nil {
 		return s.o.Store, set.Store, nil
 	}
-	if s.cmStore != nil && s.storeKind(set.Store) == StoreConfigMap {
-		// The temporary store needs no keys (CF-57).
-		return s.cmStore, set.Store, nil
+	if s.dbStore != nil && s.storeKind(set.Store) == StoreDatabase {
+		// The database store needs no keys (DB-96).
+		return s.dbStore, set.Store, nil
 	}
 	if set.Store.Kind == "" {
 		return nil, set.Store, ErrNoStore
@@ -212,7 +219,7 @@ func (s *Service) refreshEvery(ctx context.Context) time.Duration {
 	if err == nil && set.Store.RefreshMinutes > 0 {
 		return time.Duration(set.Store.RefreshMinutes) * time.Minute
 	}
-	if err == nil && (set.Store.Kind == StoreS3 || s.storeKind(set.Store) == StoreConfigMap) {
+	if err == nil && (set.Store.Kind == StoreS3 || s.storeKind(set.Store) == StoreDatabase) {
 		return s.o.RefreshS3
 	}
 	return s.o.RefreshGit

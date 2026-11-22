@@ -118,6 +118,22 @@ describe('the Inbox’s rows (IN-02)', () => {
     expect(approvalRow(approval({ state: 'approved', approvedAt: '2026-11-03T00:00:00Z' }))).toMatchObject({ pending: false, since: '2026-11-03T00:00:00Z', status: 'Approved' })
   })
 
+  it('says who a row of the person’s own waits for, in place of Pending (IN-11)', () => {
+    const own = approvalRow(approval({ own: true, waitingFor: 'another SuperAdmin', requestedBy: 'Ann' }))
+    expect(own).toMatchObject({ status: 'Waiting for another SuperAdmin', tone: 'info', pending: true, forMe: false, mine: true, waitingFor: 'another SuperAdmin', open: ['approval', 'script-reserve-v2'] })
+    // Listed under Pending and under Mine, and found by its words.
+    const f: InboxFilter = { show: 'pending', who: 'mine', priority: null, cluster: '', source: null, type: null }
+    expect(filterRows([own], f)).toHaveLength(1)
+    expect(rowTerms(own).map((t) => t.text)).toContain('Waiting for another SuperAdmin')
+    // The approver's row of the same version says Pending, and is theirs to decide.
+    expect(approvalRow(approval({ requestedBy: 'Ann' }))).toMatchObject({ status: 'Pending', tone: 'warn', forMe: true, mine: false, waitingFor: undefined })
+    // Their own to withdraw (a console change, a run) keeps Pending; decided, nothing waits.
+    expect(approvalRow(approval({ kind: 'admin', id: '9', own: true }))).toMatchObject({ status: 'Pending', waitingFor: undefined })
+    expect(approvalRow(approval({ state: 'approved', mine: true, waitingFor: 'another SuperAdmin' }))).toMatchObject({ status: 'Approved', waitingFor: undefined })
+    // A variable change and a Watson command say who decides them.
+    expect(approvalRow(approval({ kind: 'command', id: 'w1', own: true, waitingFor: 'a second person' })).status).toBe('Waiting for a second person')
+  })
+
   it('lists drafts and known issues back for their owner, wiki runs and Confluence edits', () => {
     expect(knownRow({ id: 'KI-2', title: 'VPN drops', status: 'investigating', kind: 'normal', updated: '', following: false, source: 'agent', created: '2026-11-01T00:00:00Z', draft: true }, ctx)).toMatchObject({
       kind: 'known',

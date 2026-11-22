@@ -46,18 +46,6 @@ func (f *fakeHosts) AddHost(_ context.Context, h nodessh.Host, by string) (nodes
 	return h, nil
 }
 
-func (f *fakeHosts) LabelHost(_ context.Context, cluster, name string, labels map[string]string) (nodessh.Host, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i, x := range f.hosts {
-		if x.Cluster == cluster && x.Name == name {
-			f.hosts[i].Labels = labels
-			return f.hosts[i], nil
-		}
-	}
-	return nodessh.Host{}, nodessh.ErrNoHost
-}
-
 func (f *fakeHosts) RemoveHost(_ context.Context, cluster, name string) (nodessh.Host, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -99,7 +87,7 @@ func (f *fakeParams) Variables(context.Context, string) (map[string]automation.F
 	return maps.Clone(f.vars), nil
 }
 
-func (f *fakeParams) SetVariables(_ context.Context, _, fleet string, fp automation.FleetVariables) error {
+func (f *fakeParams) SetVariablesFor(_ context.Context, _, fleet string, fp automation.FleetVariables, _ []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vars[fleet] = fp
@@ -157,23 +145,10 @@ func TestTheConsoleActions(t *testing.T) {
 	if _, err := w.st.Propose(ctx, proposal(Action{Kind: KindHostAdd, Args: map[string]any{"name": "Bad Name", "address": "10.0.0.1"}})); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a bad name: %v", err)
 	}
-	// host.label, re-checked: the host changed since.
-	id, _ = w.st.Propose(ctx, proposal(Action{Kind: KindHostLabel, Args: map[string]any{"name": "backup-1", "set": map[string]any{"zone": "a"}, "remove": []any{"role"}}}))
-	card, _ = w.st.Get(ctx, id)
-	if strings.Join(card.Plans[0].Impact, "; ") != "adds zone=a; removes role=backup; Fleets that select hosts by these labels gain or lose backup-1." {
-		t.Fatalf("label impact %q", card.Plans[0].Impact)
-	}
-	_, _ = c.hosts.LabelHost(ctx, "dev-1", "backup-1", map[string]string{"role": "archive"})
-	if _, err := w.st.Approve(ctx, id, admin, ""); !errors.Is(err, ErrStale) {
-		t.Fatalf("a host changed since: %v", err)
-	}
-	id, _ = w.st.Propose(ctx, proposal(Action{Kind: KindHostLabel, Args: map[string]any{"name": "backup-1", "set": map[string]any{"zone": "a"}}}))
-	if _, err := w.st.Approve(ctx, id, admin, ""); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, w.st, id, Applied)
-	if hosts, _ := c.hosts.Hosts(ctx, "dev-1"); hosts[0].Labels["zone"] != "a" || hosts[0].Labels["role"] != "archive" {
-		t.Fatalf("labels %+v", hosts[0].Labels)
+	// host.label is gone with the hosts' labels (Phase 13): a host is in a
+	// fleet by being listed.
+	if _, err := w.st.Propose(ctx, proposal(Action{Kind: "host.label", Args: map[string]any{"name": "backup-1", "set": map[string]any{"zone": "a"}}})); err == nil {
+		t.Fatal("host.label was accepted")
 	}
 	// host.remove gives the cleanup command.
 	id, _ = w.st.Propose(ctx, proposal(Action{Kind: KindHostRemove, Args: map[string]any{"name": "backup-2"}}))
@@ -222,7 +197,7 @@ func TestTheConsoleActions(t *testing.T) {
 	if _, err := w.st.Propose(ctx, proposal(Action{Kind: KindAutomationParams, Args: map[string]any{"fleet": "db", "ceiling": "full"}})); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("raising the ceiling: %v", err)
 	}
-	if log := w.audit.String(); !strings.Contains(log, `"host.add"`) || !strings.Contains(log, `"host.label"`) || !strings.Contains(log, `"host.remove"`) || !strings.Contains(log, `"fleets.update"`) || !strings.Contains(log, `"automation.params"`) {
+	if log := w.audit.String(); !strings.Contains(log, `"host.add"`) || !strings.Contains(log, `"host.remove"`) || !strings.Contains(log, `"fleets.update"`) || !strings.Contains(log, `"automation.params"`) {
 		t.Fatalf("audit: %s", log)
 	}
 }

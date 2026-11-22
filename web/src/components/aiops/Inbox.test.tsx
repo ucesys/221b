@@ -8,11 +8,12 @@ import * as issues from '../../api/issues'
 import * as knowledge from '../../api/knowledge'
 import * as rules from '../../api/rules'
 import type { Me } from '../../api/types'
-import { casesAccess, forgetSharedForTests, setIssueMeForTests } from '../../lib/cases'
+import { casesAccess, forgetSharedForTests, reloadShared, setIssueMeForTests, type CasesAccess } from '../../lib/cases'
+import { DATABASE } from '../../lib/database'
 import { parseHash } from '../../lib/router'
 import { AIOpsPage } from './AIOpsPage'
 import type { InboxCase } from './inboxRows'
-import { kindsFor } from './useInbox'
+import { COUNT_UNKNOWN, INBOX_AWAY, inboxCounts, kindsFor, useInboxCounts } from './useInbox'
 
 vi.mock('../../api/issues', async (original) => ({
   ...(await original<typeof import('../../api/issues')>()),
@@ -440,6 +441,37 @@ describe('an approval in its drawer (CS-06, IB-09)', () => {
   it('opens a waiting script version to review where it lives', async () => {
     page('#/aiops/inbox/approval/script-reserve-v2')
     expect((await screen.findByTestId('approval-script-review')).getAttribute('href')).toContain('scripts')
+  })
+
+  it('lists what the person submitted as waiting for another SuperAdmin, with nothing to decide (IN-11)', async () => {
+    const own: automation.ApprovalRow = { kind: 'script', state: 'pending', what: 'mine v3', requestedBy: 'Ann', requestedAt: '2026-11-03T00:00:00Z', script: 'mine', version: 3, own: true, waitingFor: 'another SuperAdmin' }
+    const theirs: automation.ApprovalRow = { kind: 'script', state: 'pending', what: 'reserve v2', requestedBy: 'Cy', requestedAt: '2026-11-02T00:00:00Z', script: 'reserve', version: 2 }
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [theirs, own] })
+    page('#/aiops/inbox')
+    // Both rows are listed while they wait: the person's own says who it waits for, the other Pending.
+    const mine = (await screen.findByText('mine v3')).closest('[data-inbox-row]') as HTMLElement
+    expect(mine.getAttribute('data-inbox-row')).toBe('approval:script-mine-v3')
+    expect(within(mine).getByTestId('inbox-row-status').textContent).toBe('Waiting for another SuperAdmin')
+    expect(mine.getAttribute('aria-label')).toContain('Waiting for another SuperAdmin')
+    expect(within(document.querySelector('[data-inbox-row="approval:script-reserve-v2"]') as HTMLElement).getByTestId('inbox-row-status').textContent).toBe('Pending')
+    cleanup()
+    // Its drawer: the same one, marked, with Open in place of Review and nothing to approve or reject.
+    page('#/aiops/inbox/approval/script-mine-v3')
+    const drawer = await screen.findByTestId('approval-drawer')
+    expect(within(drawer).getByTestId('approval-state').textContent).toBe('Waiting for another SuperAdmin')
+    expect(within(drawer).getByText('yours')).toBeTruthy()
+    const open = within(drawer).getByTestId('approval-script-review')
+    expect(open.textContent).toBe('Open')
+    expect(open.getAttribute('href')).toContain('script=mine')
+    expect(open.hasAttribute('data-on')).toBe(false)
+    expect(within(drawer).queryByTestId('approval-admin-approve')).toBeNull()
+    expect(within(drawer).queryByTestId('approval-admin-reject')).toBeNull()
+    expect(drawer.textContent).toContain('You wrote or submitted this version, so you cannot approve or reject it: it waits for another SuperAdmin.')
+    cleanup()
+    // The approver's drawer of the other version still says Pending and Review.
+    page('#/aiops/inbox/approval/script-reserve-v2')
+    expect((await screen.findByTestId('approval-state')).textContent).toBe('Pending')
+    expect(screen.getByTestId('approval-script-review').textContent).toBe('Review')
   })
 
   it('decides a console change here, after a confirmation, and reads the list again', async () => {
@@ -952,5 +984,126 @@ describe('the Inbox links to the alerts going on (CF-81)', () => {
     cleanup()
     at(undefined)
     expect(screen.queryByTestId('inbox-alerts')).toBeNull()
+  })
+})
+
+// --- The database away (DB-15, the tenth cluster test's F3) ---
+
+describe('the Inbox while the database is away (DB-15)', () => {
+  const SENTENCE = 'the database is unavailable; sign-in and the pages read live from the clusters still work'
+  // What every route that needs the database answers then: a 503 with the console's sentence, marked.
+  const refused = (what: string) => new CallError(`${what}: ${SENTENCE}`, 503, { error: `${what}: ${SENTENCE}` }, true)
+  const nothing = () => {
+    vi.mocked(casework.fetchCases).mockResolvedValue({ cases: [], clusters: [], mayChange: true, me: 'Ann (ann)' })
+    vi.mocked(cards.fetchProposals).mockResolvedValue({ proposals: [], waiting: 0, mayApprove: true })
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [] })
+    vi.mocked(issues.fetchKnownAll).mockResolvedValue([])
+    vi.mocked(knowledge.fetchDrafts).mockResolvedValue({ runs: [] })
+    vi.mocked(knowledge.fetchPageRequests).mockResolvedValue({ requests: [] })
+    vi.mocked(rules.fetchSuggestions).mockResolvedValue({ suggestions: [] })
+  }
+  const allRefused = () => {
+    vi.mocked(casework.fetchCases).mockRejectedValue(refused('reading the cases'))
+    vi.mocked(cards.fetchProposals).mockRejectedValue(refused('reading the proposed changes'))
+    vi.mocked(automation.fetchApprovals).mockRejectedValue(refused('reading the scripts'))
+    vi.mocked(issues.fetchKnownAll).mockRejectedValue(refused('reading the known issues'))
+    vi.mocked(knowledge.fetchDrafts).mockRejectedValue(refused('reading the drafts'))
+    vi.mocked(knowledge.fetchPageRequests).mockRejectedValue(refused('reading the requests'))
+    vi.mocked(rules.fetchSuggestions).mockRejectedValue(refused('reading the rules'))
+  }
+  /** What the top bar shows of the count: the number, or that it is not known. */
+  function Count({ access }: { access: CasesAccess }) {
+    const c = useInboxCounts(access)
+    return <output data-testid="count">{c.unknown ? 'unknown' : String(c.total)}</output>
+  }
+
+  it('says that it cannot be read, in place of "Nothing is pending for you", when every list is refused', async () => {
+    allRefused()
+    page('#/aiops/inbox')
+    expect((await screen.findByTestId('inbox-away')).textContent).toBe(INBOX_AWAY)
+    expect(screen.getByTestId('inbox-away').getAttribute('role')).toBe('alert')
+    // The table's own empty state says the same, never that nothing is pending.
+    expect(screen.getAllByText(INBOX_AWAY).length).toBe(2)
+    expect(screen.queryByText('Nothing is pending for you.')).toBeNull()
+    expect(screen.queryByText('Nothing matches these filters.')).toBeNull()
+    expect(screen.queryByText('Loading the Inbox…')).toBeNull()
+    expect(keys()).toEqual([])
+    // The Pending filter's count is not known either: a mark, never 0.
+    expect(screen.getByTestId('inbox-show-pending').textContent).toBe('Pending?')
+    expect(screen.getByTestId('inbox-pending-unknown').getAttribute('aria-label')).toBe(COUNT_UNKNOWN)
+    // Once, not once per list with the sentence in each.
+    expect(document.querySelectorAll('.tb-err').length).toBe(1)
+    expect(document.body.textContent).not.toContain('reading the cases')
+  })
+
+  it('still says nothing is pending when every list was read and is empty, and when a part is off (a 503 without the mark)', async () => {
+    nothing()
+    page('#/aiops/inbox')
+    expect(await screen.findByText('Nothing is pending for you.')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-away')).toBeNull()
+    expect(screen.getByTestId('inbox-show-pending').textContent).toBe('Pending0')
+    cleanup()
+    forgetSharedForTests()
+    // The wiki is off: its two lists answer 503 with words of their own, and list nothing, quietly, as before.
+    vi.mocked(knowledge.fetchDrafts).mockRejectedValue(new CallError('The wiki is not set up.', 503))
+    vi.mocked(knowledge.fetchPageRequests).mockRejectedValue(new CallError('The wiki is not set up.', 503))
+    page('#/aiops/inbox')
+    expect(await screen.findByText('Nothing is pending for you.')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-away')).toBeNull()
+    expect(document.querySelectorAll('.tb-err').length).toBe(0)
+  })
+
+  it('does not say nothing is pending when one list alone could not be read; what was read is listed', async () => {
+    nothing()
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [console1] })
+    // The cases answer from what the console holds in memory; the proposed changes need the database.
+    vi.mocked(cards.fetchProposals).mockRejectedValue(refused('reading the proposed changes'))
+    page('#/aiops/inbox')
+    expect((await screen.findByTestId('inbox-away')).textContent).toBe(`${INBOX_AWAY} The rows below are what was last read; they may have changed since.`)
+    expect(keys()).toEqual(['approval:9'])
+    expect(screen.queryByText('Nothing is pending for you.')).toBeNull()
+  })
+
+  it('keeps another failure apart: its own words, by kind, and no claim about the database', async () => {
+    nothing()
+    vi.mocked(cards.fetchProposals).mockRejectedValue(new CallError('The server answered 500.', 500))
+    page('#/aiops/inbox')
+    expect(await screen.findByText('Proposed changes: The server answered 500.')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-away')).toBeNull()
+  })
+
+  it('reads its lists again as soon as the database is back, and then says what is true', async () => {
+    const state = (available: boolean) => async (url: RequestInfo | URL) => (String(url).endsWith('/api/v1/database') ? new Response(JSON.stringify({ configured: true, available })) : new Response('{}', { status: 404 }))
+    vi.stubGlobal('fetch', state(false))
+    allRefused()
+    page('#/aiops/inbox')
+    expect(await screen.findByTestId('inbox-away')).toBeTruthy()
+    const asked = vi.mocked(casework.fetchCases).mock.calls.length
+    // The database answers again; the lists are not due for half a minute.
+    nothing()
+    vi.stubGlobal('fetch', state(true))
+    reloadShared(DATABASE)
+    expect(await screen.findByText('Nothing is pending for you.')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-away')).toBeNull()
+    expect(vi.mocked(casework.fetchCases).mock.calls.length).toBeGreaterThan(asked)
+  })
+
+  it('counts nothing then: the count is unknown, not 0, and not the number last read', async () => {
+    // The pure count: the rows last read, marked unknown.
+    expect(inboxCounts([], true)).toMatchObject({ total: 0, unknown: true })
+    expect(inboxCounts([]).unknown).toBeUndefined()
+    expect(COUNT_UNKNOWN).toBe('What waits for you is not known: the database is unavailable')
+    // Read: one approval waits.
+    nothing()
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [console1] })
+    const access = casesAccess(admin, op)
+    const first = render(<Count access={access} />)
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'))
+    first.unmount()
+    forgetSharedForTests()
+    // Refused from the start: unknown, where the lists read as empty would count 0.
+    allRefused()
+    render(<Count access={access} />)
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('unknown'))
   })
 })

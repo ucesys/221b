@@ -107,13 +107,13 @@ func TestAProposalsConversationIsKeptUntilItIsDecidedCF61(t *testing.T) {
 	}
 }
 
-// A conversation is bounded: one proposal's within MaxChatBytes, all of
-// them within their key, the conversation spoken in longest ago losing its
-// oldest question first; each still starts with a question.
+// A conversation is bounded: one proposal's within MaxChatBytes, its
+// oldest questions going first, and it still starts with a question. Each
+// is bounded on its own (DB-79): the bound of all of them together was the
+// ConfigMap's, so a conversation no longer gives way to another's.
 func TestAProposalsConversationIsBoundedCF61(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	w.st.opts.Limits.ChatsBytes = 120 << 10
 	keeper := w.st.Chats()
 	long := func(n int) []sherlock.Msg {
 		var out []sherlock.Msg
@@ -134,26 +134,70 @@ func TestAProposalsConversationIsBoundedCF61(t *testing.T) {
 		}
 		w.clock.add(time.Minute)
 	}
-	raw, _, _ := w.backend.LoadKey(ctx, ChatsKey)
-	if len(raw) > 120<<10 {
-		t.Fatalf("the key holds %d bytes", len(raw))
-	}
-	var rec chatsRecord
-	_ = json.Unmarshal(raw, &rec)
-	for i, id := range ids {
-		r := rec.Chats[id]
-		if b, _ := json.Marshal(r); len(b) > MaxChatBytes {
+	var counts []int
+	for _, id := range ids {
+		got, err := keeper.Load(ctx, keyOf(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := json.Marshal(chatRecord{Cluster: "dev-1", Messages: got}); len(b) > MaxChatBytes {
 			t.Errorf("%s holds %d bytes", id, len(b))
 		}
-		if len(r.Messages) > 0 && r.Messages[0].Role != "user" {
-			t.Errorf("%s starts with %s", id, r.Messages[0].Role)
+		if len(got) == 0 || got[0].Role != "user" {
+			t.Errorf("%s keeps %d messages and starts with %v", id, len(got), got)
 		}
-		if i == 2 && len(r.Messages) == 0 {
-			t.Error("the newest conversation lost everything")
-		}
+		counts = append(counts, len(got))
 	}
-	if len(rec.Chats[ids[0]].Messages) >= len(rec.Chats[ids[2]].Messages) {
-		t.Errorf("the oldest conversation did not give way first: %d, %d", len(rec.Chats[ids[0]].Messages), len(rec.Chats[ids[2]].Messages))
+	if counts[0] != counts[2] || counts[0] >= 40 {
+		t.Errorf("the conversations keep %v messages: each is bounded alone, and none gives way to another", counts)
+	}
+}
+
+// A proposal's conversation keeps the hand-overs of its answers, the ones
+// inside them too, and gives them back to a new store over the same
+// records, as after a restart (DB-58); past MaxChatBytes it loses its
+// oldest questions as before, hand-overs and all.
+func TestAProposalsConversationKeepsItsHandOversCF61(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	id, err := w.st.Propose(ctx, restart("dev-1", "restart:hands"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With everything a message has, as Sherlock keeps it.
+	msgs := fullMsgs()
+	if err := w.st.Chats().Save(ctx, keyOf(id), msgs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.open().Chats().Load(ctx, keyOf(id))
+	if err != nil || len(got) != 3 {
+		t.Fatalf("loaded %+v %v", got, err)
+	}
+	want, _ := json.Marshal(msgs[1].Hands)
+	back, _ := json.Marshal(got[1].Hands)
+	if string(back) != string(want) || len(got[1].Hands) != 1 || len(got[1].Hands[0].Hands) != 1 || got[1].Hands[0].Hands[0].To != "mycroft" || got[1].Hands[0].Usage == nil {
+		t.Fatalf("the hand-overs read back\n%s\nwere saved as\n%s", back, want)
+	}
+	// Twenty answers that each handed work on do not fit: the oldest go.
+	var long []sherlock.Msg
+	for i := range 20 {
+		long = append(long, sherlock.Msg{ID: 2*i + 1, Role: "user", Text: "Question", Asker: "Pat"},
+			sherlock.Msg{ID: 2*i + 2, Role: "sherlock", Text: "Answer", Status: "done", Hands: []*sherlock.Hand{{ID: 1, From: "sherlock", To: "troubleshooter", Task: strings.Repeat("t", 1000),
+				Status: "done", Text: strings.Repeat("a", 4000), Hands: []*sherlock.Hand{{ID: 2, From: "troubleshooter", To: "auditor", Task: "Check", Status: "done", Text: strings.Repeat("b", 1000)}}}}})
+	}
+	if err := w.st.Chats().Save(ctx, keyOf(id), long); err != nil {
+		t.Fatal(err)
+	}
+	got, err = w.open().Chats().Load(ctx, keyOf(id))
+	if err != nil || len(got) == 0 || len(got) >= len(long) || got[0].Role != "user" {
+		t.Fatalf("kept %d of %d messages: %v", len(got), len(long), err)
+	}
+	if b, _ := json.Marshal(chatRecord{Cluster: "dev-1", Messages: got}); len(b) > MaxChatBytes {
+		t.Errorf("the conversation holds %d bytes", len(b))
+	}
+	last := got[len(got)-1]
+	if last.ID != 40 || len(last.Hands) != 1 || len(last.Hands[0].Text) != 4000 || len(last.Hands[0].Hands) != 1 {
+		t.Errorf("the newest answer: %d with %d hand-overs", last.ID, len(last.Hands))
 	}
 }
 

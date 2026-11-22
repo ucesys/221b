@@ -19,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/investigate"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
@@ -37,38 +38,45 @@ import (
 // the issue service's investigator is the report triage job's; the
 // backups to S3 show as a job; the agents read as the reader identity.
 
-// runsLimit is the runs key's limit in its ConfigMap, which the runs fit
-// to.
-func runsLimit() int { return layout[objRuns][jobs.RunsKey].Bytes }
-
 // jobsWiring is the jobs and the investigator, with the ConfigMap they are
 // kept in, for the metrics.
 type jobsWiring struct {
 	svc    *jobs.Service
 	inv    *investigate.Investigator
 	stored *kv.Limited
+	// backend is what the jobs read and write through: their ConfigMap,
+	// with the keys the database keeps routed to it.
+	backend kv.Backend
 
 	mu     sync.Mutex
 	issues *issues.Service
 }
 
-// openJobs builds the jobs: their ConfigMap when the chart names one,
-// memory otherwise; the console's own kinds; the investigator, whose kind
-// is report triage. The agents and the backups' kind come later, once
-// the console has them.
-func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, leads func() bool, log *slog.Logger) (*jobsWiring, error) {
+// openJobs builds the jobs: the console's own kinds; the investigator,
+// whose kind is report triage. The agents and the backups' kind come
+// later, once the console has them.
+//
+// moved keeps the jobs and their runs in the database (Phase 13) and is
+// given the one-time copy's source and nothing else: <release>-runs, the
+// ConfigMap a release before 0.13 kept them in, nil when the flags name
+// none. A caller that gives no moved (a test) keeps them in memory.
+func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, manager *clusters.Manager, auditLog *audit.Log, leads func() bool, moved func(kv.Backend) kv.Backend, log *slog.Logger) (*jobsWiring, error) {
 	w := &jobsWiring{}
-	var backend kv.Backend = &kv.Memory{}
-	if cfg.RunsConfigMap != "" {
-		cm, err := openConfigMap(ctx, restCfg, cfg.RunsConfigMap)
-		if err != nil {
-			return nil, fmt.Errorf("the jobs' ConfigMap: %w", err)
-		}
+	var backend kv.Backend
+	cm, err := openSource(ctx, restCfg, sourceRef(cfg, objRuns))
+	if err != nil {
+		return nil, fmt.Errorf("the jobs' ConfigMap: %w", err)
+	}
+	if cm != nil {
 		w.stored = limited(cm, objRuns, log.With("component", "storage"))
 		backend = w.stored
-	} else {
-		log.Warn("the jobs' settings and runs are kept in memory and lost on restart (set -runs-configmap to keep them)")
 	}
+	if moved != nil {
+		backend = moved(backend)
+	} else if backend == nil {
+		backend = &kv.Memory{}
+	}
+	w.backend = backend
 	w.svc = jobs.New(jobs.Options{
 		Backend: backend,
 		Kinds:   jobs.Default,
@@ -84,9 +92,6 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 		Leads:     leads,
 		Audit:     auditLog,
 		TimeZone:  cfg.JobsTimeZone,
-		// The runs fit a little below their key's limit, so the save that
-		// trims them never meets it.
-		RunsBytes: runsLimit() - 16<<10,
 		Logger:    log.With("component", "jobs"),
 	})
 	w.svc.RegisterBuiltins()
@@ -245,16 +250,38 @@ type agentRunner struct {
 
 func (a agentRunner) Usable(agent, cluster string) string { return a.ai.Usable(agent, cluster) }
 
+// Blind says whether the reader identity can read nothing of a cluster
+// (JB-23), so an audit says so in place of finding nothing.
+func (a agentRunner) Blind(ctx context.Context, cluster string, reader jobs.Settings) (bool, error) {
+	sess, err := a.reader(reader)
+	if err != nil {
+		return false, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return a.handler.ReaderBlind(rctx, cluster, sess)
+}
+
+// reader is the session agents on their own read with; nil is the
+// console itself, with sign-in off.
+func (a agentRunner) reader(reader jobs.Settings) (*auth.Session, error) {
+	if a.auth == nil {
+		return nil, nil
+	}
+	s, on, err := a.auth.Reader(roles.ID(reader.Role()), reader.ReaderGroup)
+	if err != nil {
+		return nil, fmt.Errorf("the reader identity: %w", err)
+	}
+	if !on {
+		return nil, nil
+	}
+	return &s, nil
+}
+
 func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentResult {
-	var sess *auth.Session
-	if a.auth != nil {
-		s, on, err := a.auth.Reader(roles.ID(req.Reader.Role()), req.Reader.ReaderGroup)
-		if err != nil {
-			return jobs.AgentResult{Err: fmt.Errorf("the reader identity: %w", err)}
-		}
-		if on {
-			sess = &s
-		}
+	sess, err := a.reader(req.Reader)
+	if err != nil {
+		return jobs.AgentResult{Err: err}
 	}
 	rd, err := a.handler.ReaderFor(ctx, req.Cluster, sess)
 	if err != nil {
@@ -274,6 +301,9 @@ func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentR
 		// exceptions; the report triage's answer reaches the reporter,
 		// who does not (KN-32).
 		Exceptions: !req.ForReporters,
+		// The run's budget holds within the agent's rounds and its
+		// hand-overs (JB-10).
+		Meter: req.Meter,
 	}
 	agent, err := a.ai.Agent(req.Agent, q)
 	if err != nil {
@@ -322,7 +352,13 @@ func (w *wiring) wireJobs(ctx context.Context) error {
 	// Jobs (Phase 12, ADR-90 to ADR-93): the agents on their own, with
 	// their runs in <release>-runs; the report triage job is the issue
 	// service's investigator.
-	jobsW, err := openJobs(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.elector.IsLeader, log)
+	// The jobs and their runs are rows of the database (DB-42).
+	jobsW, err := openJobs(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.elector.IsLeader, func(b kv.Backend) kv.Backend {
+		w.inDatabase = append(w.inDatabase, "jobs")
+		return w.inTables(ctx, b, func(d *db.DB) map[string]movedDoc {
+			return map[string]movedDoc{jobs.JobsKey: jobs.NewJobsPG(d), jobs.RunsKey: jobs.NewRunsPG(d)}
+		})
+	}, log)
 	if err != nil {
 		return err
 	}

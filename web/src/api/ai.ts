@@ -280,6 +280,8 @@ export interface HistoryEntry {
   by?: string
   at?: string
   note?: string
+  /** The two-person request that approved a version, by its number. */
+  request?: number
   inForce?: boolean
   current?: boolean
   test?: TestBrief

@@ -6,15 +6,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
@@ -30,6 +34,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -84,12 +89,18 @@ type wiring struct {
 	mode     kube.Mode
 
 	// Sign-in (auth.go).
-	authCfg      auth.Config
-	authFile     auth.FileConfig
-	sessionStore *kube.SessionStore
+	authCfg  auth.Config
+	authFile auth.FileConfig
+	// sessionsLeft empties the session Secrets that were copied into the
+	// database and could not be emptied at the start, and says whether it
+	// is done (DB-66); nil when nothing is left.
+	sessionsLeft func(ctx context.Context) bool
 	twoPerson    *twoperson.Store
 	authSvc      *auth.Service
 	people       *access.Cache
+	// gaugesAt is when the figures the metrics show of what is kept
+	// elsewhere were last asked for, in nanoseconds (metrics.go).
+	gaugesAt atomic.Int64
 
 	// The clusters (clusters.go) and the election (leader.go).
 	cluster    *kube.Cluster
@@ -102,11 +113,43 @@ type wiring struct {
 	lost       chan struct{}
 	leaderDone chan struct{}
 
-	// The settings and what is kept beside them (settings.go); stored are
-	// the ConfigMaps whose sizes the metrics show.
-	shared       *settings.Service
-	spendBackend kv.Backend
-	stored       storedObjects
+	// The database (database.go), where every record set is kept (DB-69),
+	// and the domains whose records it holds, for GET /api/v1/database.
+	database      *db.DB
+	schemaVersion int
+	inDatabase    []string
+	// notCopied are the keys whose one-time copy from a ConfigMap failed
+	// at this start (noteNotCopied).
+	notCopied map[string]bool
+	// databaseWait is how long a start waits for the database before it
+	// gives up and the console stops (DB-02); 0 is the default (a test
+	// sets it).
+	databaseWait time.Duration
+	// importIDs are the names record sets are copied under, each once;
+	// importClash those named twice (claimImport).
+	importIDs   map[string]bool
+	importClash []string
+	// sources are the ConfigMaps of before the copies read, with the
+	// record sets each holds (readFrom), deleted once those are copied
+	// (removeCopiedSources, DB-72); copying is the copies that run beside
+	// the wiring (the audit log's), which the deletion waits for.
+	sourcesMu sync.Mutex
+	sources   map[string]*sourceUse
+	copying   sync.WaitGroup
+	// moveAgainEvery is how often a copy of the connections that failed
+	// at the start is tried again; 0 is the default (a test sets it).
+	moveAgainEvery time.Duration
+
+	// The settings and what is kept beside them (settings.go): spendBackend
+	// is their store, in the database. settingsSource is the one-time
+	// copies' source, the settings ConfigMap of a release before 0.13 with
+	// the audit log's and the session records' own (nil when none is
+	// named), and stored are the ConfigMaps of before whose sizes the
+	// metrics show until they are gone.
+	shared         *settings.Service
+	spendBackend   kv.Backend
+	settingsSource kv.Backend
+	stored         storedObjects
 
 	// Sherlock and the agents (sherlock.go). Sherlock's ask_knowledge reads
 	// the last four once they are opened, further on.
@@ -131,6 +174,9 @@ type wiring struct {
 	autoEngine  *automation.Engine
 	autoStore   *automation.Store
 	sessionsMgr *sessions.Manager
+	// sessionRecords are the ended sessions' records, which the backup
+	// reads and merges into.
+	sessionRecords sessions.Archive
 
 	// The jobs, the cases, Mycroft's knowledge and the proposed changes.
 	jobsW            *jobsWiring
@@ -143,21 +189,62 @@ type wiring struct {
 	cardsStored      *kv.Limited
 	caseSvc          *casework.Service
 	caseStored       *kv.Limited
-	mailSvc          *mail.Service
-	lessonsSvc       *lessons.Service
+	// caseBackend is what the case work reads and writes through: the
+	// casework ConfigMap, with what the database keeps of it routed there.
+	caseBackend kv.Backend
+	// cardsBackend is the same for the cards: the proposed changes'
+	// ConfigMap, with what the database keeps of it routed there.
+	cardsBackend kv.Backend
+	// knowledgeBackend is the same for Mycroft's knowledge.
+	knowledgeBackend kv.Backend
+	// issueBackend is the same for the issue service.
+	issueBackend kv.Backend
+	mailSvc      *mail.Service
+	lessonsSvc   *lessons.Service
 
 	// The backups and the HTTP API.
 	backups *backup.Scheduler
 	handler *api.Server
 }
 
-func run(args []string) error {
+func run(args []string) error { return serve(context.Background(), args, nil) }
+
+// processLogs sets the loggers the process has one of (serve).
+var processLogs sync.Once
+
+// hooks are what a test of the whole start gives serve: where the logs
+// and the audit log go, what to set on the wiring before anything is
+// wired, and what to call once the console listens.
+type hooks struct {
+	logs, audit io.Writer
+	wiring      func(w *wiring)
+	serving     func(w *wiring, addr string)
+}
+
+// serve wires the console and serves it until ctx ends, a signal asks it
+// to stop, or it stops itself.
+func serve(parent context.Context, args []string, h *hooks) error {
 	parsed, err := config.Parse(args)
 	if err != nil {
 		return err
 	}
-	log := newLogger(parsed)
-	slog.SetDefault(log)
+	if h == nil {
+		h = &hooks{}
+	}
+	if h.logs == nil {
+		h.logs = os.Stderr
+	}
+	if h.audit == nil {
+		h.audit = os.Stdout
+	}
+	log := newLogger(parsed, h.logs)
+	// The process's own loggers are set once: a process is one console,
+	// and a test that starts a second leaves the first one's in place.
+	processLogs.Do(func() {
+		slog.SetDefault(log)
+		// client-go logs through klog; send it to the same structured log.
+		klog.SetSlogLogger(log.With("component", "client-go"))
+	})
 	// The hosts applications' charts are fetched from (apps.allowedHosts).
 	if err := apps.SetAllowedHosts(parsed.AppsAllowedHosts); err != nil {
 		return fmt.Errorf("apps.allowedHosts: %w", err)
@@ -165,28 +252,43 @@ func run(args []string) error {
 
 	// The audit log (P3-10) owns standard output; the ordinary logs go to
 	// standard error.
-	w := &wiring{cfg: parsed, log: log, auditLog: audit.New(audit.Options{Out: os.Stdout, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
+	w := &wiring{cfg: parsed, log: log, auditLog: audit.New(audit.Options{Out: h.audit, WebhookURL: parsed.AuditWebhookURL, WebhookToken: parsed.AuditWebhookToken, Logger: log.With("component", "audit")})}
+	if h.wiring != nil {
+		h.wiring(w)
+	}
 	if err := w.wireAuthConfig(); err != nil {
 		return err
 	}
 	// From here on, the configuration as sign-in left it.
 	cfg := w.cfg
-	// client-go logs through klog; send it to the same structured log.
-	klog.SetSlogLogger(log.With("component", "client-go"))
 	setMemoryLimit(log)
 
 	if w.restCfg, w.mode, err = kube.RestConfig(kube.ConnectOptions{Kubeconfig: cfg.Kubeconfig, Context: cfg.Context, APIServer: cfg.APIServer}); err != nil {
 		return err
 	}
-	if err := w.wireAuth(); err != nil {
+
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	// The database is opened before anything that keeps records is made
+	// (DB-59), so each store made below can be given it: the sign-in's, the
+	// connections', the applications', the credentials'. It uses nothing
+	// but the configuration and the log, and nothing listens until it and
+	// the rest are done, so the start's order is all that changes. A
+	// database that does not answer within the wait ends the start: a
+	// console does not start without its database (DB-02).
+	if w.cfg.ConnectionsSecrets == "" {
+		return errNoRelease
+	}
+	if err := w.wireDatabase(ctx); err != nil {
+		return err
+	}
+	defer w.database.Close()
+	if err := w.wireAuth(ctx); err != nil {
 		return err
 	}
 	if err := w.wireLocalCluster(); err != nil {
 		return err
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	w.startAuth(ctx)
 	if err := w.wireLeader(ctx); err != nil {
 		return err
@@ -207,19 +309,18 @@ func run(args []string) error {
 		return err
 	}
 	w.twoPerson.SetBackend(w.spendBackend)
-	if auditStore := keepAudit(w.auditLog, w.spendBackend, log.With("component", "audit")); auditStore != nil {
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := auditStore.Close(ctx); err != nil {
-				log.Warn("saving the audit log at shutdown failed", "err", err)
-			}
-		}()
-	}
+	auditStore := w.keepAudit(ctx, w.settingsSource, log.With("component", "audit"))
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := auditStore.Close(ctx); err != nil {
+			log.Warn("saving the audit log at shutdown failed", "err", err)
+		}
+	}()
 	if err := w.wireSherlock(ctx); err != nil {
 		return err
 	}
-	if err := w.wireCredentials(); err != nil {
+	if err := w.wireCredentials(ctx); err != nil {
 		return err
 	}
 	if err := w.wireHelmRepos(); err != nil {
@@ -251,6 +352,15 @@ func run(args []string) error {
 	if err := w.wireBackups(ctx); err != nil {
 		return err
 	}
+	if len(w.importClash) > 0 {
+		return fmt.Errorf("two record sets would be copied into the database under one name, and the second never would be: %s; give one a name of its own (db.Doc.ImportAs)", strings.Join(w.importClash, ", "))
+	}
+	// The ConfigMaps of before, each deleted once every record set it
+	// held is in the database (DB-72), when every copy has run.
+	go func() {
+		w.copying.Wait()
+		w.waitForHelmThenRemove(ctx)
+	}()
 	if err := w.wireAPI(); err != nil {
 		return err
 	}
@@ -290,11 +400,18 @@ func run(args []string) error {
 		// deadline instead. Requests share ctx, so streams end on shutdown.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return err
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(w.mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
-		errCh <- srv.ListenAndServe()
+		log.Info("serving", "addr", ln.Addr().String(), "cluster", cfg.ClusterName, "mode", string(w.mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
+		errCh <- srv.Serve(ln)
 	}()
+	if h.serving != nil {
+		h.serving(w, ln.Addr().String())
+	}
 	lostLease := false
 	select {
 	case err := <-errCh:
@@ -352,32 +469,104 @@ func workWithin(grace time.Duration) time.Duration {
 	return max(grace-settleWithin-closeWithin-stopMargin, 0)
 }
 
-// keepAudit gives the log its store for Administration › Audit log, and
-// returns it to close: beside the settings, or in memory on a laptop, where
-// the page says so.
-func keepAudit(l *audit.Log, b kv.Backend, logger *slog.Logger) *audit.KVStore {
-	if _, inMemory := b.(*kv.Memory); inMemory {
-		l.KeepInMemory(audit.DefaultKeep)
-		return nil
-	}
-	st := audit.NewKVStore(b, logger)
+// auditRetention is how long the database keeps an audit event for the
+// Audit log page; the stream and the webhook are the full record.
+const auditRetention = 365 * 24 * time.Hour
+
+// keepAudit gives the log its store for Administration › Audit log, the
+// database's audit_events (Phase 13), and returns it to close. from is
+// the copy's source and nothing else: where a release before 0.13 kept
+// the audit log, the settings ConfigMap or the audit log's own; nil when
+// none is named.
+func (w *wiring) keepAudit(ctx context.Context, from kv.Backend, logger *slog.Logger) interface {
+	Close(ctx context.Context) error
+} {
+	l := w.auditLog
+	st := audit.NewPGStore(w.database, logger)
 	l.SetStore(st)
+	w.claimImport(watson.MaskedImportID)
+	w.inDatabase = append(w.inDatabase, "activity")
+	// What a release before Phase 13 kept in the ConfigMap, once, beside
+	// the rest of the start; the ConfigMap is deleted once it is copied.
+	copies := hasSource(from)
+	if copies {
+		w.readFrom(from, audit.StoreKey, audit.StoreKey)
+		w.copying.Add(1)
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := st.Sweep(ctx); err != nil {
-			logger.Warn("cleaning the kept audit log failed", "err", err)
+		if copies {
+			ictx, cancel := context.WithTimeout(ctx, time.Minute)
+			n, err := st.Import(ictx, &audit.KVStore{Backend: from, Key: audit.StoreKey, Logger: logger}, "configmap key "+audit.StoreKey)
+			cancel()
+			switch {
+			case err != nil:
+				logger.Warn("copying the audit log from its ConfigMap failed; the next start tries again", "err", err)
+			case n > 0:
+				logger.Info("copied the audit log from its ConfigMap into the database", "events", n)
+				// What a console from before wrote, after a rollback, names
+				// a command's parameters with their values.
+				w.hideCommandParameters(ctx, logger, true)
+			}
+			w.copying.Done()
+		}
+		w.hideCommandParameters(ctx, logger, false)
+		// Retention, once a day on whichever replica gets the lock.
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			tctx, cancel := context.WithTimeout(ctx, time.Minute)
+			if n, err := st.Trim(tctx, time.Now().Add(-auditRetention)); err != nil {
+				logger.Warn("trimming the audit log failed", "err", err)
+			} else if n > 0 {
+				logger.Info("trimmed the audit log", "events", n)
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 	}()
 	return st
 }
 
-func newLogger(cfg config.Config) *slog.Logger {
+// hideCommandParameters hides the values of the commands' parameters in
+// the Watson events of the audit log recorded before DB-74, as they are
+// recorded since: once, under watson.MaskedImportID, and again after a
+// copy from the ConfigMap (again). The stream and the webhook had them as
+// they were; they are not reached.
+func (w *wiring) hideCommandParameters(ctx context.Context, logger *slog.Logger, again bool) {
+	hctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	rewrite := func(ctx context.Context, tx pgx.Tx) (int, error) {
+		return audit.Rewrite(ctx, tx, "watson.", watson.MaskedLike, watson.MaskDetail)
+	}
+	n := 0
+	var err error
+	if again {
+		err = w.database.Tx(hctx, func(tx pgx.Tx) (err error) { n, err = rewrite(hctx, tx); return err })
+	} else {
+		_, err = w.database.ImportOnce(hctx, watson.MaskedImportID, "audit_events", func(ctx context.Context, tx pgx.Tx) (int, error) {
+			var err error
+			n, err = rewrite(ctx, tx)
+			return n, err
+		})
+	}
+	switch {
+	case err != nil:
+		logger.Warn("hiding the commands' parameters in the audit log's Watson events failed; the next start tries again", "err", err)
+	case n > 0:
+		logger.Info("hid the values of the commands' parameters in the audit log's Watson events recorded before", "events", n)
+	}
+}
+
+func newLogger(cfg config.Config, out io.Writer) *slog.Logger {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	opts := &slog.HandlerOptions{Level: level}
 	if cfg.LogFormat == "text" {
-		return slog.New(slog.NewTextHandler(os.Stderr, opts))
+		return slog.New(slog.NewTextHandler(out, opts))
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	return slog.New(slog.NewJSONHandler(out, opts))
 }

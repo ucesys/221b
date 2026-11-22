@@ -8,14 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 )
@@ -41,9 +45,9 @@ type Instance struct {
 	// startErr is why the connection could not even be prepared (a
 	// kubeconfig that cannot be read); then Cluster and Store are nil.
 	startErr string
-	// lastTest is the latest test's result, kept for the cluster page.
-	lastTest   *TestResult
-	lastTested time.Time
+	// tested is the latest test, for the cluster page: run here, or read
+	// with the connection from a store that keeps it (TestKeeper).
+	tested *LastTest
 	// conn fingerprints what the instance connects with, so a sync
 	// restarts it only when that changed.
 	conn string
@@ -82,6 +86,8 @@ type Manager struct {
 	seen   map[string]string
 	// syncErr is the last sync error said in the log, to say it once.
 	syncErr string
+	// soon asks Run for a sync before its next tick (SyncSoon).
+	soon chan struct{}
 	// settings are the shared settings every store follows.
 	settingsRefresh time.Duration
 	settingsRaw     []byte
@@ -98,7 +104,7 @@ func New(store Store, o Options) *Manager {
 	if o.Refresh <= 0 {
 		o.Refresh = 3 * time.Second
 	}
-	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background()}
+	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background(), soon: make(chan struct{}, 1)}
 	if o.Activity != nil {
 		o.Activity.OnChange(m.setActive)
 	}
@@ -139,16 +145,19 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	}
 	// What was saved for it (a name or description changed in the console)
 	// wins. A store that cannot be read yet (the API server is still coming
-	// up) is not fatal: the installation's name stands until a restart.
+	// up, the database is away) is not fatal: the local cluster never
+	// needs it, the installation's name stands, and Sync takes the saved
+	// one when the store answers.
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
+		spec.Tested = saved.Tested
 	} else if !errors.Is(err, ErrNotFound) {
 		m.log.Warn("the local connection's saved name could not be read; using the installation's", "err", err)
 	}
 	if spec.Added.IsZero() {
 		spec.Added = m.opts.Now().UTC()
 	}
-	inst := &Instance{Spec: spec, Cluster: cluster, Store: store}
+	inst := &Instance{Spec: spec, Cluster: cluster, Store: store, tested: spec.Tested}
 	m.mu.Lock()
 	// The local cluster's watches and pollers follow the role too; ctx
 	// bounds them, as it does the server.
@@ -209,6 +218,14 @@ func (m *Manager) load(ctx context.Context) error {
 // with the new spec (Watson's two-person and read-only rules follow it),
 // and one deleted stops. The local cluster's saved name and environment
 // are read again too.
+//
+// A store that cannot be asked (the database or the API server is away)
+// changes nothing here: every running connection keeps running with what
+// it has, and Sync says so with an error. That holds for the whole list
+// and for one connection of it: a connection that could not be read is
+// read again at the next sync, where one that was read and cannot be
+// used (a format this console does not know) is said once and left until
+// it changes.
 func (m *Manager) Sync(ctx context.Context) error {
 	revs, err := m.store.Revisions(ctx)
 	if err != nil {
@@ -216,12 +233,19 @@ func (m *Manager) Sync(ctx context.Context) error {
 	}
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
+	var notAsked []error
 	for id, rev := range revs {
 		if m.seen[id] == rev {
 			continue
 		}
 		spec, cred, err := m.store.Get(ctx, id)
 		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil && NotAsked(err) {
+			// Not marked as seen: marked, the connection would stay as it
+			// is here, or not start at all, until someone changed it.
+			notAsked = append(notAsked, fmt.Errorf("the connection %s could not be read: %w", id, err))
 			continue
 		}
 		// Applied or not, this revision is not read again: an unreadable
@@ -247,6 +271,9 @@ func (m *Manager) Sync(ctx context.Context) error {
 		default:
 			m.mu.Lock()
 			inst.Spec = spec
+			if spec.Tested != nil {
+				inst.tested = spec.Tested
+			}
 			m.mu.Unlock()
 		}
 	}
@@ -270,7 +297,40 @@ func (m *Manager) Sync(ctx context.Context) error {
 			delete(m.seen, id)
 		}
 	}
-	return nil
+	return errors.Join(notAsked...)
+}
+
+// NotAsked says whether err is a store that could not be asked, rather
+// than a store that answered with something this console cannot use: the
+// database away (db.ErrUnavailable), a time that ran out, or the API
+// server not reached, overloaded or failing. What could not be asked is
+// asked again; what was answered is not, until it changes.
+func NotAsked(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, db.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsServiceUnavailable(err) || apierrors.IsTooManyRequests(err) ||
+			apierrors.IsInternalError(err) || apierrors.IsUnexpectedServerError(err)
+	}
+	// No answer at all: the connection was refused, reset or timed out.
+	var netErr net.Error
+	var urlErr *url.Error
+	return errors.As(err, &netErr) || errors.As(err, &urlErr)
+}
+
+// SyncSoon asks Run for a sync now and not at its next tick: what the
+// store calls when another replica says it saved or removed a connection
+// (db.Subscribe). It never waits.
+func (m *Manager) SyncSoon() {
+	select {
+	case m.soon <- struct{}{}:
+	default:
+	}
 }
 
 // applyLocal takes the local cluster's saved name, environment and
@@ -285,6 +345,9 @@ func (m *Manager) applyLocal(saved Spec) {
 	spec := inst.Spec
 	spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 	inst.Spec = spec
+	if saved.Tested != nil {
+		inst.tested = saved.Tested
+	}
 }
 
 // Run syncs with the saved connections every interval until ctx is done.
@@ -299,19 +362,20 @@ func (m *Manager) Run(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			err := m.Sync(ctx)
-			msg := ""
+		case <-m.soon:
+		}
+		err := m.Sync(ctx)
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if msg != m.syncErr {
 			if err != nil {
-				msg = err.Error()
+				m.log.Warn("the saved connections could not be read; the running ones keep running", "err", err)
+			} else {
+				m.log.Info("the saved connections can be read again")
 			}
-			if msg != m.syncErr {
-				if err != nil {
-					m.log.Warn("the saved connections could not be read", "err", err)
-				} else {
-					m.log.Info("the saved connections can be read again")
-				}
-				m.syncErr = msg
-			}
+			m.syncErr = msg
 		}
 	}
 }
@@ -334,7 +398,7 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 	if old := m.instances[spec.ID]; old != nil && old.cancel != nil {
 		old.cancel()
 	}
-	inst := &Instance{Spec: spec, conn: connKey(spec, cred)}
+	inst := &Instance{Spec: spec, conn: connKey(spec, cred), tested: spec.Tested}
 	if cred.HasPlaceholder() {
 		inst.startErr = "Its credential is not in the backup it was restored from: edit the connection and paste it again."
 		m.instances[spec.ID] = inst
@@ -418,13 +482,19 @@ type Summary struct {
 	// has (P3-07).
 	Expiring bool `json:"expiring,omitempty"`
 	Expired  bool `json:"expired,omitempty"`
-	// LastTest is the latest connection test, when one ran.
-	LastTest   *TestResult `json:"lastTest,omitempty"`
-	LastTested *time.Time  `json:"lastTested,omitempty"`
+	// LastTest is the latest connection test, when one ran, LastTested
+	// when, and LastTestedBy who ran it. Kept with the connection, so a
+	// restart does not lose it (DB-64).
+	LastTest     *TestResult `json:"lastTest,omitempty"`
+	LastTested   *time.Time  `json:"lastTested,omitempty"`
+	LastTestedBy string      `json:"lastTestedBy,omitempty"`
+	// EditVersion is the version of the connection's row this summary
+	// shows (Spec.RowVersion), which an edit gives back (DB-92).
+	EditVersion int `json:"rowVersion,omitempty"`
 }
 
 func (m *Manager) summarize(inst *Instance) Summary {
-	s := Summary{Spec: inst.Spec}
+	s := Summary{Spec: inst.Spec, EditVersion: inst.Spec.RowVersion}
 	now := m.opts.Now()
 	if inst.Spec.Cred.Expires != nil {
 		s.Expired = inst.Spec.Cred.Expires.Before(now)
@@ -442,10 +512,9 @@ func (m *Manager) summarize(inst *Instance) Summary {
 		}
 		s.Nodes, s.Pods, _, _ = inst.Cluster.Counts()
 	}
-	if inst.lastTest != nil {
-		s.LastTest = inst.lastTest
-		t := inst.lastTested
-		s.LastTested = &t
+	if t := inst.tested; t != nil {
+		r, at := t.Result, t.At
+		s.LastTest, s.LastTested, s.LastTestedBy = &r, &at, t.By
 	}
 	return s
 }
@@ -491,6 +560,10 @@ func (m *Manager) Summary(id string) (Summary, bool) {
 type Draft struct {
 	Spec
 	Credential
+	// EditVersion is the version of the connection the editor read
+	// (Summary.EditVersion): the edit is saved only over it (DB-92). 0
+	// holds to nothing, as before.
+	EditVersion int `json:"rowVersion,omitempty"`
 }
 
 // nameTaken says whether another connection has the name.
@@ -509,6 +582,7 @@ func (m *Manager) nameTaken(name, except string) bool {
 // spec to save and the credential (nil when the saved one is kept).
 func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Credential, error) {
 	spec := d.Spec
+	spec.RowVersion = d.EditVersion
 	spec.Name = strings.TrimSpace(spec.Name)
 	spec.Description = strings.TrimSpace(spec.Description)
 	spec.Server = strings.TrimSpace(spec.Server)
@@ -524,6 +598,7 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		spec.ID = Slug(spec.Name)
 		spec.Local = false
 		spec.Added = now
+		spec.RowVersion = 0
 	}
 	spec.Updated = now
 	if err := ValidateSpec(spec); err != nil {
@@ -642,8 +717,18 @@ func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
 	if err := m.store.Save(ctx, spec, cred); err != nil {
 		return Summary{}, err
 	}
+	m.readVersion(ctx, &spec)
 	inst := m.start(spec, *cred)
 	return m.summaryOf(inst), nil
+}
+
+// readVersion gives a connection just made the version the store saved
+// it at, so that its first edit is held to it (DB-92). A store that
+// cannot say leaves it 0 until the next sync reads it.
+func (m *Manager) readVersion(ctx context.Context, spec *Spec) {
+	if saved, _, err := m.store.Get(ctx, spec.ID); err == nil {
+		spec.RowVersion = saved.RowVersion
+	}
 }
 
 // Redacted is a connection's saved credential with its secrets replaced
@@ -690,10 +775,29 @@ func (m *Manager) Restore(ctx context.Context, spec Spec, cred Credential) (Summ
 		return Summary{}, invalid("name", fmt.Sprintf("Another cluster is already called “%s”.", spec.Name))
 	}
 	spec.Updated = m.opts.Now().UTC()
+	spec.RowVersion = 0
 	if err := m.store.Save(ctx, spec, &cred); err != nil {
 		return Summary{}, err
 	}
+	m.readVersion(ctx, &spec)
 	return m.summaryOf(m.start(spec, cred)), nil
+}
+
+// Held says whether an edit read at rowVersion may still be saved: nil,
+// or ErrConflict when the connection was saved since (DB-92). 0 holds to
+// nothing. Update checks the same, and the store again as it writes.
+func (m *Manager) Held(ctx context.Context, id string, rowVersion int) error {
+	if rowVersion <= 0 {
+		return nil
+	}
+	orig, _, err := m.getSpec(ctx, id)
+	if err != nil {
+		return err
+	}
+	if orig.RowVersion > 0 && orig.RowVersion != rowVersion {
+		return ErrConflict
+	}
+	return nil
 }
 
 // Update changes a connection; a credential given replaces the saved one.
@@ -708,10 +812,24 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	if err != nil {
 		return Summary{}, err
 	}
+	// An edit read at a version is saved only over it (DB-92): checked
+	// here against what the store has, and by the store as it writes.
+	if d.EditVersion > 0 && orig.RowVersion > 0 && d.EditVersion != orig.RowVersion {
+		return Summary{}, ErrConflict
+	}
+	saved := func() {
+		if orig.RowVersion > 0 {
+			spec.RowVersion = orig.RowVersion + 1
+		}
+	}
+	// The kept test stays the connection's through an edit, as the store
+	// keeps it.
+	spec.Tested = orig.Tested
 	if spec.Local {
 		if err := m.store.Save(ctx, spec, nil); err != nil {
 			return Summary{}, err
 		}
+		saved()
 		m.mu.Lock()
 		inst := m.instances[LocalID]
 		inst.Spec = spec
@@ -721,6 +839,7 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	if err := m.store.Save(ctx, spec, cred); err != nil {
 		return Summary{}, err
 	}
+	saved()
 	changed := orig.Server != spec.Server || orig.CA != spec.CA || orig.Auth != spec.Auth || !d.Credential.Empty() || d.Credential.CAPEM != ""
 	if changed {
 		return m.summaryOf(m.start(spec, *cred)), nil
@@ -755,28 +874,33 @@ func (m *Manager) getSpec(ctx context.Context, id string) (Spec, Credential, err
 	return spec, cred, err
 }
 
-// Remove stops a connection and deletes its Secret (P3-08). The local
-// cluster cannot be removed.
+// Remove deletes a connection with its Secret (P3-08) and stops it. The
+// local cluster cannot be removed. A store that cannot remove it (the
+// database is away) leaves the connection running and listed, so the
+// removal can be asked for again: stopped first, it would be saved and
+// shown nowhere.
 func (m *Manager) Remove(ctx context.Context, id string) error {
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
-	m.mu.Lock()
+	m.mu.RLock()
 	inst, ok := m.instances[id]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.Unlock()
 		return ErrNotFound
 	}
 	if inst.Spec.Local {
-		m.mu.Unlock()
 		return invalid("id", "The cluster the console runs in cannot be removed.")
 	}
-	delete(m.instances, id)
-	if inst.cancel != nil {
-		inst.cancel()
-	}
-	m.mu.Unlock()
 	if err := m.store.Delete(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
+	}
+	m.mu.Lock()
+	if m.instances[id] == inst {
+		delete(m.instances, id)
+	}
+	m.mu.Unlock()
+	if inst.cancel != nil {
+		inst.cancel()
 	}
 	m.log.Info("connection removed", "cluster", id)
 	return nil
@@ -804,8 +928,11 @@ func (m *Manager) TestDraft(ctx context.Context, id string, d Draft) (TestResult
 	return Test(ctx, spec, *cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now}), nil
 }
 
-// TestSaved tests a saved connection and keeps the result for its page.
-func (m *Manager) TestSaved(ctx context.Context, id string) (TestResult, error) {
+// TestSaved tests a saved connection and keeps the result for its page,
+// with when it ran and who ran it (by): in the store, when it keeps tests,
+// so a restart does not lose it and every replica shows it (DB-64). A
+// store that cannot keep it leaves it here alone, and says so in the log.
+func (m *Manager) TestSaved(ctx context.Context, id, by string) (TestResult, error) {
 	spec, cred, err := m.getSpec(ctx, id)
 	if err != nil {
 		return TestResult{}, err
@@ -819,9 +946,15 @@ func (m *Manager) TestSaved(ctx context.Context, id string) (TestResult, error) 
 	} else {
 		r = Test(ctx, spec, cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now})
 	}
+	kept := &LastTest{Result: r, At: m.opts.Now().UTC(), By: by}
+	if k, ok := m.store.(TestKeeper); ok {
+		if err := k.SaveTest(ctx, id, *kept); err != nil && !errors.Is(err, ErrNotFound) {
+			m.log.Warn("the connection's test could not be kept; it is shown by this replica until it restarts", "cluster", id, "err", err)
+		}
+	}
 	m.mu.Lock()
 	if inst := m.instances[id]; inst != nil {
-		inst.lastTest, inst.lastTested = &r, m.opts.Now().UTC()
+		inst.tested = kept
 	}
 	m.mu.Unlock()
 	return r, nil

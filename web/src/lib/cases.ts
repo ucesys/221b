@@ -3,6 +3,7 @@
 // is signed in, which the console's pages share.
 import { useCallback, useSyncExternalStore } from 'react'
 import type { Me } from '../api/types'
+import { CallError } from '../api/call'
 import { fetchIssueMe, type IssueMe, type OpKnown } from '../api/issues'
 import type { AIOpsTab } from './router'
 
@@ -192,12 +193,14 @@ export function knownPending(list: OpKnown[], me: string): OpKnown[] {
 interface Shared<T> {
   value: T | null
   error: string
+  /** The last reading was refused because the database is unavailable (DB-15): the list is not known, which is not an empty one. */
+  away: boolean
   listeners: Set<() => void>
   timer?: ReturnType<typeof setInterval>
   load: () => void
   /** Starts the reading with the first listener and stops it with the last. */
   subscribe: (fn: () => void, every: number) => () => void
-  snapshot: { value: T | null; error: string }
+  snapshot: { value: T | null; error: string; away: boolean }
 }
 
 const shared = new Map<string, Shared<unknown>>()
@@ -207,7 +210,7 @@ const shared = new Map<string, Shared<unknown>>()
  * Inbox), read once for all of them and again every `every` ms while any
  * shows it; reload reads it at once, after a change.
  */
-export function useShared<T>(key: string | null, load: (background: boolean) => Promise<T>, every = 30_000): { value: T | null; error: string; reload: () => void } {
+export function useShared<T>(key: string | null, load: (background: boolean) => Promise<T>, every = 30_000): { value: T | null; error: string; away: boolean; reload: () => void } {
   const live = key ? entryFor(key, load) : null
   // One subscription per list and rate, so a render does not start the
   // reading again.
@@ -217,10 +220,16 @@ export function useShared<T>(key: string | null, load: (background: boolean) => 
     () => live?.snapshot ?? EMPTY,
     () => live?.snapshot ?? EMPTY,
   )
-  return { value: snap.value as T | null, error: snap.error, reload: () => live?.load() }
+  return { value: snap.value as T | null, error: snap.error, away: snap.away, reload: () => live?.load() }
 }
 
-const EMPTY = { value: null, error: '' }
+const EMPTY = { value: null, error: '', away: false }
+
+/** Reads a shared list again at once, from outside a component; nothing when nobody shows it. */
+export function reloadShared(key: string): void {
+  const e = shared.get(key)
+  if (e && e.listeners.size > 0) e.load()
+}
 
 function entryFor<T>(key: string, load: (background: boolean) => Promise<T>): Shared<T> {
   let e = shared.get(key) as Shared<T> | undefined
@@ -228,20 +237,23 @@ function entryFor<T>(key: string, load: (background: boolean) => Promise<T>): Sh
   const made: Shared<T> = {
     value: null,
     error: '',
+    away: false,
     listeners: new Set(),
-    snapshot: EMPTY as { value: T | null; error: string },
+    snapshot: EMPTY as { value: T | null; error: string; away: boolean },
     subscribe: () => () => undefined,
     load: () => {
       load(made.value !== null).then(
         (v) => {
           made.value = v
           made.error = ''
-          made.snapshot = { value: v, error: '' }
+          made.away = false
+          made.snapshot = { value: v, error: '', away: false }
           for (const fn of made.listeners) fn()
         },
         (err: unknown) => {
           made.error = err instanceof Error ? err.message : String(err)
-          made.snapshot = { value: made.value, error: made.error }
+          made.away = err instanceof CallError && err.databaseAway
+          made.snapshot = { value: made.value, error: made.error, away: made.away }
           for (const fn of made.listeners) fn()
         },
       )

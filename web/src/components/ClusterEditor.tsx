@@ -1,5 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { AUTH_LABELS, CA_LABELS, ClusterError, credText, ENVS, removeCluster, saveCluster, testDraft, type AccessMode, type AuthMethod, type CAMode, type ClusterSummary, type Draft, type Env, type TestResult } from '../api/clusters'
+import {
+  AUTH_LABELS,
+  CA_LABELS,
+  ClusterError,
+  CONNECTION_CHANGED,
+  credText,
+  ENVS,
+  removeCluster,
+  saveCluster,
+  testDraft,
+  type AccessMode,
+  type AuthMethod,
+  type CAMode,
+  type ClusterSummary,
+  type Draft,
+  type Env,
+  type TestResult,
+} from '../api/clusters'
 import { credentialNote, kubeconfigCA, kubeContext, NAME_RE, parseKubeconfig, rbacYAML, URL_RE } from '../lib/credentials'
 import { Card, Drawer } from './Drawer'
 import { CopyIcon, LockIcon, ShieldIcon, WarnIcon } from './Icons'
@@ -65,12 +82,16 @@ function initial(orig: ClusterSummary | null): Form {
   }
 }
 
-/** The draft as the server takes it: credential fields only when they are being replaced. */
-export function toDraft(f: Form, orig: ClusterSummary | null): Draft {
+/**
+ * The draft as the server takes it: credential fields only when they are being replaced, and the
+ * version of the connection the editor opened, which the save is held to (DB-92).
+ */
+export function toDraft(f: Form, orig: ClusterSummary | null, rowVersion = orig?.rowVersion): Draft {
   const needCred = !orig || f.credAsk || orig.auth !== f.auth
   const needCA = f.ca === 'pem' && (!orig || f.caAsk || orig.ca !== 'pem')
   const d: Draft = { name: f.name.trim(), env: f.env, description: f.description.trim(), server: f.server.trim(), ca: f.ca, auth: f.auth, mode: f.mode }
   if (orig) d.id = orig.id
+  if (orig && rowVersion) d.rowVersion = rowVersion
   if (needCA && f.caPem.trim()) d.caPem = f.caPem.trim()
   if (needCred) {
     switch (f.auth) {
@@ -150,6 +171,9 @@ function Seg<T extends string>({ label, options, value, onChange, disabled }: { 
  */
 export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props) {
   const [f, setF] = useState<Form>(() => initial(orig))
+  // The version opened: the list behind orig is read again every few seconds, and an edit is
+  // held to what the form started from, not to what someone else saved since (DB-92).
+  const [opened] = useState(() => orig?.rowVersion)
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<{ field?: string; msg: string } | null>(null)
   const [test, setTest] = useState<TestResult | null>(null)
@@ -205,10 +229,11 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
     }
     setSaving(true)
     try {
-      const sum = await saveCluster(toDraft(f, orig), orig?.id)
+      const sum = await saveCluster(toDraft(f, orig, opened), orig?.id)
       onSaved(sum, !orig)
     } catch (e) {
-      setSaveErr(e instanceof ClusterError ? { field: e.field, msg: e.message } : { msg: String(e) })
+      if (e instanceof ClusterError && e.status === 409) setSaveErr({ msg: CONNECTION_CHANGED })
+      else setSaveErr(e instanceof ClusterError ? { field: e.field, msg: e.message } : { msg: String(e) })
     } finally {
       setSaving(false)
     }

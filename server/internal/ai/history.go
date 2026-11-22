@@ -31,6 +31,9 @@ type HistoryEntry struct {
 	// Note says how it came to be: made live untested and why, a version
 	// restored, a draft sent back.
 	Note string `json:"note,omitempty"`
+	// Request is the two-person request that approved a version, by its
+	// number; 0 when none did (the thirteenth cluster test's N2).
+	Request int `json:"request,omitempty"`
 	// InForce marks the version in force; Current the draft now.
 	InForce bool       `json:"inForce,omitempty"`
 	Current bool       `json:"current,omitempty"`
@@ -132,7 +135,7 @@ func historyOf(ap *AgentPrompt) []historyItem {
 		return out
 	}
 	for _, v := range ap.Versions {
-		out = append(out, historyItem{entry: HistoryEntry{Kind: HistoryLive, N: v.N, Rev: v.Rev, By: v.By, At: v.At, Note: v.Why, InForce: v.N == ap.Live, Test: v.Test}, house: v.House, notes: v.Notes, parts: v.Parts})
+		out = append(out, historyItem{entry: HistoryEntry{Kind: HistoryLive, N: v.N, Rev: v.Rev, By: v.By, At: v.At, Note: v.Why, Request: v.Request, InForce: v.N == ap.Live, Test: v.Test}, house: v.House, notes: v.Notes, parts: v.Parts})
 	}
 	current := false
 	for _, r := range ap.Revisions {

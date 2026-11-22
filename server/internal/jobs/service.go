@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
@@ -49,6 +50,18 @@ type AgentRequest struct {
 	// ForReporters says the answer reaches reporters (Kind.ForReporters):
 	// the agent is given no accepted exception (KN-32).
 	ForReporters bool
+	// Meter is the run's: the runner counts each model call on it as the
+	// call ends, the agents the agent hands work to included, and starts
+	// no call once it says stop (JB-10). A runner that does not is
+	// counted by the result's cost when it ends.
+	Meter Meter
+}
+
+// Meter counts a run's model calls as they end and says when the run's
+// or the day's budget is spent (JB-10).
+type Meter interface {
+	Spend(in, out int, usd float64)
+	Stop() error
 }
 
 // AgentResult is what an agent's call came to.
@@ -69,6 +82,18 @@ type AgentRunner interface {
 	// can): it is off, has no provider, does not work there.
 	Usable(agent, cluster string) string
 }
+
+// ReadChecker is an AgentRunner that also says, before an audit reads a
+// cluster, whether the reader identity can read it at all (JB-23): blind
+// when it may list none of what an audit reads. An error is no answer,
+// and the run goes on.
+type ReadChecker interface {
+	Blind(ctx context.Context, cluster string, reader Settings) (bool, error)
+}
+
+// NoAccessHint is what a run that could not read a cluster tells the
+// person to do (JB-23).
+const NoAccessHint = "set Administration › AI › Jobs › reader role, or bind a role to 221b:agents in the cluster"
 
 // Cluster is a cluster a job may cover.
 type Cluster struct {
@@ -150,9 +175,9 @@ type Options struct {
 	Logger   *slog.Logger
 	// Every is how often the schedules and alerts are looked at; 30 s.
 	Every time.Duration
-	// MaxRuns and RunsBytes bound the runs kept (JB-14).
-	MaxRuns   int
-	RunsBytes int
+	// MaxRuns bounds the runs kept (JB-14). Their bound in bytes was the
+	// ConfigMap's, and went with it (DB-80).
+	MaxRuns int
 	// RunTimeout bounds one run; 30 minutes.
 	RunTimeout time.Duration
 }
@@ -161,6 +186,15 @@ type Options struct {
 type Service struct {
 	o        Options
 	instance string
+	// quiet keeps the jobs' reads at every look quiet while the database
+	// is away (DB-15).
+	quiet db.Quiet
+	// sweepQuiet does the same for the sweep of the runs a replica left
+	// under way, once a minute (the thirteenth cluster test's N3).
+	sweepQuiet db.Quiet
+	// claims claims the scheduled times where the jobs are kept in the
+	// database (DB-80); nil claims them in the jobs' record.
+	claims Claims
 
 	mu sync.Mutex
 	// sem holds each job's run under way on this replica; queued counts
@@ -208,9 +242,6 @@ func New(o Options) *Service {
 	if o.MaxRuns <= 0 {
 		o.MaxRuns = DefaultMaxRuns
 	}
-	if o.RunsBytes <= 0 {
-		o.RunsBytes = DefaultRunsBytes
-	}
 	if o.RunTimeout <= 0 {
 		o.RunTimeout = 30 * time.Minute
 	}
@@ -220,7 +251,7 @@ func New(o Options) *Service {
 	tag := make([]byte, 6)
 	_, _ = rand.Read(tag)
 	base, cancel := context.WithCancel(context.Background())
-	return &Service{o: o, instance: hex.EncodeToString(tag), sem: map[string]chan struct{}{}, queued: map[string]int{}, active: map[string]*activeRun{}, base: base, cancel: cancel}
+	return &Service{o: o, instance: hex.EncodeToString(tag), claims: claimsIn(o.Backend), sem: map[string]chan struct{}{}, queued: map[string]int{}, active: map[string]*activeRun{}, base: base, cancel: cancel}
 }
 
 // SetAgents gives the service its agents, once the console has them.
@@ -396,9 +427,13 @@ type RunBrief struct {
 	Findings int       `json:"findings"`
 	// Open counts the cases its findings opened or reopened; Routed what
 	// they all did (CF-01).
-	Open      int     `json:"open"`
-	Routed    Routed  `json:"routed"`
+	Open   int    `json:"open"`
+	Routed Routed `json:"routed"`
+	// Proposals counts the proposed changes it filed; NotFiled those it
+	// made that were not (a change that resolves no case, CF-27, or one
+	// the proposer refused), which the run's page lists with why.
 	Proposals int     `json:"proposals"`
+	NotFiled  int     `json:"notFiled,omitempty"`
 	CostUSD   float64 `json:"costUSD"`
 	Model     string  `json:"model,omitempty"`
 	// NotRouted says why its findings were not routed into cases (W-8).
@@ -416,8 +451,15 @@ type RunBrief struct {
 
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
-		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, Proposals: len(r.Proposals), CostUSD: r.CostUSD, Model: r.Model,
+		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, CostUSD: r.CostUSD, Model: r.Model,
 		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked}
+	for _, p := range r.Proposals {
+		if p.ID == "" {
+			b.NotFiled++
+		} else {
+			b.Proposals++
+		}
+	}
 	b.Health, b.Severities = r.Health()
 	return b
 }

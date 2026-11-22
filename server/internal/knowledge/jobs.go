@@ -87,9 +87,10 @@ func (s *Service) syncKinds(ctx context.Context) {
 	defer s.kindsMu.Unlock()
 	set, err := s.Settings(ctx)
 	if err != nil {
-		s.o.Logger.Warn("the sources could not be read for their Wiki sync jobs", "err", err)
+		s.kindsQuiet.Failed(s.o.Logger, "the sources could not be read for their Wiki sync jobs", err)
 		return
 	}
+	s.kindsQuiet.Worked(s.o.Logger, "the sources are read again for their Wiki sync jobs")
 	reg := js.Kinds()
 	want := map[string]bool{}
 	for _, x := range set.Sources {

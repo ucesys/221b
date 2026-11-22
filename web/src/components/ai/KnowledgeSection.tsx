@@ -25,7 +25,7 @@ import {
   type KnowledgeSource,
   type LiveAddress,
   type KnowledgeView,
-  CONFIGMAP_STORE_LABEL,
+  DATABASE_STORE_LABEL,
   SOURCES_HREF,
   type SourceTestResult,
   type StoreCheck,
@@ -186,9 +186,9 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
           Choose where the wiki is kept, below, before Mycroft reads the sources.
         </p>
       )}
-      {v.settings.store.kind === 'configmap' && (
-        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="knowledge-configmap-store">
-          The wiki is kept in a {CONFIGMAP_STORE_LABEL}. It holds at most 900 KiB.
+      {v.settings.store.kind === 'database' && (
+        <p className="rk-callout" style={{ margin: 0, fontSize: 12.5 }} data-testid="knowledge-database-store">
+          The wiki is kept in the console’s database, with its other records, up to 256 MiB. Choose Git or S3 below to keep every page’s history there instead.
         </p>
       )}
       {!v.model && (
@@ -428,11 +428,11 @@ const blankStore = (kind: StoreSettings['kind']): StoreSettings =>
     ? { kind, url: '', branch: 'main', username: '' }
     : kind === 's3'
       ? { kind, endpoint: '', region: '', bucket: '', prefix: 'wiki/', pathStyle: false, credentials: 'keys', sse: '' }
-      : kind === 'configmap'
+      : kind === 'database'
         ? { kind }
         : { kind: '' }
 
-/** Where the wiki is kept: a git repository, an S3 bucket, or the temporary ConfigMap store (CF-57). */
+/** Where the wiki is kept: a git repository, an S3 bucket, or the console's database (DB-96). */
 function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => void; onToast?: (msg: string) => void }) {
   const saved = v.settings.store
   const [st, setSt] = useState<StoreSettings>(saved.kind ? saved : blankStore('git'))
@@ -474,20 +474,20 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           <button aria-pressed={st.kind === 's3'} onClick={() => setSt(saved.kind === 's3' ? saved : blankStore('s3'))} data-testid="knowledge-store-s3">
             S3 bucket
           </button>
-          {(v.configMapStore || saved.kind === 'configmap') && (
-            <button aria-pressed={st.kind === 'configmap'} onClick={() => setSt(saved.kind === 'configmap' ? saved : blankStore('configmap'))} data-testid="knowledge-store-configmap">
-              ConfigMap (temporary)
+          {(v.databaseStore || saved.kind === 'database') && (
+            <button aria-pressed={st.kind === 'database'} onClick={() => setSt(saved.kind === 'database' ? saved : blankStore('database'))} data-testid="knowledge-store-database">
+              Database
             </button>
           )}
         </div>
         <span className="rk-fhint">Pages are kept as pages/&lt;kind&gt;/&lt;name&gt;.md beside manifest.json. With the chart’s network policy on, the store’s address goes in knowledge.egressCIDRs.</span>
       </Row>
-      {st.kind === 'configmap' && (
-        <Row label="ConfigMap" hint="The chart’s <release>-wiki">
-          <span className="rk-callout" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="knowledge-store-configmap-label">
-            {CONFIGMAP_STORE_LABEL}
+      {st.kind === 'database' && (
+        <Row label="Database" hint="Where the console keeps its records">
+          <span className="rk-callout" style={{ fontSize: 12.5 }} data-testid="knowledge-store-database-label">
+            {DATABASE_STORE_LABEL}
           </span>
-          <span className="rk-fhint">Every replica reads it; it holds at most 900 KiB, and a write past that is refused. Choose Git or S3 and Move the wiki here to keep the pages.</span>
+          <span className="rk-fhint">Every replica reads it, and the database’s backups hold it. It holds at most 256 MiB, pages, excerpts and waiting changes together; a write past that is refused. Choose Git or S3 and Move the wiki here to keep every page’s history.</span>
         </Row>
       )}
       {st.kind === 'git' && (
@@ -582,7 +582,7 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           </Row>
         </>
       )}
-      {st.kind !== 'configmap' && (
+      {st.kind !== 'database' && (
         <>
           <Row label="Refresh" hint={st.kind === 's3' ? 'A bucket notification, and a poll' : 'Each push, and a poll'}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

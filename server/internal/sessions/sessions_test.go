@@ -850,7 +850,7 @@ func TestTunnelForwardsConnections(t *testing.T) {
 	var reply tunnel.Frame
 	select {
 	case reply = <-p.out:
-	case <-time.After(3 * time.Second):
+	case <-time.After(tunnelGuard):
 		t.Fatal("no answer through the tunnel")
 	}
 	if reply.Type != tunnel.Data || reply.Conn != 7 || string(reply.Payload) != "SELECT 1" {
@@ -862,17 +862,59 @@ func TestTunnelForwardsConnections(t *testing.T) {
 	}
 	m.End(s.ID, alice(), "")
 	// The CLI is told the session ended.
-	deadline := time.After(3 * time.Second)
+	waitEnd(t, p)
+	close(p.in)
+	<-errc
+}
+
+// tunnelGuard only bounds a wait for an event that is sure to come: a test
+// waits on the frame, and the guard is long enough for a loaded machine.
+const tunnelGuard = 30 * time.Second
+
+// waitEnd waits for the End frame the CLI is sent.
+func waitEnd(t *testing.T, p *pipeFrames) {
+	t.Helper()
+	deadline := time.After(tunnelGuard)
 	for {
 		select {
 		case fr := <-p.out:
 			if fr.Type == tunnel.End {
-				close(p.in)
-				<-errc
 				return
 			}
 		case <-deadline:
 			t.Fatal("the CLI was not told the session ended")
+		}
+	}
+}
+
+// A session ended the moment its CLI is told what it is connected to still
+// tells the CLI it ended. The watch for the end used to be put in place by
+// a goroutine started after that, which, when it ran late, found the
+// session ended and closed the tunnel without a word (the flaky
+// TestTunnelForwardsConnections under load).
+func TestTheCLIIsToldOfAnEndThatComesAsItConnects(t *testing.T) {
+	m, _, _, _ := setup(t)
+	for i := range 40 {
+		s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 5432}, alice(), "", "")
+		waitState(t, m, s.ID, StateLive)
+		token, err := m.Token(s.ID, alice())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &pipeFrames{in: make(chan tunnel.Frame, 4), out: make(chan tunnel.Frame, 4)}
+		p.in <- tunnel.Frame{Type: tunnel.Hello, Payload: []byte(`{"version":"0.8.2","host":"laptop"}`)}
+		errc := make(chan error, 1)
+		go func() { errc <- m.Tunnel(context.Background(), s.ID, token, p) }()
+		if fr := <-p.out; fr.Type != tunnel.Info {
+			t.Fatalf("round %d: first frame %d", i, fr.Type)
+		}
+		m.End(s.ID, alice(), "")
+		waitEnd(t, p)
+		// The CLI hangs up once told: the tunnel ends with that, or with
+		// the end it was told of, whichever it sees first.
+		close(p.in)
+		if err := <-errc; err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("round %d: %v", i, err)
 		}
 	}
 }

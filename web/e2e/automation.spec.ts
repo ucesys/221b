@@ -1,3 +1,4 @@
+import { E2E_ADMIN2, signInAs } from './accounts'
 import { inKind } from './cluster'
 import { expect, test } from './test'
 
@@ -410,6 +411,36 @@ test('Variables is a table of what each one gets, edited in a drawer', async ({ 
   await expect(row).toHaveCount(0)
 })
 
+test('a sensitive variable reads as set, never as its value or its digest, and its drawer keeps it unless a new one is typed (DB-71)', async ({ page }) => {
+  await page.goto('/#/variables')
+  const name = `E2E_SECRET_${Date.now()}`
+  const row = page.locator(`[data-testid=param-row][data-name=${name}]`)
+  await page.getByTestId('params-new').click()
+  await page.getByTestId('param-name').fill(name)
+  await page.getByTestId('param-sensitive').check()
+  await expect(page.getByTestId('param-value-hint')).toContainText('cluster’s Secret')
+  await page.getByTestId('param-value').fill('s3cret-one')
+  await page.getByTestId('param-save').click()
+  await expect(row).toContainText('set')
+  await expect(row).not.toContainText('s3cret-one')
+  await expect(row).not.toContainText('hidden:')
+
+  // The drawer opens it empty and says so; a new value replaces it.
+  await row.getByTestId('param-edit').click()
+  await expect(page.getByTestId('param-value')).toHaveValue('')
+  await expect(page.getByTestId('param-value-hint')).toContainText('Leave this empty to keep it')
+  await expect(page.getByTestId('param-drawer')).not.toContainText('hidden:')
+  await page.getByTestId('param-value').fill('s3cret-two')
+  await page.getByTestId('param-save').click()
+  await expect(row).toContainText('set')
+  await expect(row).not.toContainText('s3cret-two')
+
+  await row.getByTestId('param-edit').click()
+  await page.getByTestId('param-delete').click()
+  await page.getByTestId('confirm-ok').click()
+  await expect(row).toHaveCount(0)
+})
+
 test('a fleet can be started from Variables, and it opens there', async ({ page }) => {
   await page.goto('/#/variables')
   const name = `e2e-params-${Date.now()}`
@@ -514,7 +545,7 @@ test('Approvals moved to AIOps › Inbox, where the old Administration link open
   await expect(page.locator('[data-admin-page=approvals]')).toHaveCount(0)
 })
 
-test('Approvals lists what waits on top, then what was decided, each opening with who asked and who approved', async ({ page, request }) => {
+test('Approvals lists what waits on top, then what was decided, each opening with who asked and who approved; what one submitted waits for another SuperAdmin (IN-11)', async ({ page, request, browser }) => {
   const name = `e2e-appr-${Date.now()}`
   const SAME = { 'Sec-Fetch-Site': 'same-origin' }
   await page.goto('/#/scripts')
@@ -529,9 +560,40 @@ test('Approvals lists what waits on top, then what was decided, each opening wit
   await expect(page.getByRole('grid', { name: 'Inbox' })).toBeVisible()
   // Pending approvals come before decided ones (IN-03); no Kind filter (CF-38), so the approvals' rows are read.
   await expect(page.getByText('Loading the Inbox…')).toHaveCount(0)
+  // What the person asked for themselves waits too, for someone else, and says for whom (IN-11).
+  const waits = (x: string) => x === 'Pending' || x.startsWith('Waiting for ')
   const states = await page.locator('[data-inbox-row^="approval:"]').getByTestId('inbox-row-status').allTextContents()
-  const firstDecided = states.findIndex((x) => x !== 'Pending')
-  expect(firstDecided === -1 || !states.slice(firstDecided).includes('Pending')).toBe(true)
+  const firstDecided = states.findIndex((x) => !waits(x))
+  expect(firstDecided === -1 || !states.slice(firstDecided).some(waits)).toBe(true)
+  // The version just submitted is a row of whoever submitted it, marked
+  // as waiting for another SuperAdmin, with nothing to decide (IN-11).
+  const own = page.locator(`[data-inbox-row="approval:script-${name}-v1"]`)
+  await expect(own.getByTestId('inbox-row-status')).toHaveText('Waiting for another SuperAdmin')
+  // It is counted, as everything pending in the Inbox is: with this row
+  // waiting, the bell and the Inbox tab's count cannot say nothing waits.
+  await expect(page.getByTestId('inbox-bell')).toHaveAttribute('data-state', /^(p01|waiting)$/)
+  await expect(page.getByTestId('inbox-bell')).toHaveAttribute('title', /^[1-9]\d* waiting for you(, .+)?: open AIOps › Inbox$/)
+  await expect(page.locator('[data-cases-tab=inbox] .rk-count')).toHaveText(/^[1-9]\d*$/)
+  await own.locator('[role=rowheader]').click()
+  const ownDrawer = page.getByTestId('approval-drawer')
+  await expect(ownDrawer.getByTestId('approval-state')).toHaveText('Waiting for another SuperAdmin')
+  await expect(ownDrawer).toContainText('you cannot approve or reject it')
+  await expect(ownDrawer.getByTestId('approval-script-review')).toHaveText('Open')
+  await expect(ownDrawer.getByRole('button', { name: /Approve|Reject|Withdraw/ })).toHaveCount(0)
+  await page.goto('/#/aiops/inbox?show=all')
+  await expect(ownDrawer).toHaveCount(0)
+  // The second SuperAdmin has the same version to decide: Pending, with Review.
+  if (!inKind) {
+    const second = await signInAs(browser, E2E_ADMIN2)
+    try {
+      await second.goto(`/#/aiops/inbox/approval/script-${name}-v1`)
+      await expect(second.locator(`[data-inbox-row="approval:script-${name}-v1"]`).getByTestId('inbox-row-status')).toHaveText('Pending')
+      await expect(second.getByTestId('approval-drawer').getByTestId('approval-state')).toHaveText('Pending')
+      await expect(second.getByTestId('approval-drawer').getByTestId('approval-script-review')).toHaveText('Review')
+    } finally {
+      await second.context().close()
+    }
+  }
   // A row opens with who asked; one waiting is reviewed where it lives.
   const at = new Date().toISOString()
   await page.route('**/api/v1/admin/approvals', (route) => route.fulfill({ json: { items: [{ kind: 'script', state: 'pending', what: `${name} v1`, requestedBy: 'Bea', requestedAt: at, script: name, version: 1 }] } }))
@@ -714,4 +776,36 @@ test('the bell says what waits for you and opens it in the Inbox; the gear opens
   await expect(page).toHaveURL(/#\/(c\/[^/]+\/)?admin\//)
   await page.unroute('**/api/v1/admin/approvals')
   await page.unroute('**/api/v1/aiops/proposals**')
+})
+
+test('Run history lists the run requests with the runs, filtered by state, a rejected one with who and why (AU-24)', async ({ page }) => {
+  const at = new Date().toISOString()
+  const req = (id: number, state: string, more: object = {}) => ({
+    kind: 'request',
+    state,
+    at,
+    request: { id, cluster: 'local', script: 'e2e-requested', version: 1, fleet: '_cluster', targets: ['n1'], params: {}, by: { name: 'Pat' }, at, changed: ['MODE'], impact: [], state, ...more },
+  })
+  let real = 0
+  // The console's own list, which the simulator has no requests in, with two added.
+  await page.route('**/api/v1/automation/history', async (route) => {
+    const res = await route.fetch()
+    real = res.status()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: { entries: [req(9001, 'waiting'), req(9002, 'rejected', { decidedBy: { name: 'Sam' }, comment: 'not this week' }), ...(body.entries ?? [])] } })
+  })
+  try {
+    await page.goto('/#/run-history')
+    const requests = page.getByTestId('run-request-row')
+    await expect(requests).toHaveCount(2)
+    expect(real).toBe(200)
+    await expect(requests.nth(1).getByTestId('run-request-what')).toHaveText('rejected by Sam: not this week')
+    await expect(requests.first().getByTestId('run-request-approval')).toHaveAttribute('href', '#/aiops/inbox/approval/run-local-9001')
+    await page.getByTestId('runs-state').selectOption('rejected')
+    await expect(requests).toHaveCount(1)
+    await expect(requests.first()).toHaveAttribute('data-state', 'rejected')
+    await expect(page.getByTestId('run-row')).toHaveCount(0)
+  } finally {
+    await page.unroute('**/api/v1/automation/history')
+  }
 })

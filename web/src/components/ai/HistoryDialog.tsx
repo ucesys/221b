@@ -34,7 +34,7 @@ export function testText(t: TestBrief): string {
   return `tested: ${how}${t.passed} of ${t.cases} passed, ${fmtTs(t.at)}`
 }
 
-/** An entry as its select lists it: "Version 7 · live · in force · Nov 17 18:44 · ann", "Draft 9 · the draft now · tested 12/12 passed · …", "Draft 8 · discarded · …". */
+/** An entry as its select lists it: "Version 7 · live · in force · Nov 17 18:44 · ann · approved in request 4", "Draft 9 · the draft now · tested 12/12 passed · …", "Draft 8 · discarded · …". */
 export function entryOption(e: HistoryEntry): string {
   const t = e.test
   const parts = [
@@ -45,6 +45,7 @@ export function entryOption(e: HistoryEntry): string {
     t ? `tested ${t.passed}/${t.cases} passed${t.state === 'stopped' ? ' (stopped)' : t.state === 'failed' ? ' (failed)' : ''}` : '',
     e.at && !e.at.startsWith('0001') ? fmtTs(e.at) : '',
     e.by ?? '',
+    e.request ? `approved in request ${e.request}` : '',
   ]
   return parts.filter(Boolean).join(' · ')
 }

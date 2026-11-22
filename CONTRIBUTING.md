@@ -30,6 +30,7 @@ The [README](README.md#develop) has more: running against a real cluster, the br
 - **Requirements.** A change that meets or changes a requirement names it (for example `P3-02` or `RB-41`) in the code comment and the pull request, and updates [docs/requirements.md](docs/requirements.md). A design decision gets a record in [docs/architecture.md](docs/architecture.md).
 - **Security stance.** 221B never shows, logs or exports a Secret's value; every read and write is made as the person asking (Kubernetes impersonation); nothing an AI model writes runs without a person's approval. A change that touches any of these says so in the pull request.
 - **Upgrades.** A change to what the server keeps in the cluster (the settings ConfigMap, connection Secrets, local accounts) or to chart values keeps upgrades from the two previous releases working ([docs/upgrading.md](docs/upgrading.md)). Rename a value with a fallback for the old name rather than removing it.
+- **The database's schema.** A change to the schema is a new migration step in `server/internal/db/migrations`, never an edit of an earlier one ([docs/database.md](docs/database.md#writing-a-domains-repository)), and comes with the data model's page, [docs/data-model.md](docs/data-model.md), which a test compares with the schema.
 - **Release notes.** Add a line under *Unreleased* in [CHANGELOG.md](CHANGELOG.md) for anything a user or an operator would notice.
 - **Writing.** Comments and docs are plain English sentences, written for someone new to the code.
 

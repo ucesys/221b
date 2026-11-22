@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/ai"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/sherlocktools"
 	"github.com/ucesys/221b/server/internal/twoperson"
@@ -30,6 +32,13 @@ func aiSetup(t *testing.T) (*httptest.Server, *http.Client, *fakeclaude.Fake, *a
 // answers, and the audit log to read.
 func aiSetupWith(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service, *lockedBuffer) {
 	t.Helper()
+	return aiSetupOn(t, wrap, nil)
+}
+
+// aiSetupOn is aiSetupWith with the agents' records and the two-person
+// requests in the database d, when d is not nil.
+func aiSetupOn(t *testing.T, wrap func(http.Handler) http.Handler, d *db.DB) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service, *lockedBuffer) {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = 0
 	var h http.Handler = fake
@@ -46,7 +55,14 @@ func aiSetupWith(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.
 	var aiSvc *ai.Service
 	var svc *sherlock.Service
 	srv, c, _, aud, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
-		aiSvc = ai.New(ai.Options{Settings: o.Settings.(ai.SettingsStore), Keys: keys, DefaultURL: api.URL, ToolDefs: sherlocktools.Defs, Logger: logger})
+		var backend kv.Backend
+		tp := twoperson.New(nil, nil)
+		if d != nil {
+			backend = &kv.Keyed{Keys: map[string]kv.Backend{ai.ProvidersKey: ai.NewProvidersPG(d), ai.AgentsKey: ai.NewAgentsPG(d), ai.PromptsKey: ai.NewPromptsPG(d),
+				ai.TestsKey: ai.NewTestsPG(d), ai.PilotKey: ai.NewPilotPG(d)}, Rest: &kv.Memory{}}
+			tp = twoperson.New(&kv.Keyed{Keys: map[string]kv.Backend{twoperson.Key: twoperson.NewPG(d)}, Rest: &kv.Memory{}}, nil)
+		}
+		aiSvc = ai.New(ai.Options{Backend: backend, Settings: o.Settings.(ai.SettingsStore), Keys: keys, DefaultURL: api.URL, ToolDefs: sherlocktools.Defs, Logger: logger})
 		svc = sherlock.New(sherlock.Options{
 			Agent: aiSvc.Agent, OnAnswer: aiSvc.OnAnswer, Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
 			Settings: func() sherlock.Settings {
@@ -57,7 +73,7 @@ func aiSetupWith(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.
 		})
 		aiSvc.SetEngine(svc)
 		o.Sherlock, o.SherlockKeys, o.AI, o.SherlockDefaultURL = svc, keys, aiSvc, api.URL
-		o.TwoPerson = twoperson.New(nil, nil)
+		o.TwoPerson = tp
 	})
 	t.Cleanup(svc.Wait)
 	return srv, c, fake, aiSvc, svc, aud

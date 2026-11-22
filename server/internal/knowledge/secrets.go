@@ -42,6 +42,13 @@ type SecretStore interface {
 	SaveKeyIf(ctx context.Context, key string, b []byte, version string) error
 }
 
+// keyDeleter is a SecretStore that removes a key whole: a credential
+// emptied leaves no empty key behind in the Secret (DB-61: the Secret
+// object itself stays).
+type keyDeleter interface {
+	DeleteKeyIf(ctx context.Context, key, version string) error
+}
+
 // MemorySecret keeps the credentials until the server restarts.
 type MemorySecret struct {
 	mu      sync.Mutex
@@ -70,6 +77,23 @@ func (m *MemorySecret) SaveKeyIf(_ context.Context, key string, b []byte, versio
 	}
 	m.data[key] = append([]byte(nil), b...)
 	m.version++
+	return nil
+}
+
+// DeleteKeyIf removes a key, if the Secret is still at version.
+func (m *MemorySecret) DeleteKeyIf(_ context.Context, key, version string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		return nil
+	}
+	if version != fmt.Sprint(m.version) {
+		return fmt.Errorf("the Secret changed since it was read")
+	}
+	if _, ok := m.data[key]; ok {
+		delete(m.data, key)
+		m.version++
+	}
 	return nil
 }
 
@@ -177,7 +201,15 @@ func (s *Service) saveCreds(ctx context.Context, key string, ch CredsChange) err
 		if !c.empty() {
 			raw, _ = json.Marshal(c)
 		}
-		if err := s.o.Secrets.SaveKeyIf(ctx, key, raw, version); err == nil {
+		save := func() error { return s.o.Secrets.SaveKeyIf(ctx, key, raw, version) }
+		if d, ok := s.o.Secrets.(keyDeleter); ok && c.empty() {
+			// Nothing left: the key goes, not an empty value.
+			if !found {
+				return nil
+			}
+			save = func() error { return d.DeleteKeyIf(ctx, key, version) }
+		}
+		if err := save(); err == nil {
 			return nil
 		} else if try == 4 {
 			return fmt.Errorf("saving the credential failed: %w", err)

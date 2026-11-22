@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -39,6 +40,10 @@ const (
 // cache; a key it has not seen yet, a sign-in on another replica a moment
 // ago, is read from the API server. It needs get, list, watch, create,
 // update and delete on Secrets in that namespace.
+//
+// With a database the sessions are rows of auth_sessions (DB-66) and this
+// store is not run: it is then only what reads the Secrets for the
+// one-time copy (All) and empties them after it (Empty).
 type SessionStore struct {
 	secrets   corev1client.SecretInterface
 	namespace string
@@ -106,6 +111,42 @@ func (s *SessionStore) Synced(ctx context.Context) bool {
 
 func (s *SessionStore) name(key string) string { return s.prefix + "-session-" + key }
 
+// awayError marks an error of the API server that means it could not be
+// asked, which is what makes a sign-in's session a signed one
+// (auth.StoreAway, DB-65).
+type awayError struct{ error }
+
+func (e awayError) Unwrap() error { return e.error }
+
+// StoreAway says the store could not be asked.
+func (awayError) StoreAway() bool { return true }
+
+// away marks err when the API server did not answer, or answered that it
+// cannot serve just now, and leaves a refusal as it is. Not answering is
+// every error that is not an answer of the API server's: the connection
+// refused, reset or timed out, a name that does not resolve, a certificate
+// that does not verify, the time given to the call run out. "Not now" is
+// 429 (too many requests) and every 5xx: an internal error (which is how
+// etcd being away reads), the server unavailable, a timeout. Everything
+// else the API server says is a refusal: forbidden, unauthorized, a
+// conflict, already exists, not found, invalid, too large.
+func away(err error) error {
+	if err == nil {
+		return nil
+	}
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return awayError{err}
+	}
+	if code := status.Status().Code; code == 429 || code >= 500 {
+		return awayError{err}
+	}
+	return err
+}
+
 // Get returns a session record by key: from the cache, or from the API
 // server when the cache has not seen it. ok is false when there is none.
 func (s *SessionStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
@@ -135,7 +176,7 @@ func (s *SessionStore) Get(ctx context.Context, key string) ([]byte, bool, error
 		s.mu.Unlock()
 		return nil, false, nil
 	case err != nil:
-		return nil, false, fmt.Errorf("reading the session Secret: %w", err)
+		return nil, false, away(fmt.Errorf("reading the session Secret: %w", err))
 	}
 	b, ok := sec.Data[sessionKey]
 	return b, ok, nil
@@ -161,12 +202,12 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 				continue
 			}
 			if err != nil {
-				return false, fmt.Errorf("creating the session Secret: %w", err)
+				return false, away(fmt.Errorf("creating the session Secret: %w", err))
 			}
 			return true, nil
 		}
 		if err != nil {
-			return false, fmt.Errorf("reading the session Secret: %w", err)
+			return false, away(fmt.Errorf("reading the session Secret: %w", err))
 		}
 		if replace != nil && !replace(cur.Data[sessionKey]) {
 			return false, nil
@@ -183,7 +224,7 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("saving the session Secret: %w", err)
+			return false, away(fmt.Errorf("saving the session Secret: %w", err))
 		}
 		return true, nil
 	}
@@ -194,17 +235,22 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 func (s *SessionStore) Delete(ctx context.Context, key string) error {
 	err := s.secrets.Delete(ctx, s.name(key), metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting the session Secret: %w", err)
+		return away(fmt.Errorf("deleting the session Secret: %w", err))
 	}
 	return nil
 }
 
-// List returns the records in the cache, by key.
-func (s *SessionStore) List() map[string][]byte {
+// List returns the records in the cache, by key. A cache that has not
+// been filled yet holds nothing, which is not the same as no sessions: it
+// is an error, so nothing is taken to have ended.
+func (s *SessionStore) List(context.Context) (map[string][]byte, error) {
+	if !s.informer.HasSynced() {
+		return nil, errors.New("the session Secrets have not been listed yet")
+	}
 	out := map[string][]byte{}
 	list, err := s.lister.List(labels.Everything())
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("listing the session Secrets: %w", err)
 	}
 	head := s.prefix + "-session-"
 	for _, sec := range list {
@@ -216,5 +262,117 @@ func (s *SessionStore) List() map[string][]byte {
 			out[key] = b
 		}
 	}
-	return out
+	return out, nil
+}
+
+// All reads every session Secret from the API server, not from the cache,
+// which need not be running, and returns the records by key: what the
+// one-time copy into the database reads (DB-66). A Secret that holds no
+// record, one emptied after the copy, is not among them.
+func (s *SessionStore) All(ctx context.Context) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	head := s.prefix + "-session-"
+	opts := metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + sessionComponent, Limit: 500}
+	for {
+		list, err := s.secrets.List(ctx, opts)
+		if err != nil {
+			return nil, away(fmt.Errorf("listing the session Secrets: %w", err))
+		}
+		for _, sec := range list.Items {
+			key, ok := strings.CutPrefix(sec.Name, head)
+			if !ok {
+				continue
+			}
+			if b, ok := sec.Data[sessionKey]; ok {
+				out[key] = b
+			}
+		}
+		if list.Continue == "" {
+			return out, nil
+		}
+		opts.Continue = list.Continue
+	}
+}
+
+// Empty takes the record out of a session's Secret and leaves the Secret,
+// with no keys: the session is a row of the database from then on, and
+// the console deletes no Secret because a record set moved (DB-61). An
+// emptied Secret is no session to any console: one from before the move
+// reads it as a session that ended. It reports whether it emptied one; a
+// Secret already empty, or gone, is not an error.
+func (s *SessionStore) Empty(ctx context.Context, key string) (bool, error) {
+	name := s.name(key)
+	for range 3 {
+		cur, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, away(fmt.Errorf("reading the session Secret: %w", err))
+		}
+		if _, ok := cur.Data[sessionKey]; !ok {
+			return false, nil
+		}
+		// Over the version read: a console from before the move may be
+		// writing the session's last activity.
+		cur.Data = map[string][]byte{}
+		_, err = s.secrets.Update(ctx, cur, metav1.UpdateOptions{})
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, away(fmt.Errorf("emptying the session Secret: %w", err))
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("emptying the session Secret: it kept changing")
+}
+
+// DeleteEmpty deletes this release's session Secrets that hold no data:
+// what the move left of the sessions copied into the database (DB-66),
+// once the copy is recorded, which the caller checks. It is the one case
+// of a Secret deleted because a record set moved (DB-61). A Secret is
+// taken by its labels, app.kubernetes.io/component=session and the
+// release's app.kubernetes.io/instance, and its name; one with data (a
+// session a console from before the move started since) is left until it
+// expires and is emptied, and one written between the list and the delete
+// is left (the delete is held to the version listed). With no instance
+// label given nothing is deleted. It says how many it deleted.
+func (s *SessionStore) DeleteEmpty(ctx context.Context) (int, error) {
+	instance := s.labels["app.kubernetes.io/instance"]
+	if instance == "" {
+		return 0, nil
+	}
+	head := s.prefix + "-session-"
+	opts := metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + sessionComponent + ",app.kubernetes.io/instance=" + instance, Limit: 500}
+	n := 0
+	for {
+		list, err := s.secrets.List(ctx, opts)
+		if err != nil {
+			return n, away(fmt.Errorf("listing the session Secrets: %w", err))
+		}
+		for _, sec := range list.Items {
+			if !strings.HasPrefix(sec.Name, head) || len(sec.Data) > 0 || len(sec.StringData) > 0 ||
+				sec.Labels["app.kubernetes.io/component"] != sessionComponent || sec.Labels["app.kubernetes.io/instance"] != instance {
+				continue
+			}
+			uid, version := sec.UID, sec.ResourceVersion
+			err := s.secrets.Delete(ctx, sec.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &version}})
+			switch {
+			case err == nil:
+				n++
+			case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+				// Gone already, or written since it was listed: left.
+			default:
+				return n, away(fmt.Errorf("deleting an empty session Secret: %w", err))
+			}
+		}
+		if list.Continue == "" {
+			return n, nil
+		}
+		opts.Continue = list.Continue
+	}
 }

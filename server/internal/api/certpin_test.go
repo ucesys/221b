@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/apps/appstest"
 	"github.com/ucesys/221b/server/internal/apps/repotest"
 	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/certpin/certpintest"
@@ -85,7 +86,7 @@ func TestTrustingARepositorysCertificateThroughTheAPI(t *testing.T) {
 	creds := credentials.New(credentials.Options{HTTP: &http.Client{Transport: &http.Transport{}}, Dial: (&net.Dialer{Timeout: 5 * time.Second}).DialContext})
 	repos := apps.NewRepos(apps.RepoOptions{Client: &http.Client{Transport: &certpin.ContextTransport{Base: &http.Transport{}}}, Credentials: creds})
 	srv, c, _, auditOut, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
-		store := apps.NewMemoryStore()
+		store := appstest.Store(t)
 		o.Apps, o.Repos, o.Credentials = store, repos, creds
 		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog(), Apps: store, Repos: repos, Credentials: creds})
 	})

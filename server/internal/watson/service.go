@@ -369,7 +369,9 @@ func (s *Service) record(action string, it *Item, who Who, outcome, detail strin
 	if s.opts.Audit == nil {
 		return
 	}
-	d := "command=" + quote(it.Line)
+	// The values of the command's parameters are hidden, their names kept
+	// (DB-74): the record says which command ran with which parameters.
+	d := "command=" + quote(MaskLine(it.Line))
 	if detail != "" {
 		d += " " + detail
 	}
@@ -1136,6 +1138,22 @@ func (s *Service) Items(cl Cluster, who Who) []*Item {
 	for _, it := range s.items {
 		if it.Cluster == cl.ID && s.Visible(it, who, cl) {
 			out = append(out, it)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	return out
+}
+
+// Listed is Items as copies made under the lock, for a reader outside
+// the service: a queue's worker changes an item's status while it runs,
+// and a reader of the items themselves would race with it.
+func (s *Service) Listed(cl Cluster, who Who) []Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Item
+	for _, it := range s.items {
+		if it.Cluster == cl.ID && s.Visible(it, who, cl) {
+			out = append(out, *it)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })

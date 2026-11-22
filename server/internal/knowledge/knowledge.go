@@ -37,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
 	"github.com/ucesys/221b/server/internal/credentials"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -187,12 +188,10 @@ type Options struct {
 	// Store, when set, is the wiki's store whatever the settings say
 	// (tests).
 	Store Store
-	// WikiConfigMap keeps the wiki in the ConfigMap <release>-wiki: the
-	// temporary store, used while the settings name none (CF-57); nil
-	// leaves it out, and the wiki is kept nowhere until a store is
-	// chosen. WikiBytes is the most it holds (0: DefaultWikiBytes).
-	WikiConfigMap kv.Backend
-	WikiBytes     int
+	// WikiStore keeps the wiki in the console's database, used while the
+	// settings name no Git repository or S3 bucket (DB-96); nil leaves it
+	// out (a test), and the wiki is kept nowhere until a store is chosen.
+	WikiStore *DBStore
 	// Model is how Mycroft is asked; nil reads sources and keeps their
 	// excerpts, but writes no pages.
 	Model Completer
@@ -236,6 +235,9 @@ type Service struct {
 	o      Options
 	kv     kv.Backend
 	limits Limits
+	// kindsQuiet keeps the sources' reads for the Wiki sync jobs quiet
+	// while the database is away (DB-15).
+	kindsQuiet db.Quiet
 
 	// writeMu serialises this process's writes to the ConfigMap.
 	writeMu sync.Mutex
@@ -258,8 +260,8 @@ type Service struct {
 	store    Store
 	storeFor string
 	pulled   time.Time
-	// cmStore is the ConfigMap store, when the chart made its ConfigMap.
-	cmStore *ConfigMapStore
+	// dbStore is the wiki's store in the database (DB-96).
+	dbStore *DBStore
 
 	// gitRepos are Administration › Settings › Repositories' git repositories (RP-03).
 	gitRepos gitRepos
@@ -334,9 +336,7 @@ func New(o Options) *Service {
 		o.Dir = filepath.Join(os.TempDir(), "221b-knowledge")
 	}
 	s := &Service{o: o, kv: o.Backend, limits: o.Limits.withDefaults(), files: map[string]File{}, manifest: newManifest(), index: NewIndex(nil, nil, 0, o.Now()), pending: map[string]pendingDoc{}}
-	if o.WikiConfigMap != nil {
-		s.cmStore = NewConfigMapStore(o.WikiConfigMap, o.WikiBytes)
-	}
+	s.dbStore = o.WikiStore
 	s.SetFixes(o.Fixes)
 	// Runs are numbered from the clock, so a restart does not reuse one.
 	s.runSeq.Store(o.Now().Unix() % 100000)

@@ -9,7 +9,11 @@ install_kubeconform
 
 helm lint --strict "$CHART" --set clusterName=ci
 
-render() { helm template "$@" "$CHART" --namespace consoles; }
+# Every render but the database's leaves out the bundled database's own
+# objects (DB-69: there by default), so the console's checks read the
+# console's; render_db keeps them, for the database's checks.
+render_db() { helm template "$@" "$CHART" --namespace consoles; }
+render() { render_db "$@" | awk 'BEGIN { RS = "\n---\n"; ORS = "\n---\n" } !/\n    app.kubernetes.io\/name: "221b-db"\n/'; }
 # Against the oldest and newest Kubernetes releases CI tests.
 validate() {
   local f
@@ -29,8 +33,8 @@ render k8s-console --set clusterName=ci --set kubeletStats=false | tee "$WORK/ch
 render k8s-console --set clusterName=ci --set cases.cleanStart.token=2026-11-07 --set cases.cleanStart.dryRun=true | tee "$WORK/chart-clean.yaml" | validate
 echo "--- without reading Secrets"
 render k8s-console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
-render k8s-console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
-render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
+render k8s-console --set clusterName=ci --set connections.store=secrets | tee "$WORK/chart-secrets.yaml" | validate
+render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false | tee "$WORK/chart-sherlock.yaml" | validate
 render k8s-console --set clusterName=ci --set sherlock.provider.kind=bedrock --set sherlock.provider.region=eu-west-1 --set sherlock.lockProvider=true | tee "$WORK/chart-provider.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render k8s-console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
@@ -91,7 +95,6 @@ render k8s-console --set clusterName=ci --set backup=null | tee "$WORK/chart-bac
 # --- Knowledge (Phase 12): its egress, and values from before it.
 render k8s-console --set clusterName=ci --set 'knowledge.egressCIDRs[0]=10.30.0.0/16' --set 'knowledge.egressPorts={7990}' | tee "$WORK/chart-knowledge.yaml" | validate
 render k8s-console --set clusterName=ci --set knowledge=null | tee "$WORK/chart-knowledge-reuse.yaml" | validate
-render k8s-console --set clusterName=ci --set knowledge.configMapStore.enabled=false | tee "$WORK/chart-knowledge-nowiki.yaml" | validate
 # --- Helm repositories (Phase 12, wave 5): their egress, and values from before it.
 render k8s-console --set clusterName=ci --set 'helmRepositories.egressCIDRs[0]=10.40.0.0/16' --set 'helmRepositories.egressPorts={8443}' | tee "$WORK/chart-helm-repos.yaml" | validate
 render k8s-console --set clusterName=ci --set helmRepositories=null | tee "$WORK/chart-helm-repos-reuse.yaml" | validate
@@ -108,6 +111,18 @@ render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "
 render k8s-console --set clusterName=ci --set image.digest=sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d | tee "$WORK/chart-digest.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=main --set image.pullPolicy=IfNotPresent | tee "$WORK/chart-policy.yaml" | validate
 
+# --- The database (Phase 13, DB-69): the chart's own by default, or the
+# operator's; never none.
+echo "--- the bundled database: the default, one member, then three with backups to S3"
+render_db k8s-console --set clusterName=ci | tee "$WORK/chart-default-db.yaml" | validate
+render_db k8s-console --set clusterName=ci --set database.mode=bundled | tee "$WORK/chart-db.yaml" | validate
+render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.ha=true \
+  --set database.bundled.backup.s3.bucket=backups --set 'database.bundled.backup.s3.egressCIDRs[0]=10.30.0.0/16' | tee "$WORK/chart-db-ha.yaml" | validate
+echo "--- an external database"
+render_db k8s-console --set clusterName=ci --set replicaCount=2 --set database.mode=external --set database.external.host=pg.example.com \
+  --set database.external.passwordSecret.name=pg --set database.external.caSecret=pg-ca --set database.external.port=6432 \
+  --set database.external.listenerHost=pg-direct.example.com | tee "$WORK/chart-db-external.yaml" | validate
+refused() { ! helm template k8s-console "$CHART" --namespace consoles --set clusterName=ci "$@" > /dev/null 2>&1; }
 fail=0
 check() {
   local what=$1
@@ -121,6 +136,142 @@ check() {
 }
 out=$WORK/chart-default.yaml
 netpol() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "${1:-$out}"; }
+# The database (Phase 13, DB-69). By default it is the chart's own, one
+# member; none is refused. Bundled: a StatefulSet of one member, or three kept apart with a
+# budget; the console is given its Service, its own password and the CA, and
+# nothing else of the Secret; the members are closed to all but the console
+# and themselves. External: the address, port and Secrets from values, the
+# connections shared among the replicas, no database of the chart's. What
+# cannot work is refused.
+statefulset() { sed -n '/^kind: StatefulSet$/,/^---/p' "$1"; }
+# The Role of the bundled database's pods, of a render.
+dbrole() {
+  awk 'BEGIN { RS = "\n---\n" } /\nkind: Role\n/ && /\n  name: k8s-console-221b-db\n/' "$1"
+}
+
+database_modes() {
+  local d=$WORK/chart-db.yaml ha=$WORK/chart-db-ha.yaml ext=$WORK/chart-db-external.yaml
+  local def=$WORK/chart-default-db.yaml
+  statefulset "$def" | has '^  replicas: 1$' && grep -A1 'name: DB_HOST' "$def" | has '"k8s-console-221b-db.consoles.svc"' &&
+    has '221b.io/database-mode: "bundled"' < "$def" && ! statefulset "$out" | has replicas &&
+    statefulset "$d" | has '^  replicas: 1$' && statefulset "$ha" | has '^  replicas: 3$' &&
+    statefulset "$ha" | has 'requiredDuringSchedulingIgnoredDuringExecution' && ! statefulset "$d" | has 'podAntiAffinity' &&
+    has '^kind: PodDisruptionBudget$' < "$ha" && has 'name: k8s-console-221b-db-replicas$' < "$ha" &&
+    ! has 'name: k8s-console-221b-db-replicas$' < "$d" &&
+    statefulset "$d" | has 'readOnlyRootFilesystem: true' && statefulset "$d" | has 'runAsNonRoot: true' &&
+    statefulset "$d" | grep -A1 'name: PATRONI_KUBERNETES_USE_ENDPOINTS' | has '"false"' &&
+    statefulset "$d" | grep -A1 'name: PATRONI_KUBERNETES_SCOPE_LABEL' | has '221b.io/patroni-scope' &&
+    statefulset "$d" | has '^        221b.io/patroni-scope: k8s-console-221b-db$' &&
+    statefulset "$d" | grep -A1 'name: WALG_FILE_PREFIX' | has '/backup' && ! statefulset "$ha" | has 'WALG_FILE_PREFIX' &&
+    statefulset "$ha" | grep -A1 'name: WALG_S3_PREFIX' | has '"s3://backups/221b"' &&
+    grep -A1 'name: DB_HOST' "$d" | has '"k8s-console-221b-db.consoles.svc"' &&
+    grep -A1 'name: DB_SSLMODE' "$d" | has 'verify-full' &&
+    sed -n '/^kind: Deployment$/,/^---/p' "$d" | grep -B1 -A4 'secretName: k8s-console-221b-db$' | has 'key: app-password' &&
+    ! sed -n '/^kind: Deployment$/,/^---/p' "$d" | has 'superuser-password' &&
+    sed -n '/^kind: Deployment$/,/^---/p' "$out" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
+    sed -n '/^kind: Deployment$/,/^---/p' "$d" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
+    sed -n '/^kind: Deployment$/,/^---/p' "$ext" | grep -A7 'startupProbe:' | has 'failureThreshold: 90$' &&
+    dbrole "$d" | has 'configmaps' &&
+    dbrole "$d" | has 'k8s-console-221b-db-leader$' && dbrole "$d" | has 'k8s-console-221b-db-failover$' && dbrole "$d" | has 'k8s-console-221b-db-2$' &&
+    [ "$(dbrole "$d" | grep -c 'verbs:')" = 4 ] && [ "$(dbrole "$d" | grep -c 'resourceNames:')" = 2 ] &&
+    [ "$(dbrole "$d" | grep -c '"patch"')" = 2 ] && ! dbrole "$d" | grep -A1 'resources: \["configmaps"\]' | has '"patch"' &&
+    netpol "$d" | has 'app.kubernetes.io/name: "221b-db"' &&
+    netpol "$ha" | grep -A6 'port: 443$' | has 'cidr: "10.30.0.0/16"' &&
+    ! has '^kind: StatefulSet$' < "$ext" &&
+    grep -A1 'name: DB_HOST' "$ext" | has '"pg.example.com"' && grep -A1 'name: DB_PORT' "$ext" | has '"6432"' &&
+    grep -A1 'name: DB_MAX_CONNECTIONS' "$ext" | has '"10"' &&
+    grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
+    grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
+    netpol "$ext" | has 'port: 6432$' &&
+    # No value starts a console without its database (DB-02; DB-67 is
+    # withdrawn): the option is gone from the values and the Deployment,
+    # also when someone still sets it.
+    ! has 'DB_START_WITHOUT' < "$d" && ! has 'DB_START_WITHOUT' < "$ext" && ! has 'DB_START_WITHOUT' < "$def" &&
+    ! render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.startWithoutIt=true | has 'DB_START_WITHOUT' &&
+    ! grep -q 'startWithoutIt' "$CHART/values.yaml" "$CHART"/templates/* &&
+    refused --set database.mode=mongo && refused --set database.mode=external &&
+    # No mode keeps the records in ConfigMaps any more (DB-69), and values
+    # kept from a release before 0.13, which have no database block, are
+    # refused with what to do rather than rendered half.
+    refused --set database.mode=none && refused --set database=null &&
+    { helm template k8s-console "$CHART" --namespace consoles --set clusterName=ci --set database.mode=none 2>&1 || true; } | has 'database.mode=none was removed' &&
+    { helm template k8s-console "$CHART" --namespace consoles --set clusterName=ci --set database=null 2>&1 || true; } | has 'reset-then-reuse-values' &&
+    refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable &&
+    ! refused --set database.mode=external --set database.external.host=h --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
+    refused --set database.mode=bundled --set database.bundled.backup.dailyAt=2am &&
+    # DB-84: the base backup's schedule is a cron expression; dailyAt is
+    # turned into the same, and the schedule wins when both are given.
+    statefulset "$d" | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"0 2 \* \* \*"' && ! statefulset "$d" | has 'DB_BACKUP_AT' &&
+    statefulset "$d" | has 'command: \["/usr/local/bin/221b-backup"\]' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.backup.dailyAt=03:45 | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"45 3 \* \* \*"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set 'database.bundled.backup.schedule=0 */6 * * *' --set database.bundled.backup.dailyAt=03:45 | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"0 \*/6 \* \* \*"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.backup.schedule=@weekly | grep -A1 'name: DB_BACKUP_SCHEDULE' | has '"@weekly"' &&
+    refused --set database.mode=bundled --set 'database.bundled.backup.schedule=every night' &&
+    refused --set database.mode=bundled --set 'database.bundled.backup.schedule=0 2 * *' &&
+    refused --set database.mode=bundled --set database.bundled.backup.enabled=false --set database.bundled.restore.fromBackup=true &&
+    # A restore's time goes to PostgreSQL with its offset in numbers, never
+    # as Z, which it refuses there; a time without a zone is refused here.
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29Z |
+      grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '"2026-11-20T02:19:29+00:00"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29.5-08:00 |
+      grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '"2026-11-20T02:19:29.5-08:00"' &&
+    render_db k8s-console --set clusterName=ci --set database.mode=bundled --set database.bundled.restore.fromBackup=true | grep -A1 'name: DB_RESTORE_TARGET_TIME' | has '""' &&
+    refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=2026-11-20T02:19:29 &&
+    refused --set database.mode=bundled --set database.bundled.restore.fromBackup=true --set-string database.bundled.restore.targetTime=yesterday
+}
+# DB-83: an external database signed in to with a token of the cloud's
+# IAM: no password, the way and the region passed; with a password, without
+# TLS, without a region or of an unknown way, refused.
+database_iam() {
+  local ext=(--set clusterName=ci --set database.mode=external --set database.external.host=db.abc.eu-west-1.rds.amazonaws.com)
+  local aws gcp
+  aws=$(render_db k8s-console "${ext[@]}" --set database.external.iamAuth=aws --set database.external.aws.region=eu-west-1 \
+    --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/console')
+  gcp=$(render_db k8s-console "${ext[@]}" --set database.external.iamAuth=gcp --set database.external.sslMode=verify-ca --set database.external.caSecret=sql-ca)
+  grep -A1 'name: DB_IAM_AUTH' <<<"$aws" | has '"aws"' && grep -A1 'name: DB_AWS_REGION' <<<"$aws" | has '"eu-west-1"' &&
+    ! has 'DB_PASSWORD_FILE' <<<"$aws" && has 'eks.amazonaws.com/role-arn' <<<"$aws" &&
+    grep -A1 'name: DB_IAM_AUTH' <<<"$gcp" | has '"gcp"' && ! has 'DB_AWS_REGION' <<<"$gcp" && ! has 'DB_PASSWORD_FILE' <<<"$gcp" &&
+    ! render_db k8s-console "${ext[@]}" | has 'DB_IAM_AUTH' &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=azure &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=aws --set database.external.aws.region=eu-west-1 --set database.external.passwordSecret.name=pg &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=gcp --set database.external.sslMode=disable --set database.external.allowInsecure=true &&
+    refused "${ext[@]:2}" --set database.external.iamAuth=aws
+}
+# The mode guard and the production refusal go by what a lookup finds,
+# which helm template never finds. So they are rendered from a copy of the
+# chart whose lookups read values instead (guardTest.namespace, .deployment
+# and .dbSecret, each what the lookup would return): an upgrade from a
+# release without a database (0.12, whose Deployment has no annotation, or
+# mode none) gets the bundled one with the default values, or an external
+# one; bundled to external and back is refused without allowModeChange; an
+# external one is refused where a bundled database's Secret is kept; one
+# member is refused in a namespace labelled production unless acknowledged,
+# and a plain install in any other namespace passes.
+database_guard() {
+  local g=$WORK/guard-chart
+  rm -rf "$g" && cp -r "$CHART" "$g" &&
+    sed -i -e 's#lookup "v1" "Namespace" "" .Release.Namespace#((.Values.guardTest | default dict).namespace | default dict)#' \
+      -e 's#lookup "apps/v1" "Deployment" .Release.Namespace (include "b221.fullname" .)#((.Values.guardTest | default dict).deployment | default dict)#' \
+      -e 's#lookup "v1" "Secret" .Release.Namespace (include "b221.dbSecret" .)#((.Values.guardTest | default dict).dbSecret | default dict)#' "$g/templates/_helpers.tpl" &&
+    [ "$(grep -c 'guardTest' "$g/templates/_helpers.tpl")" = 3 ] || return 1
+  passes() { helm template k8s-console "$g" --namespace consoles --set clusterName=ci "$@" > /dev/null 2>&1; }
+  local was012='guardTest.deployment={"metadata":{"name":"k8s-console-221b"}}'
+  local wasNone='guardTest.deployment={"metadata":{"annotations":{"221b.io/database-mode":"none"}}}'
+  local wasBundled='guardTest.deployment={"metadata":{"annotations":{"221b.io/database-mode":"bundled"}}}'
+  local wasExternal='guardTest.deployment={"metadata":{"annotations":{"221b.io/database-mode":"external"}}}'
+  local kept='guardTest.dbSecret={"metadata":{"name":"k8s-console-221b-db"}}'
+  local prod='guardTest.namespace={"metadata":{"labels":{"221b.io/environment":"production"}}}'
+  local staging='guardTest.namespace={"metadata":{"labels":{"221b.io/environment":"staging"}}}'
+  local ext=(--set database.mode=external --set database.external.host=pg.example.com)
+  passes && passes --set-json "$was012" && passes --set-json "$wasNone" && passes --set-json "$wasBundled" &&
+    passes --set-json "$was012" "${ext[@]}" && passes --set-json "$wasNone" "${ext[@]}" && passes --set-json "$wasExternal" "${ext[@]}" &&
+    ! passes --set-json "$wasBundled" "${ext[@]}" && passes --set-json "$wasBundled" "${ext[@]}" --set database.allowModeChange=true &&
+    ! passes --set-json "$wasExternal" && passes --set-json "$wasExternal" --set database.allowModeChange=true &&
+    ! passes --set-json "$was012" --set-json "$kept" "${ext[@]}" && passes --set-json "$was012" --set-json "$kept" &&
+    passes --set-json "$staging" && ! passes --set-json "$prod" && ! passes --set-json "$prod" --set-json "$was012" &&
+    passes --set-json "$prod" --set database.bundled.acknowledgeNoHA=true && passes --set-json "$prod" --set database.bundled.ha=true &&
+    passes --set-json "$prod" "${ext[@]}"
+}
 # SSH to nodes (Phase 11): the toolbox config carries toolbox.ssh.
 ssh_values() {
   grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml" &&
@@ -154,13 +305,13 @@ helm_repos_egress() {
     ! netpol "$WORK/chart-default.yaml" | has 'port: 8443$' &&
     ! netpol "$WORK/chart-helm-repos-reuse.yaml" | has 'port: 8443$'
 }
-# Mycroft's knowledge (Phase 12): its records in a ConfigMap of its own,
-# named in the env and the Role; the wiki's local copy in an emptyDir;
+# Mycroft's knowledge (Phase 12): its ConfigMap of before 0.13, named
+# after the release (no env); the wiki's local copy in an emptyDir;
 # its sources and store reached at knowledge.egressCIDRs, a rule only when
 # listed; values from an older release take the defaults.
 knowledge_values() {
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-knowledge$' &&
-    grep -A1 'name: KNOWLEDGE_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-knowledge"' &&
+    ! grep -q 'name: KNOWLEDGE_CONFIGMAP' "$out" &&
     grep -A1 'name: KNOWLEDGE_DIR' "$out" | has '/var/lib/221b/knowledge' &&
     grep -A1 'name: KNOWLEDGE_REFRESH_GIT' "$out" | has '"15m"' &&
     grep -A2 'name: knowledge$' "$out" | has 'sizeLimit: "512Mi"' &&
@@ -171,15 +322,17 @@ knowledge_values() {
     ! netpol "$out" | has 'cidr: "10.30.0.0/16"' &&
     ! netpol "$WORK/chart-knowledge-reuse.yaml" | has 'port: 7990$'
 }
-# The temporary wiki store (CF-57): its ConfigMap, named in the env and the
+# The temporary wiki store of before (CF-57): its ConfigMap is a ConfigMap
+# of before 0.13 like the others (copy_sources), named in no env and
+# patched by no rule: the wiki is kept in the database (DB-96), and
+# knowledge.configMapStore is gone. Was: its ConfigMap, named in the env and the
 # Role, on by default and with values from an older release; none with
 # knowledge.configMapStore.enabled=false.
 wiki_configmap() {
-  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-wiki$' &&
-    grep -A1 'name: WIKI_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-wiki"' &&
-    grep -A1 'name: WIKI_CONFIGMAP' "$WORK/chart-knowledge-reuse.yaml" | has '"consoles/k8s-console-221b-wiki"' &&
-    ! grep -q 'k8s-console-221b-wiki' "$WORK/chart-knowledge-nowiki.yaml" &&
-    ! grep -q 'name: WIKI_CONFIGMAP' "$WORK/chart-knowledge-nowiki.yaml"
+  configmaps < "$out" | grep -qx 'k8s-console-221b-wiki keep -' &&
+    ! grep -q 'name: WIKI_CONFIGMAP' "$out" && ! grep -q 'name: WIKI_CONFIGMAP' "$WORK/chart-knowledge-reuse.yaml" &&
+    ! settings_role | has 'k8s-console-221b-wiki\|"patch"' &&
+    ! grep -q 'configMapStore:' "$CHART/values.yaml" "$CHART"/templates/*
 }
 # Hosts outside Kubernetes (Phase 12) are reached on the same rule: their
 # other SSH ports are added once, to the same CIDRs; with SSH off, none.
@@ -193,28 +346,30 @@ host_ports() {
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
 automation_configmap() {
-  # On by default: a ConfigMap of its own, named in the env and in the
-  # settings Role; off, neither.
+  # On by default: a ConfigMap of before 0.13, named after the release (no
+  # env); off, the same, since it is copied and deleted whatever is on (November
+  # 21, 2026), and Automation is off.
   local off
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-automation$' &&
-    grep -A1 'name: AUTOMATION_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-automation"' &&
-    grep -q '"k8s-console-221b-automation"' "$out" || return 1
+    ! grep -q 'name: AUTOMATION_CONFIGMAP' "$out" || return 1
   off=$(render k8s-console --set clusterName=ci --set automation.enabled=false)
-  ! grep -q 'k8s-console-221b-automation' <<<"$off" && grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
+  sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-automation$' &&
+    ! grep -q 'name: AUTOMATION_CONFIGMAP' <<<"$off" &&
+    grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
 }
 issues_values() {
-  # On by default (Phase 12): a ConfigMap of its own, named in the env and
-  # in the settings Role, and who reports and triages; reporter groups and
+  # On by default (Phase 12): a ConfigMap of before 0.13, named after the
+  # release (no env), and who reports and triages; reporter groups and
   # local reporter groups reach the auth file and bind nothing; off, the
   # report page is off and the ConfigMap stays, for the cases (wave 5).
   local off reporters
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-issues$' &&
-    grep -A1 'name: ISSUES_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-issues"' &&
+    ! grep -q 'name: ISSUES_CONFIGMAP' "$out" &&
     grep -A1 'name: ISSUES_REPORT_ROLES' "$out" | has '"superAdmin,superViewer,admin,viewer"' &&
     grep -A1 'name: ISSUES_OPERATOR_ROLES' "$out" | has '"superAdmin,admin"' || return 1
   off=$(render k8s-console --set clusterName=ci --set issues.enabled=false)
-  sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-issues$' && grep -A1 'name: ISSUES_CONFIGMAP' <<<"$off" | has '"consoles/k8s-console-221b-issues"' &&
-    grep -q '"k8s-console-221b-issues"' <<<"$off" && grep -A1 'name: ISSUES$' <<<"$off" | has '"false"' || return 1
+  sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-issues$' && ! grep -q 'name: ISSUES_CONFIGMAP' <<<"$off" &&
+    grep -A1 'name: ISSUES$' <<<"$off" | has '"false"' || return 1
   reporters=$(render k8s-console --set clusterName=ci --set 'issues.reporterGroups[0]=staff' \
     --set 'auth.local.groups[0].name=helpdesk' --set 'auth.local.groups[0].role=reporter')
   has '"reporterGroups": \[' <<<"$reporters" && has '"role": "reporter"' <<<"$reporters" && ! grep -q 'RoleBinding.*helpdesk\|221b-reporter-' <<<"$reporters" || return 1
@@ -232,64 +387,120 @@ issues_report_url() {
   reuse=$(render k8s-console --set clusterName=ci --set issues=null)
   ! grep -q 'name: ISSUES_REPORT_URL' <<<"$reuse"
 }
-# The AI agents (Phase 12): their records in a ConfigMap of their own, named
-# in the env and the Role; the baselines from values in another, mounted,
+# The AI agents (Phase 12): their ConfigMap of before 0.13, named after the
+# release (no env); the baselines from values in another, mounted,
 # with a checksum that restarts the console when they change.
 ai_configmaps() {
   local with
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-ai$' &&
-    grep -A1 'name: AI_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-ai"' &&
+    ! grep -q 'name: AI_CONFIGMAP' "$out" &&
     grep -A1 'name: AGENTS_DIR' "$out" | has '/etc/221b/agents' || return 1
   with=$(render k8s-console --set clusterName=ci --set agents.troubleshooter.instructions='Cite our runbooks.')
   grep -q '^  troubleshooter.md: "Cite our runbooks."$' <<<"$with" &&
     [ "$(grep 'checksum/agents' <<<"$with")" != "$(grep 'checksum/agents' "$out")" ] &&
     ! render k8s-console --set clusterName=ci --set agents.watson.instructions=x > /dev/null 2>&1
 }
-# The agents' proposed changes (Phase 12): their records in a ConfigMap of
-# their own, <release>-proposals since CF-104, named in the env and the
-# Role, approved by cases.approverRoles. <release>-cases, where builds
-# before kept them, is still made, for the console's one copy at start,
-# and no longer named in the env or the Role.
+# The agents' proposed changes (Phase 12): their ConfigMap of before 0.13,
+# <release>-proposals since CF-104, named after the release, approved by
+# cases.approverRoles. <release>-cases, where builds before CF-104 kept
+# them, is rendered by the same rule (copy_sources) and read beside it by
+# the copy; it is not named in the env.
 cases_values() {
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-proposals$' &&
     sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-cases$' &&
-    grep -A1 'name: PROPOSALS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-proposals"' &&
+    ! grep -q 'name: PROPOSALS_CONFIGMAP' "$out" &&
     ! grep -q 'name: CASES_CONFIGMAP' "$out" &&
     grep -A1 'name: CASES_APPROVER_ROLES' "$out" | has '"superAdmin,admin"' || return 1
   grep -A1 'name: CASES_APPROVER_ROLES' <<<"$(render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=viewer')" | has '"viewer"' &&
     ! render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=reporter' >/dev/null 2>&1
 }
-# --- Jobs (Phase 12): their records in a ConfigMap of their own, named in
-# the env and the Role; the time zone of new schedules only when set.
+# --- Jobs (Phase 12): their ConfigMap of before 0.13, named after the release;
+# the time zone of new schedules only when set.
 jobs_configmap() {
   local with
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-runs$' &&
-    grep -A1 'name: RUNS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-runs"' &&
-    grep -q '"k8s-console-221b-runs"' "$out" && ! grep -q 'name: JOBS_TIME_ZONE' "$out" || return 1
+    ! grep -q 'name: RUNS_CONFIGMAP' "$out" &&
+    ! grep -q 'name: JOBS_TIME_ZONE' "$out" || return 1
   with=$(render k8s-console --set clusterName=ci --set jobs.timeZone=Europe/Berlin)
   grep -A1 'name: JOBS_TIME_ZONE' <<<"$with" | has '"Europe/Berlin"'
 }
-# --- Case work (Phase 12): the cases in a ConfigMap of their own, named
-# in the env and the Role.
+# --- Case work (Phase 12): its ConfigMap of before 0.13, named after the release.
 casework_configmap() {
   sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-casework$' &&
-    grep -A1 'name: CASEWORK_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-casework"' &&
-    grep -q '"k8s-console-221b-casework"' "$out"
+    ! grep -q 'name: CASEWORK_CONFIGMAP' "$out"
 }
-# --- One flow for findings and cases (Phase 12, wave 6): each case is a
-# ConfigMap the console makes, <release>-case-<n>, named by a prefix and
-# the release in the env; the Role grants ConfigMaps in the namespace only
-# (a Role, never the ClusterRole), without resourceNames, since the names
-# do not exist yet; the clean start's token and dry run reach the env.
+# --- One flow for findings and cases (Phase 12, wave 6): each case was a
+# ConfigMap, <release>-case-<n>, named after the release and labelled
+# with its name (SELF_RELEASE); the Role grants reading and deleting ConfigMaps in the namespace
+# only (a Role, never the ClusterRole), without resourceNames, since the
+# names are not known; the clean start's token and dry run reach the env.
 case_configmaps() {
-  grep -A1 'name: CASE_CONFIGMAPS' "$out" | has '"consoles/k8s-console-221b-case-"' &&
-    grep -A1 'name: CASE_INSTANCE' "$out" | has '"k8s-console"' &&
-    settings_role | grep -B2 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resources: \["configmaps"\]' &&
-    ! settings_role | grep -A1 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resourceNames' &&
+  ! grep -q 'name: CASE_CONFIGMAPS' "$out" && ! grep -q 'name: CASE_INSTANCE' "$out" &&
+    grep -A1 'name: SELF_RELEASE' "$out" | has '"consoles/k8s-console"' &&
+    settings_role | grep -B1 'verbs: \["get", "list", "delete"\]' | has 'resources: \["configmaps"\]' &&
     grep -A1 'name: CASES_CLEAN_START_TOKEN' "$out" | has 'value: ""' &&
     grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$out" | has '"false"' &&
     grep -A1 'name: CASES_CLEAN_START_TOKEN' "$WORK/chart-clean.yaml" | has '"2026-11-07"' &&
     grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$WORK/chart-clean.yaml" | has '"true"'
+}
+# The ConfigMaps of before 0.13 (DB-72, ADR-167). Where the chart cannot
+# see the cluster (helm template), every one is rendered as 0.12 did, but
+# empty and with helm.sh/resource-policy keep, so nothing applying the
+# output deletes one before the console copied it. In a cluster (lookup,
+# here read from values in a copy of the chart) only those still there
+# are rendered, so Helm keeps them for the copy and never makes one again
+# once the console deleted it; Automation's too, whatever
+# automation.enabled says; the temporary wiki store's too (DB-96). The
+# configuration ConfigMaps are rendered as before, without keep. No env names a ConfigMap of
+# before: the env names the release (RELEASE_FULLNAME, POD_NAMESPACE),
+# and the console works out each name from it.
+COPY_SOURCES='k8s-console-221b k8s-console-221b-ai k8s-console-221b-audit k8s-console-221b-automation k8s-console-221b-automation-runs k8s-console-221b-cases k8s-console-221b-casework k8s-console-221b-issues k8s-console-221b-knowledge k8s-console-221b-proposals k8s-console-221b-runs k8s-console-221b-sessions'
+# The ConfigMaps rendered, one line each: the name, keep or -, data or -.
+configmaps() {
+  python3 -c '
+import sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get("kind") == "ConfigMap":
+        m = d["metadata"]
+        keep = (m.get("annotations") or {}).get("helm.sh/resource-policy") == "keep"
+        print(m["name"], "keep" if keep else "-", "data" if d.get("data") else "-")' | sort
+}
+copy_sources() {
+  local c=$WORK/copy-chart blind seen audit auto_off auto_there n
+  rm -rf "$c" && cp -r "$CHART" "$c" &&
+    sed -i -e 's#lookup "v1" "Namespace" "" "kube-system"#((.Values.copyTest | default dict).seen | default dict)#' \
+      -e 's#lookup "v1" "ConfigMap" $.Release.Namespace $name#(get (($.Values.copyTest | default dict).present | default dict) $name)#' "$c/templates/_helpers.tpl" &&
+    [ "$(grep -c 'copyTest' "$c/templates/_helpers.tpl")" = 2 ] || return 1
+  rendered() { helm template k8s-console "$c" --namespace consoles --set clusterName=ci "$@"; }
+  local sees='copyTest.seen={"metadata":{"name":"kube-system"}}'
+  blind=$(configmaps < "$out")
+  for n in $COPY_SOURCES; do grep -qx "$n keep -" <<<"$blind" || return 1; done
+  grep -qx "k8s-console-221b-agents - -" <<<"$blind" || return 1
+  for n in auth-config toolbox; do grep -qx "k8s-console-221b-$n - data" <<<"$blind" || return 1; done
+  [ "$(grep -c ' keep ' <<<"$blind")" = 13 ] &&
+    # Every template that makes one goes through the rule.
+    [ "$(grep -c 'include "b221.copySource"' "$CHART/templates/configmap.yaml")" = 1 ] || return 1
+  # In a cluster that holds none (installed at 0.13, or copied and
+  # deleted): none rendered, and the env still names each.
+  seen=$(rendered --set-json "$sees")
+  [ "$(configmaps <<<"$seen" | grep -c ' keep ')" = 0 ] && ! configmaps <<<"$seen" | grep -q 'k8s-console-221b-wiki' &&
+    configmaps <<<"$seen" | grep -qx 'k8s-console-221b-agents - -' || return 1
+  # No env names one (November 21, 2026): the console works each name out
+  # from the release, <namespace>/<fullname>-<what>.
+  for n in SETTINGS AUDIT SESSIONS AI KNOWLEDGE AUTOMATION AUTOMATION_RUNS ISSUES PROPOSALS RUNS CASEWORK; do
+    ! grep -q "name: ${n}_CONFIGMAP\$" <<<"$seen" || return 1
+  done
+  grep -A1 'name: RELEASE_FULLNAME$' <<<"$seen" | has '"k8s-console-221b"' &&
+    grep -A3 'name: POD_NAMESPACE$' <<<"$seen" | has 'fieldPath: metadata.namespace' || return 1
+  # One still there (a 0.12 release, or a copy that failed): that one.
+  audit=$(rendered --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-audit":{"metadata":{"name":"k8s-console-221b-audit"}}}' | configmaps | grep ' keep ')
+  [ "$audit" = 'k8s-console-221b-audit keep -' ] || return 1
+  # Automation off: rendered blind as every other, and in a cluster
+  # while it is there; copied and deleted all the same (November 21).
+  auto_off=$(rendered --set automation.enabled=false | configmaps)
+  auto_there=$(rendered --set automation.enabled=false --set-json "$sees" --set-json 'copyTest.present={"k8s-console-221b-automation":{"metadata":{"name":"k8s-console-221b-automation"}}}' | configmaps | grep ' keep ')
+  grep -qx 'k8s-console-221b-automation keep -' <<<"$auto_off" && grep -qx 'k8s-console-221b-automation-runs keep -' <<<"$auto_off" &&
+    [ "$auto_there" = 'k8s-console-221b-automation keep -' ]
 }
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | has '^  name: k8s-console-221b-auth$'; }
 kinds() {
@@ -352,8 +563,8 @@ probes_and_resources() {
 hardened() { grep -q 'runAsNonRoot: true' "$out" && grep -q 'readOnlyRootFilesystem: true' "$out"; }
 # The ClusterRole reads the kinds the tabs show (from Phase 8 volumes,
 # storage classes and volume attachments too), pod logs, metrics and the
-# kubelets' stats, and Secrets only when asked to; the Role patches the
-# settings ConfigMap, by name, and nothing else.
+# kubelets' stats, and Secrets only when asked to; the Role patches no
+# ConfigMap, and reads and deletes the ConfigMaps of before 0.13 (DB-72).
 cluster_role() { sed -n '/^kind: ClusterRole$/,/^---/p' "${1:-$out}"; }
 settings_role() { sed -n '/^kind: Role$/,/^---/p' "$out"; }
 # Every resource the ClusterRole names, as group/resource, sorted.
@@ -404,31 +615,46 @@ sherlock_provider() {
 }
 sherlock_key() {
   grep -A1 'name: SHERLOCK_API_URL' "$out" | has '"https://api.anthropic.com"' &&
-    grep -A1 'name: SHERLOCK_SECRET' "$out" | has '/k8s-console-221b-sherlock"' &&
+    ! grep -q 'name: SHERLOCK_SECRET' "$out" &&
     ! grep -q 'name: SHERLOCK_API_KEY' "$out" &&
-    grep -A4 'name: SHERLOCK_API_KEY' "$WORK/chart-sherlock.yaml" | has 'name: "claude"' &&
-    ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
+    grep -A4 'name: SHERLOCK_API_KEY' "$WORK/chart-sherlock.yaml" | has 'name: "claude"'
 }
 settings_only() {
-  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-ai", "k8s-console-221b-knowledge", "k8s-console-221b-wiki", "k8s-console-221b-runs", "k8s-console-221b-automation", "k8s-console-221b-automation-runs", "k8s-console-221b-issues", "k8s-console-221b-proposals", "k8s-console-221b-cases", "k8s-console-221b-casework"\]' &&
-    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create","list","get","update","patch","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
-    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 4 ]
+  [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ] &&
+    ! settings_role | has '"patch"'
 }
-# The connections to other clusters: Secrets in the release namespace, by
-# default; in memory on request, and then nothing is granted on Secrets.
+# The connections to other clusters: Secrets in the release namespace,
+# always (DB-97), named after the release the console is told
+# (RELEASE_FULLNAME, the pod's namespace); connections.store is gone:
+# secrets, the one way there is, renders as the default does, and memory
+# or anything else is refused with what to do.
 connections_store() {
+  local refused
   settings_role | grep -A1 'resources: \["secrets"\]' | has 'verbs: \["get", "list", "watch", "create", "update", "delete"\]' &&
-    grep -A1 'name: CONNECTIONS_SECRETS' "$out" | has '"consoles/k8s-console-221b"' &&
-    ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | has 'secrets' &&
-    ! grep -q 'CONNECTIONS_SECRETS' "$WORK/chart-memory.yaml" &&
+    ! grep -q 'name: CONNECTIONS_SECRETS' "$out" && grep -A1 'name: RELEASE_FULLNAME' "$out" | has '"k8s-console-221b"' &&
+    diff -q <(grep -Ev 'checksum/|token:' "$out") <(grep -Ev 'checksum/|token:' "$WORK/chart-secrets.yaml") > /dev/null &&
+    ! grep -q 'connections:' "$CHART/values.yaml" || return 1
+  refused=$({ render k8s-console --set clusterName=ci --set connections.store=memory 2>&1 || true; })
+  has 'connections.store: memory is gone in 0.13' <<<"$refused" && has 'Remove connections.store from your values' <<<"$refused" &&
+    ! render k8s-console --set clusterName=ci --set connections.store=memory > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set connections.store=disk > /dev/null 2>&1
 }
-# The backups' key (ADR-137): its Secret named and only read; nothing on
-# Secrets with connections in memory, where there is no key.
+# The backups' key (ADR-137): its Secret named and only read.
 backup_key() {
   settings_role | grep -A2 'resourceNames: \["k8s-console-221b-backup-key"\]' | has 'verbs: \["get"\]' &&
-    ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | has 'backup-key' &&
     grep -q 'backup-key' "$CHART/templates/NOTES.txt"
+}
+# A session made while the session store is away (DB-65): how long it
+# lasts is a value the server is told. The key that signs it is in a
+# Secret the console makes itself, as it makes the backups' key: no
+# template renders it, and the Role's create on Secrets covers it.
+outage_session() {
+  grep -A1 'name: SESSION_OUTAGE' "$out" | has '"30m"' &&
+    render k8s-console --set clusterName=ci --set auth.outageSession=10m | grep -A1 'name: SESSION_OUTAGE' | has '"10m"' &&
+    settings_role | grep -A1 'resources: \["secrets"\]' | has '"create"' &&
+    grep -q 'outageSession: 30m' "$CHART/values.yaml" &&
+    ! grep -rq 'session-key' "$CHART/templates"
 }
 no_kubelet_stats() {
   grep -q 'nodes/proxy' "$out" && ! grep -q 'nodes/proxy' "$WORK/chart-nostats.yaml" &&
@@ -442,7 +668,8 @@ settings_configmap() {
        /^  name: k8s-console-221b$/ { nm = 1 }
        /^data:/ { data = 1 }
        END { done(); exit !(found && !bad) }' "$out" &&
-    grep -A1 'name: SETTINGS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b"' && grep -A1 'name: REFRESH' "$out" | has '"3s"'
+    ! grep -q 'name: SETTINGS_CONFIGMAP' "$out" && grep -A1 'name: RELEASE_FULLNAME' "$out" | has '"k8s-console-221b"' &&
+    grep -A3 'name: POD_NAMESPACE' "$out" | has 'fieldPath: metadata.namespace' && grep -A1 'name: REFRESH' "$out" | has '"3s"'
 }
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | has 'name: k8s-console-221b'; }
 name_required() { ! render k8s-console > /dev/null 2>&1; }
@@ -500,7 +727,7 @@ open_when_exposed() {
 # Several replicas (P7-02): every pod joins the election, the leader is
 # reached at its pod IP with the shared token, the replicas reach each
 # other through the network policy, and with more than one a disruption
-# budget and a spread over nodes; connections in memory cannot be shared.
+# budget and a spread over nodes.
 replicas() {
   local ha=$WORK/chart-ha.yaml
   grep -A1 'name: LEADER_LEASE' "$out" | has '"consoles/k8s-console-221b-leader"' &&
@@ -521,8 +748,7 @@ replicas() {
     grep -A1 'podAntiAffinity:' "$WORK/chart-ha-hard.yaml" | has 'requiredDuringSchedulingIgnoredDuringExecution' &&
     grep -q 'nodeAffinity:' "$WORK/chart-ha-hard.yaml" && grep -A6 'podAntiAffinity:' "$WORK/chart-ha-hard.yaml" | has 'app.kubernetes.io/instance: k8s-console' &&
     ! render k8s-console --set clusterName=ci --set antiAffinity=hard | has 'podAntiAffinity' &&
-    { render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=always 2>&1 || true; } | has 'antiAffinity must be soft, hard or empty' &&
-    { render k8s-console --set clusterName=ci --set replicaCount=2 --set connections.store=memory 2>&1 || true; } | has 'needs connections.store=secrets'
+    { render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=always 2>&1 || true; } | has 'antiAffinity must be soft, hard or empty'
 }
 # Watson (Phase 6): reads only by default. With localCluster.mode=write and
 # sign-in off, changes run as the console, bound to the write role and a
@@ -618,11 +844,12 @@ check "the ClusterRole's verbs are read-only, but for the access reviews" read_o
 check "with sign-in it impersonates people and reviews their access; without, neither" impersonation
 check "pod logs are only read" log_verbs
 check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
-check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only
-check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
+check "it patches no ConfigMap, reads and deletes the ConfigMaps of before 0.13, and writes the connection Secrets, in its namespace" settings_only
+check "connections are kept in Secrets in the release namespace, always; connections.store: memory is refused with what to do" connections_store
 check "the backups' key Secret is named in the Role and only read" backup_key
+check "a session made while the session store is away lasts auth.outageSession; its key's Secret is the console's to make" outage_session
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
-check "the settings ConfigMap is created empty and named to the server" settings_configmap
+check "the settings ConfigMap is rendered empty, and the release (RELEASE_FULLNAME, the pod's namespace) names it and every ConfigMap of before to the server" settings_configmap
 check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs
 check "Sherlock's API key is kept in the release's Secret or taken from sherlock.existingSecret, never in the values" sherlock_key
 check "Sherlock's provider from the chart, locked when asked (Phase 6 review)" sherlock_provider
@@ -662,18 +889,22 @@ check "node shells run in a namespace of their own at Pod Security privileged, c
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
+check "the database: bundled by default, as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it and no value starts without it; none, values from before 0.13 and what cannot work are refused" database_modes
+check "an external database's IAM sign-in: the way and the region passed and no password; a password, no TLS, no region and an unknown way refused" database_iam
+check "the mode guard: a release without a database gets one, bundled by default or external; bundled and external do not flip without allowModeChange; one member in a production namespace only when acknowledged" database_guard
 check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
 check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
 check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
-check "Automation keeps its records in a ConfigMap of its own, named in the env and the Role; off, neither" automation_configmap
-check "the AI agents keep their records in a ConfigMap of their own, and their baselines come from values, mounted" ai_configmaps
-check "the issue service keeps its records in a ConfigMap of its own, named in the env and the Role, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
+check "Automation's ConfigMap of before 0.13, the one-time copy's source, is rendered where the cluster cannot be seen, named after the release; off, the same" automation_configmap
+check "the AI agents' ConfigMap of before 0.13, the one-time copy's source, is rendered, and their baselines come from values, mounted" ai_configmaps
+check "the issue service's ConfigMap of before 0.13, the one-time copy's source, is named after the release, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
 check "the report page's address reaches the console from issues.reportURL, and none is set by default" issues_report_url
-check "Mycroft's knowledge keeps its records in a ConfigMap of its own, its local copy in an emptyDir, and reaches its sources only at knowledge.egressCIDRs" knowledge_values
-check "the temporary wiki store has a ConfigMap of its own, named in the env and the Role, and none when knowledge.configMapStore.enabled is false" wiki_configmap
-check "the jobs keep their runs in a ConfigMap of their own, named in the env and the Role; the time zone of new schedules when set" jobs_configmap
-check "the cases are kept in a ConfigMap of their own, named in the env and the Role" casework_configmap
-check "each case is a ConfigMap the console makes in its namespace, granted by the Role without names, with the clean start's values in the env" case_configmaps
-check "the agents' proposed changes keep their records in a ConfigMap of their own, <release>-proposals, named in the env and the Role, with who approves them; <release>-cases stays, readable, for the copy at start" cases_values
+check "Mycroft's knowledge has its ConfigMap of before 0.13, the one-time copy's source, its local copy in an emptyDir, and reaches its sources only at knowledge.egressCIDRs" knowledge_values
+check "the temporary wiki store's ConfigMap is a ConfigMap of before 0.13, in no env and patched by no rule; knowledge.configMapStore is gone" wiki_configmap
+check "the jobs' ConfigMap of before 0.13, the one-time copy's source, is named after the release; the time zone of new schedules when set" jobs_configmap
+check "the cases' ConfigMap of before 0.13, the one-time copy's source, is named after the release" casework_configmap
+check "each case's ConfigMap of before 0.13, which the copy reads and deletes, is read and deleted by the Role without names, labelled with the release's name, with the clean start's values in the env" case_configmaps
+check "the ConfigMaps of before 0.13: rendered while they are there, empty and kept by helm upgrade, all of them where the cluster cannot be seen; none made again once deleted; the configuration ConfigMaps as before" copy_sources
+check "the agents' proposed changes' ConfigMap of before 0.13, <release>-proposals, the one-time copy's source, is named after the release, with who approves them; <release>-cases is read beside it by the copy" cases_values
 exit "$fail"
