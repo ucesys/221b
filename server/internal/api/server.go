@@ -1231,8 +1231,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if f := st.TimeFormat; f != nil {
 		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
 	}
-	if b := st.AlertBanners; b != nil && !*b {
-		detail += ", alert banners hidden"
+	if b := st.AlertBanners; b != nil && *b {
+		detail += ", alert banners shown"
 	}
 	if !st.ChecksImages() {
 		detail += ", newer images not checked"

@@ -26,7 +26,7 @@ import { AdminPageView } from './components/AdminPage'
 import { TipLayer } from './components/TipLayer'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
-import { badgeOf, bannersOf, tabTone } from './lib/alerts'
+import { alertBannersShown, badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
 import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams, aiHref } from './lib/router'
@@ -550,7 +550,7 @@ function Shell() {
                 summary={summary ?? null}
                 pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined}
                 accessError={live.accessError}
-                alerts={view === 'tabs' && tab !== 'alerts' && live.settings?.alertBanners !== false ? bannersOf(alerts.rows, now) : []}
+                alerts={view === 'tabs' && tab !== 'alerts' && alertBannersShown(live.settings) ? bannersOf(alerts.rows, now) : []}
                 alertsHref={href('alerts')}
               />
             )}

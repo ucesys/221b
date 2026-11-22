@@ -243,6 +243,11 @@ function lowerFirst(s: string): string {
 }
 
 /** The banners every other tab shows: red for what is failing, amber for what waits. Acknowledged and resolved alerts stay on the Alerts tab only. */
+/** Whether the alert banners show on the tabs: only once Administration › Settings › General turns them on (off by default since 0.13). */
+export function alertBannersShown(settings?: { alertBanners?: boolean } | null): boolean {
+  return settings?.alertBanners === true
+}
+
 export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
   const rows = all.filter((r) => !r.ack && isActive(r))
   const failed = rows.filter((r) => r.kind === 'pod' && r.severity === 'failed')

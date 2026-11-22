@@ -52,8 +52,9 @@ type Settings struct {
 	// DefaultPendingGrace.
 	PendingGraceSeconds *int `json:"pendingGraceSeconds,omitempty"`
 	// AlertBanners says whether every tab but Alerts shows what the Alerts
-	// tab has in banners at the top; nil is true. Off, the Alerts tab's
-	// name still turns red or amber (asked at the second Toolbox review).
+	// tab has in banners at the top; nil is false (off by default since 0.13,
+	// the owner, November 22, 2026). Off, the Alerts tab's name still turns
+	// red or amber (asked at the second Toolbox review).
 	AlertBanners *bool `json:"alertBanners,omitempty"`
 	// FleetsPage says whether the Fleets tab shows; nil is true. Off, the
 	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
