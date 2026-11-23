@@ -147,6 +147,9 @@ type Service struct {
 	// writeMu serialises this process's changes, so they meet no conflict
 	// among themselves; cache is the last state read or saved.
 	writeMu sync.Mutex
+	// skipTo, under writeMu, is the lowest number a new case may take
+	// after a save that failed left an object it could not delete.
+	skipTo  int
 	cacheMu sync.Mutex
 	cache   *state
 

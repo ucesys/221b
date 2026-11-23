@@ -370,6 +370,10 @@ func (st *state) touch(r *Case, now time.Time, fn func() error) error {
 
 // add keeps a new case, numbered next.
 func (st *state) add(r Case) *Case {
+	// A number whose object a failed save could not delete is skipped.
+	if st.svc != nil && st.index.Next < st.svc.skipTo {
+		st.index.Next = st.svc.skipTo
+	}
 	r.Number = st.index.Next
 	st.index.Next++
 	if st.cases == nil {
@@ -672,6 +676,23 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 			return err
 		}
 	}
+	// The objects made here, until the index that numbers them is saved:
+	// a save that fails after them (another writer saved the index first)
+	// deletes them, so that the retry, which numbers its cases from the
+	// index again, does not find its own object there and fail on it.
+	var made []int
+	saved := false
+	defer func() {
+		if saved {
+			return
+		}
+		for _, n := range made {
+			if err := s.cases.Delete(ctx, caseName(n)); err != nil {
+				s.log.Warn("a case made by a save that failed could not be deleted: its number is skipped", "case", n, "err", err)
+				s.skipTo = max(s.skipTo, n+1)
+			}
+		}
+	}()
 	for _, w := range creates {
 		if st.cases[w.n].dropped {
 			continue
@@ -680,7 +701,8 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 		if err != nil {
 			return err
 		}
-		w.l.version, w.l.was, w.l.created = v, w.b, false
+		made = append(made, w.n)
+		w.l.version, w.l.was = v, w.b
 	}
 	type part struct {
 		bit int
@@ -702,6 +724,10 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 			return err
 		}
 		st.version = next
+	}
+	saved = true
+	for _, w := range creates {
+		w.l.created = false
 	}
 	for _, w := range changes {
 		v, err := s.cases.Save(ctx, caseName(w.n), CaseKey, w.b, w.l.version)

@@ -945,3 +945,60 @@ func TestAKnownIssueKeepsWhoWroteItFU02(t *testing.T) {
 		t.Fatalf("an operator does not see who wrote it: %+v", v.CreatedBy)
 	}
 }
+
+// indexRace is a store where another writer saves the index once, just
+// before this one does, when armed.
+type indexRace struct {
+	*kv.Memory
+	armed bool
+}
+
+func (r *indexRace) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if r.armed && key == IndexKey {
+		r.armed = false
+		was, _, err := r.Memory.LoadKey(ctx, IndexKey)
+		if err != nil && !errors.Is(err, kv.ErrNotFound) {
+			return "", err
+		}
+		if was == nil {
+			was = []byte("{}")
+		}
+		if _, err := r.Memory.SaveKey(ctx, IndexKey, was, ""); err != nil {
+			return "", err
+		}
+	}
+	return r.Memory.SaveKey(ctx, key, b, version)
+}
+
+// noDelete is a store of case objects that cannot delete one.
+type noDelete struct{ *kv.MemoryObjects }
+
+func (noDelete) Delete(context.Context, string) error { return errors.New("the API server is away") }
+
+// A new case whose index save meets another writer's is saved again under
+// the same number: the object the failed save made is deleted, so the
+// retry does not find it there and fail with "object exists" five times.
+// When it cannot be deleted, the retry takes the next number.
+func TestACaseRetriedAfterAnIndexConflictKeepsItsNumber(t *testing.T) {
+	store := &indexRace{Memory: &kv.Memory{}}
+	f := newFixture(t, Options{Backend: store, Cases: &kv.MemoryObjects{}})
+	first, err := f.s.Submit(ctx, alice, Submission{Text: "problem one"})
+	if err != nil || first.Report.Number != 1 {
+		t.Fatalf("first: C-%d, %v", first.Report.Number, err)
+	}
+	f.clock.add(time.Minute)
+	store.armed = true
+	second, err := f.s.Submit(ctx, alice, Submission{Text: "problem two"})
+	if err != nil || second.Report.Number != 2 || store.armed {
+		t.Fatalf("second, after a conflict on the index: C-%d, %v (armed %v)", second.Report.Number, err, store.armed)
+	}
+	if got, err := f.s.Report(ctx, alice, 2); err != nil || got.Text != "problem two" {
+		t.Fatalf("C-2 reads %+v, %v", got, err)
+	}
+	// The object cannot be deleted: its number is skipped.
+	f2 := newFixture(t, Options{Backend: &indexRace{Memory: &kv.Memory{}, armed: true}, Cases: noDelete{&kv.MemoryObjects{}}})
+	r, err := f2.s.Submit(ctx, alice, Submission{Text: "problem three"})
+	if err != nil || r.Report.Number != 2 {
+		t.Fatalf("with an object left behind: C-%d, %v", r.Report.Number, err)
+	}
+}
