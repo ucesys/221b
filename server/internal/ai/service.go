@@ -716,6 +716,65 @@ func (s *Service) Available(ctx context.Context, id string) error {
 	return err
 }
 
+// Setup is an agent's model and effort as set now, for the jobs it runs
+// (AIOps › Jobs › Schedule): Model is the model in force, auto.Auto when
+// Auto picks it, then from AutoFrom to AutoTo (its floor model on); Effort
+// is "" (the model's default), a level or auto, then at least FloorEffort.
+type Setup struct {
+	Model        string
+	DefaultModel bool
+	AutoFrom     string
+	AutoTo       string
+	Provider     string
+	Effort       string
+	FloorEffort  string
+}
+
+// SetupOf is an agent's model and effort as set now; false for no agent.
+func (s *Service) SetupOf(ctx context.Context, id string) (Setup, bool) {
+	if _, ok := InfoOf(id); !ok {
+		return Setup{}, false
+	}
+	snap := s.read(ctx)
+	set := s.settingsOf(snap, id)
+	out := Setup{Effort: set.Effort}
+	if set.Effort == auto.Auto {
+		out.FloorEffort = set.FloorEffort
+	}
+	pid := set.Provider
+	if pid == "" {
+		pid = s.defaultID(snap)
+	}
+	p, ok := s.provider(snap, pid)
+	if !ok {
+		return out, true
+	}
+	out.Provider = p.Name
+	out.Model, out.DefaultModel = modelOf(set, p), set.Model == ""
+	if set.Model == auto.Auto {
+		out.Model, out.DefaultModel = auto.Auto, false
+		l := ladderOf(p)
+		low := 0
+		if set.FloorModel != "" {
+			low = max(l.Rank(set.FloorModel), 0)
+		}
+		lo, hi := -1, -1
+		for _, o := range l {
+			r := auto.TierRank(o.Tier)
+			if r < low {
+				continue
+			}
+			if lo < 0 || r < lo {
+				lo, out.AutoFrom = r, o.Model
+			}
+			if r > hi {
+				hi, out.AutoTo = r, o.Model
+			}
+		}
+	}
+	return out, true
+}
+
 // ---------- the administrators' view ----------
 
 // ProviderView is a provider as Administration › AI › Providers shows it.

@@ -86,6 +86,9 @@ export interface RunBrief {
   provider?: string
   effort?: string
   pickBy?: string
+  /** Why Auto picked its effort, and the step that moved its model up: the Runs table's Model and Effort columns. */
+  pickWhy?: string
+  movedUp?: MovedUp
   health?: RunHealth
   severities?: Severities
   /** What the run could not be used for (I-3): see RunLimits. */
@@ -95,6 +98,17 @@ export interface RunBrief {
 }
 
 /** A run's model moved up at one of its steps (AI-44): the step, from 1, the model before, and why. */
+/** A job's agent's model and effort as set now: model "auto" picks from autoFrom to autoTo; effort "" is the model's default, "auto" at least floorEffort. */
+export interface AgentSetup {
+  model?: string
+  defaultModel?: boolean
+  autoFrom?: string
+  autoTo?: string
+  provider?: string
+  effort?: string
+  floorEffort?: string
+}
+
 export interface MovedUp {
   step: number
   from: string
@@ -313,6 +327,8 @@ export interface Job {
   running: boolean
   spentToday: number
   stoppedToday?: string
+  /** Its agent's model and effort as set now: the Schedule table's Model and Effort columns. */
+  setup?: AgentSetup
   /** Its agent is turned off ("the Summarizer is off"), the job on or paused: Run now is refused, and its scheduled and event runs fail, until the agent is on (JB-25). */
   agentOff?: string
   /** Why its agent cannot work now otherwise: its provider, or the job's cluster. */

@@ -3,7 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
-import { JobsTab, WhenCell } from './JobsTab'
+import { exportTable } from '../../lib/table'
+import { jobColumns, JobsTab, WhenCell } from './JobsTab'
 import { clockInBrowser } from '../../lib/format'
 
 vi.mock('../../api/jobs', async (original) => ({
@@ -433,5 +434,51 @@ describe('AIOps › Jobs: a job whose agent is off, and a failed last run', () =
     const callout = await screen.findByTestId('job-last-failed-callout')
     expect(callout.textContent).toContain('Failed · the Auditor is off. Open the run')
     expect(within(callout).getByRole('link').getAttribute('href')).toContain('run-9')
+  })
+})
+
+// --- Model and Effort columns (the owner, November 23) ---
+describe('AIOps › Jobs › Schedule: each job’s agent’s model and effort', () => {
+  const autoAudit: api.Job = { ...audit, setup: { model: 'auto', autoFrom: 'claude-sonnet-5-5', autoTo: 'claude-opus-5-5', provider: 'Anthropic', effort: 'auto', floorEffort: 'medium' } }
+  const defAlerts: api.Job = { ...alerts, setup: { model: 'claude-opus-5-5', defaultModel: true, provider: 'Anthropic' } }
+  const ownDigest: api.Job = { ...alerts, id: 'daily-digest', kind: 'daily-digest', label: 'Daily digest', setup: { model: 'claude-haiku-5-5', provider: 'Anthropic', effort: 'low' } }
+  beforeAll(() => {
+    Element.prototype.scrollTo = () => {}
+  })
+  beforeEach(() => {
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...view(), jobs: [autoAudit, defAlerts, ownDigest, backup] })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('shows them in their columns, sorts by them, hides them in the column chooser, and exports them', async () => {
+    render(<JobsTab route={route()} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const cell = (r: HTMLElement, id: string) => within(r).getByTestId(id).textContent
+    expect(cell(rows[0]!, 'job-model')).toBe('Auto (Claude Sonnet 5.5 to Claude Opus 5.5)on Anthropic')
+    expect(cell(rows[0]!, 'job-effort')).toBe('Autoat least medium')
+    expect(cell(rows[1]!, 'job-model')).toBe('Default (Claude Opus 5.5)on Anthropic')
+    expect(cell(rows[1]!, 'job-effort')).toBe('Default')
+    expect(cell(rows[2]!, 'job-model')).toBe('Claude Haiku 5.5on Anthropic')
+    expect(cell(rows[2]!, 'job-effort')).toBe('Low')
+    // The backup has no agent.
+    expect(cell(rows[3]!, 'job-model')).toBe('—')
+    expect(screen.getByTestId('jobs-table').querySelector('thead')!.textContent!.replace(/[↑↓]/g, '')).toBe('JobModelEffortWhenBudgetLast runNext runState')
+    // In the jobs' own order until a heading sorts them.
+    fireEvent.click(within(screen.getByTestId('jobs-table')).getByRole('button', { name: /^Model/ }))
+    await waitFor(() => expect(screen.getAllByTestId('job-row').map((r) => r.dataset.job)).toEqual(['nightly-audit', 'daily-digest', 'alert-diagnosis', 'backup-s3']))
+    fireEvent.click(within(screen.getByTestId('jobs-table-tools')).getByRole('button', { name: 'Columns' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Model' }))
+    await waitFor(() => expect(within(screen.getAllByTestId('job-row')[0]!).queryByTestId('job-model')).toBeNull())
+    fireEvent.click(screen.getByTestId('cols-all'))
+    const sheet = exportTable([autoAudit, defAlerts, backup], jobColumns(true, new Map(), new Map()), Date.now())
+    expect(sheet.head.slice(0, 6)).toEqual(['Job', 'Agent', 'Clusters', 'Model', 'Provider', 'Effort'])
+    expect(sheet.rows.map((r) => r.slice(3, 6))).toEqual([
+      ['Auto (Claude Sonnet 5.5 to Claude Opus 5.5)', 'Anthropic', 'Auto (at least medium)'],
+      ['Default (Claude Opus 5.5)', 'Anthropic', 'Default'],
+      ['', '', ''],
+    ])
   })
 })

@@ -4,7 +4,8 @@ import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
 import { findingTitles } from './RunDetail'
-import { RunsTab, runSummary } from './RunsTab'
+import { exportTable } from '../../lib/table'
+import { runColumns, RunsTab, runSummary } from './RunsTab'
 
 vi.mock('../../api/jobs', async (original) => ({
   ...(await original<typeof import('../../api/jobs')>()),
@@ -85,12 +86,31 @@ describe('AIOps › Runs', () => {
     await waitFor(() => expect(api.fetchRuns).toHaveBeenLastCalledWith({ status: '', mine: true, limit: 200 }, false))
   })
 
-  it('says each run’s agent, model and effort under the job’s name; an old run what it has (AI-48)', async () => {
-    vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [{ ...brief, effort: 'high', provider: 'Anthropic', pickBy: 'rules' }, { ...brief, id: 'run-11' }], total: 2 })
+  // --- Model and Effort columns (the owner, November 23; AI-48) ---
+  it('says what each run ran with in the Model and Effort columns, the agent alone under the job’s name; an old run its model and no effort', async () => {
+    const auto = { ...brief, effort: 'high', provider: 'Anthropic', pickBy: 'rules', pickWhy: 'a P0 case', movedUp: { step: 2, from: 'claude-sonnet-5-5' } }
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [auto, { ...brief, id: 'run-11', started: '2026-11-05T02:00:00Z', model: 'claude-haiku-5-5' }], total: 2 })
     render(<RunsTab route={route()} />)
-    const lines = await screen.findAllByTestId('run-agent-line')
-    expect(lines[0]!.textContent).toMatch(/ · Claude Opus 5\.5 · high$/)
-    expect(lines[1]!.textContent).toMatch(/ · Claude Opus 5\.5$/)
+    const rows = await screen.findAllByTestId('run-row')
+    expect(within(rows[0]!).getByTestId('run-agent-line').textContent).toBe('troubleshooter')
+    expect(within(rows[0]!).getByTestId('run-model').textContent).toBe('Claude Opus 5.5on Anthropic · moved up from Claude Sonnet 5.5')
+    expect(within(rows[0]!).getByTestId('run-effort-cell').textContent).toBe('HighAuto: a P0 case')
+    expect(within(rows[1]!).getByTestId('run-model').textContent).toBe('Claude Haiku 5.5')
+    expect(within(rows[1]!).getByTestId('run-effort-cell').textContent).toBe('—')
+    // Each sorts: by model, Haiku before Opus.
+    fireEvent.click(within(screen.getByTestId('runs-table')).getByRole('button', { name: /^Model/ }))
+    await waitFor(() => expect(within(screen.getAllByTestId('run-row')[0]!).getByTestId('run-model').textContent).toBe('Claude Haiku 5.5'))
+    // The column chooser hides one.
+    fireEvent.click(within(screen.getByTestId('runs-table-tools')).getByRole('button', { name: 'Columns' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Effort' }))
+    await waitFor(() => expect(within(screen.getByTestId('runs-table')).queryByRole('button', { name: /^Effort/ })).toBeNull())
+    fireEvent.click(screen.getByTestId('cols-all'))
+    // And the export has them.
+    const names = { agent: (id?: string) => id ?? '', cluster: (id: string) => id, job: (id?: string) => id ?? '' }
+    const sheet = exportTable([auto, { ...brief, id: 'run-11' }], runColumns(true, names), Date.now())
+    expect(sheet.head).toEqual(['Started', 'Ended', 'Job', 'Agent', 'Clusters', 'Model', 'Provider', 'Moved up from', 'Effort', 'Started by', 'Status', 'Health', 'Result', 'Cost (US$)'])
+    expect(sheet.rows[0]!.slice(5, 9)).toEqual(['claude-opus-5-5', 'Anthropic', 'claude-sonnet-5-5', 'High (Auto: a P0 case)'])
+    expect(sheet.rows[1]!.slice(5, 9)).toEqual(['claude-opus-5-5', '', '', ''])
   })
 
   it('shows the run’s agent, model with its provider and effort as facts, what Auto picked and why, and a move up with its step (AI-48)', async () => {
@@ -209,7 +229,7 @@ describe('AIOps › Runs', () => {
     })
     render(<RunsTab route={route()} />)
     const rows = await screen.findAllByTestId('run-row')
-    expect(screen.getByTestId('runs-table').querySelector('thead')!.textContent).toBe('StartedEndedJobStarted byStatusHealthResultCost')
+    expect(screen.getByTestId('runs-table').querySelector('thead')!.textContent!.replace(/[↑↓]/g, '')).toBe('StartedEndedJobModelEffortStarted byStatusHealthResultCost')
     const status = (i: number) => within(rows[i]!).getByTestId('run-status-cell')
     const health = (i: number) => within(rows[i]!).queryByTestId('run-health-cell')
     expect(status(0).textContent).toBe('Done · 2 critical')

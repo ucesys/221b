@@ -250,6 +250,12 @@ type agentRunner struct {
 
 func (a agentRunner) Usable(agent, cluster string) string { return a.ai.Usable(agent, cluster) }
 
+// SetupOf is an agent's model and effort as set now, for the jobs' list.
+func (a agentRunner) SetupOf(ctx context.Context, agent string) (jobs.AgentSetup, bool) {
+	st, ok := a.ai.SetupOf(ctx, agent)
+	return jobs.AgentSetup{Model: st.Model, DefaultModel: st.DefaultModel, AutoFrom: st.AutoFrom, AutoTo: st.AutoTo, Provider: st.Provider, Effort: st.Effort, FloorEffort: st.FloorEffort}, ok
+}
+
 // Available says whether an agent can answer at all (JB-25): one turned
 // off is jobs.AgentOff, in the agents' words.
 func (a agentRunner) Available(ctx context.Context, agent string) error {

@@ -121,6 +121,27 @@ type AgentChecker interface {
 	Available(ctx context.Context, agent string) error
 }
 
+// AgentDescriber is an AgentRunner that also says each agent's model and
+// effort as set now, for the jobs' list (AIOps › Jobs › Schedule): a
+// person who may see the jobs but not Administration › AI sees them too.
+type AgentDescriber interface {
+	SetupOf(ctx context.Context, agent string) (AgentSetup, bool)
+}
+
+// AgentSetup is a job's agent's model and effort as set now. Model is the
+// model in force, "auto" when Auto picks it among AutoFrom to AutoTo, and
+// DefaultModel says it is its provider's default; Effort is "" (the
+// model's default), a level, or "auto", at least FloorEffort.
+type AgentSetup struct {
+	Model        string `json:"model,omitempty"`
+	DefaultModel bool   `json:"defaultModel,omitempty"`
+	AutoFrom     string `json:"autoFrom,omitempty"`
+	AutoTo       string `json:"autoTo,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	Effort       string `json:"effort,omitempty"`
+	FloorEffort  string `json:"floorEffort,omitempty"`
+}
+
 // AgentsPath is where a person turns an agent on.
 const AgentsPath = "Administration › AI › Agents"
 
@@ -478,6 +499,10 @@ type RunBrief struct {
 	Provider string `json:"provider,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 	PickBy   string `json:"pickBy,omitempty"`
+	// PickWhy is why Auto picked its effort, MovedUp where its model was
+	// moved up: the Runs table's Model and Effort columns say them.
+	PickWhy string   `json:"pickWhy,omitempty"`
+	MovedUp *MovedUp `json:"movedUp,omitempty"`
 	// NotRouted says why its findings were not routed into cases (W-8).
 	NotRouted string `json:"notRouted,omitempty"`
 	// Health is the worst of what it found, or failed, and Severities its
@@ -494,7 +519,7 @@ type RunBrief struct {
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
 		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, CostUSD: r.CostUSD, Model: r.Model,
-		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked, Provider: r.Provider, Effort: r.Effort, PickBy: r.PickBy}
+		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked, Provider: r.Provider, Effort: r.Effort, PickBy: r.PickBy, PickWhy: r.PickWhy, MovedUp: r.MovedUp}
 	for _, p := range r.Proposals {
 		if p.ID == "" {
 			b.NotFiled++
@@ -538,6 +563,9 @@ type View struct {
 	// stopped it.
 	SpentToday   float64 `json:"spentToday"`
 	StoppedToday string  `json:"stoppedToday,omitempty"`
+	// Setup is its agent's model and effort as set now; nil for a job
+	// without an agent.
+	Setup *AgentSetup `json:"setup,omitempty"`
 	// AgentOff says its agent is turned off ("the Summarizer is off"), on
 	// or paused (JB-25): Run now is refused, and its scheduled and event
 	// runs fail, until the agent is turned on.
@@ -650,6 +678,11 @@ func (s *Service) view(ctx context.Context, rec jobsRecord, runs []Run, j Job, k
 		if s.o.Agents == nil {
 			v.Unusable = "The agents are not running on this console."
 		} else {
+			if ad, ok := s.o.Agents.(AgentDescriber); ok {
+				if st, ok := ad.SetupOf(ctx, k.Agent); ok {
+					v.Setup = &st
+				}
+			}
 			if ac, ok := s.o.Agents.(AgentChecker); ok {
 				if err := ac.Available(ctx, k.Agent); errors.Is(err, ErrAgentOff) {
 					v.AgentOff = err.Error()
