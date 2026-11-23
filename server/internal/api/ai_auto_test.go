@@ -58,3 +58,32 @@ func TestEffortAutoAndTheClassifierAPI(t *testing.T) {
 	}
 	_ = fake
 }
+
+// A provider's offered models and their tiers are saved with it, shown in
+// the overview and audited (A9); Auto's model on an OpenAI-compatible
+// provider is taken once one has a tier, and a model it does not offer is
+// refused.
+func TestAProvidersOfferedModelsAPIA9(t *testing.T) {
+	srv, ops, _, _, _, aud := aiSetupWith(t, nil)
+	var o aiOverview
+	body, _ := json.Marshal(map[string]any{"id": "a5000", "name": "A5000", "kind": "openai", "endpoint": "http://vllm.example/v1", "model": "qwen3.8-27b"})
+	aiJSON(t, ops, http.MethodPost, srv.URL+"/api/v1/ai/providers", string(body), 200, &o)
+	if r, text := send(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor", `{"provider":"a5000","model":"auto"}`); r.StatusCode != http.StatusBadRequest || !strings.Contains(text, "none has a tier") {
+		t.Fatalf("Auto with no tier: %d %s", r.StatusCode, text)
+	}
+	body, _ = json.Marshal(map[string]any{"name": "A5000", "kind": "openai", "endpoint": "http://vllm.example/v1", "model": "qwen3.8-27b", "offeredChosen": true,
+		"offered": []map[string]string{{"model": "qwen3.8-8b", "tier": "light"}, {"model": "qwen3.8-27b", "tier": "standard"}}})
+	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/providers/a5000", string(body), 200, &o)
+	if !strings.Contains(aud.String(), "offers qwen3.8-8b (light), qwen3.8-27b (standard)") {
+		t.Fatalf("audit: %s", aud.String())
+	}
+	for _, p := range o.Providers {
+		if p.ID == "a5000" && (p.OffersAll || len(p.Offers) != 2 || p.Offers[0].Tier != "light") {
+			t.Fatalf("the view: %+v", p)
+		}
+	}
+	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/auditor", `{"provider":"a5000","model":"auto"}`, 200, &o)
+	if r, text := send(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/troubleshooter", `{"provider":"a5000","model":"qwen3.8-235b"}`); r.StatusCode != http.StatusBadRequest || !strings.Contains(text, "does not offer") {
+		t.Fatalf("a model not offered: %d %s", r.StatusCode, text)
+	}
+}

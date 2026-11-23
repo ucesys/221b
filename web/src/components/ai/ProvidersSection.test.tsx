@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AIOverview } from '../../api/ai'
-import { idFromName, providerFromForm, ProvidersSection } from './ProvidersSection'
+import { idFromName, offeredStart, providerFromForm, ProvidersSection } from './ProvidersSection'
+import { offersText } from './OfferedModels'
 
 function overview(): AIOverview {
   return {
@@ -133,6 +134,74 @@ describe('the Providers section', () => {
 })
 
 // --- AI settings, round 2 (Phase 12, wave 5) ---
+describe('the models a provider offers its agents (A9)', () => {
+  const calls: { method: string; url: string; body?: unknown }[] = []
+  const claude = [
+    { model: 'claude-haiku-5-5', tier: 'light' as const },
+    { model: 'claude-sonnet-5-5', tier: 'standard' as const },
+    { model: 'claude-opus-5-5', tier: 'strong' as const },
+  ]
+  beforeEach(() => {
+    Element.prototype.scrollTo = () => {}
+    calls.length = 0
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      calls.push({ method: init?.method ?? 'GET', url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      // The endpoint lists Sonnet and Opus, not Haiku, and a model released since.
+      if (u.endsWith('/models')) return new Response(JSON.stringify({ models: [{ id: 'claude-opus-5-5' }, { id: 'claude-sonnet-5-5' }, { id: 'claude-fable-6', contextWindow: 1000000 }] }))
+      const ov = overview()
+      ov.providers[0] = { ...ov.providers[0]!, offers: claude, offersAll: true }
+      return new Response(JSON.stringify(ov))
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('starts an upgraded Anthropic provider from Claude’s three that it lists, offers a new model with a tier, orders and saves them', async () => {
+    render(<ProvidersSection />)
+    const card = (await screen.findAllByTestId('provider'))[0]!
+    expect(within(card).getByTestId('provider-offers').textContent).toBe('Every model it lists; Auto picks among claude-haiku-5-5 · light, claude-sonnet-5-5 · standard, claude-opus-5-5 · strong')
+    fireEvent.click(within(card).getByTestId('provider-edit'))
+    const drawer = screen.getByTestId('provider-drawer')
+    const box = within(drawer).getByTestId('provider-offered')
+    expect(box.dataset.chosen).toBe('false')
+    expect(within(box).getByTestId('provider-offered-hint').textContent).toContain('None chosen yet')
+    // Once listed: Haiku, which the endpoint does not list, is left out; the new model is there, not offered.
+    await waitFor(() => expect(within(box).getAllByTestId('provider-offered-row').map((r) => `${r.dataset.model}:${r.dataset.offered}`)).toEqual(['claude-sonnet-5-5:true', 'claude-opus-5-5:true', 'claude-fable-6:false']))
+    const row = (m: string) => within(box).getAllByTestId('provider-offered-row').find((r) => r.dataset.model === m)!
+    // The default model is always offered.
+    expect((within(row('claude-opus-5-5')).getByTestId('provider-offered-check') as HTMLInputElement).disabled).toBe(true)
+    // Offer the new model as strong, first of its tier.
+    fireEvent.click(within(row('claude-fable-6')).getByTestId('provider-offered-check'))
+    expect(box.dataset.chosen).toBe('true')
+    fireEvent.change(within(row('claude-fable-6')).getByTestId('provider-offered-tier'), { target: { value: 'strong' } })
+    fireEvent.click(within(row('claude-fable-6')).getByTestId('provider-offered-up'))
+    fireEvent.click(within(row('claude-fable-6')).getByTestId('provider-offered-up'))
+    // And a model by name, for a server that lists none.
+    fireEvent.change(within(box).getByTestId('provider-offered-name'), { target: { value: 'claude-haiku-5-5' } })
+    fireEvent.click(within(box).getByTestId('provider-offered-add'))
+    fireEvent.click(within(drawer).getByTestId('provider-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toBeTruthy())
+    expect(calls.find((c) => c.method === 'PUT')!.body).toMatchObject({
+      offeredChosen: true,
+      offered: [{ model: 'claude-fable-6', tier: 'strong' }, { model: 'claude-sonnet-5-5', tier: 'standard' }, { model: 'claude-opus-5-5', tier: 'strong' }, { model: 'claude-haiku-5-5' }],
+    })
+  })
+
+  it('starts from what the server says, filters by the list, and says what a provider offers', () => {
+    expect(offeredStart(null, 'anthropic', null).map((o) => o.model)).toEqual(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'])
+    expect(offeredStart(null, 'openai', null)).toEqual([])
+    expect(offeredStart({ offers: claude }, 'anthropic', [{ id: 'claude-opus-5-5' }])).toEqual([{ model: 'claude-opus-5-5', tier: 'strong' }])
+    expect(offersText([{ model: 'gpt-5', tier: 'standard' }, { model: 'embed' }], false)).toBe('gpt-5 · standard, embed')
+    expect(offersText([], true)).toBe('Every model it lists')
+    // A provider none were chosen for sends none.
+    expect(providerFromForm({ id: 'x', name: 'X', kind: 'openai', headersText: '', offered: [{ model: 'a', tier: 'light' }] })).not.toHaveProperty('offered')
+    expect(providerFromForm({ id: 'x', name: 'X', kind: 'openai', headersText: '', offeredChosen: true, offered: [{ model: 'a', tier: '' }] })).toMatchObject({ offeredChosen: true, offered: [{ model: 'a' }] })
+  })
+})
+
 describe('a provider without a credential, tested in its dialog', () => {
   const calls: { method: string; url: string; body?: unknown }[] = []
   const a5000 = {

@@ -194,8 +194,29 @@ func (s *Server) saveAIProvider(w http.ResponseWriter, r *http.Request, adding b
 	if adding {
 		verb = "added"
 	}
-	s.record(r, audit.ActionAISettings, "provider "+p.ID, fmt.Sprintf("provider %s %s: %s", p.ID, verb, providerText(&p.Provider)))
+	s.record(r, audit.ActionAISettings, "provider "+p.ID, fmt.Sprintf("provider %s %s: %s%s", p.ID, verb, providerText(&p.Provider), offeredText(p)))
 	s.getAI(w, r)
+}
+
+// offeredText says the models a provider offers its agents, with their
+// tiers, when a SuperAdmin chose them (A9): "; offers gpt-5 (standard),
+// embed".
+func offeredText(p ai.Provider) string {
+	if !p.OfferedChosen {
+		return ""
+	}
+	if len(p.Offered) == 0 {
+		return "; offers its default model only"
+	}
+	var out []string
+	for _, o := range p.Offered {
+		if o.Tier != "" {
+			out = append(out, o.Model+" ("+o.Tier+")")
+		} else {
+			out = append(out, o.Model)
+		}
+	}
+	return "; offers " + strings.Join(out, ", ")
 }
 
 func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {

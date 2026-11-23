@@ -1,13 +1,16 @@
 // Package auto picks an agent's effort and model when an administrator
 // leaves them to the console (phase-13.1-ai, part A, AI-43 to AI-48).
 //
-// The owner's decisions (November 22, 2026): Auto picks among Claude
-// Haiku 5.5, Sonnet 5.5 and Opus 5.5 on Anthropic; a job's run is picked
+// The owner's decisions (November 22, 2026): a job's run is picked
 // by rules alone, from what started it; a conversation (Sherlock, an agent
 // a person talks to) by a classifier that reads the message and answers
 // low, medium or high. The effort is picked for every message, the model
 // when the conversation or the run starts, moved up once at most and never
-// down. Every pick says why.
+// down. Every pick says why. Since A9 (November 23) Auto picks a tier,
+// light, standard or strong, and takes the tier's model among those the
+// agent's provider offers (a Ladder), on any kind of provider: Claude
+// Haiku, Sonnet and Opus 5.5 are what an Anthropic provider whose models
+// no SuperAdmin chose yet offers.
 //
 // The package is pure: no request leaves it. The classifier's request is
 // sherlock.Client.ChooseOne, and package ai puts the two together.
@@ -41,31 +44,110 @@ func Rank(e string) int { return slices.Index(Levels, e) }
 // (the model's own default), a level, or Auto.
 func ValidEffort(e string) bool { return e == "" || e == Auto || Rank(e) >= 0 }
 
-// The models Auto picks among, cheapest first (the owner, November 22).
+// The tiers a provider's offered models are given for Auto, cheapest
+// first (A9, the owner, November 23): Auto picks a tier, then the tier's
+// model on the agent's provider. A model with no tier is one Auto does not
+// pick.
+const (
+	Light    = "light"
+	Standard = "standard"
+	Strong   = "strong"
+)
+
+// Tiers are the tiers, cheapest first.
+var Tiers = []string{Light, Standard, Strong}
+
+// TierRank is a tier's place among Tiers, from 0; -1 for none.
+func TierRank(t string) int { return slices.Index(Tiers, t) }
+
+// ValidTier says whether t is a tier a model may be given: "" (Auto does
+// not pick it) or one of Tiers.
+func ValidTier(t string) bool { return t == "" || TierRank(t) >= 0 }
+
+// Offered is a model a provider offers its agents, with its tier for Auto;
+// "" is none.
+type Offered struct {
+	Model string `json:"model"`
+	Tier  string `json:"tier,omitempty"`
+}
+
+// Ladder is what Auto picks among on one provider: its offered models, in
+// the order the provider offers them, by their tiers. The preferred model
+// of a tier is the first offered with it.
+type Ladder []Offered
+
+// Rank is the tier's place of a model on the ladder, from 0; -1 for a
+// model it does not have, or has with no tier.
+func (l Ladder) Rank(model string) int {
+	for _, o := range l {
+		if o.Model == model {
+			return TierRank(o.Tier)
+		}
+	}
+	return -1
+}
+
+// Empty says it has no model with a tier: Auto cannot pick the model.
+func (l Ladder) Empty() bool {
+	return !slices.ContainsFunc(l, func(o Offered) bool { return TierRank(o.Tier) >= 0 })
+}
+
+// Of is the model Auto takes for a tier: the tier's preferred model; with
+// none of that tier, the next tier up with a model, else the next tier
+// down; "" on an empty ladder.
+func (l Ladder) Of(tier string) string {
+	r := max(TierRank(tier), 0)
+	first := func(rank int) string {
+		for _, o := range l {
+			if TierRank(o.Tier) == rank {
+				return o.Model
+			}
+		}
+		return ""
+	}
+	for d := r; d < len(Tiers); d++ {
+		if m := first(d); m != "" {
+			return m
+		}
+	}
+	for d := r - 1; d >= 0; d-- {
+		if m := first(d); m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
+// The Claude models Auto picked among before a provider's models had
+// tiers (the owner, November 22), cheapest first.
 const (
 	Haiku  = "claude-haiku-5-5"
 	Sonnet = "claude-sonnet-5-5"
 	Opus   = "claude-opus-5-5"
 )
 
-// Models are the models Auto picks among, cheapest first.
-var Models = []string{Haiku, Sonnet, Opus}
+// Claude is the ladder of a provider of kind Anthropic whose offered
+// models no SuperAdmin chose yet, as before A9: Claude Haiku 5.5 light,
+// Sonnet 5.5 standard, Opus 5.5 strong.
+var Claude = Ladder{{Model: Haiku, Tier: Light}, {Model: Sonnet, Tier: Standard}, {Model: Opus, Tier: Strong}}
 
-// Tier is a model's place among Models, from 0; -1 for one Auto does not
-// pick.
-func Tier(model string) int { return slices.Index(Models, model) }
-
-// Label names a model for people: "Claude Opus 5.5".
+// Label names a model for people: "Claude Opus 5.5" for claude-opus-5-5,
+// any other name as it is.
 func Label(model string) string {
-	switch model {
-	case Haiku:
-		return "Claude Haiku 5.5"
-	case Sonnet:
-		return "Claude Sonnet 5.5"
-	case Opus:
-		return "Claude Opus 5.5"
+	rest, ok := strings.CutPrefix(model, "claude-")
+	if !ok {
+		return model
 	}
-	return model
+	parts := strings.Split(rest, "-")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" {
+		return model
+	}
+	for _, p := range parts[1:] {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return model
+		}
+	}
+	return "Claude " + strings.ToUpper(parts[0][:1]) + parts[0][1:] + " " + strings.Join(parts[1:], ".")
 }
 
 // How a pick was made.
@@ -89,6 +171,8 @@ type Settings struct {
 	// pick; "" is none (AI-47). Item 5's measurement fills them.
 	FloorEffort string
 	FloorModel  string
+	// Ladder is what the agent's provider offers Auto, by tier (A9).
+	Ladder Ladder
 }
 
 // AutoEffort and AutoModel say what is left to Auto.
@@ -146,28 +230,28 @@ const (
 // what the step is about (AI-45), with the limits and the floor applied.
 // A setting that is fixed stays as it is set.
 func Rules(s Settings, in RunInput) Pick {
-	effort, model, why := rule(in)
-	p := Pick{Effort: effort, Model: model, By: ByRules, Why: why}
+	effort, tier, why := rule(in)
+	p := Pick{Effort: effort, Model: s.Ladder.Of(tier), By: ByRules, Why: why}
 	return finish(s, p, Limits{Urgent: in.CasePriority == 0 || in.CasePriority == 1, DayShare: in.DayShare})
 }
 
-// rule is the table of the rules: the effort, the model and why.
+// rule is the table of the rules: the effort, the tier and why.
 func rule(in RunInput) (string, string, string) {
 	switch {
 	case in.CasePriority == 0:
-		return XHigh, Opus, "a P0 case"
+		return XHigh, Strong, "a P0 case"
 	case in.CasePriority == 1:
-		return High, Opus, "a P1 case"
+		return High, Strong, "a P1 case"
 	case in.Event == "alert" && in.Production:
-		return High, Sonnet, "an alert on a production cluster"
+		return High, Standard, "an alert on a production cluster"
 	case in.Event == "alert":
-		return Medium, Sonnet, "an alert"
+		return Medium, Standard, "an alert"
 	case in.Event == "case" && in.CasePriority > 1:
-		return Medium, Sonnet, fmt.Sprintf("a P%d case", in.CasePriority)
+		return Medium, Standard, fmt.Sprintf("a P%d case", in.CasePriority)
 	case in.Event == "case" || in.Event == "report":
-		return Medium, Sonnet, "a problem report"
+		return Medium, Standard, "a problem report"
 	case in.Event == "source":
-		return Low, Haiku, "a knowledge source changed"
+		return Low, Light, "a knowledge source changed"
 	}
 	what := "a schedule"
 	if in.Trigger == "manual" {
@@ -175,35 +259,36 @@ func rule(in RunInput) (string, string, string) {
 	}
 	switch {
 	case in.Kind == kindDigest && in.Production:
-		return Low, Sonnet, what + ", a summary, on a production cluster"
+		return Low, Standard, what + ", a summary, on a production cluster"
 	case in.Kind == kindDigest:
-		return Low, Haiku, what + ", a summary"
+		return Low, Light, what + ", a summary"
 	case in.Kind == kindAudit && in.Production:
-		return Medium, Sonnet, what + ", an audit of a production cluster"
+		return Medium, Standard, what + ", an audit of a production cluster"
 	case in.Kind == kindAudit:
-		return Medium, Sonnet, what + ", an audit"
+		return Medium, Standard, what + ", an audit"
 	case in.Production:
-		return Medium, Sonnet, what + " on a production cluster"
+		return Medium, Standard, what + " on a production cluster"
 	}
-	return Low, Sonnet, what
+	return Low, Standard, what
 }
 
-// FromLevel is the model a classifier's level starts a conversation on.
-func FromLevel(level string) string {
+// TierOf is the tier an effort level starts a conversation on: low
+// light, medium standard, high and above strong.
+func TierOf(level string) string {
 	switch level {
 	case Low:
-		return Haiku
+		return Light
 	case High, XHigh, Max:
-		return Opus
+		return Strong
 	}
-	return Sonnet
+	return Standard
 }
 
-// Defaults are the effort and model Auto falls back to when the classifier
-// is off or did not answer: medium on Claude Sonnet 5.5 (AI-45).
+// Defaults are the effort and tier Auto falls back to when the classifier
+// is off or did not answer: medium on the standard model (AI-45).
 const (
 	DefaultEffort = Medium
-	DefaultModel  = Sonnet
+	DefaultTier   = Standard
 )
 
 // Turn is a message of a conversation, for Conversation.
@@ -220,8 +305,8 @@ type Turn struct {
 
 // Conversation is the pick for one message of a conversation (AI-45): the
 // effort from the classifier's level; the model from the first message's
-// level, moved up to Claude Opus 5.5 once when a later message is high,
-// never down. moved says this message moved it. The limits and the floor
+// level's tier, moved up once to the strong tier's model (or, with none,
+// the strongest above it) when a later message is high, never down. moved says this message moved it. The limits and the floor
 // apply; a setting that is fixed stays as it is set.
 func Conversation(s Settings, t Turn, l Limits) (p Pick, moved bool) {
 	p = Pick{By: ByClassifier, Effort: t.Level, Why: "the classifier said " + t.Level}
@@ -230,12 +315,13 @@ func Conversation(s Settings, t Turn, l Limits) (p Pick, moved bool) {
 	}
 	switch {
 	case t.Model == "":
-		p.Model = FromLevel(p.Effort)
+		tier := TierOf(p.Effort)
 		if p.By == ByFixed {
-			p.Model = DefaultModel
+			tier = DefaultTier
 		}
-	case p.By == ByClassifier && t.Level == High && Tier(t.Model) >= 0 && Tier(t.Model) < Tier(Opus) && !t.MovedUp && l.DayShare < BudgetShare && s.AutoModel():
-		p.Model, moved = Opus, true
+		p.Model = s.Ladder.Of(tier)
+	case p.By == ByClassifier && t.Level == High && !t.MovedUp && l.DayShare < BudgetShare && s.AutoModel() && MoveUp(s.Ladder, t.Model, s.Ladder.Of(Strong), false, l.DayShare):
+		p.Model, moved = s.Ladder.Of(Strong), true
 		p.Why += "; moved up from " + Label(t.Model)
 	default:
 		p.Model = t.Model
@@ -261,7 +347,7 @@ func finish(s Settings, p Pick, l Limits) Pick {
 		p.Effort = s.FloorEffort
 		p.Why += "; raised to the agent's floor"
 	}
-	if f := Tier(s.FloorModel); f >= 0 && Tier(p.Model) >= 0 && Tier(p.Model) < f {
+	if f := s.Ladder.Rank(s.FloorModel); f >= 0 && s.Ladder.Rank(p.Model) >= 0 && s.Ladder.Rank(p.Model) < f {
 		p.Model = s.FloorModel
 		p.Why += "; raised to the agent's floor model"
 	}
@@ -275,14 +361,14 @@ func finish(s Settings, p Pick, l Limits) Pick {
 }
 
 // Inherited is the pick for a task handed to an agent in a job's run: the
-// effort the run's rules gave the agent that handed it, on the model that
+// effort the run's rules gave the agent that handed it, on the tier that
 // effort starts a conversation on, never the classifier (the owner: a
 // job's run is picked by rules alone). The day's budget was weighed when
 // the run's step was picked.
 func Inherited(s Settings, effort string) Pick {
-	p := Pick{Effort: effort, Model: FromLevel(effort), By: ByRules, Why: "handed work in a job's run at " + effort}
+	p := Pick{Effort: effort, Model: s.Ladder.Of(TierOf(effort)), By: ByRules, Why: "handed work in a job's run at " + effort}
 	if Rank(effort) < 0 {
-		p = Pick{Effort: DefaultEffort, Model: DefaultModel, By: ByRules, Why: "handed work in a job's run: the defaults"}
+		p = Pick{Effort: DefaultEffort, Model: s.Ladder.Of(DefaultTier), By: ByRules, Why: "handed work in a job's run: the defaults"}
 	}
 	return finish(s, p, Limits{Urgent: Rank(effort) > Rank(High)})
 }
@@ -292,14 +378,15 @@ func Inherited(s Settings, effort string) Pick {
 // no classifier reads a request that long, so the defaults, with the
 // floor.
 func Single(s Settings) Pick {
-	return finish(s, Pick{Effort: DefaultEffort, Model: DefaultModel, By: ByFixed, Why: "one request outside a conversation: the defaults"}, Limits{})
+	return finish(s, Pick{Effort: DefaultEffort, Model: s.Ladder.Of(DefaultTier), By: ByFixed, Why: "one request outside a conversation: the defaults"}, Limits{})
 }
 
 // MoveUp says whether a run's later step moves its model up: the step
-// wants a stronger model than the run started on, the run has not moved
-// up, and the day's budget is below BudgetShare.
-func MoveUp(current, wanted string, movedUp bool, dayShare float64) bool {
-	return !movedUp && dayShare < BudgetShare && Tier(current) >= 0 && Tier(wanted) > Tier(current)
+// wants a model of a higher tier on the ladder than the run started on
+// (one still offered with a tier), the run has not moved up, and the
+// day's budget is below BudgetShare.
+func MoveUp(l Ladder, current, wanted string, movedUp bool, dayShare float64) bool {
+	return !movedUp && dayShare < BudgetShare && l.Rank(current) >= 0 && l.Rank(wanted) > l.Rank(current)
 }
 
 // Said reads a classifier's answer: one of low, medium or high, or "".

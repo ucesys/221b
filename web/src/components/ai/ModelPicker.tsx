@@ -47,6 +47,8 @@ interface Props {
   listOnly?: boolean
   /** Names suggested when nothing is listed. */
   suggestions?: string[]
+  /** Told the models the endpoint listed, each time it lists them (A9: the offered models). */
+  onList?: (models: ListedModel[]) => void
   disabled?: boolean
   testId: string
 }
@@ -59,7 +61,7 @@ interface Props {
  * (FU-01) the dropdown has the listed models alone, plus the current value
  * when the list lacks it.
  */
-export function ModelPicker({ label, hint, value, onChange, load, auto, from = '', listOnly, suggestions = [], disabled, testId }: Props) {
+export function ModelPicker({ label, hint, value, onChange, load, auto, from = '', listOnly, suggestions = [], onList, disabled, testId }: Props) {
   const [list, setList] = useState<ListedModel[] | null>(null)
   const [typing, setTyping] = useState(false)
   const [error, setError] = useState('')
@@ -76,7 +78,9 @@ export function ModelPicker({ label, hint, value, onChange, load, auto, from = '
   const take = useCallback((r: ModelList) => {
     const models = r.models ?? []
     setList(models)
+    onList?.(models)
     setError(r.error ?? (models.length ? '' : 'The endpoint lists no models: type the model’s name.'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e))
   const fetchList = async () => {

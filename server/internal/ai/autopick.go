@@ -22,31 +22,34 @@ import (
 const ClassifierTimeout = 1500 * time.Millisecond
 
 // autoSettings is what Auto may pick for an agent on its provider: the
-// model only on a provider of kind Anthropic, whose models Auto knows;
-// elsewhere the model stays the one resolved.
+// model among the provider's offered models by tier (A9); on a provider
+// none of whose offered models has a tier, the model stays the one
+// resolved.
 func autoSettings(set AgentSettings, p Provider, model string) auto.Settings {
 	s := set.auto()
-	if s.Model != auto.Auto || !anthropicKind(p) {
+	s.Ladder = ladderOf(p)
+	if s.Model != auto.Auto || s.Ladder.Empty() {
 		s.Model = model
 	}
 	return s
 }
 
 // anthropicKind says a provider speaks the Claude Messages API as
-// Anthropic does: the models Auto picks among are its.
+// Anthropic does: with no offered models chosen, Auto picks among Claude
+// Haiku, Sonnet and Opus 5.5 on it.
 func anthropicKind(p Provider) bool {
 	return p.Provider.Kind == "" || p.Provider.Kind == sherlock.KindAnthropic
 }
 
-// modelOfAuto is the model an agent starts on before Auto has picked:
-// Claude Sonnet 5.5 for a model left to Auto on Anthropic, the provider's
-// default elsewhere.
+// modelOfAuto is the model an agent starts on before Auto has picked: for
+// a model left to Auto, the standard tier's on its provider; on a provider
+// with no tiered model, the provider's default.
 func modelOfAuto(set AgentSettings, p Provider) string {
 	if set.Model != auto.Auto {
 		return modelOf(set, p)
 	}
-	if anthropicKind(p) {
-		return auto.DefaultModel
+	if l := ladderOf(p); !l.Empty() {
+		return l.Of(auto.DefaultTier)
 	}
 	return modelOf(AgentSettings{}, p)
 }
@@ -178,7 +181,7 @@ func (s *Service) PickRun(ctx context.Context, a *sherlock.Agent, in auto.RunInp
 	as := autoSettings(set, prov, a.Model)
 	p = auto.Rules(as, in)
 	if as.AutoModel() && runModel != "" {
-		if auto.MoveUp(runModel, p.Model, movedUp, in.DayShare) {
+		if auto.MoveUp(as.Ladder, runModel, p.Model, movedUp, in.DayShare) {
 			movedFrom = runModel
 			p.Why += "; moved up from " + auto.Label(runModel)
 		} else {

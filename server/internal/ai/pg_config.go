@@ -9,13 +9,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
 // AI configuration's providers and agents in the database (Phase 13,
 // DB-39): a provider is a row of ai_providers, known by the id the console
-// gives it, with its headers in ai_provider_headers; an agent is a row of
+// gives it, with its headers in ai_provider_headers and the models it
+// offers its agents in ai_provider_models (A9); an agent is a row of
 // agents, known by its catalog id. The service is unchanged and reaches
 // the rows through db.Doc.
 //
@@ -45,7 +47,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	at := map[string]int{}
 	rows, err := q.Query(ctx, `SELECT ai_provider_id, name, kind, endpoint, auth, auth_header, auth_prefix, query, region, project, ca_cert, model,
 			price_in_usd::float8, price_out_usd::float8, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn, tested_error,
-			daily_limit_usd::float8, monthly_limit_usd::float8, is_default, is_removed, is_classifier
+			daily_limit_usd::float8, monthly_limit_usd::float8, is_default, is_removed, is_classifier, is_models_chosen
 		FROM ai_providers ORDER BY position, ai_provider_id`)
 	if err != nil {
 		return ps, false, err
@@ -57,7 +59,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	var isDefault, removed, classifier bool
 	if _, err := pgx.ForEachRow(rows, []any{&p.ID, &p.Name, &p.Kind, &p.Endpoint, &p.Auth, &p.AuthHeaderName, &p.AuthPrefix, &p.Query, &p.Region, &p.Project,
 		&p.CACert, &p.Model, &p.PriceIn, &p.PriceOut, &p.ContextWindow, &tested, &t.OK, &t.Model, &t.Keyless, &t.Conn, &t.Error,
-		&caps.DailyUSD, &caps.MonthlyUSD, &isDefault, &removed, &classifier}, func() error {
+		&caps.DailyUSD, &caps.MonthlyUSD, &isDefault, &removed, &classifier, &p.OfferedChosen}, func() error {
 		found = true
 		var test *ProviderTest
 		if tested != nil {
@@ -73,6 +75,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 		}
 		if p.ID == DefaultProvider {
 			ps.DefaultName, ps.DefaultWindow, ps.DefaultTested, ps.DefaultRemoved = p.Name, p.ContextWindow, test, removed
+			ps.DefaultOfferedChosen = p.OfferedChosen
 			return nil
 		}
 		if isDefault {
@@ -82,7 +85,7 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 			ps.ClassifierID = p.ID
 		}
 		x := p
-		x.Tested, x.Headers = test, nil
+		x.Tested, x.Headers, x.Offered = test, nil, nil
 		at[x.ID] = len(ps.List)
 		ps.List = append(ps.List, x)
 		return nil
@@ -105,6 +108,22 @@ func readProviders(ctx context.Context, q db.Querier) (Providers, bool, error) {
 	}); err != nil {
 		return ps, false, err
 	}
+	rows, err = q.Query(ctx, "SELECT ai_provider_id, model, tier FROM ai_provider_models ORDER BY ai_provider_id, position")
+	if err != nil {
+		return ps, false, err
+	}
+	var model, tier string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &model, &tier}, func() error {
+		o := auto.Offered{Model: model, Tier: tier}
+		if id == DefaultProvider {
+			ps.DefaultOffered = append(ps.DefaultOffered, o)
+		} else if i, ok := at[id]; ok {
+			ps.List[i].Offered = append(ps.List[i].Offered, o)
+		}
+		return nil
+	}); err != nil {
+		return ps, false, err
+	}
 	return ps, found, nil
 }
 
@@ -120,18 +139,29 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 		caps := next.Limits[p.ID]
 		if _, err := tx.Exec(ctx, `INSERT INTO ai_providers (ai_provider_id, position, name, kind, endpoint, auth, auth_header, auth_prefix, query, region,
 				project, ca_cert, model, price_in_usd, price_out_usd, context_window, tested_at, tested_is_ok, tested_model, tested_is_keyless, tested_conn,
-				tested_error, daily_limit_usd, monthly_limit_usd, is_default, is_removed, is_classifier)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+				tested_error, daily_limit_usd, monthly_limit_usd, is_default, is_removed, is_classifier, is_models_chosen)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
 			ON CONFLICT (ai_provider_id) DO UPDATE SET position = excluded.position, name = excluded.name, kind = excluded.kind, endpoint = excluded.endpoint,
 				auth = excluded.auth, auth_header = excluded.auth_header, auth_prefix = excluded.auth_prefix, query = excluded.query, region = excluded.region,
 				project = excluded.project, ca_cert = excluded.ca_cert, model = excluded.model, price_in_usd = excluded.price_in_usd,
 				price_out_usd = excluded.price_out_usd, context_window = excluded.context_window, tested_at = excluded.tested_at, tested_is_ok = excluded.tested_is_ok,
 				tested_model = excluded.tested_model, tested_is_keyless = excluded.tested_is_keyless, tested_conn = excluded.tested_conn,
 				tested_error = excluded.tested_error, daily_limit_usd = excluded.daily_limit_usd, monthly_limit_usd = excluded.monthly_limit_usd,
-				is_default = excluded.is_default, is_removed = excluded.is_removed, is_classifier = excluded.is_classifier`,
+				is_default = excluded.is_default, is_removed = excluded.is_removed, is_classifier = excluded.is_classifier,
+				is_models_chosen = excluded.is_models_chosen`,
 			p.ID, position, p.Name, p.Kind, p.Endpoint, p.Auth, p.AuthHeaderName, p.AuthPrefix, p.Query, p.Region, p.Project, p.CACert, p.Model,
-			p.PriceIn, p.PriceOut, p.ContextWindow, tested, t.OK, t.Model, t.Keyless, t.Conn, t.Error, caps.DailyUSD, caps.MonthlyUSD, isDefault, removed, classifier); err != nil {
+			p.PriceIn, p.PriceOut, p.ContextWindow, tested, t.OK, t.Model, t.Keyless, t.Conn, t.Error, caps.DailyUSD, caps.MonthlyUSD, isDefault, removed, classifier,
+			p.OfferedChosen); err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM ai_provider_models WHERE ai_provider_id = $1", p.ID); err != nil {
+			return err
+		}
+		for i, o := range p.Offered {
+			if _, err := tx.Exec(ctx, "INSERT INTO ai_provider_models (ai_provider_model_id, ai_provider_id, model, tier, position) VALUES ($1, $2, $3, $4, $5)",
+				db.NewID(), p.ID, o.Model, o.Tier, i); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM ai_provider_headers WHERE ai_provider_id = $1", p.ID); err != nil {
 			return err
@@ -145,9 +175,11 @@ func writeProviders(ctx context.Context, tx pgx.Tx, old, next Providers) error {
 	}
 	kept := []string{}
 	// What is kept of the default provider, when anything is.
-	if c := next.Limits[DefaultProvider]; next.DefaultName != "" || next.DefaultWindow != 0 || next.DefaultTested != nil || next.DefaultRemoved || c.DailyUSD != 0 || c.MonthlyUSD != 0 {
+	if c := next.Limits[DefaultProvider]; next.DefaultName != "" || next.DefaultWindow != 0 || next.DefaultTested != nil || next.DefaultRemoved || c.DailyUSD != 0 || c.MonthlyUSD != 0 ||
+		next.DefaultOfferedChosen {
 		kept = append(kept, DefaultProvider)
-		if err := put(Provider{ID: DefaultProvider, Name: next.DefaultName, ContextWindow: next.DefaultWindow}, -1, next.DefaultTested, false, next.DefaultRemoved, false); err != nil {
+		def := Provider{ID: DefaultProvider, Name: next.DefaultName, ContextWindow: next.DefaultWindow, Offered: next.DefaultOffered, OfferedChosen: next.DefaultOfferedChosen}
+		if err := put(def, -1, next.DefaultTested, false, next.DefaultRemoved, false); err != nil {
 			return err
 		}
 	}

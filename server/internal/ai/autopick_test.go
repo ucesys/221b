@@ -17,7 +17,8 @@ import (
 
 // An agent's effort and Auto are validated and kept (AI-43, AI-44, AI-47):
 // the effort one of the levels or auto, the model auto only on a provider
-// of kind Anthropic, the floor at most high and one of Auto's models.
+// with a tiered model (A9), the floor at most high and one of its tiered
+// models.
 func TestTheEffortAndAutoSettingsAI43(t *testing.T) {
 	w := setup(t, nil)
 	ctx := context.Background()
@@ -91,8 +92,8 @@ func TestTheClassifierPicksAConversationAI45(t *testing.T) {
 		t.Fatalf("the default provider as the classifier: %v", err)
 	}
 	a5000(t, w, srv.URL+"/open/v1")
-	if v := w.ai.View(ctx); v.Classifier != "a5000" || v.ClassifierOff != "" || len(v.AutoModels) != 3 {
-		t.Fatalf("view: %q %q %v", v.Classifier, v.ClassifierOff, v.AutoModels)
+	if v := w.ai.View(ctx); v.Classifier != "a5000" || v.ClassifierOff != "" || len(v.Providers[0].Offers) != 3 {
+		t.Fatalf("view: %q %q %+v", v.Classifier, v.ClassifierOff, v.Providers[0])
 	}
 	if err := w.ai.SaveAgent(ctx, Sherlock, AgentChange{AgentSettings: AgentSettings{Effort: auto.Auto, Model: auto.Auto}}); err != nil {
 		t.Fatal(err)

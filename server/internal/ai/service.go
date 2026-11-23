@@ -189,7 +189,8 @@ func (s *Service) defaultProvider(snap snapshot) Provider {
 	if name == "" {
 		name = KindLabel(p.Normalized(s.opts.DefaultURL).Kind)
 	}
-	return Provider{ID: DefaultProvider, Name: name, Provider: p, Model: sh.Model, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut, ContextWindow: snap.providers.DefaultWindow, Tested: snap.providers.DefaultTested}
+	return Provider{ID: DefaultProvider, Name: name, Provider: p, Model: sh.Model, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut, ContextWindow: snap.providers.DefaultWindow, Tested: snap.providers.DefaultTested,
+		Offered: snap.providers.DefaultOffered, OfferedChosen: snap.providers.DefaultOfferedChosen}
 }
 
 // defaultID is the provider agents that name none use: the one made the
@@ -728,6 +729,11 @@ type ProviderView struct {
 	// on it (Phase 12.1, AI-36).
 	Limit sherlock.Caps       `json:"limit"`
 	Spend sherlock.AgentSpend `json:"spend"`
+	// Offers are the models it offers its agents in force, with their
+	// tiers, and OffersAll says it offers every model it lists, none
+	// having been chosen yet (A9): Offers are then the tiers Auto uses.
+	Offers    []auto.Offered `json:"offers"`
+	OffersAll bool           `json:"offersAll"`
 }
 
 // AgentView is an agent as Administration › AI › Agents shows it.
@@ -760,6 +766,12 @@ type AgentView struct {
 	// Footprint is what its instructions and tools take of its model's
 	// context; nil when it cannot answer now (Phase 12, wave 5).
 	Footprint *AgentFootprint `json:"footprint,omitempty"`
+	// NotOffered says its model is one its provider no longer offers: it
+	// keeps answering on it until changed (A9). AutoNoTier says its model
+	// is left to Auto on a provider none of whose offered models has a
+	// tier: it answers on the provider's default model.
+	NotOffered bool `json:"notOffered,omitempty"`
+	AutoNoTier bool `json:"autoNoTier,omitempty"`
 }
 
 // AgentFootprint is what an agent's instructions and tools take of its
@@ -827,8 +839,6 @@ type Overview struct {
 	// ClassifierOff why it is not used when one is chosen (AI-45).
 	Classifier    string `json:"classifier"`
 	ClassifierOff string `json:"classifierOff,omitempty"`
-	// AutoModels are the models Auto picks among on Anthropic.
-	AutoModels []string `json:"autoModels"`
 }
 
 // View is the overview.
@@ -840,7 +850,7 @@ func (s *Service) View(ctx context.Context) Overview {
 		spend = s.engine.Ledger().Now(ctx)
 	}
 	o := Overview{Models: sherlock.Models, DefaultModel: sh.Model, DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD, Spend: spend, SingleProvider: snap.agents.SingleProvider, ViewControl: sh.ChangesView(),
-		Classifier: snap.providers.ClassifierID, AutoModels: auto.Models}
+		Classifier: snap.providers.ClassifierID}
 	if o.Classifier != "" {
 		_, _, o.ClassifierOff = s.classifier(snap)
 	}
@@ -869,7 +879,9 @@ func (s *Service) View(ctx context.Context) Overview {
 			v.Model, v.DefaultModel = modelOf(set, p), set.Model == ""
 			if set.Model == auto.Auto {
 				v.Model = auto.Auto
+				v.AutoNoTier = ladderOf(p).Empty()
 			}
+			v.NotOffered = set.Model != "" && set.Model != auto.Auto && !offers(p, set.Model)
 			if v.Enabled {
 				used[pid] = append(used[pid], info.Name)
 			}
@@ -900,7 +912,12 @@ func (s *Service) View(ctx context.Context) Overview {
 	for _, p := range list {
 		k := s.KeysFor(p.ID)
 		r := p.Provider.Normalized(s.opts.DefaultURL)
-		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)})
+		v := ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)}
+		v.Offers, v.OffersAll = offerOf(p)
+		if v.Offers == nil {
+			v.Offers = []auto.Offered{}
+		}
+		o.Providers = append(o.Providers, v)
 	}
 	return o
 }
@@ -938,6 +955,10 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 		if s.read(ctx).providers.DefaultRemoved {
 			return ErrNotFound
 		}
+		// What it offers is checked before anything of it is saved (A9).
+		if err := checkOffered(p); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
 		sh := s.sherlockSettings()
 		before := s.defaultProvider(s.read(ctx))
 		if s.opts.ProviderLocked && before.Provider.Kind != p.Provider.Kind || s.opts.ProviderLocked && before.Endpoint != p.Endpoint {
@@ -971,6 +992,10 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 			}
 			ps.DefaultName = name
 			ps.DefaultWindow = p.ContextWindow
+			ps.DefaultOffered, ps.DefaultOfferedChosen = p.Offered, p.OfferedChosen
+			if !p.OfferedChosen {
+				ps.DefaultOffered = nil
+			}
 			return nil
 		})
 		return err
@@ -980,6 +1005,9 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 	}
 	// The last test is the console's own record, never the request's.
 	p.Tested = nil
+	if !p.OfferedChosen {
+		p.Offered = nil
+	}
 	_, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
 		i := slices.IndexFunc(ps.List, func(x Provider) bool { return x.ID == p.ID })
 		switch {
@@ -1158,8 +1186,19 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 	if !ok {
 		return fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
 	}
-	if set.Model == auto.Auto && !anthropicKind(prov) {
-		return fmt.Errorf("%w: Auto picks among Claude Haiku, Sonnet and Opus 5.5 on a provider of kind Anthropic; %s is %s: pick its model", ErrInvalid, prov.Name, KindLabel(prov.Provider.Kind))
+	// The models its provider offers (A9). A model or floor set before
+	// that its provider no longer offers may stay as it is, so that the
+	// agent's other settings can be saved; a new one must be offered.
+	before := snap.agents.Agents[id]
+	kept := cmp.Or(before.Provider, s.defaultID(snap)) == cmp.Or(set.Provider, s.defaultID(snap))
+	ladder := ladderOf(prov)
+	switch {
+	case set.Model == auto.Auto && ladder.Empty():
+		return fmt.Errorf("%w: Auto picks among the models %s offers by their tiers, and none has a tier: give its models tiers in Administration › AI › Providers, or pick its model", ErrInvalid, prov.Name)
+	case set.Model != "" && set.Model != auto.Auto && !offers(prov, set.Model) && !(kept && set.Model == before.Model):
+		return fmt.Errorf("%w: %s does not offer %s to the agents: pick one of the models it offers, or offer it in Administration › AI › Providers", ErrInvalid, prov.Name, set.Model)
+	case set.FloorModel != "" && ladder.Rank(set.FloorModel) < 0 && !(kept && set.FloorModel == before.FloorModel):
+		return fmt.Errorf("%w: the lowest model Auto may pick is one of the models %s offers with a tier, not %s", ErrInvalid, prov.Name, set.FloorModel)
 	}
 	if set.Provider == s.defaultID(snap) {
 		set.Provider = ""

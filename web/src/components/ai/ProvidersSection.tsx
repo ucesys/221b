@@ -15,6 +15,8 @@ import {
   tryProvider,
   type AIOverview,
   type AIProvider,
+  type ListedModel,
+  type OfferedModel,
   type ProviderTestResult,
   type ProviderView,
 } from '../../api/ai'
@@ -25,6 +27,7 @@ import { currentRoute, navigate, withParams } from '../../lib/router'
 import { Select } from '../Select'
 import { AUTHS, defaultAuth, ENDPOINT_HINT, Field, headersText, parseHeaders, PRESETS, presetOf } from '../SherlockSettings'
 import { ModelPicker } from './ModelPicker'
+import { CLAUDE_OFFERS, OfferedModels, offersText } from './OfferedModels'
 import { useUnsaved } from '../../lib/unsaved'
 
 /**
@@ -135,7 +138,7 @@ export function ClassifierChoice({ ov, onChange, onError, onToast }: { ov: AIOve
       </div>
       <span className="rk-fhint">
         For an agent whose effort or model is Auto, a short request to this provider reads each message of a conversation and answers low, medium or high, within 1.5 seconds; slower, or off, the agent’s fixed defaults
-        apply (medium on Claude Sonnet 5.5). An OpenAI-compatible provider only, such as an in-house vLLM: free, and the messages stay on site. Jobs’ runs are picked by rules, never by the classifier.
+        apply (medium on the agent’s provider’s standard model). An OpenAI-compatible provider only, such as an in-house vLLM: free, and the messages stay on site. Jobs’ runs are picked by rules, never by the classifier.
       </span>
       {ov.classifierOff && (
         <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="classifier-off">
@@ -290,6 +293,8 @@ function ProviderCard({ p, onEdit, onChange, onError }: { p: ProviderView; onEdi
             </dd>
           </>
         )}
+        <dt>Offered</dt>
+        <dd data-testid="provider-offers">{offersText(p.offers, p.offersAll)}</dd>
         <dt>Used by</dt>
         <dd data-testid="provider-used-by">{p.usedBy?.length ? p.usedBy.join(', ') : 'No agent'}</dd>
       </dl>
@@ -370,7 +375,23 @@ export function providerFromForm(f: FormState): AIProvider {
   if (f.priceIn) out.priceIn = f.priceIn
   if (f.priceOut) out.priceOut = f.priceOut
   if (f.contextWindow) out.contextWindow = f.contextWindow
+  // A9: the models it offers, once a SuperAdmin chose them.
+  if (f.offeredChosen) {
+    out.offeredChosen = true
+    out.offered = (f.offered ?? []).map((o) => (o.tier ? { model: o.model, tier: o.tier } : { model: o.model }))
+  }
   return out
+}
+
+/**
+ * The models a provider offers before a SuperAdmin chooses (A9), as the
+ * drawer starts from: what the server says it offers Auto (Claude Haiku,
+ * Sonnet and Opus 5.5 on Anthropic), those its endpoint lists when it was
+ * listed.
+ */
+export function offeredStart(seed: { offers?: OfferedModel[] } | null, kind: string | undefined, listed: ListedModel[] | null): OfferedModel[] {
+  const base = seed?.offers ?? (!kind || kind === 'anthropic' ? CLAUDE_OFFERS : [])
+  return listed?.length ? base.filter((o) => listed.some((m) => m.id === o.model)) : base
 }
 
 /** The id a new provider gets from its name: "Second gateway" → second-gateway. */
@@ -396,6 +417,9 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
   const [startKey] = useState(formKey)
   useUnsaved(formKey !== startKey, 'the provider drawer')
   const tested = test?.r?.ok && test.form === formKey
+  // A9: the models it offers, from the endpoint's list the default model's field fetched.
+  const [listed, setListed] = useState<ListedModel[] | null>(null)
+  const offered = f.offeredChosen ? (f.offered ?? []) : offeredStart(seed, f.kind, listed)
   const runTest = async () => {
     setTest({ busy: true })
     try {
@@ -610,6 +634,7 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
           auto={!!seed}
           from={`${f.kind} ${f.endpoint ?? ''} ${f.region ?? ''}`}
           suggestions={models}
+          onList={setListed}
           testId="provider-model"
         />
         <Field label="Context window (tokens)" hint="Of the default model: from the endpoint’s list when it says, else as its server is set (vLLM’s --max-model-len). Empty is not known.">
@@ -638,6 +663,7 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
           </span>
         </Field>
       </div>
+      <OfferedModels value={offered} chosen={!!f.offeredChosen} defaultModel={f.model} listed={listed} onChange={(next) => set({ offered: next, offeredChosen: true })} />
       {!seed && (
         <p className="rk-fhint" style={{ margin: 0 }}>
           Once it is added, save its credential on its card and press Test.
