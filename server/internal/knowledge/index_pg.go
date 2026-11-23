@@ -236,13 +236,13 @@ func (q IndexQuery) mode(m string) bool { return len(q.Modes) == 0 || slices.Con
 
 // indexHit is a passage the index found, with its document.
 type indexHit struct {
-	passage                                                                  string
-	position                                                                 int
+	passage                                                                   string
+	position                                                                  int
 	path, kind, source, itemKey, title, heading, pageKind, version, url, body string
-	date                                                                     time.Time
-	product, productVersion                                                  string
-	reviewed                                                                 bool
-	score                                                                    float64
+	date                                                                      time.Time
+	product, productVersion                                                   string
+	reviewed                                                                  bool
+	score                                                                     float64
 }
 
 // candidates is how many passages each way of searching gives, before

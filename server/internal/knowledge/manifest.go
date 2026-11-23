@@ -185,7 +185,7 @@ type Excerpt struct {
 	// says it is about (KN-56).
 	Product        string   `json:"product,omitempty"`
 	ProductVersion string   `json:"productVersion,omitempty"`
-	Chunks  []string `json:"chunks"`
+	Chunks         []string `json:"chunks"`
 }
 
 // chunkSize is about a paragraph or a few. An excerpt holds every chunk
