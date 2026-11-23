@@ -124,6 +124,12 @@ func paragraphs(text string) []string {
 // NewIndex builds the index of a local copy: its pages, with stale ones
 // marked from the manifest, and its excerpts.
 func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) *Index {
+	return newIndex(files, m, staleDays, now, true)
+}
+
+// newIndex builds the index of a local copy, its excerpts left out when
+// the database holds them (KN-53): each replica keeps the pages alone.
+func newIndex(files map[string]File, m *Manifest, staleDays int, now time.Time, excerpts bool) *Index {
 	idx := &Index{df: map[string]int{}}
 	if m == nil {
 		m = newManifest()
@@ -146,7 +152,7 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 			d.add(p.Title, 2)
 			d.add(p.Body, 1)
 			idx.docs = append(idx.docs, d)
-		case strings.HasPrefix(f.Path, ExcerptsDir):
+		case excerpts && strings.HasPrefix(f.Path, ExcerptsDir):
 			var e Excerpt
 			if json.Unmarshal(f.Body, &e) != nil {
 				continue

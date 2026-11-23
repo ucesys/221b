@@ -207,10 +207,14 @@ func (s *Service) reindexWith(ctx context.Context) {
 	s.mu.RLock()
 	files, m := s.files, s.manifest
 	s.mu.RUnlock()
-	idx := NewIndex(files, m, days, s.o.Now())
+	idx := newIndex(files, m, days, s.o.Now(), s.pg == nil)
 	s.mu.Lock()
 	s.index = idx
 	s.mu.Unlock()
+	if s.pg != nil {
+		s.docs.Store(int64(len(docsOf(files, m))))
+		s.kickIndex()
+	}
 }
 
 // refreshEvery is how often the local copy is read again.

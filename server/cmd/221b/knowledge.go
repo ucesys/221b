@@ -51,6 +51,9 @@ type knowledgeOptions struct {
 	// wiki is the wiki's store in the database (DB-96); nil keeps the wiki
 	// nowhere until a store is chosen (a test).
 	wiki *knowledge.DBStore
+	// database keeps the search index (KN-53); nil keeps it in memory (a
+	// test).
+	database *db.DB
 }
 
 // copyWiki copies the wiki the temporary ConfigMap store of a release
@@ -125,6 +128,7 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		Leads:  o.leads, Audit: record, RefreshGit: cfg.KnowledgeRefreshGit, RefreshS3: cfg.KnowledgeRefreshS3,
 		Logger:    o.log.With("component", "knowledge"),
 		WikiStore: o.wiki,
+		Database:  o.database,
 		// Mycroft's first import (Phase 12, GS-11): a source is read once
 		// it is added.
 		ReadNew: true,
@@ -810,7 +814,7 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	if err := w.copyWiki(ctx, wikiStore); err != nil {
 		return err
 	}
-	svc, l, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{wiki: wikiStore, auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
+	svc, l, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{wiki: wikiStore, database: w.database, auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
 		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log,
 		wrap: func(b kv.Backend) kv.Backend {
 			// Mycroft's sources, the syncs' state and the runs of page

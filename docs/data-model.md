@@ -1,6 +1,6 @@
 # The data model
 
-What 221B keeps in PostgreSQL: 131 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0054`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
+What 221B keeps in PostgreSQL: 134 tables in 12 domains and 3 tiers, and 2 tables of the database's own. The schema itself is the SQL in [`server/internal/db/migrations`](../server/internal/db/migrations), steps `0001` to `0055`, applied in order; a later step reshapes what an earlier one made, so no one file is a domain's schema. This page is the schema as it stands after the last step: every table, every column, the keys and the rules they follow. A test, `TestTheDataModelIsTheSchema`, compares it with a migrated database and fails when the two disagree on a table, a column or a key (DB-68). [database.md](database.md) says how the database is run and how a domain's repository is written.
 
 ## How to read it
 
@@ -308,7 +308,7 @@ A message's parts are one JSON value by decision: a chat is read and written who
 
 ### Knowledge
 
-What outlives the cases it came from: the fixes that worked, the accepted exceptions and the known issues; and Mycroft's side, the sources it reads, its syncs, and the wiki page changes that wait for review. The wiki's pages themselves stay in Git or S3, or in the wiki's store in the database while no repository or bucket is named. Schema: `0011_knowledge.sql`, `0029_knowledge_fixes_exceptions.sql` (fixes and exceptions), `0030_knowledge.sql` (sources, syncs and page changes), `0031_cases.sql` (known issues), `0034_credentials.sql` (a source's credential) and `0050_wiki_store.sql` (the wiki's store).
+What outlives the cases it came from: the fixes that worked, the accepted exceptions and the known issues; and Mycroft's side, the sources it reads, its syncs, and the wiki page changes that wait for review. The wiki's pages themselves stay in Git or S3, or in the wiki's store in the database while no repository or bucket is named. Schema: `0011_knowledge.sql`, `0029_knowledge_fixes_exceptions.sql` (fixes and exceptions), `0030_knowledge.sql` (sources, syncs and page changes), `0031_cases.sql` (known issues), `0034_credentials.sql` (a source's credential), `0050_wiki_store.sql` (the wiki's store) and `0055_knowledge_index.sql` (the search index).
 
 #### The wiki
 
@@ -333,11 +333,21 @@ What outlives the cases it came from: the fixes that worked, the accepted except
 
 The store holds 256 MiB at most, the files and the staged pages together; a write past it is refused whole, and one that makes the store smaller always goes through. A write takes one lock for the store, so a version checked is the one written over. A run is staged by its key, not keyed to `wiki_runs`: a run is staged before its row is saved, and its row may go first. The first start copies the ConfigMap `<release>-wiki` of the temporary store of before (CF-57) in once, recorded as `wiki-store` in `imports`.
 
+#### The search index
+
+| Table | Holds | Columns |
+| --- | --- | --- |
+| `knowledge_documents` | What the knowledge search finds (KN-53): each approved page and each source item's excerpt (a long document's section, KN-52), as the wiki holds it now, with what it is about. | `knowledge_document_id` PK, `path` (its file in the wiki; unique), `kind` (`page` or `excerpt`), `knowledge_source_id` FK? → `knowledge_sources` (an excerpt's source; none for a page), `item_key` (an excerpt's item, as the manifest keys it), `title`, `heading` (a section's heading path), `page_kind`, `item_version` (the item's version in its source), `url`, `dated_at`, `product`, `product_version` (major.minor), `is_reviewed` (an approved page), `content_hash` (of the file and its tags), `indexed_at` |
+| `knowledge_passages` | A document's chunks, each with its words for full-text search. | `knowledge_passage_id` PK, `knowledge_document_id` FK → `knowledge_documents`, `position`, `body`, `squashed` (its letters and digits in lower case), `search` (`tsvector`: the title and heading weighted A, the body D) |
+| `knowledge_embeddings` | Each passage's embedding by the chosen embedding model (KN-55). | `knowledge_passage_id` PK FK → `knowledge_passages`, `model`, `dimensions`, `embedding` (`real` array; cast to pgvector's `vector` to search), `embedded_at` |
+
+A document's passages are unique by `(knowledge_document_id, position)`. The index is a projection of the wiki: the leader writes a document again whole when its file or its tags change, deletes it when its file is gone, and so rebuilds the index at the first start of a release that has it. It is not in the console's backup. A source's removal deletes its documents. `search` has a GIN index; where `pg_trgm` is there the console adds trigram indexes on `body` and `squashed` (not in the schema's steps, since the extension may be missing). The embeddings are kept as `real` arrays, so the table is there whether or not pgvector is.
+
 #### Sources and syncs
 
 | Table | Holds | Columns |
 | --- | --- | --- |
-| `knowledge_sources` | The sources Mycroft reads: Confluence, Git, S3, web sites, live addresses, uploads, the console and the fixes. Every field of a source is a column. | `knowledge_source_id` PK (text: the id the console gives it, or the one a SuperAdmin chose), `position` (its place in the list), `name`, `kind`, `is_enabled` (false: not read; its pages stay and grow stale), `base_url`, `flavor`, `email`, `space` (a Confluence space), `url` (a git repository, or a web site's start address), `branch`, `path`, `username`, `repository_name` ≈ `repositories` (the repository it reads, by its name there; it may be gone), `bucket` (a bucket of documents), `prefix`, `region`, `endpoint`, `is_path_style`, `credentials_kind` (`keys`, in the Secret, or `identity`, the pod's), `auth` (how a live source or a web site signs in), `depth` (how far a web site's read goes), `page_limit`, `migrated_from` (text array: the web pages a web site was made from at the upgrade), `ca_pem`, `pinned_cert_sha256` (the certificate a SuperAdmin trusted; empty for none), `pinned_cert_subject`, `pinned_cert_issuer`, `pinned_cert_not_after`, `pinned_by`, `pinned_at`, `added_at`, `added_by`, `credential_id` FK? → `credentials` ↗ (the credential it signs in with; none for none), `is_credential_migrated` |
+| `knowledge_sources` | The sources Mycroft reads: Confluence, Git, S3, web sites, live addresses, uploads, the console and the fixes. Every field of a source is a column. | `knowledge_source_id` PK (text: the id the console gives it, or the one a SuperAdmin chose), `position` (its place in the list), `name`, `kind`, `is_enabled` (false: not read; its pages stay and grow stale), `base_url`, `flavor`, `email`, `space` (a Confluence space), `url` (a git repository, or a web site's start address), `branch`, `path`, `username`, `repository_name` ≈ `repositories` (the repository it reads, by its name there; it may be gone), `bucket` (a bucket of documents), `prefix`, `region`, `endpoint`, `is_path_style`, `credentials_kind` (`keys`, in the Secret, or `identity`, the pod's), `auth` (how a live source or a web site signs in), `depth` (how far a web site's read goes), `page_limit`, `migrated_from` (text array: the web pages a web site was made from at the upgrade), `ca_pem`, `pinned_cert_sha256` (the certificate a SuperAdmin trusted; empty for none), `pinned_cert_subject`, `pinned_cert_issuer`, `pinned_cert_not_after`, `pinned_by`, `pinned_at`, `added_at`, `added_by`, `credential_id` FK? → `credentials` ↗ (the credential it signs in with; none for none), `is_credential_migrated`, `trust` (`high`, `normal` or `low`, set by a SuperAdmin; empty is its kind's default), `product` (what its documents are about, such as `rke2`), `product_version` (their version, major.minor), `follows_cluster_versions` (its passages are kept to the versions the clusters run) |
 | `knowledge_source_addresses` | The addresses of a live source. | `knowledge_source_id` PK FK → `knowledge_sources`, `position` PK, `kind`, `url`, `space` |
 | `source_exclusions` | The items or patterns a source does not read. | `knowledge_source_id` PK FK → `knowledge_sources`, `position` PK, `pattern` (an item's id, a glob, or a prefix), `is_under` (a Confluence page and its children), `is_item` (the pattern is one item's id, matched as it is), `title`, `reason`, `excluded_by`, `excluded_at` |
 | `knowledge_source_reads` | The last read of each source: when, how many items, what it skipped, why it failed. | `knowledge_source_id` PK ≈ `knowledge_sources` (text: the source's id, kept whether or not the settings still list the source), `last_read_at`, `item_count`, `error`, `reported_count`, `skipped_count`, `skipped_why`, `last_full_at` (the last read of every item) |
@@ -378,7 +388,7 @@ Two tables are the database's own and belong to no domain: the steps applied, an
 
 ## Every foreign key
 
-The 119 foreign keys of the schema, by the table that holds them. `CASCADE`: the row goes with the row it points at. `SET NULL`: the key is emptied and the row stays. `RESTRICT`: the row pointed at cannot be deleted while it is pointed at.
+The 122 foreign keys of the schema, by the table that holds them. `CASCADE`: the row goes with the row it points at. `SET NULL`: the key is emptied and the row stays. `RESTRICT`: the row pointed at cannot be deleted while it is pointed at.
 
 | From | Columns | To | On delete |
 | --- | --- | --- | --- |
@@ -493,6 +503,9 @@ The 119 foreign keys of the schema, by the table that holds them. `CASCADE`: the
 | `knowledge_sources` | `credential_id` | `credentials` (`credential_id`) | `SET NULL` |
 | `knowledge_source_addresses` | `knowledge_source_id` | `knowledge_sources` (`knowledge_source_id`) | `CASCADE` |
 | `source_exclusions` | `knowledge_source_id` | `knowledge_sources` (`knowledge_source_id`) | `CASCADE` |
+| `knowledge_documents` | `knowledge_source_id` | `knowledge_sources` (`knowledge_source_id`) | `CASCADE` |
+| `knowledge_passages` | `knowledge_document_id` | `knowledge_documents` (`knowledge_document_id`) | `CASCADE` |
+| `knowledge_embeddings` | `knowledge_passage_id` | `knowledge_passages` (`knowledge_passage_id`) | `CASCADE` |
 | `knowledge_sync_batches` | `knowledge_sync_id` | `knowledge_syncs` (`knowledge_sync_id`) | `CASCADE` |
 | `fix_cases` | `fix_id` | `fixes` (`fix_id`) | `CASCADE` |
 | `exceptions` | `case_id` | `cases` (`case_id`) | `SET NULL` |
