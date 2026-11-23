@@ -191,7 +191,7 @@ function SourceRow({ x, clusters, run, busy }: { x: SourceIndexView; clusters: s
   const [version, setVersion] = useState(x.productVersion ?? '')
   const [follows, setFollows] = useState(!!x.followsClusterVersions)
   const changed = trust !== (x.trustDefault ? '' : x.trust) || product.trim() !== (x.product ?? '') || version.trim() !== (x.productVersion ?? '') || follows !== !!x.followsClusterVersions
-  const kindDefault = x.trustDefault ? x.trust : (({ git: 'high', upload: 'high', console: 'high', fixes: 'high' } as Record<string, TrustLevel>)[x.kind] ?? 'normal')
+  const kindDefault = x.trustDefault ? x.trust : (({ confluence: 'high', git: 'high', upload: 'high', console: 'high', fixes: 'high' } as Record<string, TrustLevel>)[x.kind] ?? 'normal')
   return (
     <tr data-testid="knowledge-index-source" data-source={x.id}>
       <td>

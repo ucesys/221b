@@ -35,6 +35,7 @@ import { CallError } from '../../api/call'
 import {
   excludeItems,
   fetchItemDetail,
+  writePage,
   fetchItems,
   fetchSources,
   includeAgain,
@@ -452,7 +453,7 @@ function SourceItems({ source, onToast }: { source: string; onToast?: (msg: stri
           </button>
         </div>
       )}
-      {open && <ItemDrawer it={open} onClose={() => setOpen(null)} />}
+      {open && <ItemDrawer it={open} mayWrite={!!data?.mayExclude} onClose={() => setOpen(null)} />}
       {excluding && (
         <ExcludeDialog
           it={excluding}
@@ -532,9 +533,26 @@ function ExcludeDialog({ it, onCancel, onDone }: { it: SourceItem; onCancel: () 
 }
 
 /** An item's details: its excerpts, the pages that drew on it, and the original. */
-function ItemDrawer({ it, onClose }: { it: SourceItem; onClose: () => void }) {
+function ItemDrawer({ it, mayWrite, onClose }: { it: SourceItem; mayWrite?: boolean; onClose: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [error, setError] = useState('')
+  // A page asked of Mycroft from the item (KN-59), and what it did.
+  const [writing, setWriting] = useState(false)
+  const [written, setWritten] = useState('')
+  const ask = () => {
+    setWriting(true)
+    setWritten('')
+    writePage(it.source, it.id).then(
+      (r) => {
+        setWriting(false)
+        setWritten(r.text)
+      },
+      (e: unknown) => {
+        setWriting(false)
+        setWritten(errorText(e))
+      },
+    )
+  }
   useEffect(() => {
     let stop = false
     fetchItemDetail(it.source, it.id).then(
@@ -593,6 +611,19 @@ function ItemDrawer({ it, onClose }: { it: SourceItem; onClose: () => void }) {
                 </>
               )}
             </section>
+            {mayWrite && d.excerpts.length > 0 && (
+              <section aria-label="Write a page" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }} data-testid="sources-item-write">
+                <button className="rk-btn" disabled={writing} onClick={ask} data-testid="sources-item-write-page">
+                  {writing ? 'Mycroft is writing…' : 'Write a page from it'}
+                </button>
+                <span className="rk-fhint">Mycroft writes pages from a source of high trust by itself; from this item on request. The pages wait for review in AIOps › Inbox.</span>
+                {written && (
+                  <span className="rk-t" style={{ fontSize: 12 }} role="status" data-testid="sources-item-write-result">
+                    {written}
+                  </span>
+                )}
+              </section>
+            )}
             <section aria-label="Wiki pages" data-testid="sources-item-pages">
               <strong>Wiki pages that drew on it</strong>
               {!d.provenance ? (

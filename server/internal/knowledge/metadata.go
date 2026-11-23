@@ -36,14 +36,15 @@ const (
 const ActionIndexSettings = "knowledge.trust"
 
 // trustLevel is a source's trust level: its own, or its kind's: the
-// organisation's own (git repositories of runbooks, uploaded documents
-// and notes, the console's records, the fixes) high, the rest normal.
+// organisation's own (Confluence spaces, git repositories of runbooks,
+// uploaded documents and notes, the console's records, the fixes) high;
+// web sites and buckets, where vendor documentation is read, normal.
 func (x Source) trustLevel() string {
 	if x.Trust != "" {
 		return x.Trust
 	}
 	switch x.Kind {
-	case SourceGit, SourceUpload, SourceConsole, SourceFixes:
+	case SourceConfluence, SourceGit, SourceUpload, SourceConsole, SourceFixes:
 		return TrustHigh
 	}
 	return TrustNormal
@@ -152,6 +153,25 @@ type SourceIndex struct {
 	FollowsClusters bool   `json:"followsClusterVersions"`
 }
 
+// normalized are index settings as they are kept: the trust and the
+// product in lower case, the version as major.minor; an error says what
+// is wrong.
+func (in SourceIndex) normalized() (SourceIndex, error) {
+	in.Trust = strings.TrimSpace(strings.ToLower(in.Trust))
+	in.Product = strings.TrimSpace(strings.ToLower(in.Product))
+	in.ProductVersion = strings.TrimSpace(in.ProductVersion)
+	switch {
+	case in.Trust != "" && in.Trust != TrustHigh && in.Trust != TrustNormal && in.Trust != TrustLow:
+		return in, invalid("a source's trust is high, normal or low, or its kind's default")
+	case in.Product != "" && !productName.MatchString(in.Product):
+		return in, invalid("a product is a short name in lower case: rke2, kubernetes, longhorn")
+	case in.ProductVersion != "" && versionMinor(in.ProductVersion) == "":
+		return in, invalid("a version is major.minor, such as 1.33")
+	}
+	in.ProductVersion = versionMinor(in.ProductVersion)
+	return in, nil
+}
+
 // SetSourceIndex sets a source's trust level, product, version and
 // whether it follows the clusters' versions: a SuperAdmin's, audited
 // with what changed.
@@ -162,18 +182,10 @@ func (s *Service) SetSourceIndex(ctx context.Context, c Caller, id string, in So
 	if err := s.leads(); err != nil {
 		return Source{}, err
 	}
-	in.Trust = strings.TrimSpace(strings.ToLower(in.Trust))
-	in.Product = strings.TrimSpace(strings.ToLower(in.Product))
-	in.ProductVersion = strings.TrimSpace(in.ProductVersion)
-	switch {
-	case in.Trust != "" && in.Trust != TrustHigh && in.Trust != TrustNormal && in.Trust != TrustLow:
-		return Source{}, invalid("a source's trust is high, normal or low, or its kind's default")
-	case in.Product != "" && !productName.MatchString(in.Product):
-		return Source{}, invalid("a product is a short name in lower case: rke2, kubernetes, longhorn")
-	case in.ProductVersion != "" && versionMinor(in.ProductVersion) == "":
-		return Source{}, invalid("a version is major.minor, such as 1.33")
+	in, err := in.normalized()
+	if err != nil {
+		return Source{}, err
 	}
-	in.ProductVersion = versionMinor(in.ProductVersion)
 	var was, saved Source
 	if _, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(x Source) bool { return x.ID == id })

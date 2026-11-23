@@ -89,6 +89,9 @@ type SyncResult struct {
 	// sync stopped asking Mycroft (the run's budget spent).
 	failed bool
 	stop   error
+	// indexed counts the items read for the search alone: Mycroft writes
+	// no page from them (KN-59). Said in the report.
+	indexed int
 }
 
 // The outcomes of a batch (KN-27).
@@ -420,11 +423,21 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 			writes = append(writes, Change{Path: excerptPath(key), Body: b})
 		}
 	}
-	// Mycroft drafts the pages.
+	// Mycroft drafts the pages from what matters (KN-59): the items of
+	// a source of high trust and the corrections; the rest is excerpted
+	// and indexed alone.
+	var toDraft []readItem
+	for _, ri := range changed {
+		if writesPages(ri) {
+			toDraft = append(toDraft, ri)
+		} else {
+			res.indexed++
+		}
+	}
 	var run *Run
-	if len(changed) > 0 {
+	if len(toDraft) > 0 {
 		var unsent map[string]bool
-		run, unsent, err = s.draft(ctx, store, files, m, changed, req, secrets, &res)
+		run, unsent, err = s.draft(ctx, store, files, m, toDraft, req, secrets, &res)
 		if err != nil {
 			res.Errors = append(res.Errors, err.Error())
 		}
@@ -566,6 +579,9 @@ func syncReport(r SyncResult) string {
 		fmt.Fprintf(&b, ", %d skipped (%s)", r.Skipped, r.SkippedWhy)
 	}
 	b.WriteString(".")
+	if r.indexed > 0 {
+		fmt.Fprintf(&b, " %d of the changed items were indexed for the search alone: Mycroft writes pages from a source of high trust, from corrections, and on request.", r.indexed)
+	}
 	if r.Pages > 0 {
 		fmt.Fprintf(&b, " %d page changes wait for review in [AIOps › Inbox](%s) (run %s).", r.Pages, DraftHref(r.Run), r.Run)
 	} else {

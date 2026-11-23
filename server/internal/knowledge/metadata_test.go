@@ -44,7 +44,7 @@ func TestTagsAndTrust(t *testing.T) {
 	if _, v := tagsOf(Excerpt{Key: "notes:docs/v1.33/x.md"}, Source{Kind: SourceUpload}); v != "" {
 		t.Errorf("a source that names nothing takes no version from a path: %q", v)
 	}
-	for kind, want := range map[string]string{SourceGit: TrustHigh, SourceUpload: TrustHigh, SourceConsole: TrustHigh, SourceFixes: TrustHigh, SourceConfluence: TrustNormal, SourceWeb: TrustNormal, SourceS3: TrustNormal} {
+	for kind, want := range map[string]string{SourceGit: TrustHigh, SourceUpload: TrustHigh, SourceConsole: TrustHigh, SourceFixes: TrustHigh, SourceConfluence: TrustHigh, SourceWeb: TrustNormal, SourceS3: TrustNormal} {
 		if got := (Source{Kind: kind}).trustLevel(); got != want {
 			t.Errorf("%s's default trust: %s, want %s", kind, got, want)
 		}

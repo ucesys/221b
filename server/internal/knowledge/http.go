@@ -55,6 +55,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("PUT settings", h.putSettings)
 	route("PUT embeddings", h.putEmbeddings)
 	route("PUT sources/{id}/index", h.putSourceIndex)
+	route("POST items/page", h.postItemPage)
 	route("POST sources", h.postSource)
 	route("PUT sources/{id}", h.putSource)
 	route("DELETE sources/{id}", h.deleteSource)
@@ -201,6 +202,23 @@ func (h *handler) putSourceIndex(w http.ResponseWriter, r *http.Request, c Calle
 		return
 	}
 	writeJSON(w, http.StatusOK, x)
+}
+
+// postItemPage has Mycroft write pages from an item (KN-59).
+func (h *handler) postItemPage(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Source string `json:"source"`
+		ID     string `json:"id"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.WritePage(r.Context(), c, in.Source, in.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // sourceInput is a source as its dialog sends it: it names its

@@ -608,7 +608,13 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		x.PinnedCert = nil
 		if create {
 			x.Added, x.AddedBy = s.o.Now().UTC(), c.label()
-			x.Trust, x.Product, x.ProductVersion, x.FollowsClusters = "", "", "", false
+			// A new source may come with its index settings (KN-56, KN-57),
+			// audited below.
+			in, err := SourceIndex{Trust: x.Trust, Product: x.Product, ProductVersion: x.ProductVersion, FollowsClusters: x.FollowsClusters}.normalized()
+			if err != nil {
+				return err
+			}
+			x.Trust, x.Product, x.ProductVersion, x.FollowsClusters = in.Trust, in.Product, in.ProductVersion, in.FollowsClusters
 			// Exclusions are made in AIOps › Mycroft › Sources only.
 			x.Excluded, x.MigratedFrom = nil, nil
 			set.Sources = append(set.Sources, x)
@@ -663,6 +669,10 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		}
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: x.ID, Detail: detail, Outcome: audit.OutcomeOK, From: c.From})
+	if create && (saved.Trust != "" || saved.Product != "" || saved.ProductVersion != "" || saved.FollowsClusters) {
+		s.audit(audit.Event{Action: ActionIndexSettings, Who: c.who(), Target: x.ID, Outcome: audit.OutcomeOK, From: c.From,
+			Detail: fmt.Sprintf("%s, added: trust %s; about %s; %s", saved.Name, saved.trustLevel(), aboutWords(saved), map[bool]string{true: "kept to the versions the clusters run", false: "every version"}[saved.FollowsClusters])})
+	}
 	s.sourceSaved(ctx, c, x, create, !renamedOnly)
 	return saved, nil
 }

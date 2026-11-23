@@ -198,6 +198,21 @@ describe('AIOps › Mycroft › Sources', () => {
     expect(calls.some((c) => c.url === '/api/v1/knowledge/items/detail?source=vendor&id=%2Fblog%2Fold.html')).toBe(true)
   })
 
+  it('asks Mycroft for a page from an item, whatever its source’s trust (KN-59)', async () => {
+    stub({
+      detail: () => ({ item: site, excerpts: ['First part.'], excerptCount: 1, pages: [], provenance: true }),
+      items: (_u, init) => (init?.method === 'POST' ? { run: 'r-1', pages: 1, text: '1 page change waits for review in AIOps › Inbox (run r-1).' } : page()),
+    })
+    render(<MycroftSources open="vendor" />)
+    fireEvent.click(within((await screen.findAllByTestId('sources-item'))[0]!).getByTestId('sources-item-open'))
+    const drawer = await screen.findByTestId('sources-item-drawer')
+    fireEvent.click(await within(drawer).findByTestId('sources-item-write-page'))
+    expect((await within(drawer).findByTestId('sources-item-write-result')).textContent).toContain('run r-1')
+    const sent = calls.find((c) => c.url === '/api/v1/knowledge/items/page')
+    expect(sent?.init?.method).toBe('POST')
+    expect(JSON.parse(String(sent?.init?.body))).toEqual({ source: 'vendor', id: '/blog/old.html' })
+  })
+
   it('excludes everything under an item with a reason, says which pages drew on it, and includes it again from Excluded', async () => {
     stub({
       exclusions: (_u, init) =>

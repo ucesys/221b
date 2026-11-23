@@ -845,6 +845,14 @@ export interface ItemDetail {
 }
 
 export const fetchItemDetail = (source: string, id: string) => call<ItemDetail>(base + 'items/detail?source=' + enc(source) + '&id=' + enc(id))
+/** What asking Mycroft for a page from an item did (KN-59). */
+export interface PageRequestResult {
+  run?: string
+  pages: number
+  text: string
+}
+/** Has Mycroft write the wiki's pages from one item, whatever its source's trust (KN-59): they wait for review. */
+export const writePage = (source: string, id: string) => call<PageRequestResult>(base + 'items/page', post({ source, id }))
 
 export interface ExcludeResult {
   exclusion: Exclusion
