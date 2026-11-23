@@ -173,6 +173,8 @@ type readItem struct {
 	item   Item
 	key    string
 	text   string
+	// doc is a section's document, by key (KN-52).
+	doc string
 }
 
 // Status reads the syncs' status.
@@ -286,6 +288,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				st := m.Items[key]
 				if st != nil && it.Version != "" && st.Version == it.Version && !st.Gone && !req.Rebuild {
 					st.LastSeen = now
+					seeSections(m, x.ID, it.ID, now)
 					res.Unchanged++
 					continue
 				}
@@ -325,6 +328,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					// Unchanged, or nothing to read (a page of children only).
 					st.Hash = h
 					st.Version = it.Version
+					seeSections(m, x.ID, it.ID, now)
 					res.Unchanged++
 					continue
 				}
@@ -333,12 +337,23 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					ss.Reported++
 					res.Reported = append(res.Reported, fmt.Sprintf("%s “%s”%s tried to give instructions, which were not followed: “%s”", x.Name, it.Title, versionWords(it.Version), clip(st.Reported, 160)))
 				}
-				changed = append(changed, readItem{source: x, item: it, key: key, text: text})
+				// A long document is its sections (KN-52): each changed
+				// one is read, and the document keeps no excerpt of its own.
+				secs := cutSections(text)
+				if len(secs) > 0 && st.Sections == 0 {
+					gone = append(gone, key)
+				}
+				read, dropped := readSections(m, x, it, st, secs, req.Rebuild, now)
+				changed = append(changed, read...)
+				gone = append(gone, dropped...)
+				if len(secs) == 0 {
+					changed = append(changed, readItem{source: x, item: it, key: key, text: text})
+				}
 				res.Read++
 			}
 			if complete {
 				for _, st := range m.bySource(x.ID) {
-					if key := itemKey(st.Source, st.ID); !listed[key] && !st.Gone {
+					if key := itemKey(st.Source, st.ID); !listed[key] && !st.Gone && (st.Of == "" || !listed[itemKey(st.Source, st.Of)]) {
 						st.Gone = true
 						if st.record() {
 							// A record of an item never read holds no excerpt.
@@ -365,7 +380,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				}
 			}
 			for _, st := range m.bySource(x.ID) {
-				if !st.Gone && !st.record() {
+				if !st.Gone && !st.record() && st.Of == "" {
 					ss.Items++
 				}
 			}
@@ -388,7 +403,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// The excerpts of what changed, and none for what is gone.
 	var writes []Change
 	for _, ri := range changed {
-		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Chunks: chunks(ri.text)}
+		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Heading: m.Items[ri.key].Heading, Chunks: chunks(ri.text)}
 		b, _ := json.Marshal(ex)
 		writes = append(writes, Change{Path: excerptPath(ri.key), Body: b})
 	}
@@ -411,6 +426,15 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 		for key := range unsent {
 			if st := m.Items[key]; st != nil {
 				st.Version, st.Hash = "", ""
+				// A section's document is read again, and the section
+				// with it (KN-52).
+				if st.Of != "" {
+					doc := itemKey(st.Source, st.Of)
+					if d := m.Items[doc]; d != nil {
+						d.Version, d.Hash = "", ""
+					}
+					delete(uploads, doc)
+				}
 			}
 			delete(uploads, key)
 		}

@@ -306,7 +306,7 @@ func (r *uploadReader) List(context.Context, time.Time) ([]Item, bool, error) {
 			seen[p.name] = true
 		}
 	}
-	for _, st := range m.bySource(r.source) {
+	for _, st := range m.documents(r.source) {
 		// A document whose read failed is let go: it is uploaded again.
 		if !seen[st.ID] && !st.Gone && !st.record() {
 			out = append(out, Item{ID: st.ID, Title: st.Title, Version: st.Version, Modified: st.Modified, URL: st.URL, By: st.By, Corrects: st.Corrects, Type: st.Type})

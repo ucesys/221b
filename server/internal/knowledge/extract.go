@@ -144,6 +144,17 @@ func docxText(b []byte) (string, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
+			case "pStyle":
+				// A heading paragraph is marked as Markdown's, so a long
+				// document is cut at its headings (KN-52); its style
+				// comes before its text.
+				for _, a := range t.Attr {
+					if a.Name.Local == "val" {
+						if n := headingLevel(a.Value); n > 0 {
+							out.WriteString(strings.Repeat("#", n) + " ")
+						}
+					}
+				}
 			case "t":
 				inText = true
 			case "tab":
@@ -169,6 +180,22 @@ func docxText(b []byte) (string, error) {
 		}
 	}
 	return out.String(), nil
+}
+
+// headingStyle is a Word paragraph style that is a heading: Heading1 to
+// Heading9 (the style ids Word gives them), and Title.
+var headingStyle = regexp.MustCompile(`(?i)^heading\s*([1-9])$`)
+
+// headingLevel is a style's heading level, 0 for none: Title is 1, and
+// HeadingN N, at most 6.
+func headingLevel(style string) int {
+	if strings.EqualFold(style, "Title") {
+		return 1
+	}
+	if m := headingStyle.FindStringSubmatch(style); m != nil {
+		return min(int(m[1][0]-'0'), 6)
+	}
+	return 0
 }
 
 // The PDF reader: every stream is inflated when it is Flate-encoded, and

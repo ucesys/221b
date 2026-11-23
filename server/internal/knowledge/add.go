@@ -345,7 +345,7 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 			b.LastRead, b.Error, b.Reported = ss.LastRead, ss.Error, ss.Reported
 			b.Skipped, b.SkippedWhy = ss.Skipped, ss.SkippedWhy
 		}
-		for _, it := range m.bySource(x.ID) {
+		for _, it := range m.documents(x.ID) {
 			if !it.Gone && !it.record() {
 				b.Items++
 			}

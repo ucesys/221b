@@ -106,7 +106,7 @@ func (s *Service) Documents(source string) []ItemState {
 	s.mu.RUnlock()
 	var out []ItemState
 	seen := map[string]bool{}
-	for _, st := range m.bySource(source) {
+	for _, st := range m.documents(source) {
 		if !st.Gone && !st.record() {
 			out = append(out, *st)
 			seen[st.ID] = true
@@ -162,7 +162,17 @@ func (s *Service) removeDocument(ctx context.Context, c Caller, source, name str
 	// now.
 	st.Gone, st.Hash, st.Version = true, "", ""
 	empty := []byte(`{"key":"` + key + `","chunks":[]}`)
-	if err := store.Write(ctx, []Change{{Path: excerptPath(key), Body: empty}, {Path: ManifestPath, Body: m.encode()}}, "Mycroft forgets the document "+name); err != nil {
+	writes := []Change{{Path: excerptPath(key), Body: empty}}
+	// And its sections, a long document's (KN-52).
+	for _, sec := range sectionsOf(m, source, name) {
+		if !sec.Gone {
+			sec.Gone, sec.Hash, sec.Version = true, "", ""
+			k := itemKey(source, sec.ID)
+			writes = append(writes, Change{Path: excerptPath(k), Body: []byte(`{"key":"` + k + `","chunks":[]}`)})
+		}
+	}
+	writes = append(writes, Change{Path: ManifestPath, Body: m.encode()})
+	if err := store.Write(ctx, writes, "Mycroft forgets the document "+name); err != nil {
 		return err
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: source, Outcome: audit.OutcomeOK, Detail: "document " + name + " removed from " + source, From: c.From})

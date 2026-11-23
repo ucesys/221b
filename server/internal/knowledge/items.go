@@ -201,7 +201,7 @@ func (s *Service) uploadRows(source string) []UploadItem {
 		seen[p.name] = true
 	}
 	s.pendingMu.Unlock()
-	for _, st := range m.bySource(source) {
+	for _, st := range m.documents(source) {
 		if seen[st.ID] || st.Gone {
 			continue
 		}
@@ -417,7 +417,7 @@ func (s *Service) allItems(set Settings) []SourceItem {
 		default:
 			parents := parentsOf(m, x.ID, nil)
 			matched := map[int]bool{}
-			for _, st := range m.bySource(x.ID) {
+			for _, st := range m.documents(x.ID) {
 				it := SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: typeOf(x.Kind, st), ID: st.ID, Title: st.Title, URL: st.URL, By: st.By, At: st.Modified, LastRead: st.LastRead, Pages: len(st.Pages), Path: RelPath(x, st.ID), key: itemKey(x.ID, st.ID)}
 				if it.At.IsZero() {
 					it.At = st.LastRead
@@ -540,13 +540,27 @@ func (s *Service) Item(ctx context.Context, c Caller, source, id string) (ItemDe
 	if st := s.manifest.Items[found.key]; st != nil {
 		pages = slices.Clone(st.Pages)
 	}
-	f, ok := s.files[excerptPath(found.key)]
+	// A long document's excerpts are its sections' (KN-52).
+	paths := []string{excerptPath(found.key)}
+	for _, sec := range sectionsOf(s.manifest, source, id) {
+		if !sec.Gone {
+			paths = append(paths, excerptPath(itemKey(source, sec.ID)))
+		}
+	}
+	var bodies [][]byte
+	for _, p := range paths {
+		if f, ok := s.files[p]; ok {
+			bodies = append(bodies, f.Body)
+		}
+	}
 	s.mu.RUnlock()
-	if ok {
+	for _, b := range bodies {
 		var ex Excerpt
-		if json.Unmarshal(f.Body, &ex) == nil {
-			d.ExcerptCount = len(ex.Chunks)
-			d.Excerpts = append(d.Excerpts, ex.Chunks[:min(len(ex.Chunks), detailExcerpts)]...)
+		if json.Unmarshal(b, &ex) == nil {
+			d.ExcerptCount += len(ex.Chunks)
+			if n := detailExcerpts - len(d.Excerpts); n > 0 {
+				d.Excerpts = append(d.Excerpts, ex.Chunks[:min(len(ex.Chunks), n)]...)
+			}
 		}
 	}
 	d.Pages = s.pageBriefs(pages)
