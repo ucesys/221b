@@ -28,6 +28,10 @@ contents:
     # line, with pg_upgrade (docs/upgrading.md).
     - postgresql-18
     - postgresql-18-client
+    # The knowledge index's search (KN-51): contrib for pg_trgm (fuzzy
+    # matching), and pgvector for the passages' embeddings (semantic search).
+    - postgresql-18-contrib
+    - pgvector-18
     - patroni
     # python3 itself (restore.sh), beside the python3.13 Patroni runs on.
     - python-3.13

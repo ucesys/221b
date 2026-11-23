@@ -60,7 +60,7 @@ while IFS= read -r line; do
   services=$((services + 1))
   image=${line#*image: }
   [ "$image" = "${PIN[POSTGRES_IMAGE]:-}" ] || bad "${line%%:*} runs $image, not POSTGRES_IMAGE (${PIN[POSTGRES_IMAGE]:-none})"
-done < <(grep -nE '^ +image: postgres' .github/workflows/*.yml)
+done < <(grep -nE '^ +image: (postgres|pgvector/pgvector):' .github/workflows/*.yml)
 [ "$services" -gt 0 ] || bad "no workflow runs a PostgreSQL service"
 
 [ "$fail" = 0 ] || exit 1

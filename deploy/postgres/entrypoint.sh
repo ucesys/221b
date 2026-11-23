@@ -92,6 +92,11 @@ postgresql:
   connect_address: '${PATRONI_KUBERNETES_POD_IP}:5432'
   data_dir: '${PGDATA}'
   pgpass: /run/patroni/pgpass
+  # The knowledge index's extensions in the console's database, on the
+  # primary (extensions.sh, KN-51).
+  callbacks:
+    on_start: /usr/local/bin/extensions.sh
+    on_role_change: /usr/local/bin/extensions.sh
   parameters:
     # Where post-bootstrap.sh, PGHOST and kubectl exec psql look: Debian's
     # PostgreSQL puts its socket there anyway, Wolfi's in /tmp unless told.

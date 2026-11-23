@@ -169,7 +169,7 @@ context() {
   local ctx=$OUT/context
   rm -rf "$ctx"
   mkdir -p "$ctx"
-  cp -r "$DIR/entrypoint.sh" "$DIR/post-bootstrap.sh" "$DIR/restore.sh" "$DIR/backup" "$ctx/"
+  cp -r "$DIR/entrypoint.sh" "$DIR/post-bootstrap.sh" "$DIR/extensions.sh" "$DIR/restore.sh" "$DIR/backup" "$ctx/"
   walg "$ctx/wal-g"
 }
 

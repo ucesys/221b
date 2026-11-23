@@ -11,7 +11,7 @@ GO      ?= go
 NPM     ?= npm
 # The PostgreSQL the tests and the simulator's console run against; CI runs
 # it pinned to a digest (hack/base-images.env, POSTGRES_IMAGE).
-POSTGRES_IMAGE ?= postgres:18
+POSTGRES_IMAGE ?= pgvector/pgvector:0.8.7-pg18-trixie
 
 # The simulated cluster for dev-sim and e2e-sim.
 SIM_NODES ?= 40

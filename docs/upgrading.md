@@ -56,6 +56,11 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories, and from 0.13.0 the session key) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.14.0 (unreleased)
+
+- **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.
+- **An external database** wants `pg_trgm` and `vector` in the console's database: `CREATE EXTENSION IF NOT EXISTS vector` needs a superuser (or `rds_superuser`, `cloudsqlsuperuser`), once; `pg_trgm` the console's role creates itself where the server has contrib. Without them the console runs, and the knowledge search has no fuzzy matching or no semantic search ([database.md](database.md), *The extensions*).
+
 ## 0.13.0 (2026-11-22)
 
 - **A node's own Automation variables are the node's**. The Variables page always kept them under All nodes; only a card or an API request could put one under another fleet. A node that had different own values of one variable under two fleets could not run a script that reads it; after the upgrade it has one, the first by fleet id. Automation › Variables lists such conflicts: look before upgrading if you rely on that stop. After a rollback, the earlier release reads a node's own values under All nodes, where they apply as before.
