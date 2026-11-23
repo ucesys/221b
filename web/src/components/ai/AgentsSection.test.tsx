@@ -137,7 +137,12 @@ describe('the Agents section', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists every agent with its model, cap, clusters, state and on/off', async () => {
+  it('lists every agent with its model, effort, cap, clusters, state and on/off', async () => {
+    // The Automation author left to Auto, at least Low; the others on the model's own effort.
+    const withEffort = overview()
+    withEffort.agents[2] = { ...withEffort.agents[2]!, settings: { ...withEffort.agents[2]!.settings, effort: 'auto', floorEffort: 'low' } }
+    const served = globalThis.fetch
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => (String(url) === '/api/v1/ai' ? new Response(JSON.stringify(withEffort)) : served(url, init)))
     render(<AgentsSection />)
     const table = await screen.findByTestId('agents-table')
     const rows = within(table).getAllByTestId('agent-row')
@@ -149,6 +154,9 @@ describe('the Agents section', () => {
     expect(rows[1]!.textContent).toContain('$15.00')
     expect(rows[1]!.textContent).toContain('Edited in app')
     expect(rows[1]!.textContent).toContain('Draft tested')
+    // The effort column: the model's own default, a level, or Auto with its floor (AI-43).
+    expect(within(rows[0]!).getByTestId('agent-effort').textContent).toBe('Default')
+    expect(within(rows[2]!).getByTestId('agent-effort').textContent).toBe('Autoat least low')
     expect(rows[4]!.textContent).toContain('Baseline changed')
     expect(rows[4]!.dataset.on).toBe('false')
     // Sherlock has no switch: its clusters say where it is on.
@@ -233,12 +241,7 @@ describe('the Agents section', () => {
     fireEvent.change(effort, { target: { value: 'auto' } })
     fireEvent.change(within(drawer).getByTestId('agent-model-list'), { target: { value: 'auto' } })
     expect((within(drawer).getByTestId('agent-model-list') as HTMLSelectElement).value).toBe('auto')
-    expect([...(within(drawer).getByTestId('agent-floor-model') as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
-      'None',
-      'Claude Haiku 5.5 · light',
-      'Claude Sonnet 5.5 · standard',
-      'Claude Opus 5.5 · strong',
-    ])
+    expect([...(within(drawer).getByTestId('agent-floor-model') as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(['None', 'Claude Haiku 5.5 · light', 'Claude Sonnet 5.5 · standard', 'Claude Opus 5.5 · strong'])
     const line = within(drawer).getByTestId('agent-auto-line').textContent
     expect(line).toContain('the effort for every message and the model when a conversation or a run starts')
     expect(line).toContain('Never xhigh or max without an open P0 or P1 case')
@@ -735,15 +738,7 @@ describe('the agent’s one Model dropdown (A9)', () => {
     expect(within(drawer).queryByTestId('agent-auto-model')).toBeNull()
     const model = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
     expect(within(drawer).getByTestId('agent-model-picker').dataset.state).toBe('listed')
-    expect([...model.options].map((o) => o.textContent)).toEqual([
-      'Default (gpt-5 on Gateway)',
-      'Auto',
-      'qwen-old (no longer offered)',
-      'qwen-small · light',
-      'qwen-big · strong',
-      'embed-1',
-      'gpt-5',
-    ])
+    expect([...model.options].map((o) => o.textContent)).toEqual(['Default (gpt-5 on Gateway)', 'Auto', 'qwen-old (no longer offered)', 'qwen-small · light', 'qwen-big · strong', 'embed-1', 'gpt-5'])
     expect(model.value).toBe('qwen-old')
     expect(within(drawer).getByTestId('agent-not-offered').textContent).toContain('Gateway no longer offers qwen-old: the Troubleshooter answers on it until you choose another model.')
     // No request for the endpoint's list: the offered models were chosen.

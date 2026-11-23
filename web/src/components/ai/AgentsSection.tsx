@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { currentRoute, navigate, withParams } from '../../lib/router'
-import { fetchAI, saveAgent, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
+import { EFFORTS, fetchAI, saveAgent, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
 import { AgentDrawer } from './AgentDrawer'
@@ -84,6 +84,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
               <th scope="col">Agent</th>
               <th scope="col">Purpose</th>
               <th scope="col">Model</th>
+              <th scope="col">Effort</th>
               {costs && <th scope="col">Daily cap</th>}
               <th scope="col">Works on</th>
               <th scope="col">Instructions</th>
@@ -124,6 +125,14 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
                   {a.unusable && a.enabled && (
                     <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 11 }} title={a.unusable}>
                       cannot answer now
+                    </span>
+                  )}
+                </td>
+                <td style={{ fontSize: 12.5 }} data-testid="agent-effort">
+                  {effortLabel(a.settings.effort)}
+                  {a.settings.effort === 'auto' && a.settings.floorEffort && (
+                    <span className="rk-fhint" style={{ display: 'block', fontSize: 11 }}>
+                      at least {effortLabel(a.settings.floorEffort).toLowerCase()}
                     </span>
                   )}
                 </td>
@@ -192,4 +201,9 @@ export function worksOn(a: AgentView, ov: AIOverview): string {
   const name = (id: string) => ov.clusters.find((c) => c.id === id)?.name ?? id
   if (a.id === 'sherlock') return a.clusters?.length ? a.clusters.map(name).join(', ') : 'No cluster'
   return a.clusters?.length ? a.clusters.map(name).join(', ') : 'All clusters'
+}
+
+/** An agent's effort as the table says it: Default (the model's own), a level, or Auto. */
+export function effortLabel(effort?: string): string {
+  return EFFORTS.find((e) => e.id === (effort ?? ''))?.label ?? effort ?? 'Default'
 }
