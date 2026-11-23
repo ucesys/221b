@@ -776,14 +776,28 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 	if !a.Compact {
 		defs = append(defs, uiDefs(q.ViewChanges && a.ID == SherlockID)...)
 	}
-	if n := len(defs); n > 0 {
-		defs = append([]ToolDef(nil), defs...)
-		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
-	}
+	// The tools carry no breakpoint of their own in a conversation: they
+	// come first, so the system blocks' breakpoints cache them too, and
+	// the history takes the two left (withHistoryCache, AI-50).
 	if q.Commands == "" {
 		q.Commands = s.opts.Commands
 	}
 	system := systemPrompt(q, s.opts.Now())
+	// The time goes with the question, not in the system blocks: there it
+	// changed the prefix every minute, and the history after it could
+	// never be read from the cache at the next turn (AI-50).
+	if n := len(system); n > 2 {
+		now := system[n-1]
+		system = system[:n-1]
+		c.mu.Lock()
+		if k := len(c.starts); k > 0 && c.starts[k-1] < len(c.history) && c.history[c.starts[k-1]].Role == "user" {
+			at := c.starts[k-1]
+			m := c.history[at]
+			m.Content = append(append([]Block(nil), m.Content...), now)
+			c.history[at] = m
+		}
+		c.mu.Unlock()
+	}
 	first := func() {
 		if ans.FirstAt == nil {
 			t := s.opts.Now()
@@ -885,7 +899,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		c.mu.Lock()
 		s.trimLocked(c)
-		req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs, OutputConfig: top}
+		turn := -1
+		if k := len(c.starts); k > 0 {
+			turn = c.starts[k-1]
+		}
+		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs, OutputConfig: top}, turn)
 		c.mu.Unlock()
 		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder

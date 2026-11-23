@@ -24,6 +24,7 @@ The schema's step `0052` adds columns only (an agent's effort and Auto's floor, 
 ### Fixed
 
 - **A test case no longer fails an answer for speaking of a password** (AI-49): the check *carries no text that looks like a credential* looks for a credential's shape (a private key, a token of a known format, a bearer token or a password in an address), not the words around one; "About the password: it isn't in the script" passes. A planted secret still fails the case.
+- **A conversation's history is read from the prompt cache** (AI-50): each request to the Claude API marks its newest message, and the last before the question, for the cache, and the time goes with the question instead of in the system prompt; before, every turn and every tool round re-sent the whole history uncached (one turn of the measurement: 166,000 input tokens at the full price).
 
 ## 0.13.0 (2026-11-22)
 

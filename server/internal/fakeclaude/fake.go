@@ -172,6 +172,10 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "invalid_request_error", msg)
 		return
 	}
+	if msg := checkCache(body); msg != "" {
+		apiError(w, 400, "invalid_request_error", msg)
+		return
+	}
 	if msg := checkEffort(body, r.Header.Get("anthropic-beta")); msg != "" {
 		apiError(w, 400, "invalid_request_error", msg)
 		return
@@ -225,6 +229,64 @@ func checkThinking(body []byte) string {
 				}
 			}
 		}
+	}
+	return ""
+}
+
+// checkCache holds a request to what the API asks of its cache_control
+// markers: four at most, the tools', the system blocks' and the messages'
+// together, and none on a thinking block or an empty text block.
+func checkCache(body []byte) string {
+	type marked struct {
+		Type         string          `json:"type"`
+		Text         *string         `json:"text"`
+		CacheControl json.RawMessage `json:"cache_control"`
+	}
+	var req struct {
+		Tools    []marked        `json:"tools"`
+		System   json.RawMessage `json:"system"`
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	n := 0
+	count := func(where string, bs []marked) string {
+		for i, b := range bs {
+			if len(b.CacheControl) == 0 || string(b.CacheControl) == "null" {
+				continue
+			}
+			n++
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				return fmt.Sprintf("%s.%d.%s.cache_control: Extra inputs are not permitted", where, i, b.Type)
+			}
+			if b.Type == "text" && (b.Text == nil || *b.Text == "") {
+				return fmt.Sprintf("%s.%d: cache_control cannot be set for empty text blocks", where, i)
+			}
+		}
+		return ""
+	}
+	if msg := count("tools", req.Tools); msg != "" {
+		return msg
+	}
+	var sys []marked
+	if json.Unmarshal(req.System, &sys) == nil {
+		if msg := count("system", sys); msg != "" {
+			return msg
+		}
+	}
+	for i, m := range req.Messages {
+		var bs []marked
+		if json.Unmarshal(m.Content, &bs) == nil {
+			if msg := count(fmt.Sprintf("messages.%d.content", i), bs); msg != "" {
+				return msg
+			}
+		}
+	}
+	if n > 4 {
+		return fmt.Sprintf("A maximum of 4 blocks with cache_control may be provided. Found %d.", n)
 	}
 	return ""
 }
@@ -291,7 +353,9 @@ func where(msgs []message) (question string, round int, results []string) {
 		}
 		text := ""
 		for _, b := range m.Content {
-			if b.Type == "text" {
+			// The time a conversation sends after the question (AI-50) is
+			// not the question.
+			if b.Type == "text" && !reTime.MatchString(b.Text) {
 				text += b.Text
 			}
 		}
@@ -331,6 +395,9 @@ func splitView(q string) (question, view string) {
 	}
 	return strings.TrimSpace(q[:i] + q[i+j+len("</console-view>"):]), strings.TrimSpace(q[i+len("<console-view>") : i+j])
 }
+
+// reTime is the time a conversation sends after its question.
+var reTime = regexp.MustCompile(`^It is [A-Z][a-z]+day \d{1,2} [A-Z][a-z]+ \d{4}, \d\d:\d\d UTC\.$`)
 
 // reChain is a scripted chain of hand-overs: [[chain troubleshooter,auditor]].
 var reChain = regexp.MustCompile(`\[\[chain ([a-zA-Z,]*)\]\]`)
