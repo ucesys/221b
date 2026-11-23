@@ -724,6 +724,15 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 			mu.Unlock()
 			break
 		}
+		// A cap reached while earlier cases ran stops the run before this
+		// case starts: the case waits, as every case after it does.
+		s.capsNow(ctx, &a)
+		if cerr := s.engine.CapsErr(ctx, &a); cerr != nil {
+			halt, haltAt = cerr, i+1
+			show()
+			mu.Unlock()
+			break
+		}
 		run.Planned[i].State = CaseRunning
 		started = i + 1
 		show()
