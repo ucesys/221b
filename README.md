@@ -293,6 +293,62 @@ CPU and memory in use come from [metrics-server](https://github.com/kubernetes-s
 
 **Settings** (the gear in the top bar opens Administration; Settings is one of its pages, for SuperAdmins) hold Getting started, the refresh rate, for everyone, the AI providers, agents and knowledge sources, Watson's and the applications' settings, and the AIOps sections (Issues, SLA, Cases, Jobs); the theme is personal and in the account menu, whose last line names the console's version and build (a click copies it). For the refresh rate, the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its database so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
 
+## Documentation
+
+Everything under [`docs/`](docs), by what it is for. The requirements and the architecture are where every decision lands; the rest is the detail of one area, written when that area was designed or reviewed.
+
+**Running the console**
+
+| Document | What it covers |
+|---|---|
+| [getting-started.md](docs/getting-started.md) | The setup checklist a SuperAdmin sees on the home page, and Sherlock's setup skill |
+| [upgrading.md](docs/upgrading.md) | How to upgrade, which upgrades are tested, what each release migrates and how to go back; read its 0.13.0 section before upgrading from 0.12 |
+| [database.md](docs/database.md) | The PostgreSQL the console keeps its records in: bundled (one member or three with Patroni), external, backups and restores, and how to write a repository |
+| [roles-and-users.md](docs/roles-and-users.md) | The four roles, users and groups, LDAP and local sign-in, and the Administration area |
+| [releasing.md](docs/releasing.md) | Version numbers, how a release is cut and what CI publishes |
+
+**Design and architecture**
+
+| Document | What it covers |
+|---|---|
+| [requirements.md](docs/requirements.md) | Every requirement by phase, with the tests that prove it: the roadmap and the reference for what the console must do |
+| [architecture.md](docs/architecture.md) | The parts, how data moves through them, the security model, the deployment modes and the decision records (ADRs) |
+| [data-model.md](docs/data-model.md) | Every table and column the console keeps in PostgreSQL, by domain, and the rules the schema follows; the SQL is in [`server/internal/db/migrations`](server/internal/db/migrations) |
+| [states.md](docs/states.md) | How cases, proposed changes, fixes, known issues, exceptions, validation rules and wiki pages change state, and what moves each |
+| [design/data-model-domains.md](docs/design/data-model-domains.md) | The data model's domains and tiers as diagrams, one per domain (an export of the Claude doc where it is edited) |
+| [design/storage-deployment.md](docs/design/storage-deployment.md) | Why PostgreSQL with Patroni, and how the bundled database is deployed (an export of the Claude doc where it is edited) |
+
+**Requirements of one area**
+
+| Document | What it covers |
+|---|---|
+| [sherlock-ui-control.md](docs/sherlock-ui-control.md) | Sherlock reading the screen, moving you around the console and changing what a table shows |
+| [toolbox.md](docs/toolbox.md) | Shells, commands, port forwards and debug containers for pods and nodes, as audited sessions in the Dock |
+| [storage.md](docs/storage.md) | The Storage tab: classes, volumes, claims and the pods that mount them, as one tree |
+| [helm-apps.md](docs/helm-apps.md) | The Helm page: every release in one table, deploying charts from Git, diffs, and Secret editing |
+| [issues.md](docs/issues.md) | Issue handling: reports become cases, matched against known issues, investigated and kept up to date; its API is [issues-api.yaml](docs/issues-api.yaml) (OpenAPI) |
+| [automation.md](docs/automation.md) | Automation: AI-written, human-approved scripts run on nodes over SSH, approved once on the code; [automation-mapping.xlsx](docs/automation-mapping.xlsx) maps Ansible's functions to it |
+| [prompt-sources.md](docs/prompt-sources.md) | Where each agent's instructions come from, and the open-source projects they draw on |
+| [phase-12.1-prompts.md](docs/phase-12.1-prompts.md) | The review of the agents' and jobs' instructions, and what was changed from it |
+
+**Reviews and handovers**
+
+| Document | What it covers |
+|---|---|
+| [phase-1-review.md](docs/phase-1-review.md) to [phase-6-review.md](docs/phase-6-review.md) | The guides that closed Phases 1 to 6: what was built, what CI proves and what to check by hand ([2](docs/phase-2-review.md), [3](docs/phase-3-review.md), [4](docs/phase-4-review.md), [5](docs/phase-5-review.md)) |
+| [phase-9-review.md](docs/phase-9-review.md) | The code review of the Toolbox |
+| [phase-12-review.md](docs/phase-12-review.md) | The architecture and code review of the AIOps work (0.12.0), its second review, and what was handed over |
+| [phase-13-handover.md](docs/phase-13-handover.md) | The move of the console's records to PostgreSQL: the decisions, what was done and what is left for 0.14 |
+
+**Screens and images**
+
+| Path | What it holds |
+|---|---|
+| [`design/Main.dc.html`](design/Main.dc.html) | The original prototype of the console (see [What the design covers](#what-the-design-covers)) |
+| [`docs/design/`](docs/design) | The design mockups for one area each, as HTML pages: [roles and users](docs/design/roles-and-users), [storage](docs/design/storage), [toolbox](docs/design/toolbox) and [automation](docs/design/automation) |
+| [`docs/screenshots/`](docs/screenshots) | The screenshots this page shows |
+| [`docs/images/`](docs/images) | The images the requirements, the architecture and the review guides use |
+
 ## Develop
 
 You need Go 1.26, Node.js 24 and make. Docker, kind, kubectl and helm are needed only for the image and the kind tests.
@@ -332,7 +388,7 @@ The console keeps its records in PostgreSQL 16 or later and does not start witho
 | `deploy/helm/221b` | The Helm chart |
 | `hack/` | Scripts CI runs: chart checks, the kind end-to-end run, the RBAC check (with and without Secrets) and the scale test |
 | `design/` | The prototype: `Main.dc.html` is a Claude Design artboard with the template, logic and sample data in one file |
-| `docs/` | Requirements, architecture and decision records, and their images |
+| `docs/` | Requirements, architecture and decision records, the data model, the area designs, reviews and their images (see [Documentation](#documentation)) |
 
 ## What the design covers
 
