@@ -436,25 +436,36 @@ func scripted(question, view string, round int, results []string) reply {
 	}
 	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
 		// [[sleep 2000]] waits before the next call, as a slow model would.
+		// [[say {"text":"…"}]] is the text the round of the next call
+		// writes before it, in place of "Step N.".
 		type call struct {
-			tool, input string
-			pause       time.Duration
+			tool, input, say string
+			pause            time.Duration
 		}
 		var calls []call
 		var pause time.Duration
+		say := ""
 		for _, c := range found {
 			if c[1] == "sleep" {
 				continue
 			}
-			calls = append(calls, call{tool: c[1], input: c[2], pause: pause})
-			pause = 0
+			if c[1] == "say" {
+				var v struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal([]byte(c[2]), &v)
+				say = v.Text
+				continue
+			}
+			calls = append(calls, call{tool: c[1], input: c[2], say: say, pause: pause})
+			pause, say = 0, ""
 		}
 		for _, c := range regexp.MustCompile(`\[\[sleep (\d+)\]\]`).FindAllStringSubmatchIndex(question, -1) {
 			ms, _ := strconv.Atoi(question[c[2]:c[3]])
 			// The pause goes before the first call after it.
 			before := 0
 			for _, d := range reDirective.FindAllStringSubmatchIndex(question[:c[0]], -1) {
-				if question[d[2]:d[3]] != "sleep" {
+				if name := question[d[2]:d[3]]; name != "sleep" && name != "say" {
 					before++
 				}
 			}
@@ -470,7 +481,11 @@ func scripted(question, view string, round int, results []string) reply {
 			if c.input != "" {
 				_ = json.Unmarshal([]byte(c.input), &input)
 			}
-			return reply{text: []string{fmt.Sprintf("Step %d.", round+1)}, tool: c.tool, input: input, pause: c.pause}
+			text := fmt.Sprintf("Step %d.", round+1)
+			if c.say != "" {
+				text = c.say
+			}
+			return reply{text: []string{text}, tool: c.tool, input: input, pause: c.pause}
 		}
 		return reply{text: []string{uiSummary(last)}, pause: pause}
 	}

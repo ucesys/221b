@@ -879,6 +879,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		s.record(q, a.Model, tools, total, cost, outcome, detail)
 	}()
 
+	// lead is the text written before view calls alone (withLead).
+	lead := ""
 	for round := 0; ; round++ {
 		err := ch.stop
 		if err == nil {
@@ -948,6 +950,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			}
 		}
 		if resp.StopReason != "tool_use" || len(calls) == 0 {
+			ans.Text = withLead(lead, ans.Text)
 			if resp.StopReason == "max_tokens" {
 				ans.Text = strings.TrimSpace(ans.Text) + "\n\n(The answer was cut off at its length limit.)"
 			}
@@ -958,6 +961,19 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		// Text before a tool call is the model thinking aloud: it stays in
 		// the history, and on screen as the note until the next round
 		// speaks; never in the answer.
+		// But text before view calls alone is kept as the answer's lead: a
+		// model that has written its answer and then opens a view answers
+		// after it with a line about the view only (F6, AI-51).
+		onlyUI := true
+		for _, b := range calls {
+			onlyUI = onlyUI && IsUITool(b.Name)
+		}
+		switch {
+		case !onlyUI:
+			lead = ""
+		case strings.TrimSpace(ans.Text) != "":
+			lead = strings.TrimSpace(strings.TrimSpace(lead) + "\n\n" + strings.TrimSpace(ans.Text))
+		}
 		if ans.Text != "" {
 			ans.Note, ans.Text = ans.Text, ""
 		}
@@ -1179,6 +1195,24 @@ func newID() string {
 func answerOr(text, note string) string {
 	if strings.TrimSpace(text) == "" {
 		return note
+	}
+	return text
+}
+
+// withLead is the answer of a conversation whose model wrote text before
+// it called the view tools alone (F6, AI-51): that text, then the last
+// round's, when the last round's is shorter, as a line about the view
+// after the answer is; the last round's alone when it is as long, as a
+// full answer after a line such as "Opening the nodes." is.
+func withLead(lead, text string) string {
+	t := strings.TrimSpace(text)
+	switch {
+	case lead == "":
+		return text
+	case t == "":
+		return lead
+	case len(t) < len(lead):
+		return lead + "\n\n" + t
 	}
 	return text
 }
