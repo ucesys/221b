@@ -25,7 +25,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PK
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim cli cli-release test test-go test-go-store test-web lint lint-go lint-web licenses image image-postgres postgres-lock postgres-packages postgres-rebuild image-postgres-wolfi postgres-wolfi-lock postgres-wolfi-packages postgres-wolfi-rebuild test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
+.PHONY: help build web ui server sim cli cli-release test test-go test-go-store test-web lint lint-go lint-web licenses image image-postgres postgres-lock postgres-packages postgres-rebuild image-postgres-wolfi postgres-wolfi-lock postgres-wolfi-packages postgres-wolfi-rebuild test-db chart-lint dev-sim e2e-sim screenshots sherlock-eval knowledge-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -206,6 +206,9 @@ screenshots: build ## Take the README's screenshots (docs/screenshots) against a
 
 sherlock-eval: ## Ask Sherlock about the simulator's sample problems (P5-06); with ANTHROPIC_API_KEY, through the Claude API
 	hack/sherlock-eval.sh
+
+knowledge-eval: ## Measure a console's knowledge search with QUESTIONS (a file) at CONSOLE, signed in by CONSOLE_COOKIE or CONSOLE_USER (KN-60)
+	hack/knowledge-eval.py $(QUESTIONS)
 
 clean: ## Remove build output
 	rm -rf bin web/dist

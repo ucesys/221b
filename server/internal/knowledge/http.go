@@ -56,6 +56,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("PUT embeddings", h.putEmbeddings)
 	route("PUT sources/{id}/index", h.putSourceIndex)
 	route("POST items/page", h.postItemPage)
+	route("POST evaluate", h.postEvaluate)
 	route("POST sources", h.postSource)
 	route("PUT sources/{id}", h.putSource)
 	route("DELETE sources/{id}", h.deleteSource)
@@ -219,6 +220,22 @@ func (h *handler) postItemPage(w http.ResponseWriter, r *http.Request, c Caller)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// postEvaluate measures the search with questions (KN-60).
+func (h *handler) postEvaluate(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Questions []EvalQuestion `json:"questions"`
+	}
+	if !decode(w, r, 1<<20, &in) {
+		return
+	}
+	rep, err := h.s.Evaluate(r.Context(), c, in.Questions)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // sourceInput is a source as its dialog sends it: it names its
