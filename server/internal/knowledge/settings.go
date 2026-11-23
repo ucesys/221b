@@ -196,6 +196,9 @@ type Settings struct {
 	StaleDays int `json:"staleDays,omitempty"`
 	// Migrated are the one-time migrations done (KN-46).
 	Migrated []string `json:"migrated,omitempty"`
+	// Embeddings are the embedding model of the semantic search (KN-55);
+	// none by default.
+	Embeddings EmbeddingSettings `json:"embeddings,omitzero"`
 }
 
 // DefaultStaleDays is when a page is marked stale.

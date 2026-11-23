@@ -39,6 +39,8 @@ type View struct {
 	// Pins are the certificates pinned for the sources, by id: their own,
 	// their credential's or their repository's (CR-19).
 	Pins map[string]Pinned `json:"pins,omitempty"`
+	// Index is the search index in the database (KN-53 to KN-58).
+	Index *IndexView `json:"index,omitempty"`
 }
 
 // GetView builds Administration › AI › Knowledge's view.
@@ -79,6 +81,7 @@ func (s *Service) GetView(ctx context.Context, c Caller) (View, error) {
 	if v.Status, err = s.Status(ctx); err != nil {
 		return View{}, err
 	}
+	v.Index = s.indexView(ctx, set)
 	s.mu.RLock()
 	for p := range s.files {
 		switch {

@@ -36,6 +36,8 @@ func (s *Service) kickIndex() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			if _, err := s.SyncIndex(ctx); err != nil {
 				s.o.Logger.Warn("the knowledge index could not be brought up to the wiki; the next read of the wiki tries again", "err", err)
+			} else if err := s.embedAll(ctx); err != nil {
+				s.o.Logger.Warn("the knowledge index's passages could not all be embedded; the next read of the wiki tries again", "err", err)
 			}
 			cancel()
 			s.indexMu.Lock()
@@ -78,6 +80,7 @@ func (s *Service) SyncIndex(ctx context.Context) (IndexSync, error) {
 	s.mu.RLock()
 	files, m := s.files, s.manifest
 	s.mu.RUnlock()
+	s.pg.ensureExtensions(ctx)
 	res, err := s.pg.Sync(ctx, docsOf(files, m), sources)
 	if err == nil && (res.Written > 0 || res.Deleted > 0) {
 		s.o.Logger.Info("the knowledge index follows the wiki", "written", res.Written, "deleted", res.Deleted, "kept", res.Kept)
@@ -88,9 +91,18 @@ func (s *Service) SyncIndex(ctx context.Context) (IndexSync, error) {
 // searchPG searches the index in the database: the pages and the
 // excerpts that answer a query best, ranked together.
 func (s *Service) searchPG(ctx context.Context, query, kind string, limit int) ([]Hit, error) {
+	return s.searchModes(ctx, query, kind, limit, nil)
+}
+
+// searchModes is searchPG by the ways of searching named (none: all).
+func (s *Service) searchModes(ctx context.Context, query, kind string, limit int, modes []string) ([]Hit, error) {
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
-	found, err := s.pg.Search(ctx, IndexQuery{Text: query, Kind: kind, Limit: limit})
+	iq := IndexQuery{Text: query, Kind: kind, Limit: limit, Modes: modes}
+	if iq.mode(ModeSemantic) {
+		iq.Vector, iq.Model = s.queryVector(ctx, query)
+	}
+	found, err := s.pg.Search(ctx, iq)
 	if err != nil {
 		return nil, err
 	}

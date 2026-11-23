@@ -104,6 +104,8 @@ type settingsKept struct {
 	Store     StoreSettings `json:"store"`
 	StaleDays int           `json:"staleDays,omitempty"`
 	Migrated  []string      `json:"migrated,omitempty"`
+	// Embeddings are the embedding model of the search (KN-55).
+	Embeddings EmbeddingSettings `json:"embeddings,omitzero"`
 }
 
 // NewSettingsPG keeps the sources and where the wiki is kept in d.
@@ -118,7 +120,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	if err != nil {
 		return set, false, err
 	}
-	set.Store, set.StaleDays, set.Migrated = kept.Store, kept.StaleDays, kept.Migrated
+	set.Store, set.StaleDays, set.Migrated, set.Embeddings = kept.Store, kept.StaleDays, kept.Migrated, kept.Embeddings
 	var id string
 	addresses := map[string][]LiveAddress{}
 	rows, err := q.Query(ctx, "SELECT knowledge_source_id, kind, url, space FROM knowledge_source_addresses ORDER BY knowledge_source_id, position")
@@ -181,7 +183,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 }
 
 func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
-	was, now := settingsKept{old.Store, old.StaleDays, old.Migrated}, settingsKept{next.Store, next.StaleDays, next.Migrated}
+	was, now := settingsKept{old.Store, old.StaleDays, old.Migrated, old.Embeddings}, settingsKept{next.Store, next.StaleDays, next.Migrated, next.Embeddings}
 	if !pgSame(was, now) {
 		if err := pgSaveScope(ctx, tx, knowledgeScope, now); err != nil {
 			return err

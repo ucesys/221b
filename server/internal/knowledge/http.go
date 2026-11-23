@@ -53,6 +53,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	}
 	route("GET settings", h.getSettings)
 	route("PUT settings", h.putSettings)
+	route("PUT embeddings", h.putEmbeddings)
 	route("POST sources", h.postSource)
 	route("PUT sources/{id}", h.putSource)
 	route("DELETE sources/{id}", h.deleteSource)
@@ -168,6 +169,19 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 		return
 	}
 	if err := h.s.SetStaleDays(r.Context(), c, in.StaleDays); err != nil {
+		fail(w, err)
+		return
+	}
+	h.getSettings(w, r, c)
+}
+
+// putEmbeddings chooses the embedding model of the search (KN-55).
+func (h *handler) putEmbeddings(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in EmbeddingSettings
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	if err := h.s.SetEmbeddings(r.Context(), c, in); err != nil {
 		fail(w, err)
 		return
 	}

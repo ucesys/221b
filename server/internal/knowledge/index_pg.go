@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ type PGIndex struct {
 	log *slog.Logger
 	// syncMu lets one Sync run at a time.
 	syncMu sync.Mutex
+	// feat is what extensions the database has (KN-54).
+	feat featureCache
 }
 
 // NewPGIndex keeps the index in d.
@@ -212,7 +215,15 @@ type IndexQuery struct {
 	// Kind is "page", "excerpt", or "" for both.
 	Kind  string
 	Limit int
+	// Modes are the ways of searching (KN-54): ModeKeyword, ModeFuzzy,
+	// ModeSemantic; none is all three.
+	Modes []string
+	// Vector is the query's embedding by Model, for semantic search.
+	Vector []float32
+	Model  string
 }
+
+func (q IndexQuery) mode(m string) bool { return len(q.Modes) == 0 || slices.Contains(q.Modes, m) }
 
 // indexHit is a passage the index found, with its document.
 type indexHit struct {
@@ -286,13 +297,33 @@ func (x *PGIndex) Search(ctx context.Context, q IndexQuery) ([]indexHit, error) 
 	if q.Limit <= 0 {
 		q.Limit = 10
 	}
-	ranked, err := x.keyword(ctx, q)
-	if err != nil {
-		return nil, err
-	}
 	score := map[string]float64{}
-	for i, id := range ranked {
-		score[id] += 1.0 / float64(rrfK+i+1)
+	fuse := func(ranked []string) {
+		for i, id := range ranked {
+			score[id] += 1.0 / float64(rrfK+i+1)
+		}
+	}
+	if q.mode(ModeKeyword) {
+		ranked, err := x.keyword(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		fuse(ranked)
+	}
+	f := x.features(ctx)
+	if q.mode(ModeFuzzy) {
+		ranked, err := x.fuzzy(ctx, q, f)
+		if err != nil {
+			return nil, err
+		}
+		fuse(ranked)
+	}
+	if q.mode(ModeSemantic) && f.vector {
+		ranked, err := x.semantic(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		fuse(ranked)
 	}
 	return x.hits(ctx, score, q.Limit, nil)
 }

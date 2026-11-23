@@ -184,8 +184,37 @@ export interface ItemState {
   lastSeen?: string
 }
 
+/** The embedding model of the semantic search (KN-55): a provider of Administration › AI and its model; none by default. */
+export interface EmbeddingSettings {
+  provider?: string
+  model?: string
+}
+
+/** A provider an embedding model may be chosen on: an OpenAI-compatible one of Administration › AI. */
+export interface EmbeddingProvider {
+  id: string
+  name: string
+  endpoint?: string
+}
+
+/** The search index in the database (KN-53 to KN-58). */
+export interface IndexView {
+  documents: number
+  passages: number
+  /** The database has pg_trgm (fuzzy matching) and pgvector (semantic search). */
+  fuzzy: boolean
+  semantic: boolean
+  /** Passages with an embedding by the chosen model; why the last pass stopped. */
+  embedded: number
+  embedError?: string
+  embeddedAt?: string
+  providers: EmbeddingProvider[]
+}
+
 export interface KnowledgeView {
-  settings: { sources: KnowledgeSource[]; store: StoreSettings; staleDays?: number }
+  settings: { sources: KnowledgeSource[]; store: StoreSettings; staleDays?: number; embeddings?: EmbeddingSettings }
+  /** The search index in the database (KN-53). */
+  index?: IndexView
   creds: Record<string, CredState>
   storeCreds: CredState
   hook: boolean
@@ -354,6 +383,8 @@ const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
+/** Chooses the embedding model of the search, or none (KN-55). */
+export const saveEmbeddings = (e: EmbeddingSettings) => call<KnowledgeView>(base + 'embeddings', { method: 'PUT', body: JSON.stringify(e) })
 /** Adds a source, naming its credential (CR-11): no secret goes with it. */
 export const addSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources', post({ source }))
 export const saveSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify({ source }) })

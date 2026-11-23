@@ -196,6 +196,9 @@ type Options struct {
 	// nil keeps it in memory, built by each replica from its copy of the
 	// wiki (a test).
 	Database *db.DB
+	// Embedder embeds the passages and the queries with the embedding
+	// model chosen (KN-55); nil offers none.
+	Embedder Embedder
 	// Model is how Mycroft is asked; nil reads sources and keeps their
 	// excerpts, but writes no pages.
 	Model Completer
@@ -314,6 +317,8 @@ type Service struct {
 	sourcesSaved atomic.Bool
 	// docs is how many documents the copy of the wiki gives the search.
 	docs atomic.Int64
+	// embedded is the leader's last pass of embeddings (KN-55).
+	embedded embedState
 }
 
 // New builds the service; Start reads the local copy.

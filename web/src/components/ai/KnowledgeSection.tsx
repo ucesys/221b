@@ -42,6 +42,7 @@ import { fetchCredentials, type CredentialUse } from '../../api/credentials'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { UploadedDocuments } from './UploadedDocuments'
+import { SearchCard } from './KnowledgeSearch'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -324,6 +325,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
       {/* What people upload or note: not a source to sync again (0.12.1). */}
       <UploadedDocuments onToast={onToast} focus={focus === 'added' || focus === 'uploads'} />
       <StoreCard v={v} onSaved={() => void reload()} onToast={onToast} />
+      <SearchCard v={v} run={run} busy={busy} />
       <section aria-label="More" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         <h3 className="rk-h" style={{ marginBottom: 4 }}>
           Freshness and pushes
@@ -487,7 +489,10 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           <span className="rk-callout" style={{ fontSize: 12.5 }} data-testid="knowledge-store-database-label">
             {DATABASE_STORE_LABEL}
           </span>
-          <span className="rk-fhint">Every replica reads it, and the database’s backups hold it. It holds at most 256 MiB, pages, excerpts and waiting changes together; a write past that is refused. Choose Git or S3 and Move the wiki here to keep every page’s history.</span>
+          <span className="rk-fhint">
+            Every replica reads it, and the database’s backups hold it. It holds at most 256 MiB, pages, excerpts and waiting changes together; a write past that is refused. Choose Git or S3 and Move the wiki here to keep every page’s
+            history.
+          </span>
         </Row>
       )}
       {st.kind === 'git' && (
