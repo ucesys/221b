@@ -100,6 +100,9 @@ type Request struct {
 	// Betas are the Messages API betas the request needs, sent as the
 	// anthropic-beta header.
 	Betas []string `json:"-"`
+	// Agent names the agent that sends it, for the log (AI-55); never
+	// sent.
+	Agent string `json:"-"`
 }
 
 // Usage is what one request used.

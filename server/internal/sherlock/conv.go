@@ -905,7 +905,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		if k := len(c.starts); k > 0 {
 			turn = c.starts[k-1]
 		}
-		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs, OutputConfig: top}, turn)
+		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs, OutputConfig: top, Agent: a.ID}, turn)
 		c.mu.Unlock()
 		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder

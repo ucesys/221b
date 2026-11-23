@@ -861,7 +861,7 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 			out.Err = errors.New("too many tool rounds")
 			return out
 		}
-		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: lastRound(history, round, s.opts.MaxRounds), Tools: defs, OutputConfig: topEffort(a)}, -1)
+		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: lastRound(history, round, s.opts.MaxRounds), Tools: defs, OutputConfig: topEffort(a), Agent: a.ID}, -1)
 		var roundText strings.Builder
 		resp, err := client.Stream(ctx, req, func(d Delta) {
 			if d.Text == "" || h == nil {

@@ -295,7 +295,7 @@ func (s *Service) Client(id string) *sherlock.Client {
 	if c := s.clients[id]; c != nil {
 		return c
 	}
-	c := &sherlock.Client{BaseURL: s.opts.DefaultURL, Key: keys.Key, HTTP: s.opts.HTTP, Retries: 2, Backoff: 2 * time.Second,
+	c := &sherlock.Client{BaseURL: s.opts.DefaultURL, Key: keys.Key, HTTP: s.opts.HTTP, Retries: 2, Backoff: 2 * time.Second, Logger: s.opts.Logger,
 		Provider: func() sherlock.Provider {
 			p, _ := s.provider(s.cached(), id)
 			return p.Provider
