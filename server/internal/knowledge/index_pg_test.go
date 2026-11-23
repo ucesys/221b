@@ -63,9 +63,10 @@ func TestTheIndexIsInTheDatabase(t *testing.T) {
 	if err := leader.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
-	res, err := leader.SyncIndex(ctx)
-	if err != nil || res.Written != 3 {
-		t.Fatalf("the leader indexed %+v: %v", res, err)
+	// The read of the wiki brings the index up to it, in the background.
+	leader.Wait()
+	if docs, _, err := leader.pg.Count(ctx); err != nil || docs != 3 {
+		t.Fatalf("the leader indexed %d documents: %v", docs, err)
 	}
 	// The other replica has no copy of the excerpts, and finds them.
 	if err := other.Refresh(ctx); err != nil {
@@ -116,9 +117,7 @@ func TestTheIndexIsInTheDatabase(t *testing.T) {
 	if err := leader.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := leader.SyncIndex(ctx); err != nil || res.Deleted != 1 {
-		t.Fatalf("a file emptied: %+v, %v", res, err)
-	}
+	leader.Wait()
 	if hits := other.Search("firewall", "", 6); len(hits) != 0 {
 		t.Fatalf("a gone excerpt is found: %+v", hits)
 	}
