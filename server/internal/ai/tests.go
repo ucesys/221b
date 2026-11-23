@@ -440,16 +440,33 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	if s.engine != nil && o.Replays > 0 {
 		traces = s.engine.Recent(id, min(o.Replays, MaxReplays))
 	}
-	prompt := len(a.Instructions) + 6000
+	// An agent that can hand work over is counted with one hand-over a
+	// case and a replay, to the dearest agent it may ask, which reads
+	// the same results: the measurement found a test run's cost a third
+	// to four fifths short without them (AI-53, F3).
+	var asked []sherlock.Agent
+	for _, e := range a.Roster {
+		if h, err := s.resolve(snap, e.ID, "", nil, nil, nil, false); err == nil {
+			asked = append(asked, h)
+		}
+	}
 	usd := 0.0
-	run := func(question string, rec []sherlock.Recorded) {
-		in, results := prompt+len(question), 0
+	cost := func(ag sherlock.Agent, question string, rec []sherlock.Recorded) float64 {
+		in, results := len(ag.Instructions)+6000+len(question), 0
 		for _, r := range rec {
 			results += len(r.Result) + len(r.Input)
 		}
 		rounds := len(rec) + 1
 		u := sherlock.Usage{InputTokens: (in*rounds + results*rounds/2) / 4, OutputTokens: 600 * rounds}
-		usd += a.Price.Cost(u)
+		return ag.Price.Cost(u)
+	}
+	run := func(question string, rec []sherlock.Recorded) {
+		usd += cost(a, question, rec)
+		dearest := 0.0
+		for _, h := range asked {
+			dearest = max(dearest, cost(h, question, rec))
+		}
+		usd += dearest
 	}
 	for _, c := range cases {
 		run(c.Question, c.Recorded)
@@ -620,7 +637,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "replay", Cluster: t.Cluster}, Text: t.Question, Cluster: t.Cluster, Tools: newRecorded(defs, t.Tools), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, t.Question)
-			rr := ReplayResult{Question: clip(t.Question, 300), Cluster: t.Cluster, Before: clip(t.Answer, 800), After: clip(res.Text, 800), CostUSD: res.CostUSD}
+			rr := ReplayResult{Question: clip(t.Question, 300), Cluster: t.Cluster, Before: clip(t.Answer, 800), After: clip(res.Text, 800), CostUSD: res.TotalCostUSD()}
 			if res.Err != nil {
 				rr.Error = res.Err.Error()
 			}
@@ -628,7 +645,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 			if rr.Same {
 				run.Same++
 			}
-			run.CostUSD += res.CostUSD
+			run.CostUSD += rr.CostUSD
 			run.Replays = append(run.Replays, rr)
 			s.publish(id, run)
 		}
@@ -896,7 +913,7 @@ func (s *Service) check(ctx context.Context, a sherlock.Agent, c TestCase, res s
 			ev.Secrets++
 		}
 	}
-	cr := TestResult{ID: c.ID, Name: c.Name, Base: c.Base, Question: clip(hide(c.Question), 600), Expect: ev, Answer: clip(hide(res.Text), 800), Tools: res.Tools, HandOvers: res.HandOvers, CostUSD: res.CostUSD}
+	cr := TestResult{ID: c.ID, Name: c.Name, Base: c.Base, Question: clip(hide(c.Question), 600), Expect: ev, Answer: clip(hide(res.Text), 800), Tools: res.Tools, HandOvers: res.HandOvers, CostUSD: res.TotalCostUSD()}
 	why := func(f string, v ...any) { cr.Why = append(cr.Why, hide(fmt.Sprintf(f, v...))) }
 	expect := func(ok bool, what string) { cr.Checks = append(cr.Checks, Check{What: what, OK: ok}) }
 	expect(res.Err == nil, "finishes its answer")

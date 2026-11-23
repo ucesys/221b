@@ -757,6 +757,21 @@ func (s *Service) RunAgent(ctx context.Context, a Agent, q Question, task string
 	return res
 }
 
+// TotalCostUSD is what the run cost with the agents it handed work to,
+// each charged to its own budget (CostUSD is the agent's own): what a
+// test case or a replay cost (AI-53).
+func (r RunResult) TotalCostUSD() float64 {
+	return r.CostUSD + handsCost(r.Hands)
+}
+
+func handsCost(hands []*Hand) float64 {
+	usd := 0.0
+	for _, h := range hands {
+		usd += h.CostUSD + handsCost(h.Hands)
+	}
+	return usd
+}
+
 // handTools are the tools the agents handed work called, in the order of
 // the hand-overs, each one's own before those of the agents it asked: a
 // test case that expects a tool is met when the agent asked calls it

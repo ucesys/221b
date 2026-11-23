@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"math"
 	"slices"
 	"testing"
 
@@ -85,5 +86,56 @@ func TestAToolCalledByTheAgentAskedCountsAI52(t *testing.T) {
 	}
 	if r == nil || !slices.Equal(r.HandOvers, []string{Troubleshooter}) || !slices.Contains(r.Tools, "get_pod") || !r.Passed {
 		t.Fatalf("the handed case: %+v", r)
+	}
+}
+
+// A test run's cost counts the agents its cases hand work to, and so does
+// its estimate (AI-53, F3): the run's cost is what the console spent on
+// it, hand-overs and grading included.
+func TestATestRunCountsItsHandOversAI53(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	c := crashCase("handed", "[[chain troubleshooter]]")
+	c.Agent = Sherlock
+	if _, err := w.ai.SaveTest(ctx, c, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ai.SaveDraft(ctx, Sherlock, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	withHandOvers, _, _, err := w.ai.Estimate(ctx, Sherlock, TestOptions{Draft: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := w.engine.Ledger().Now(ctx).DayUSD
+	run, err := w.ai.RunTests(ctx, Sherlock, TestOptions{Draft: true, By: "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent := w.engine.Ledger().Now(ctx).DayUSD - before
+	var handed TestResult
+	for _, r := range run.Results {
+		if r.Name == "handed" {
+			handed = r
+		}
+	}
+	if spent <= 0 || math.Abs(run.CostUSD-spent) > 1e-9 || len(handed.HandOvers) != 1 {
+		t.Fatalf("the run says $%v, the console spent $%v (the handed case: %+v)", run.CostUSD, spent, handed)
+	}
+	// With no agent to hand work to, the estimate is about half.
+	off := false
+	for range 2 { // the Script reviewer goes off only after the Automation author
+		for _, info := range Catalog {
+			if info.ID != Sherlock {
+				_ = w.ai.SaveAgent(ctx, info.ID, AgentChange{AgentSettings: AgentSettings{On: &off}})
+			}
+		}
+	}
+	if a, err := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}}); err != nil || len(a.Roster) != 0 {
+		t.Fatalf("Sherlock can still hand work to %v: %v", a.Roster, err)
+	}
+	alone, _, _, err := w.ai.Estimate(ctx, Sherlock, TestOptions{Draft: true})
+	if err != nil || withHandOvers < 1.5*alone {
+		t.Fatalf("the estimate with hand-overs $%v, alone $%v: %v", withHandOvers, alone, err)
 	}
 }
