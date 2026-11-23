@@ -21,6 +21,10 @@ The schema's step `0052` adds columns only (an agent's effort and Auto's floor, 
 - **The console's version in the account menu**: its last line reads `221B 0.13.0 · build 9ef9683` (a release's version alone), and a click copies it. The build stamps the chart's version beside the commit; it is told to people signed in only, never on the sign-in page (RB-58).
 - **Tests**: `hack/ha-kind.sh`'s failover step tries the setting's read and write again for a while (60 s and 30 s) after the database's primary is lost, where one 503 before the console reconnected failed CI on `main` once.
 
+### Fixed
+
+- **A test case no longer fails an answer for speaking of a password** (AI-49): the check *carries no text that looks like a credential* looks for a credential's shape (a private key, a token of a known format, a bearer token or a password in an address), not the words around one; "About the password: it isn't in the script" passes. A planted secret still fails the case.
+
 ## 0.13.0 (2026-11-22)
 
 Phase 13: **the console keeps its records in PostgreSQL, and does not run without it** ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-72). Every record set that was kept in a ConfigMap, and the part of what was kept in Secrets that is not secret, is now rows of a proper data model. **The chart runs a bundled PostgreSQL by default** (`database.mode: bundled`, one member); `database.mode: none` is gone. **Every installation changes at this upgrade**: a 0.12 release gets the bundled database, and its first start copies its ConfigMaps and Secrets in, once, and removes what it copied. Where an entry below says *with a database*, that is every console now.

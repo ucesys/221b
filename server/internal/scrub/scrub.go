@@ -28,6 +28,65 @@ const (
 	secretValue = `(?:\\+".*?\\+"(?:\s*[,}\]]|\s*$)|"[^"]*"|'[^']*'|[^\s,;&}\]]+)`
 )
 
+// The shapes of real credentials, whatever words stand around them. Text
+// removes them with the rest; Credential looks for them alone.
+var (
+	// PEM and PGP private keys.
+	rePEM = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)`)
+	// JSON Web Tokens, wherever they are.
+	reJWT = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`)
+	// Tokens of well-known formats: AWS access keys, GitHub, Slack, OpenAI
+	// and Anthropic API keys, Google API keys, GitLab.
+	tokenShapes = []*regexp.Regexp{
+		regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+		regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{30,}\b`),
+		regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{40,}\b`),
+		regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`),
+		regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),
+		regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
+		regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}\b`),
+	}
+	// A bearer token written out.
+	reBearer = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9\-._~+/]{20,}=*)`)
+	// A password in an address: scheme://user:password@host.
+	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>@]+)@`)
+	reDigit       = regexp.MustCompile(`[0-9]`)
+	reLetter      = regexp.MustCompile(`[A-Za-z]`)
+	// What stands in for a password: $VAR, ${VAR}, <password>, {{ .x }},
+	// [REDACTED], %s, *** or xxx, or a word for what goes there.
+	rePlaceholder = regexp.MustCompile(`(?i)^(?:\$.*|<.*>|\{.*\}|\[.*\]|%.*|\*+|x+|\.+|(?:your|my|the)?[_-]?(?:pass(?:word|wd)?|pwd|secret|token|changeme|example|redacted)[_-]?[a-z0-9]{0,6})$`)
+)
+
+// Credential says whether text carries a real credential's shape: a
+// private key's PEM block, a JSON Web Token, a token of a well-known
+// format, a bearer token written out (twenty characters or more, letters
+// and digits), or a password in an address that is not a placeholder.
+// Words such as password or token, and key=value pairs, are not enough:
+// Text removes those from what tools return, erring towards too much,
+// while Credential is for what a model wrote, such as an answer, where
+// prose about a password is no leak.
+func Credential(s string) bool {
+	if rePEM.MatchString(s) || reJWT.MatchString(s) {
+		return true
+	}
+	for _, re := range tokenShapes {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	for _, m := range reBearer.FindAllStringSubmatch(s, -1) {
+		if reDigit.MatchString(m[1]) && reLetter.MatchString(m[1]) {
+			return true
+		}
+	}
+	for _, m := range reURLPassword.FindAllStringSubmatch(s, -1) {
+		if !rePlaceholder.MatchString(m[1]) {
+			return true
+		}
+	}
+	return false
+}
+
 // scrubbers find what looks like a credential in text that leaves for the
 // Claude API (P5-03): log lines above all, but every tool result passes
 // through them. They err towards removing too much.
@@ -36,12 +95,12 @@ var scrubbers = []struct {
 	keep int // the submatch to keep in front of the redaction, 0 for none
 }{
 	// PEM and PGP private keys.
-	{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)`), 0},
+	{rePEM, 0},
 	// Authorization and cookie headers, and bearer tokens.
 	{regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)`), 1},
 	{regexp.MustCompile(`(?i)(\b(?:bearer|basic|token)\s+)[A-Za-z0-9\-._~+/]{8,}=*`), 1},
 	// JSON Web Tokens, wherever they are.
-	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`), 0},
+	{reJWT, 0},
 	// Credentials in URLs: scheme://user:password@host. The password runs
 	// to the last @ of the address, so it may hold / or @ itself.
 	{regexp.MustCompile(`(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:)[^\s"'<>]*(@)`), -1},
@@ -59,13 +118,8 @@ var scrubbers = []struct {
 	// a JSON string.
 	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?\s*[:=]\s*)` + secretValue), 1},
 	// Well-known token shapes.
-	{regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`), 0},
-	{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{30,}\b`), 0},
-	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{40,}\b`), 0},
-	{regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`), 0},
-	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`), 0},
-	{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`), 0},
-	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}\b`), 0},
+	{tokenShapes[0], 0}, {tokenShapes[1], 0}, {tokenShapes[2], 0}, {tokenShapes[3], 0},
+	{tokenShapes[4], 0}, {tokenShapes[5], 0}, {tokenShapes[6], 0},
 }
 
 // blockKey is a YAML key that names a secret and whose value is the block
