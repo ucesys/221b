@@ -749,11 +749,29 @@ func (s *Service) RunAgent(ctx context.Context, a Agent, q Question, task string
 	r := &run{chain: ch, known: Known{}, hands: &hands, seq: &seq}
 	res := s.loop(ctx, &a, q, task, r, nil)
 	res.Hands, res.HandOvers = hands, ch.asked
+	res.Tools = append(res.Tools, handTools(hands)...)
 	if err := s.opts.Ledger.Save(context.Background()); err != nil {
 		s.opts.Logger.Warn("saving the Sherlock spend failed", "err", err)
 	}
 	s.recordAgent(q, nil, &a, res)
 	return res
+}
+
+// handTools are the tools the agents handed work called, in the order of
+// the hand-overs, each one's own before those of the agents it asked: a
+// test case that expects a tool is met when the agent asked calls it
+// (the measurement of November 23, 2026, F2; AI-52).
+func handTools(hands []*Hand) []string {
+	var out []string
+	for _, h := range hands {
+		for _, st := range h.Steps {
+			if st.Tool != "" {
+				out = append(out, st.Tool)
+			}
+		}
+		out = append(out, handTools(h.Hands)...)
+	}
+	return out
 }
 
 // DefaultMaxRounds is how many rounds of reads one answer gets when the

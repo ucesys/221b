@@ -399,6 +399,10 @@ func splitView(q string) (question, view string) {
 // reTime is the time a conversation sends after its question.
 var reTime = regexp.MustCompile(`^It is [A-Z][a-z]+day \d{1,2} [A-Z][a-z]+ \d{4}, \d\d:\d\d UTC\.$`)
 
+// HandedMark starts what a hand-over adds after its task: what the asker
+// knows already. The scripts read the task alone.
+const HandedMark = "\n\nWhat "
+
 // reChain is a scripted chain of hand-overs: [[chain troubleshooter,auditor]].
 var reChain = regexp.MustCompile(`\[\[chain ([a-zA-Z,]*)\]\]`)
 
@@ -423,16 +427,33 @@ func scripted(question, view string, round int, results []string) reply {
 	}
 	// A chain of hand-overs (Phase 12): [[chain a,b,c]] hands the rest of
 	// the chain to a, which hands it to b, and so on; the last one answers.
+	// What the question says beside the chain goes along with it, so the
+	// last one may call the tools it scripts: "[[chain troubleshooter]]
+	// [[get_pod {…}]]" has the Troubleshooter call get_pod.
 	if m := reChain.FindStringSubmatch(question); m != nil {
 		agents := strings.Split(m[1], ",")
-		if agents[0] == "" {
+		along := ""
+		if loc := reChain.FindStringIndex(question); loc != nil {
+			along = strings.TrimSpace(question[loc[1]:])
+			if i := strings.Index(along, HandedMark); i >= 0 {
+				along = strings.TrimSpace(along[:i])
+			}
+		}
+		switch {
+		case agents[0] == "" && reDirective.MatchString(along):
+			question = along
+		case agents[0] == "":
 			return reply{text: []string{"End of the chain."}}
-		}
-		if round == 0 {
+		case round == 0:
 			rest := strings.Join(agents[1:], ",")
-			return reply{text: []string{"Asking " + agents[0] + "."}, tool: "hand_over", input: map[string]any{"agent": agents[0], "task": "[[chain " + rest + "]]", "context": "a test chain"}}
+			task := strings.TrimSpace("[[chain " + rest + "]] " + along)
+			if along == "" {
+				task = "[[chain " + rest + "]]"
+			}
+			return reply{text: []string{"Asking " + agents[0] + "."}, tool: "hand_over", input: map[string]any{"agent": agents[0], "task": task, "context": "a test chain"}}
+		default:
+			return reply{text: []string{"Chain: " + summarize(last)}}
 		}
-		return reply{text: []string{"Chain: " + summarize(last)}}
 	}
 	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
 		// [[sleep 2000]] waits before the next call, as a slow model would.

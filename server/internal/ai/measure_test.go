@@ -57,3 +57,33 @@ func TestTheCredentialCheckLooksForCredentialsAI49(t *testing.T) {
 		}
 	}
 }
+
+// A test case that expects a tool is met when the agent asked calls it
+// (AI-52, F2): Sherlock hands the crash loop to the Troubleshooter, which
+// calls get_pod, and the case's "calls get_pod" holds.
+func TestAToolCalledByTheAgentAskedCountsAI52(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	c := crashCase("handed", "[[chain troubleshooter]]")
+	c.Agent = Sherlock
+	c.Expect.Points = nil
+	if _, err := w.ai.SaveTest(ctx, c, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ai.SaveDraft(ctx, Sherlock, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	run, err := w.ai.RunTests(ctx, Sherlock, TestOptions{Draft: true, By: "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r *TestResult
+	for i := range run.Results {
+		if run.Results[i].Name == "handed" {
+			r = &run.Results[i]
+		}
+	}
+	if r == nil || !slices.Equal(r.HandOvers, []string{Troubleshooter}) || !slices.Contains(r.Tools, "get_pod") || !r.Passed {
+		t.Fatalf("the handed case: %+v", r)
+	}
+}
