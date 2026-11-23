@@ -875,7 +875,7 @@ Why: Mycroft's knowledge is built for small sources. Today a file is sent to Myc
 5. **Mycroft writes pages for what matters**, not for every item read: its cost and the Inbox's approvals no longer grow with a source. Its rewriting stays for in-house documents (it also cleans their typos and names).
 6. **Measured.** Before and after each step, a set of real questions with the passage that answers each (from the owner's documents, which this session cannot reach): how often the right passage is among the 6 hits, for keyword, fuzzy and semantic search.
 
-To decide when it starts (the owner's): the embedding model and where it runs; whether vendor documentation is ingested or looked up live per version; the bounds (sections, storage: about 4 KB of vector a section, so 100,000 sections are about 400 MB); the trust levels and who sets them.
+Not a question (the owner, November 23): whether vendor documentation is ingested or looked up live is each source's own mode, *Ingest* or *Live* (KN-39), chosen by whoever adds it; part B's work is for Ingest sources, and a Live source stays read when asked, never stored (its addresses may name the version a cluster runs). To decide when it starts (the owner's): the embedding model and where it runs; the bounds (sections, storage: about 4 KB of vector a section, so 100,000 sections are about 400 MB); the trust levels and who sets them.
 
 ### 1. Verify and ship what is here
 
