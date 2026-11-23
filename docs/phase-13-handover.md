@@ -852,7 +852,11 @@ The aim, in the owner's words: select only the provider per agent, "and then it'
 
 8. **A job's run says its agent, model and effort** (the owner, November 22). Jobs › Runs: each row under the job's name, `Auditor · Claude Opus 5.5 · high` (today it says the agent alone); the run's page: *Agent*, *Model* (with its provider) and *Effort* as facts (today *Agent* with the model beside it, and no effort, since none is sent: item 1). Under Auto, what was picked and why (`high, picked: a P0 case`), and a model moved up during the run (item 3) as both, with the step it moved at. Recorded on the run, so an old run says what it ran with even after the agent's settings change.
 
+9. **The models a provider offers to the agents** (the owner, November 23). A provider's details (Administration › AI › Providers) gain a multiselect of its models that are available to every agent: an agent's *Model* and Auto choose among those only, and a model left out is not offered (a model an agent is set to that is no longer offered says so in its drawer). Today an agent may name any model of its provider.
+
 *The A5000 measured on November 22* (`~/p13-qwen/` on `rke2cp1`: `bench.py`, `cases.json`, `bench.log`; 54 first messages labelled by Claude, not by a person): `qwen3.8-27b` with vLLM's constrained choice and thinking off agreed 52 of 54 times (96%), never picked a lower level than the label (both misses went up: *Open case C-3* as high, *What changed in the last hour before the alerts* as high), gave the same answer in two runs, and took 0.20 s (median; 0.43 s at most) one at a time, 1.16 s with eight at once; the first call took 1.34 s.
+
+**The owner on November 23:** the floors stay unset (the measurement found Low for every agent, the same as no floor; `~/phase-13-1-measure.md` on `rke2cp1`).
 
 **Decided by the owner when the work started (November 22):** Auto picks among **Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5** on Anthropic; **a job's run is picked by rules alone** (what started it), the classifier is for conversations; **Effort on the A5000's Qwen means thinking off at `low` and on above it**; **a change of an agent's Auto settings is saved at once and audited**, with no second SuperAdmin.
 
