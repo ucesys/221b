@@ -166,3 +166,40 @@ func TestALiveTestSaysInstructionsInForceAI54(t *testing.T) {
 		t.Fatalf("the draft's test's records:\n%s", got)
 	}
 }
+
+// The estimate follows the effort the test runs at (F9): each level above
+// another is estimated dearer, the model's default and Auto
+// (whose default is medium) as medium, and an agent's own fixed effort
+// counts when the test names none.
+func TestTheEstimateFollowsTheEffortF9(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	if _, err := w.ai.SaveTest(ctx, crashCase("effort", ""), "ann"); err != nil {
+		t.Fatal(err)
+	}
+	at := func(effort string) float64 {
+		t.Helper()
+		usd, _, _, err := w.ai.Estimate(ctx, Troubleshooter, TestOptions{Effort: effort})
+		if err != nil || usd <= 0 {
+			t.Fatalf("the estimate at %q: $%v, %v", effort, usd, err)
+		}
+		return usd
+	}
+	low, medium, high, max := at("low"), at("medium"), at("high"), at("max")
+	def := at("")
+	if !(low < medium && medium < high && high < max) || def != medium {
+		t.Fatalf("low $%v, medium $%v, high $%v, max $%v, default $%v", low, medium, high, max, def)
+	}
+	for _, effort := range []string{"auto", "high"} {
+		if err := w.ai.SaveAgent(ctx, Troubleshooter, AgentChange{AgentSettings: AgentSettings{Effort: effort}}); err != nil {
+			t.Fatal(err)
+		}
+		want := medium
+		if effort == "high" {
+			want = high
+		}
+		if got := at(""); math.Abs(got-want) > 1e-12 {
+			t.Fatalf("the agent at %s is estimated $%v, want $%v", effort, got, want)
+		}
+	}
+}

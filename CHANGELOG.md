@@ -28,6 +28,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **A test's estimate follows the effort** (AI-56): the test dialog's estimate counted 600 output tokens a round at every effort, and under-stated a run at high three to four times; it now counts about 1,200 a round at low, 2,400 at medium (the model's default and Auto's), 3,600 at high, 5,000 at extra high and 7,000 at max.
 - **A new case is no longer lost to a conflict on the cases' index** (CF-20): when another writer saved the index between the read and the save, the retry numbered the case again with the number it had just written and failed five times (*object exists*); the object of the failed save is deleted first, so the retry keeps the number (or, when it cannot be deleted, takes the next).
 - **A test case no longer fails an answer for speaking of a password** (AI-49): the check *carries no text that looks like a credential* looks for a credential's shape (a private key, a token of a known format, a bearer token or a password in an address), not the words around one; "About the password: it isn't in the script" passes. A planted secret still fails the case.
 - **A conversation's history is read from the prompt cache** (AI-50): each request to the Claude API marks its newest message, and the last before the question, for the cache, and the time goes with the question instead of in the system prompt; before, every turn and every tool round re-sent the whole history uncached (one turn of the measurement: 166,000 input tokens at the full price).

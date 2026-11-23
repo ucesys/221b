@@ -419,6 +419,27 @@ func (s *Service) testHouse(snap snapshot, id string, draft bool) (*draftText, i
 	return ap.Draft.text(), ap.Draft.Rev, nil
 }
 
+// OutputPerRound is about how many tokens a model writes in one round of
+// a test at an effort: its thinking and its answer. A higher effort thinks
+// longer (F9 of the measurement of November 23, 2026: the estimate counted
+// 600 tokens a round at every effort, and the Automation author's run cost
+// 1.3 to 1.7 times it at low, 2.8 times at medium and 3.4 to 4.1 times at
+// high). The model's own default and Auto, whose default is medium, count
+// as medium.
+func OutputPerRound(effort string) int {
+	switch effort {
+	case auto.Low:
+		return 1200
+	case auto.High:
+		return 3600
+	case auto.XHigh:
+		return 5000
+	case auto.Max:
+		return 7000
+	}
+	return 2400
+}
+
 // Estimate is about what a test would cost, from the size of what it
 // sends: every round sends the instructions and what came before.
 func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float64, int, int, error) {
@@ -457,7 +478,7 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 			results += len(r.Result) + len(r.Input)
 		}
 		rounds := len(rec) + 1
-		u := sherlock.Usage{InputTokens: (in*rounds + results*rounds/2) / 4, OutputTokens: 600 * rounds}
+		u := sherlock.Usage{InputTokens: (in*rounds + results*rounds/2) / 4, OutputTokens: OutputPerRound(ag.Effort) * rounds}
 		return ag.Price.Cost(u)
 	}
 	run := func(question string, rec []sherlock.Recorded) {
