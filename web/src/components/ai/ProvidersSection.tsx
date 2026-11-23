@@ -137,8 +137,8 @@ export function ClassifierChoice({ ov, onChange, onError, onToast }: { ov: AIOve
         />
       </div>
       <span className="rk-fhint">
-        For an agent whose effort or model is Auto, a short request to this provider reads each message of a conversation and answers low, medium or high, within 1.5 seconds; slower, or off, the agent’s fixed defaults
-        apply (medium on the agent’s provider’s standard model). An OpenAI-compatible provider only, such as an in-house vLLM: free, and the messages stay on site. Jobs’ runs are picked by rules, never by the classifier.
+        For an agent whose effort or model is Auto, a short request to this provider reads each message of a conversation and answers low, medium or high, within 1.5 seconds; slower, or off, the agent’s fixed defaults apply (medium on the
+        agent’s provider’s standard model). An OpenAI-compatible provider only, such as an in-house vLLM: free, and the messages stay on site. Jobs’ runs are picked by rules, never by the classifier.
       </span>
       {ov.classifierOff && (
         <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="classifier-off">

@@ -169,8 +169,17 @@ describe('the models a provider offers its agents (A9)', () => {
     expect(box.dataset.chosen).toBe('false')
     expect(within(box).getByTestId('provider-offered-hint').textContent).toContain('None chosen yet')
     // Once listed: Haiku, which the endpoint does not list, is left out; the new model is there, not offered.
-    await waitFor(() => expect(within(box).getAllByTestId('provider-offered-row').map((r) => `${r.dataset.model}:${r.dataset.offered}`)).toEqual(['claude-sonnet-5-5:true', 'claude-opus-5-5:true', 'claude-fable-6:false']))
-    const row = (m: string) => within(box).getAllByTestId('provider-offered-row').find((r) => r.dataset.model === m)!
+    await waitFor(() =>
+      expect(
+        within(box)
+          .getAllByTestId('provider-offered-row')
+          .map((r) => `${r.dataset.model}:${r.dataset.offered}`),
+      ).toEqual(['claude-sonnet-5-5:true', 'claude-opus-5-5:true', 'claude-fable-6:false']),
+    )
+    const row = (m: string) =>
+      within(box)
+        .getAllByTestId('provider-offered-row')
+        .find((r) => r.dataset.model === m)!
     // The default model is always offered.
     expect((within(row('claude-opus-5-5')).getByTestId('provider-offered-check') as HTMLInputElement).disabled).toBe(true)
     // Offer the new model as strong, first of its tier.

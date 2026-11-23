@@ -85,15 +85,7 @@ export function OfferedModels({ value, chosen, defaultModel, listed, onChange }:
                 {r.context ? <span className="rk-fhint"> · {r.context.toLocaleString('en')} tokens</span> : null}
                 {unlisted && <span className="rk-fhint"> · not listed by the provider</span>}
               </label>
-              <Select
-                label={`Tier of ${r.model}`}
-                value={r.tier}
-                options={TIERS.map((t) => [t.id, t.label] as [string, string])}
-                onChange={(v) => set(r.model, v as Tier)}
-                disabled={!r.offered}
-                testId="provider-offered-tier"
-                width={130}
-              />
+              <Select label={`Tier of ${r.model}`} value={r.tier} options={TIERS.map((t) => [t.id, t.label] as [string, string])} onChange={(v) => set(r.model, v as Tier)} disabled={!r.offered} testId="provider-offered-tier" width={130} />
               <button
                 type="button"
                 className="rk-btn"

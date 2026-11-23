@@ -518,8 +518,7 @@ export interface TestAt {
   effort?: string
   model?: string
 }
-export const estimateTest = (id: string, replays: number, live = false, at?: TestAt) =>
-  call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live, ...at })
+export const estimateTest = (id: string, replays: number, live = false, at?: TestAt) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live, ...at })
 export const startTest = (id: string, replays: number, live = false, at?: TestAt) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live, ...at })
 /** The agent's test run: the one in flight, with each case's state, else the latest that ended (Phase 12.1). */
 export const fetchTestRun = (id: string) => call<TestRun>('GET', `/api/v1/ai/agents/${enc(id)}/tests/run`)

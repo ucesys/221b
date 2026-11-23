@@ -211,7 +211,11 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
         <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="agent-model-row">
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 200px' }}>
             Provider
-            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => {
+            <Select
+              label="Provider"
+              value={providerId}
+              options={ov.providers.map((p) => [p.id, p.name])}
+              onChange={(v) => {
                 const next = ov.providers.find((p) => p.id === v)
                 // A9: Auto stays only where the provider has a tiered model; a fixed model only where it is offered (or every listed model is).
                 const keepsAuto = tieredOf(next).length > 0
@@ -275,8 +279,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
         )}
         {autoModel && tiered.length === 0 && (
           <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="agent-auto-no-tier">
-            None of the models {provider?.name ?? 'its provider'} offers has a tier, so Auto cannot pick the model: the {agent.name} answers on the default model. Give the models tiers in Administration › AI ›
-            Providers, or choose a model.
+            None of the models {provider?.name ?? 'its provider'} offers has a tier, so Auto cannot pick the model: the {agent.name} answers on the default model. Give the models tiers in Administration › AI › Providers, or choose a model.
           </span>
         )}
         {(autoModel || autoEffort) && (
@@ -284,9 +287,9 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
             <span className="rk-fhint" data-testid="agent-auto-line">
               Auto picks {autoEffort ? 'the effort for every message' : ''}
               {autoEffort && autoModel ? ' and ' : ''}
-              {autoModel ? 'the model when a conversation or a run starts, moving it up once at most' : ''}: a job’s run by what started it (a P0 or P1 case, a production cluster, an alert, a schedule),
-              a conversation by the classifier ({ov.classifier ? (ov.providers.find((p) => p.id === ov.classifier)?.name ?? ov.classifier) : `off: medium${autoModel && standard ? ` on ${modelLabel(standard)}` : ''}`}). Never xhigh or max without an open P0 or P1 case;
-              one level lower past 80% of the day’s budget. Each pick is shown with the run or the answer.
+              {autoModel ? 'the model when a conversation or a run starts, moving it up once at most' : ''}: a job’s run by what started it (a P0 or P1 case, a production cluster, an alert, a schedule), a conversation by the classifier (
+              {ov.classifier ? (ov.providers.find((p) => p.id === ov.classifier)?.name ?? ov.classifier) : `off: medium${autoModel && standard ? ` on ${modelLabel(standard)}` : ''}`}). Never xhigh or max without an open P0 or P1 case; one
+              level lower past 80% of the day’s budget. Each pick is shown with the run or the answer.
             </span>
             <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               {autoEffort && (
@@ -295,7 +298,12 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
                   <Select
                     label="Lowest effort Auto may pick"
                     value={set.floorEffort ?? ''}
-                    options={[['', 'None'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]}
+                    options={[
+                      ['', 'None'],
+                      ['low', 'Low'],
+                      ['medium', 'Medium'],
+                      ['high', 'High'],
+                    ]}
                     onChange={(v) => setSet({ ...set, floorEffort: v || undefined })}
                     testId="agent-floor-effort"
                     width={150}
@@ -308,7 +316,11 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
                   <Select
                     label="Lowest model Auto may pick"
                     value={set.floorModel ?? ''}
-                    options={[['', 'None'], ...(set.floorModel && !tiered.some((o) => o.model === set.floorModel) ? [[set.floorModel, `${set.floorModel} (no longer offered with a tier)`] as [string, string]] : []), ...tiered.map((o) => [o.model, `${modelLabel(o.model)} · ${o.tier}`] as [string, string])]}
+                    options={[
+                      ['', 'None'],
+                      ...(set.floorModel && !tiered.some((o) => o.model === set.floorModel) ? [[set.floorModel, `${set.floorModel} (no longer offered with a tier)`] as [string, string]] : []),
+                      ...tiered.map((o) => [o.model, `${modelLabel(o.model)} · ${o.tier}`] as [string, string]),
+                    ]}
                     onChange={(v) => setSet({ ...set, floorModel: v || undefined })}
                     testId="agent-floor-model"
                     width={190}
