@@ -388,3 +388,19 @@ describe('the Inbox’s From column (FU-02)', () => {
     expect(filterRows([pat, auditor, none], { ...f, from: '' })).toHaveLength(3)
   })
 })
+
+describe('a case the safety net opened is pending (C-14)', () => {
+  it('lists two P0 cases the console opened at the same moment, one with a detail, under Pending and in its count', () => {
+    const net = { name: 'The console (alert safety net)', kind: 'system' as const }
+    const at = '2026-11-23T00:21:17Z'
+    const c14 = kase(14, { priority: 0, source: { kind: 'alert', alert: 'Pod status Unknown: node r620-worker stopped reporting', alertKey: 'pod:shop/a' }, createdBy: net, created: at, since: at, waitingSince: at, pending: true, stage: 'analyzing' })
+    const c15 = kase(15, { priority: 0, source: { kind: 'alert', alert: 'Pod status Unknown: node r620-worker stopped reporting', alertKey: 'pod:shop/b' }, createdBy: net, created: at, since: at, waitingSince: at, pending: true })
+    const rows = [caseRow(c15, ctx), caseRow(c14, ctx)]
+    const f: InboxFilter = { show: 'pending', who: 'all', priority: null, cluster: '', source: null, type: null }
+    expect(filterRows(rows, f).map((r) => r.ref)).toEqual(['C-15', 'C-14'])
+    expect(pendingByKind(rows).case).toBe(2)
+    // Under Unassigned too; under Mine neither is the person's, being nobody's and opened by the console.
+    expect(pendingByKind(rows, 'unassigned').case).toBe(2)
+    expect(pendingByKind(rows, 'mine').case).toBe(0)
+  })
+})

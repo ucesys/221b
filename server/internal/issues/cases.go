@@ -248,6 +248,8 @@ type Opening struct {
 	Type      string
 	Incident  string
 	CreatedBy *Actor
+	// CorrelationKey groups the alerts of one failure under it (CF-117).
+	CorrelationKey string
 }
 
 // Open opens a case in the console. A person's is not matched to a known
@@ -599,6 +601,12 @@ func (s *Service) Apply(ctx context.Context, n int, fn func(tx *Tx, r *Case) err
 // Now is the change's time.
 func (tx *Tx) Now() time.Time { return tx.now }
 
+// Touch changes a case of the Tx with fn, naming the change's actor as
+// its last changer when fn changed it (as Apply does for its case).
+func (tx *Tx) Touch(r *Case, fn func() error) error {
+	return tx.st.touch(r, tx.now, fn)
+}
+
 // As names who makes the change: each case it changes names them as its
 // last changer (CF-35). Without it, the system.
 func (tx *Tx) As(a Actor) { tx.st.actor = &a }
@@ -675,6 +683,35 @@ func (tx *Tx) DuplicateCheck(r *Case, original int) DuplicateCheck {
 // chain a DuplicateCheck allowed).
 func (tx *Tx) CloseDuplicate(r *Case, original int, by Person, explanation string) {
 	closeDuplicate(tx.st, r, original, by, explanation, tx.now)
+}
+
+// Merge merges r into target (CF-119): r closes as a duplicate of it,
+// named merged; its alerts move to target, and its own alert, when an
+// alert opened it, is attached there too (own). target is counted seen
+// again for each alert it takes. Both must be open; the caller audits.
+func (tx *Tx) Merge(r, target *Case, by Person, explanation string, own *Signal) error {
+	if r.Number == target.Number {
+		return invalid("a case is not merged into itself")
+	}
+	if !r.Status.Open() {
+		return invalid("C-%d is closed: only an open case is merged", r.Number)
+	}
+	if !target.Status.Open() {
+		return invalid("C-%d is closed: merge into an open case", target.Number)
+	}
+	moved := append([]Signal(nil), r.Signals...)
+	if own != nil && !r.HasSignal(own.Cluster, own.Key) {
+		moved = append(moved, *own)
+	}
+	for _, g := range moved {
+		g.Why, g.At, g.ByKey, g.By = fmt.Sprintf("merged from C-%d", r.Number), tx.now, by.ID, by.Label()
+		AttachSignal(target, g, tx.now)
+	}
+	r.Signals = nil
+	closeDuplicate(tx.st, r, target.Number, by, explanation, tx.now)
+	r.MergedInto = target.Number
+	target.Updated = tx.now
+	return nil
 }
 
 // LinkKnown closes r as a known issue a person chose: an agent-found
@@ -754,6 +791,7 @@ func (tx *Tx) Open(c Caller, in Opening) (*Case, error) {
 	r.PriorityBy = firstNonEmpty(in.PriorityBy, c.Label())
 	r.Key, r.Job, r.Run, r.Finding, r.Severity = in.Key, in.Job, in.Run, in.Finding, in.Severity
 	r.RegressionOf, r.PossibleDuplicateOf, r.Previous = in.RegressionOf, in.PossibleDuplicateOf, in.Previous
+	r.CorrelationKey = clip(strings.TrimSpace(in.CorrelationKey), MaxObject)
 	if in.Source == CaseFinding {
 		if r.Priority <= 1 {
 			r.SLAFrom = ptr(now)

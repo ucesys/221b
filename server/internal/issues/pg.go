@@ -254,6 +254,12 @@ type caseRow struct {
 	Closed        *time.Time `col:"closed_at"`
 	LastReporter  *time.Time `col:"last_reporter_at"`
 	Reopened      int        `col:"reopened_count"`
+
+	// One case for one failure (CF-117, CF-119): the key its alerts are
+	// grouped under, and the case it was merged into, by its number (the
+	// key, merged_into_case_id, is written beside it).
+	CorrelationKey string `col:"correlation_key"`
+	MergedInto     int    `col:"merged_into_case_number"`
 }
 
 func caseToRow(c *Case) caseRow {
@@ -266,7 +272,7 @@ func caseToRow(c *Case) caseRow {
 		Priority: c.Priority, PriorityBy: c.PriorityBy, Service: c.Service, ServiceConfidence: c.ServiceConfidence, ServiceBy: c.ServiceBy, KnownIssue: c.KnownIssue,
 		MatchConfidence: c.MatchConfidence, Rejected: pgList(c.Rejected), Waiting: pgAtPtr(c.Waiting), Technical: c.Technical, Plain: c.Plain, Cause: c.Cause,
 		Evidence: pgList(c.Evidence), Acknowledged: pgAtPtr(c.Acknowledged), FirstResponse: pgAtPtr(c.FirstResponse), Resolved: pgAtPtr(c.Resolved), Closed: pgAtPtr(c.Closed),
-		LastReporter: pgAt(c.LastReporter), Reopened: c.Reopened}
+		LastReporter: pgAt(c.LastReporter), Reopened: c.Reopened, CorrelationKey: c.CorrelationKey, MergedInto: c.MergedInto}
 	r.OpenedKey, r.OpenedName, r.OpenedEmail, r.OpenedSystem = pgPerson(c.OpenedBy)
 	r.ClosedKey, r.ClosedName, r.ClosedEmail, r.ClosedSystem = pgPerson(c.ClosedBy)
 	r.FiledKey, r.FiledName, r.FiledEmail, r.FiledSystem = pgPerson(c.FiledBy)
@@ -308,7 +314,7 @@ func rowToCase(r *caseRow) Case {
 		Priority: r.Priority, PriorityBy: r.PriorityBy, Service: r.Service, ServiceConfidence: r.ServiceConfidence, ServiceBy: r.ServiceBy, KnownIssue: r.KnownIssue,
 		MatchConfidence: r.MatchConfidence, Rejected: pgListOf(r.Rejected), Waiting: pgAtPtr(r.Waiting), Technical: r.Technical, Plain: r.Plain, Cause: r.Cause,
 		Evidence: pgListOf(r.Evidence), Acknowledged: pgAtPtr(r.Acknowledged), FirstResponse: pgAtPtr(r.FirstResponse), Resolved: pgAtPtr(r.Resolved), Closed: pgAtPtr(r.Closed),
-		LastReporter: pgTime(r.LastReporter), Reopened: r.Reopened}
+		LastReporter: pgTime(r.LastReporter), Reopened: r.Reopened, CorrelationKey: r.CorrelationKey, MergedInto: r.MergedInto}
 	c.OpenedBy = pgPersonOf(r.OpenedKey, r.OpenedName, r.OpenedEmail, r.OpenedSystem)
 	c.ClosedBy = pgPersonOf(r.ClosedKey, r.ClosedName, r.ClosedEmail, r.ClosedSystem)
 	c.FiledBy = pgPersonOf(r.FiledKey, r.FiledName, r.FiledEmail, r.FiledSystem)
@@ -359,7 +365,56 @@ func readCase(ctx context.Context, q db.Querier, id string) (Case, error) {
 		return c, err
 	}
 	links.set(&c)
+	if c.Signals, err = readSignals(ctx, q, id); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// ---------- a case's signals (CF-117) ----------
+
+// readSignals are the alerts attached to a case, in order.
+func readSignals(ctx context.Context, q db.Querier, id string) ([]Signal, error) {
+	rows, err := q.Query(ctx, `SELECT cluster_id, alert_key, alert_name, object, attached_at, attached_by_key, attached_by_name, reason
+		FROM case_signals WHERE case_id = $1 ORDER BY position`, id)
+	if err != nil {
+		return nil, err
+	}
+	var out []Signal
+	var g Signal
+	_, err = pgx.ForEachRow(rows, []any{&g.Cluster, &g.Key, &g.Name, &g.Object, &g.At, &g.ByKey, &g.By, &g.Why}, func() error {
+		x := g
+		x.At = x.At.UTC()
+		out = append(out, x)
+		return nil
+	})
+	return out, err
+}
+
+// signalValues are a signal's columns after case_id and position.
+func signalValues(g *Signal) []any {
+	return []any{g.Cluster, g.Key, g.Name, g.Object, pgAt(g.At), g.ByKey, g.By, g.Why}
+}
+
+// writeSignals changes a case's signals to next, touching only the rows
+// that changed: an alert attached is one row inserted.
+func writeSignals(b *pgx.Batch, id string, was, next []Signal) {
+	for i := range next {
+		now := signalValues(&next[i])
+		if i < len(was) {
+			if sameValues(signalValues(&was[i]), now) {
+				continue
+			}
+			b.Queue(`UPDATE case_signals SET cluster_id = $3, alert_key = $4, alert_name = $5, object = $6, attached_at = $7, attached_by_key = $8, attached_by_name = $9, reason = $10
+				WHERE case_id = $1 AND position = $2`, append([]any{id, i}, now...)...)
+			continue
+		}
+		b.Queue(`INSERT INTO case_signals (case_signal_id, case_id, position, cluster_id, alert_key, alert_name, object, attached_at, attached_by_key, attached_by_name, reason)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, append([]any{db.NewID(), id, i}, now...)...)
+	}
+	if len(was) > len(next) {
+		b.Queue("DELETE FROM case_signals WHERE case_id = $1 AND position >= $2", id, len(next))
+	}
 }
 
 // ---------- a case's links ----------
@@ -446,6 +501,9 @@ func keyLinksTo(ctx context.Context, tx pgx.Tx, id, name string) error {
 		return nil
 	}
 	if _, err := tx.Exec(ctx, "UPDATE case_links SET linked_case_id = $1 WHERE linked_case_id IS NULL AND linked_case_number = $2", id, n); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "UPDATE cases SET merged_into_case_id = $1 WHERE merged_into_case_id IS NULL AND merged_into_case_number = $2", id, n); err != nil {
 		return err
 	}
 	// What other domains name it by, as people read it (DB-90).
@@ -549,7 +607,12 @@ func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	if err != nil {
 		return err
 	}
+	signals, err := readSignals(ctx, tx, id)
+	if err != nil {
+		return err
+	}
 	b := &pgx.Batch{}
+	writeSignals(b, id, signals, c.Signals)
 	// The links, written again only when they changed: each with the key
 	// of the case it names, while that case has a row, and its number.
 	if next := linksOf(c); !reflect.DeepEqual(links, next) && (len(links) > 0 || len(next) > 0) {
@@ -561,8 +624,11 @@ func writeCase(ctx context.Context, tx pgx.Tx, id string, c *Case) error {
 	// Its service's key, beside the service's id, while the service has a row.
 	cols := db.Columns(&row)
 	service := "$" + strconv.Itoa(slices.Index(cols, "service_key")+1)
+	// And the key of the case it was merged into, beside its number.
+	merged := "$" + strconv.Itoa(slices.Index(cols, "merged_into_case_number")+1)
 	b.Queue(strings.Replace(db.UpdateSQL("cases", &row, "case_id = $"+strconv.Itoa(len(cols)+1)), " WHERE ",
-		", is_case_kept = true, service_id = (SELECT s.service_id FROM services s WHERE s.service_id = "+service+"), version = version + 1 WHERE ", 1), append(db.Fields(&row), id)...)
+		", is_case_kept = true, service_id = (SELECT s.service_id FROM services s WHERE s.service_id = "+service+"), "+
+			"merged_into_case_id = (SELECT t.case_id FROM cases t WHERE "+merged+"::integer > 0 AND t.object_name = ("+merged+"::integer)::text), version = version + 1 WHERE ", 1), append(db.Fields(&row), id)...)
 	for i := range c.Messages {
 		now := messageValues(&c.Messages[i])
 		if i < len(was) {

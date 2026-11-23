@@ -36,7 +36,8 @@ func lineColumns() string {
 	}
 	return "case_id::text, " + strings.Join(cols, ", ") +
 		", ARRAY(SELECT p.person_key FROM case_people p WHERE p.case_id = cases.case_id AND p.role = 'watcher' ORDER BY p.position)" +
-		", ARRAY(SELECT l.kind || ' ' || l.linked_case_number FROM case_links l WHERE l.case_id = cases.case_id AND l.kind <> '" + linkSimilar + "')"
+		", ARRAY(SELECT l.kind || ' ' || l.linked_case_number FROM case_links l WHERE l.case_id = cases.case_id AND l.kind <> '" + linkSimilar + "')" +
+		", ARRAY(SELECT g.cluster_id || '/' || g.alert_key FROM case_signals g WHERE g.case_id = cases.case_id ORDER BY g.position)"
 }
 
 // linksOfLine reads the links lineColumns gives as "<kind> <number>".
@@ -198,9 +199,11 @@ func scanLines(rows pgx.Rows) ([]Line, error) {
 	var out []Line
 	var row caseRow
 	var id string
-	var watchers, links []string
-	_, err := pgx.ForEachRow(rows, append(append([]any{&id}, db.Fields(&row)...), &watchers, &links), func() error {
-		out = append(out, rowLine(&row, watchers, linksOfLine(links)))
+	var watchers, links, signals []string
+	_, err := pgx.ForEachRow(rows, append(append([]any{&id}, db.Fields(&row)...), &watchers, &links, &signals), func() error {
+		l := rowLine(&row, watchers, linksOfLine(links))
+		l.Signals = pgListOf(signals)
+		out = append(out, l)
 		return nil
 	})
 	return out, err

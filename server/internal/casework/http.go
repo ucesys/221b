@@ -71,6 +71,8 @@ func (s *Service) Routes(caller func(*http.Request) (Caller, bool)) []Route {
 		{"POST " + Prefix + "/{id}/known", "case-known", work(h.known)},
 		{"POST " + Prefix + "/{id}/fix", "case-fix", work(h.fix)},
 		{"POST " + Prefix + "/{id}/close", "case-close", work(h.close)},
+		// --- Merge into case… (CF-119).
+		{"POST " + Prefix + "/{id}/merge", "case-merge", work(h.merge)},
 		{"GET " + Prefix + "/{id}/duplicate-check", "case-duplicate-check", read(h.duplicateCheck)},
 		{"POST " + Prefix + "/{id}/exception", "case-exception", work(h.exception)},
 		{"POST " + Prefix + "/{id}/reopen", "case-reopen", work(h.reopen)},

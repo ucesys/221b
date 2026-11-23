@@ -930,6 +930,8 @@ func CloseCase(r *Case, by Person, outcome Outcome, explanation string, now time
 	if outcome != OutcomeDuplicate {
 		r.DuplicateOf = 0
 	}
+	// Merged is closed as a duplicate by MergeCase only (CF-119).
+	r.MergedInto = 0
 	if outcome != OutcomeKnownIssue {
 		r.KnownIssue, r.MatchConfidence = "", 0
 	}
@@ -951,7 +953,7 @@ func ReopenCase(r *Case, now time.Time) {
 	}
 	r.StatusAt, r.Reopened = now, r.Reopened+1
 	r.Outcome, r.Explanation, r.Resolved, r.Closed, r.ClosedBy = "", "", nil, nil, nil
-	r.DuplicateOf, r.Exception, r.KnownIssue, r.MatchConfidence, r.RCACause = 0, "", "", 0, ""
+	r.DuplicateOf, r.Exception, r.KnownIssue, r.MatchConfidence, r.RCACause, r.MergedInto = 0, "", "", 0, "", 0
 	r.VerifyPending, r.Verified, r.Verification, r.AnalysisQueued = false, nil, "", nil
 	r.VerifiedBy, r.Unchecked, r.UncheckedWhy = nil, 0, ""
 	r.Updated = now

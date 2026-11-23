@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
@@ -118,6 +119,11 @@ type Line struct {
 	RegressionOf int      `json:"regressionOf,omitempty"`
 	SameAs       int      `json:"sameAs,omitempty"`
 	PossibleDup  int      `json:"possibleDuplicateOf,omitempty"`
+	// CorrelationKey, MergedInto and the alerts attached, as cluster/key
+	// (CF-117, CF-119): what the safety net and the lists read.
+	CorrelationKey string   `json:"correlationKey,omitempty"`
+	MergedInto     int      `json:"mergedInto,omitempty"`
+	Signals        []string `json:"signals,omitempty"`
 	// Explanation is the close's, cut short; ClosedBy who closed it.
 	Explanation   string     `json:"explanation,omitempty"`
 	ClosedBy      string     `json:"closedBy,omitempty"`
@@ -175,6 +181,10 @@ func lineOf(r *Case) Line {
 	for _, w := range r.Watchers {
 		l.Watchers = append(l.Watchers, w.ID)
 	}
+	l.CorrelationKey, l.MergedInto = r.CorrelationKey, r.MergedInto
+	for _, g := range r.Signals {
+		l.Signals = append(l.Signals, g.ID())
+	}
 	l.Involved = involvedIDs(r, &l)
 	return l
 }
@@ -212,6 +222,11 @@ func (l Line) lite() Case {
 	}
 	for _, w := range l.Watchers {
 		r.Watchers = append(r.Watchers, Person{ID: w})
+	}
+	r.CorrelationKey, r.MergedInto = l.CorrelationKey, l.MergedInto
+	for _, id := range l.Signals {
+		cluster, key, _ := strings.Cut(id, "/")
+		r.Signals = append(r.Signals, Signal{Cluster: cluster, Key: key})
 	}
 	return r
 }

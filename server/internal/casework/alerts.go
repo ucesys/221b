@@ -40,9 +40,14 @@ type CoverCase struct {
 // first: by the object they are about, lower case as the cases name
 // objects ("shop/pod/web-1"), and by the key of the alert whose diagnosis
 // run sent its findings to them ("pod:shop/web-1").
+//
+// Since CF-117 an alert attached to a case as its evidence is listed
+// under Alerts too, and Keys are the open cases by their correlation key
+// ("node:prod/worker-3"), which the safety net looks a node's case up by.
 type AlertCovers struct {
 	Objects map[string][]CoverCase `json:"objects"`
 	Alerts  map[string][]CoverCase `json:"alerts"`
+	Keys    map[string][]CoverCase `json:"keys,omitempty"`
 }
 
 // For are the open cases that cover one alert, newest first.
@@ -79,7 +84,7 @@ func (s *Service) AlertCovers(ctx context.Context, cluster string) (AlertCovers,
 	if err != nil {
 		return AlertCovers{}, err
 	}
-	out := AlertCovers{Objects: map[string][]CoverCase{}, Alerts: map[string][]CoverCase{}}
+	out := AlertCovers{Objects: map[string][]CoverCase{}, Alerts: map[string][]CoverCase{}, Keys: map[string][]CoverCase{}}
 	open := map[int]CoverCase{}
 	for _, l := range lines {
 		if !l.Open() || l.Cluster != cluster {
@@ -90,6 +95,15 @@ func (s *Service) AlertCovers(ctx context.Context, cluster string) (AlertCovers,
 		if o, err := jobs.NormalizeObject(l.Object); err == nil && alertObjects[o.Kind] {
 			k := strings.ToLower(o.String())
 			out.Objects[k] = append(out.Objects[k], c)
+		}
+		if l.CorrelationKey != "" {
+			out.Keys[l.CorrelationKey] = append(out.Keys[l.CorrelationKey], c)
+		}
+		// The alerts attached to it (CF-117).
+		for _, id := range l.Signals {
+			if cl, key, ok := strings.Cut(id, "/"); ok && cl == cluster && !slices.ContainsFunc(out.Alerts[key], func(y CoverCase) bool { return y.Number == c.Number }) {
+				out.Alerts[key] = append(out.Alerts[key], c)
+			}
 		}
 	}
 	if ar, ok := s.o.Jobs.(alertRuns); ok {
@@ -103,7 +117,7 @@ func (s *Service) AlertCovers(ctx context.Context, cluster string) (AlertCovers,
 			}
 		}
 	}
-	for _, m := range []map[string][]CoverCase{out.Objects, out.Alerts} {
+	for _, m := range []map[string][]CoverCase{out.Objects, out.Alerts, out.Keys} {
 		for _, list := range m {
 			slices.SortFunc(list, func(a, b CoverCase) int { return b.Number - a.Number })
 		}
@@ -169,7 +183,8 @@ func (s *Service) WatchAlerts(ctx context.Context, read func() []jobs.Alert) {
 		return
 	}
 	crit := map[string]jobs.Alert{}
-	for _, a := range read() {
+	all := read()
+	for _, a := range all {
 		if a.Severity == jobs.SeverityError {
 			crit[a.Cluster+"/"+a.Key] = a
 		}
@@ -193,10 +208,24 @@ func (s *Service) WatchAlerts(ctx context.Context, read func() []jobs.Alert) {
 		}
 	}
 	s.mu.Unlock()
-	slices.Sort(due)
+	// A node's alert before its pods' (CF-117): the node's case is opened
+	// first, and its pods' alerts attach to it.
+	slices.SortFunc(due, func(x, y string) int {
+		if nx, ny := crit[x].Kind == "node", crit[y].Kind == "node"; nx != ny {
+			if nx {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(x, y)
+	})
 	covers := map[string]AlertCovers{}
 	for _, k := range due {
 		a := crit[k]
+		// Attached to its node's case earlier in this look (CF-117).
+		if s.netDone(a) {
+			continue
+		}
 		c, ok := covers[a.Cluster]
 		if !ok {
 			var err error
@@ -209,7 +238,13 @@ func (s *Service) WatchAlerts(ctx context.Context, read func() []jobs.Alert) {
 		if len(c.For(a.Key, a.CaseObject())) > 0 || s.concluded(ctx, a) {
 			continue
 		}
-		id, err := s.openForAlert(ctx, a, after)
+		// One case for one failure (CF-117): the case about the alert's
+		// node takes it, or is opened for it.
+		if s.correlate(ctx, a, c, all, crit, after) {
+			delete(covers, a.Cluster)
+			continue
+		}
+		id, err := s.openForAlert(ctx, a, after, "")
 		if err != nil {
 			s.o.Logger.Warn("the safety net could not open a case for a critical alert", "cluster", a.Cluster, "alert", a.Key, "err", err)
 			continue
@@ -238,14 +273,15 @@ func (s *Service) concluded(ctx context.Context, a jobs.Alert) bool {
 
 // openForAlert opens the safety net's case for an alert: as its New Case
 // would, P0, an outage from the alert, opened by the console; named by
-// the alert's reason (CF-84).
-func (s *Service) openForAlert(ctx context.Context, a jobs.Alert, after time.Duration) (string, error) {
+// the alert's reason (CF-84). corr is the correlation key of a case about
+// a node that is down (CF-117), "" otherwise.
+func (s *Service) openForAlert(ctx context.Context, a jobs.Alert, after time.Duration, corr string) (string, error) {
 	name := a.Named()
 	mins := int(after / time.Minute)
 	in := NewCase{FromAlert: &AlertInput{Cluster: a.Cluster, Key: a.Key, Name: name, Severity: "critical", Object: a.CaseObject(), Summary: a.Message}}
 	op := opener{issue: netCaller, actor: issues.ActorOf(netCaller.Person), who: netWho,
 		opened: fmt.Sprintf("Opened by the console: the critical alert %s was still going after %d minutes and no case covered it", clip(name, 200), mins),
-		what:   fmt.Sprintf("by the console from the alert %s, critical for %d minutes with no case covering it", clip(name, 200), mins)}
+		what:   fmt.Sprintf("by the console from the alert %s, critical for %d minutes with no case covering it", clip(name, 200), mins), corr: corr}
 	info, analyse, err := s.open(ctx, in, op)
 	if err != nil {
 		return "", err

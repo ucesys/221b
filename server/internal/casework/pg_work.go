@@ -91,16 +91,18 @@ func (workPart) Read(ctx context.Context, q db.Querier, id, _ string) ([]byte, b
 	}
 	var a Analysis
 	var at time.Time
-	var evidence, commands, ruledOut, leftOut []string
-	err = q.QueryRow(ctx, `SELECT run_key, analyzed_at, summary, cause, evidence, fix_summary, fix_commands, confidence, ruled_out, is_expected, expected_why, error, left_out
+	var evidence, commands, ruledOut, leftOut, sameCause []string
+	err = q.QueryRow(ctx, `SELECT run_key, analyzed_at, summary, cause, evidence, fix_summary, fix_commands, confidence, ruled_out, is_expected, expected_why, error, left_out,
+			same_cause_as_case_keys, root_case_key
 		FROM case_analyses WHERE case_id = $1`, id).Scan(&a.Run, &at, &a.Summary, &a.Cause, &evidence, &a.Fix.Summary, &commands, &a.Confidence, &ruledOut, &a.Expected,
-		&a.ExpectedWhy, &a.Error, &leftOut)
+		&a.ExpectedWhy, &a.Error, &leftOut, &sameCause, &a.RootCase)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
 		return nil, false, err
 	default:
 		a.At, a.Evidence, a.Fix.Commands, a.RuledOut, a.LeftOut = at.UTC(), wListOf(evidence), wListOf(commands), wListOf(ruledOut), wListOf(leftOut)
+		a.SameCauseAs = wListOf(sameCause)
 		w.Analysis = &a
 	}
 	var r RCA
@@ -349,10 +351,10 @@ func analysisRows(id string, w *Work) []workStmt {
 		return nil
 	}
 	return []workStmt{{`INSERT INTO case_analyses (case_id, run_key, analyzed_at, summary, cause, evidence, fix_summary, fix_commands, confidence, ruled_out, is_expected, expected_why,
-			error, left_out)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			error, left_out, same_cause_as_case_keys, root_case_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		[]any{id, a.Run, wAt(a.At), a.Summary, a.Cause, wList(a.Evidence), a.Fix.Summary, wList(a.Fix.Commands), a.Confidence, wList(a.RuledOut), a.Expected, a.ExpectedWhy, a.Error,
-			wList(a.LeftOut)}}}
+			wList(a.LeftOut), wList(a.SameCauseAs), a.RootCase}}}
 }
 
 func rcaRows(id string, w *Work) []workStmt {
