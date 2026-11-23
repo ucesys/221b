@@ -708,6 +708,14 @@ func (s *Service) Usable(id, cluster string) string {
 	return ""
 }
 
+// Available says whether an agent can answer at all, on no cluster in
+// particular (JB-25): nil; an error that is ErrUnavailable when it is off;
+// another when its provider cannot.
+func (s *Service) Available(ctx context.Context, id string) error {
+	_, err := s.resolve(s.read(ctx), id, "", nil, nil, nil, false)
+	return err
+}
+
 // ---------- the administrators' view ----------
 
 // ProviderView is a provider as Administration › AI › Providers shows it.

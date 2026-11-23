@@ -313,6 +313,9 @@ export interface Job {
   running: boolean
   spentToday: number
   stoppedToday?: string
+  /** Its agent is turned off ("the Summarizer is off"), the job on or paused: Run now is refused, and its scheduled and event runs fail, until the agent is on (JB-25). */
+  agentOff?: string
+  /** Why its agent cannot work now otherwise: its provider, or the job's cluster. */
   unusable?: string
   external?: ExternalState
   where?: string

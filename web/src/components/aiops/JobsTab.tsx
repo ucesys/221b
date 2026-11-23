@@ -1,5 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, rebuildJobNow, removeJob, runJobNow, updateJob, usd, type Job, type JobChange, type JobEvent, type JobsView, type JobWhen, type RunBrief } from '../../api/jobs'
+import {
+  addJob,
+  budgetText,
+  describeJobSchedule,
+  fetchJobRuns,
+  fetchJobs,
+  mergedNote,
+  rebuildJobNow,
+  STATUS,
+  removeJob,
+  runJobNow,
+  updateJob,
+  usd,
+  type Job,
+  type JobChange,
+  type JobEvent,
+  type JobsView,
+  type JobWhen,
+  type RunBrief,
+} from '../../api/jobs'
 import { hideAmounts, useShowCosts } from '../../lib/costs'
 import { clockInBrowser, fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -47,9 +66,9 @@ function StatePill({ j }: { j: Job }) {
         Stopped for the day
       </span>
     )
-  if (j.unusable)
+  if (j.agentOff || j.unusable)
     return (
-      <span className="rk-pill" data-tone="warn" title={j.unusable} data-testid="job-state">
+      <span className="rk-pill" data-tone="warn" title={sentence(j.agentOff || j.unusable || '')} data-testid="job-state">
         On, cannot run
       </span>
     )
@@ -59,6 +78,15 @@ function StatePill({ j }: { j: Job }) {
     </span>
   )
 }
+
+/** A reason as a sentence: "the Summarizer is off" → "The Summarizer is off". */
+const sentence = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
+
+/** Where its agent is turned on: the agent's drawer in Administration › AI › Agents (JB-25). */
+const agentHref = (j: Job) => aiHref('agents', j.agent ? [j.agent] : [])
+
+/** A run that failed or was stopped: the Jobs tab says why beside it (JB-25). */
+const stopped = (r: RunBrief) => r.status !== 'running' && r.status !== 'ok' && r.status !== 'skipped' && r.status !== 'missed'
 
 /**
  * When a job runs, as the list shows it: the schedule, its zone under it,
@@ -92,6 +120,17 @@ function LastCell({ j }: { j: Job }) {
     )
   }
   if (!j.last) return <span style={{ color: 'var(--fg3)' }}>Never</span>
+  // A failed or stopped run says so, and why, linked to the run (JB-25).
+  if (stopped(j.last))
+    return (
+      <>
+        {fmtTs(j.last.started)} ·{' '}
+        <a className="rk-link" href={runHref(j.last.id)} onClick={(e) => e.stopPropagation()} style={{ color: 'var(--err)' }} data-testid="job-last-failed">
+          {STATUS[j.last.status]?.[0] ?? j.last.status}
+          {j.last.note ? `: ${mergedNote(j.last.note)}` : ''}
+        </a>
+      </>
+    )
   return (
     <>
       {fmtTs(j.last.started)} ·{' '}
@@ -182,6 +221,14 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
                     <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
                       {j.external ? `Set in ${j.where ?? 'Administration'}${j.external.detail ? ` · ${j.external.detail}` : ''}` : `${j.agentName ? '' : 'No agent · '}${clustersText(j, names)}`}
                     </span>
+                    {j.agentOff && (
+                      <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 12 }} data-testid="job-agent-off">
+                        {sentence(j.agentOff)}:{' '}
+                        <a className="rk-link" href={agentHref(j)} onClick={(e) => e.stopPropagation()}>
+                          turn it on
+                        </a>
+                      </span>
+                    )}
                   </td>
                   <td style={td}>
                     <WhenCell j={j} />
@@ -311,8 +358,10 @@ function JobActions({ job, onSaved, onToast }: { job: Job; onSaved: (j: Job) => 
       setBusy(false)
     }
   }
+  // Turning on a job whose agent is off is allowed (the agent may be turned on next); the toast says its runs fail until then (JB-25).
+  const resumed = job.agentOff ? `${job.label} resumed. ${sentence(job.agentOff)}: its runs fail until it is turned on in Administration › AI › Agents.` : `${job.label} resumed.`
   const setOn = (on: boolean) =>
-    act(on ? `${job.label} resumed.` : `${job.label} paused.`, async () => {
+    act(on ? resumed : `${job.label} paused.`, async () => {
       onSaved(await updateJob(job.id, { on }))
     })
   const runNow = () =>
@@ -401,9 +450,27 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
   const toggleEvent = (e: JobEvent, on: boolean) => set({ events: on ? [e] : draft.events.filter((x) => x !== e) })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="job-panel">
+      {job.agentOff && (
+        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-agent-off-callout">
+          {sentence(job.agentOff)}: Run now is refused, and {job.on ? 'its runs fail' : 'its runs would fail once it is on'}, until it is turned on in{' '}
+          <a className="rk-link" href={agentHref(job)}>
+            Administration › AI › Agents › {job.agentName ?? job.agent}
+          </a>
+          .
+        </p>
+      )}
       {job.unusable && (
         <p className="rk-callout" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-unusable">
           {job.unusable}
+        </p>
+      )}
+      {job.last && stopped(job.last) && (
+        <p className="rk-callout" data-tone="err" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-last-failed-callout">
+          Its last run, {fmtTs(job.last.started)}: {STATUS[job.last.status]?.[0] ?? job.last.status}
+          {job.last.note ? ` · ${mergedNote(job.last.note).replace(/\.$/, '')}` : ''}.{' '}
+          <a className="rk-link" href={runHref(job.last.id)}>
+            Open the run
+          </a>
         </p>
       )}
       {job.stoppedToday && (

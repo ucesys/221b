@@ -761,4 +761,24 @@ var (
 	ErrBudget = errors.New("the job's budget is spent")
 	// ErrRunning is a run asked while the job's last is still going.
 	ErrRunning = errors.New("the job's last run is still going")
+	// ErrAgentOff is an agent turned off, as an AgentChecker says it
+	// (AgentOff).
+	ErrAgentOff = errors.New("the agent is off")
+	// ErrNoAgent is a run asked by hand of a job whose agent cannot answer
+	// now, off or with a provider that cannot (JB-25): refused before it
+	// starts, so no run is recorded; its words say why and what to do.
+	ErrNoAgent = errors.New("the job's agent cannot answer")
 )
+
+// saidError is an error in its own words that is one of the service's.
+type saidError struct {
+	msg string
+	is  error
+}
+
+func (e saidError) Error() string        { return e.msg }
+func (e saidError) Is(target error) bool { return target == e.is }
+
+// AgentOff is an agent turned off, in the agents' own words ("the
+// Summarizer is off"): an error that is ErrAgentOff.
+func AgentOff(why string) error { return saidError{msg: why, is: ErrAgentOff} }

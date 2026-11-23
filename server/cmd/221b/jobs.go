@@ -250,6 +250,16 @@ type agentRunner struct {
 
 func (a agentRunner) Usable(agent, cluster string) string { return a.ai.Usable(agent, cluster) }
 
+// Available says whether an agent can answer at all (JB-25): one turned
+// off is jobs.AgentOff, in the agents' words.
+func (a agentRunner) Available(ctx context.Context, agent string) error {
+	err := a.ai.Available(ctx, agent)
+	if errors.Is(err, ai.ErrUnavailable) {
+		return jobs.AgentOff(err.Error())
+	}
+	return err
+}
+
 // Blind says whether the reader identity can read nothing of a cluster
 // (JB-23), so an audit says so in place of finding nothing.
 func (a agentRunner) Blind(ctx context.Context, cluster string, reader jobs.Settings) (bool, error) {

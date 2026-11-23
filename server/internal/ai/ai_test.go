@@ -196,6 +196,14 @@ func TestProvidersAndAgents(t *testing.T) {
 	if err := w.ai.SaveAgent(ctx, Troubleshooter, AgentChange{AgentSettings: AgentSettings{On: &off}}); err != nil {
 		t.Fatal(err)
 	}
+	// Asked before a job's run by hand (JB-25): off says so; one that
+	// works on some clusters only can answer.
+	if err := w.ai.Available(ctx, Troubleshooter); !errors.Is(err, ErrUnavailable) || err.Error() != "the Troubleshooter is off" {
+		t.Fatalf("an agent off, available: %v", err)
+	}
+	if err := w.ai.Available(ctx, Auditor); err != nil {
+		t.Fatalf("an agent on, on prod only: %v", err)
+	}
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
 	for _, r := range s.Roster {
 		if r.ID == Troubleshooter || r.ID == Sherlock || r.ID == Summarizer {

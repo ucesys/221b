@@ -97,7 +97,7 @@ func failErr(w http.ResponseWriter, err error) {
 		code = http.StatusBadRequest
 	case errors.Is(err, ErrDenied):
 		code = http.StatusForbidden
-	case errors.Is(err, ErrRunning):
+	case errors.Is(err, ErrRunning), errors.Is(err, ErrNoAgent):
 		code = http.StatusConflict
 	case errors.Is(err, ErrBudget):
 		code = http.StatusTooManyRequests

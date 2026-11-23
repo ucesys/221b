@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -111,6 +112,17 @@ type AgentRunner interface {
 type ReadChecker interface {
 	Blind(ctx context.Context, cluster string, reader Settings) (bool, error)
 }
+
+// AgentChecker is an AgentRunner that also says whether an agent can
+// answer at all, on no cluster in particular (JB-25): nil when it can; an
+// error that is ErrAgentOff when it is turned off; another, in its own
+// words, when its provider cannot (gone, no key).
+type AgentChecker interface {
+	Available(ctx context.Context, agent string) error
+}
+
+// AgentsPath is where a person turns an agent on.
+const AgentsPath = "Administration › AI › Agents"
 
 // NoAccessHint is what a run that could not read a cluster tells the
 // person to do (JB-23).
@@ -526,7 +538,12 @@ type View struct {
 	// stopped it.
 	SpentToday   float64 `json:"spentToday"`
 	StoppedToday string  `json:"stoppedToday,omitempty"`
-	// Unusable says why its agent cannot work now.
+	// AgentOff says its agent is turned off ("the Summarizer is off"), on
+	// or paused (JB-25): Run now is refused, and its scheduled and event
+	// runs fail, until the agent is turned on.
+	AgentOff string `json:"agentOff,omitempty"`
+	// Unusable says why its agent cannot work now otherwise: its provider
+	// cannot answer, or it does not work on the job's cluster.
 	Unusable string `json:"unusable,omitempty"`
 	// External is a job run elsewhere (the backups to S3), with where it
 	// is set.
@@ -632,11 +649,43 @@ func (s *Service) view(ctx context.Context, rec jobsRecord, runs []Run, j Job, k
 	if k.Agent != "" {
 		if s.o.Agents == nil {
 			v.Unusable = "The agents are not running on this console."
-		} else if cl := s.covered(j, nil); len(cl) > 0 {
-			v.Unusable = s.o.Agents.Usable(k.Agent, cl[0])
+		} else {
+			if ac, ok := s.o.Agents.(AgentChecker); ok {
+				if err := ac.Available(ctx, k.Agent); errors.Is(err, ErrAgentOff) {
+					v.AgentOff = err.Error()
+				}
+			}
+			if cl := s.covered(j, nil); v.AgentOff == "" && len(cl) > 0 {
+				v.Unusable = s.o.Agents.Usable(k.Agent, cl[0])
+			}
 		}
 	}
 	return v
+}
+
+// agentReady refuses a run asked by hand of a job whose agent cannot
+// answer now (JB-25): turned off, or with a provider that cannot. Nothing
+// is recorded; the error says why and what to do. Scheduled and event
+// runs are not asked: they run and fail with the note, as nobody is at
+// the screen to read a refusal.
+func (s *Service) agentReady(ctx context.Context, j Job, k Kind) error {
+	if k.Agent == "" || s.o.Agents == nil {
+		return nil
+	}
+	ac, ok := s.o.Agents.(AgentChecker)
+	if !ok {
+		return nil
+	}
+	err := ac.Available(ctx, k.Agent)
+	if err == nil {
+		return nil
+	}
+	name := firstNonEmpty(k.AgentName, k.Agent)
+	if errors.Is(err, ErrAgentOff) {
+		return saidError{msg: fmt.Sprintf("The %s runs on the %s, which is off: turn it on in %s.", labelOf(j, k), name, AgentsPath), is: ErrNoAgent}
+	}
+	why := strings.TrimRight(strings.TrimSpace(err.Error()), ".")
+	return saidError{msg: fmt.Sprintf("The %s runs on the %s, which cannot answer now: %s.", labelOf(j, k), name, why), is: ErrNoAgent}
 }
 
 // List lists the jobs.

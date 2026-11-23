@@ -362,3 +362,76 @@ describe("a job's schedule beside the browser's time (R2-16)", () => {
     expect(screen.getByTestId('job-when-zone').textContent).toBe(browser)
   })
 })
+
+// --- A job whose agent is off (JB-25, the owner, November 23) ---
+describe('AIOps › Jobs: a job whose agent is off, and a failed last run', () => {
+  const digest: api.Job = {
+    ...audit,
+    id: 'daily-digest',
+    kind: 'daily-digest',
+    label: 'Daily digest',
+    agent: 'summarizer',
+    agentName: 'Summarizer',
+    on: false,
+    nextText: 'Paused',
+    next: undefined,
+    last: undefined,
+    agentOff: 'the Summarizer is off',
+  }
+  const failed: api.Job = { ...audit, last: { ...audit.last!, id: 'run-9', status: 'failed', note: 'the Auditor is off', findings: 0 } }
+  beforeAll(() => {
+    Element.prototype.scrollTo = () => {}
+  })
+  beforeEach(() => {
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...view(), jobs: [failed, digest] })
+    vi.mocked(api.describeJobSchedule).mockResolvedValue({ description: 'Every day at 02:00, Europe/Berlin', next: ['2026-11-06T01:00:00Z'] })
+    vi.mocked(api.fetchJobRuns).mockResolvedValue({ runs: [], total: 0 })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('shows Run now’s refusal in the drawer, and no “started”', async () => {
+    const refusal = 'The Daily digest runs on the Summarizer, which is off: turn it on in Administration › AI › Agents.'
+    vi.mocked(api.runJobNow).mockRejectedValue(new Error(refusal))
+    const toast = vi.fn()
+    render(<JobsTab route={route('daily-digest')} onToast={toast} />)
+    const drawer = await screen.findByTestId('job-drawer')
+    fireEvent.click(within(drawer).getByTestId('job-run-now'))
+    expect((await within(drawer).findByTestId('job-action-error')).textContent).toBe(refusal)
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('says on the row and in the drawer that the agent is off, with a link to it, and warns on turning it on', async () => {
+    vi.mocked(api.updateJob).mockImplementation(async () => ({ ...digest, on: true }))
+    const toast = vi.fn()
+    render(<JobsTab route={route('daily-digest')} onToast={toast} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const row = rows.find((r) => r.dataset.job === 'daily-digest')!
+    const off = within(row).getByTestId('job-agent-off')
+    expect(off.textContent).toBe('The Summarizer is off: turn it on')
+    expect(off.getAttribute('data-tone')).toBe('warn')
+    expect(within(off).getByRole('link').getAttribute('href')).toContain('/ai/agents/summarizer')
+    expect(within(rows.find((r) => r.dataset.job === 'nightly-audit')!).queryByTestId('job-agent-off')).toBeNull()
+    const callout = await screen.findByTestId('job-agent-off-callout')
+    expect(callout.textContent).toContain('The Summarizer is off: Run now is refused')
+    expect(within(callout).getByRole('link').getAttribute('href')).toContain('/ai/agents/summarizer')
+    fireEvent.click(screen.getByTestId('job-toggle'))
+    await waitFor(() => expect(api.updateJob).toHaveBeenCalledWith('daily-digest', { on: true }))
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Daily digest resumed. The Summarizer is off: its runs fail until it is turned on in Administration › AI › Agents.'))
+    // On, it cannot run: the state says so.
+    expect(within(row).getByTestId('job-state').textContent).toBe('On, cannot run')
+  })
+
+  it('shows a failed last run’s reason on the row and in the drawer, linked to the run', async () => {
+    render(<JobsTab route={route('nightly-audit')} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const last = within(rows.find((r) => r.dataset.job === 'nightly-audit')!).getByTestId('job-last-failed')
+    expect(last.textContent).toBe('Failed: the Auditor is off')
+    expect(last.getAttribute('href')).toContain('run-9')
+    const callout = await screen.findByTestId('job-last-failed-callout')
+    expect(callout.textContent).toContain('Failed · the Auditor is off. Open the run')
+    expect(within(callout).getByRole('link').getAttribute('href')).toContain('run-9')
+  })
+})
