@@ -485,6 +485,9 @@ type draftText struct {
 	notes      map[string]string
 	parts      map[string]string
 	partsGiven bool
+	// inForce says they are the instructions in force, as a test with
+	// live runs them: its records say so, not "draft" (F7, AI-54).
+	inForce bool
 }
 
 // Preview is an agent as it would answer on a cluster with the house
@@ -561,10 +564,10 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 		return sherlock.Agent{}, fmt.Errorf("there is no agent %q", id)
 	}
 	if id != Sherlock && !s.on(snap, info, "") {
-		return sherlock.Agent{}, fmt.Errorf("the %s is off", info.Name)
+		return sherlock.Agent{}, unavailable("the " + info.Name + " is off")
 	}
 	if id != Sherlock && cluster != "" && !s.settingsOf(snap, id).worksOn(cluster) {
-		return sherlock.Agent{}, fmt.Errorf("the %s does not work on this cluster", info.Name)
+		return sherlock.Agent{}, unavailable("the " + info.Name + " does not work on this cluster")
 	}
 	set := s.settingsOf(snap, id)
 	p, ok := s.provider(snap, set.Provider)
@@ -596,6 +599,9 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	}
 	if over != nil && over.notes != nil {
 		notes = over.notes
+	}
+	if over != nil && over.inForce {
+		version = "in force"
 	}
 	view := id == Sherlock && s.sherlockSettings().ChangesView()
 	roster := s.roster(snap, id, cluster)
@@ -899,12 +905,23 @@ func (s *Service) View(ctx context.Context) Overview {
 	return o
 }
 
+// unavailableError is ErrUnavailable in its own words.
+type unavailableError string
+
+func (e unavailableError) Error() string        { return string(e) }
+func (e unavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+func unavailable(why string) error { return unavailableError(why) }
+
 // ---------- changes ----------
 
 // ErrInvalid is a change that is not valid; ErrNotFound one about nothing.
 var (
 	ErrInvalid  = errors.New("not valid")
 	ErrNotFound = errors.New("not found")
+	// ErrUnavailable is an agent asked for while it is off, or on a
+	// cluster it does not work on: the error says which (F4, AI-54).
+	ErrUnavailable = errors.New("the agent is not available")
 	// ErrSameProvider is the Script reviewer put on the Automation
 	// author's provider without the single-provider confirmation.
 	ErrSameProvider = errors.New("the Script reviewer is on the same provider as the Automation author: an independent second opinion needs another provider. Pick another, or confirm this console has only one")

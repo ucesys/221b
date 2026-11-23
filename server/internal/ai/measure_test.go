@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -137,5 +138,31 @@ func TestATestRunCountsItsHandOversAI53(t *testing.T) {
 	alone, _, _, err := w.ai.Estimate(ctx, Sherlock, TestOptions{Draft: true})
 	if err != nil || withHandOvers < 1.5*alone {
 		t.Fatalf("the estimate with hand-overs $%v, alone $%v: %v", withHandOvers, alone, err)
+	}
+}
+
+// A test of the instructions in force says so in its records, not
+// "draft" (AI-54, F7); a test of the draft still says draft.
+func TestALiveTestSaysInstructionsInForceAI54(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	if _, err := w.ai.SaveTest(ctx, crashCase("live", ""), "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{By: "ann"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.audit.String(); !strings.Contains(got, "instructions in force") || strings.Contains(got, "instructions draft") {
+		t.Fatalf("the live test's records:\n%s", got)
+	}
+	w.audit.Reset()
+	if _, err := w.ai.SaveDraft(ctx, Troubleshooter, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.audit.String(); !strings.Contains(got, "instructions draft") || strings.Contains(got, "instructions in force") {
+		t.Fatalf("the draft's test's records:\n%s", got)
 	}
 }

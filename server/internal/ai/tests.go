@@ -404,7 +404,7 @@ func (s *Service) testHouse(snap snapshot, id string, draft bool) (*draftText, i
 	ap := snap.prompts.Agents[id]
 	if !draft {
 		house := ap.LiveHouse(s.Baseline(id))
-		t := &draftText{house: &house, notes: map[string]string{}}
+		t := &draftText{house: &house, notes: map[string]string{}, inForce: true}
 		if ap != nil {
 			t.parts, t.partsGiven = ap.Parts, true
 			if ap.Notes != nil {

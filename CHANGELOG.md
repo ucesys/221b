@@ -28,6 +28,7 @@ The schema's step `0052` adds columns only (an agent's effort and Auto's floor, 
 - **Sherlock's answer is no longer lost to a view it could not open** (AI-51): the answer Sherlock wrote before opening a view stays the answer, with the line it wrote after the view call (such as "The view couldn't be opened…") after it; before, only that line was left.
 - **A test case's tool may be called by the agent asked** (AI-52): *calls get_pod* holds when the agent hands the question over and the agent it asked calls `get_pod`; Sherlock's base case of a crash loop failed at every effort because Sherlock hands such a question to the Troubleshooter.
 - **A test run's cost and its estimate count the agents it hands work to** (AI-53): the test dialog said up to half less than the console spent when a case was handed over.
+- **Testing an agent that is off answers 409** with "the Summarizer is off", not 500 (AI-54); a test of the instructions in force says *instructions in force* in each agent call's audit record, not *instructions draft*.
 
 ## 0.13.0 (2026-11-22)
 
