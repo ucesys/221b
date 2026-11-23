@@ -56,6 +56,10 @@ type knowledgeOptions struct {
 	database *db.DB
 	// embedder embeds with the model chosen for the search (KN-55).
 	embedder knowledge.Embedder
+	// clusterVersions are the versions the clusters run, and volume the
+	// database's volume's size (KN-56, KN-58).
+	clusterVersions func(context.Context) []string
+	volume          int64
 }
 
 // copyWiki copies the wiki the temporary ConfigMap store of a release
@@ -132,6 +136,10 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 		WikiStore: o.wiki,
 		Database:  o.database,
 		Embedder:  o.embedder,
+		// The sources that follow the clusters keep to their versions
+		// (KN-56); the index warns at 80 % of the volume (KN-58).
+		ClusterVersions: o.clusterVersions,
+		VolumeBytes:     o.volume,
 		// Mycroft's first import (Phase 12, GS-11): a source is read once
 		// it is added.
 		ReadNew: true,
@@ -157,7 +165,7 @@ func knowledgeHits(svc *knowledge.Service) func(ctx context.Context, q string, l
 		}
 		out := make([]sherlock.KnowledgeHit, 0, len(hits))
 		for _, h := range hits {
-			out = append(out, sherlock.KnowledgeHit{Kind: h.Kind, Title: h.Title, Path: h.Path, Date: h.Date, Stale: h.Stale, Version: h.Version, URL: h.URL, Text: h.Text})
+			out = append(out, sherlock.KnowledgeHit{Kind: h.Kind, Title: h.Title, Path: h.Path, Date: h.Date, Stale: h.Stale, Version: h.Version, URL: h.URL, Text: h.Text, Heading: h.Heading, Trust: h.Trust})
 		}
 		return out, nil
 	}
@@ -817,7 +825,8 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	if err := w.copyWiki(ctx, wikiStore); err != nil {
 		return err
 	}
-	svc, l, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{wiki: wikiStore, database: w.database, embedder: knowledgeEmbedder{w.aiSvc.Service}, auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
+	svc, l, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{wiki: wikiStore, database: w.database, embedder: knowledgeEmbedder{w.aiSvc.Service},
+		clusterVersions: w.clusterVersions, volume: volumeBytes(cfg.DatabaseVolume, log), auditLog: w.auditLog, creds: w.creds, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
 		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log,
 		wrap: func(b kv.Backend) kv.Backend {
 			// Mycroft's sources, the syncs' state and the runs of page

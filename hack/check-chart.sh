@@ -180,6 +180,10 @@ database_modes() {
     ! has '^kind: StatefulSet$' < "$ext" &&
     grep -A1 'name: DB_HOST' "$ext" | has '"pg.example.com"' && grep -A1 'name: DB_PORT' "$ext" | has '"6432"' &&
     grep -A1 'name: DB_MAX_CONNECTIONS' "$ext" | has '"10"' &&
+    # The knowledge index warns at 80 % of the volume (KN-58): the bundled
+    # database's storage.size; an external one's volumeSize, when set.
+    grep -A1 'name: DB_VOLUME_SIZE' "$d" | has '"10Gi"' && ! has 'DB_VOLUME_SIZE' < "$ext" &&
+    render_db k8s-console --set clusterName=ci --set database.mode=external --set database.external.host=h --set database.external.volumeSize=100Gi | grep -A1 'name: DB_VOLUME_SIZE' | has '"100Gi"' &&
     grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
     grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
     netpol "$ext" | has 'port: 6432$' &&

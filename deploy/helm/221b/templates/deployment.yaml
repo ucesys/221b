@@ -151,6 +151,9 @@ spec:
               value: /etc/221b/db-ca/ca.crt
             - name: DB_POLL_INTERVAL
               value: {{ .Values.database.pollInterval | quote }}
+            # The knowledge index warns at 80 % of the volume (KN-58).
+            - name: DB_VOLUME_SIZE
+              value: {{ .Values.database.bundled.storage.size | quote }}
             {{- else if eq $dbMode "external" }}
             {{- $e := .Values.database.external }}
             # The database (Phase 13): one the operator runs.
@@ -196,6 +199,11 @@ spec:
             {{- end }}
             - name: DB_POLL_INTERVAL
               value: {{ .Values.database.pollInterval | quote }}
+            {{- with $e.volumeSize }}
+            # The knowledge index warns at 80 % of it (KN-58).
+            - name: DB_VOLUME_SIZE
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             # The AI agents (Phase 12): the chart's baseline instructions
             # mounted as files.

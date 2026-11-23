@@ -106,6 +106,18 @@ type Source struct {
 	// space, repository, bucket, web site or live source signs in with, by
 	// id; "" is none, or a bucket's pod identity (0.12.1, CR-11).
 	Credential string `json:"credential,omitempty"`
+	// --- Knowledge at scale (phase-13.1-ai, part B; KN-56, KN-57) ---
+	// Trust is how its passages rank and whether Mycroft writes pages
+	// from it: TrustHigh, TrustNormal or TrustLow, set by a SuperAdmin;
+	// "" is its kind's default (trustLevel).
+	Trust string `json:"trust,omitempty"`
+	// Product and ProductVersion are what its documents are about (rke2,
+	// 1.33), where a document's front matter or path says nothing; and
+	// FollowsClusters keeps its passages to the versions the clusters
+	// run.
+	Product         string `json:"product,omitempty"`
+	ProductVersion  string `json:"productVersion,omitempty"`
+	FollowsClusters bool   `json:"followsClusterVersions,omitempty"`
 	// CredMigrated says the source names its credential: the one it kept
 	// in the knowledge Secret before 0.12.1 was moved to Administration ›
 	// Credentials, or it had none (CR-12). Its Auth and Username, and that
@@ -596,6 +608,7 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		x.PinnedCert = nil
 		if create {
 			x.Added, x.AddedBy = s.o.Now().UTC(), c.label()
+			x.Trust, x.Product, x.ProductVersion, x.FollowsClusters = "", "", "", false
 			// Exclusions are made in AIOps › Mycroft › Sources only.
 			x.Excluded, x.MigratedFrom = nil, nil
 			set.Sources = append(set.Sources, x)
@@ -605,6 +618,9 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 				return invalid("a source keeps its kind; add a new one instead")
 			}
 			x.Added, x.AddedBy = old.Added, old.AddedBy
+			// Its index settings are set apart, by SetSourceIndex (KN-56,
+			// KN-57).
+			x.Trust, x.Product, x.ProductVersion, x.FollowsClusters = old.Trust, old.Product, old.ProductVersion, old.FollowsClusters
 			// The dialog does not hold the exclusions: they stay as they are.
 			x.Excluded, x.MigratedFrom = old.Excluded, old.MigratedFrom
 			if sameAddr(sourceAddr(old), sourceAddr(x)) || old.Kind == SourceLive && slices.Equal(old.Addresses, x.Addresses) {

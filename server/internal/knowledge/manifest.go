@@ -180,7 +180,11 @@ type Excerpt struct {
 	Date    time.Time `json:"date,omitzero"`
 	URL     string    `json:"url,omitempty"`
 	// Heading is a section's heading path (KN-52).
-	Heading string   `json:"heading,omitempty"`
+	Heading string `json:"heading,omitempty"`
+	// Product and ProductVersion are what its document's front matter
+	// says it is about (KN-56).
+	Product        string   `json:"product,omitempty"`
+	ProductVersion string   `json:"productVersion,omitempty"`
 	Chunks  []string `json:"chunks"`
 }
 

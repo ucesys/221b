@@ -50,6 +50,10 @@ type Config struct {
 	// 13, DB-01): the chart's bundled one or one the operator runs. It is
 	// the only store (DB-69): a console with no host does not start.
 	Database db.Config
+	// DatabaseVolume is the size of the database's volume as a Kubernetes
+	// quantity (10Gi), as the chart knows it: the knowledge index warns
+	// at 80 % of it (KN-58). Empty is not known.
+	DatabaseVolume string
 	// Automation turns Automation on (Phase 11 part 2, ADR-73); it runs
 	// only where SSH is on too.
 	Automation bool
@@ -244,6 +248,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.Database.ClientKeyFile, "db-client-key-file", env("DB_CLIENT_KEY_FILE", ""), "the client certificate's key")
 	fs.IntVar(&c.Database.MaxConns, "db-max-connections", envInt("DB_MAX_CONNECTIONS", 10), "most connections this replica opens to the database")
 	fs.StringVar(&c.Database.ListenerHost, "db-listener-host", env("DB_LISTENER_HOST", ""), "direct address of the database for the listener and the locks, when -db-host is a pooler in transaction mode (empty: -db-host)")
+	fs.StringVar(&c.DatabaseVolume, "db-volume-size", env("DB_VOLUME_SIZE", ""), "the size of the database's volume, a Kubernetes quantity such as 10Gi: the knowledge index warns at 80 % of it (empty: not known)")
 	fs.DurationVar(&c.Database.Poll, "db-poll-interval", envDuration("DB_POLL_INTERVAL", db.DefaultPoll), "how often a replica looks for changes other replicas made, besides being told")
 	// The release that runs the console, which names every ConfigMap of
 	// before (DB-72): the chart passes its namespace and fullname.

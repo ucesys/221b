@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { saveEmbeddings, type KnowledgeView } from '../../api/knowledge'
+import { saveEmbeddings, saveSourceIndex, SOURCE_KIND_LABEL, type KnowledgeView, type SourceIndexView, type TrustLevel } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Select } from '../Select'
 
@@ -25,6 +25,8 @@ export function SearchCard({ v, run, busy }: { v: KnowledgeView; run: Run; busy:
         </p>
       )}
       <Embeddings v={v} run={run} busy={busy} />
+      <Volume v={v} />
+      <SourcesTable v={v} run={run} busy={busy} />
     </section>
   )
 }
@@ -101,5 +103,142 @@ function Embeddings({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolea
         </span>
       )}
     </Row>
+  )
+}
+
+/** A size in bytes, in words. */
+export function bytesText(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KiB', 'MiB', 'GiB', 'TiB']
+  let x = n / 1024
+  let i = 0
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024
+    i++
+  }
+  return `${x < 10 ? x.toFixed(1) : Math.round(x)} ${units[i]}`
+}
+
+/** The database's size against its volume's, and the warning at 80 % (KN-58). */
+function Volume({ v }: { v: KnowledgeView }) {
+  const ix = v.index!
+  const share = ix.volumeBytes ? Math.round((ix.databaseBytes / ix.volumeBytes) * 100) : 0
+  return (
+    <>
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="knowledge-volume">
+        {ix.volumeBytes
+          ? `The database holds ${bytesText(ix.databaseBytes)} of its volume’s ${bytesText(ix.volumeBytes)} (${share} %). The index has no cap: the volume is its limit.`
+          : `The database holds ${bytesText(ix.databaseBytes)}; its volume’s size is not known (database.external.volumeSize), so no warning is given.`}
+      </p>
+      {ix.full && (
+        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} role="alert" data-testid="knowledge-volume-full">
+          The database holds {share} % of its volume. Grow the volume (database.bundled.storage.size), or turn off or remove the largest sources below.
+        </p>
+      )}
+    </>
+  )
+}
+
+const TRUST_WORDS: Record<TrustLevel, string> = { high: 'High', normal: 'Normal', low: 'Low' }
+
+/** Each source's trust, what it is about and what the index holds of it (KN-56 to KN-58). */
+function SourcesTable({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolean }) {
+  const ix = v.index!
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="tb-table" style={{ width: '100%' }} data-testid="knowledge-index-sources">
+        <thead>
+          <tr>
+            <th scope="col">Source</th>
+            <th scope="col" title="Ranks its passages: high above normal above low. Mycroft writes pages from a source of high trust">
+              Trust
+            </th>
+            <th scope="col" title="The product and version its documents are about, where their front matter or path says nothing">
+              About
+            </th>
+            <th scope="col">In the index</th>
+            <th scope="col">
+              <span className="rk-sr">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {ix.sources.map((x) => (
+            <SourceRow key={x.id} x={x} clusters={ix.clusterVersions} run={run} busy={busy} />
+          ))}
+          {ix.pageSize && ix.pageSize.documents > 0 && (
+            <tr data-testid="knowledge-index-pages">
+              <td>
+                <strong>Approved pages</strong>
+              </td>
+              <td>Reviewed</td>
+              <td>—</td>
+              <td>
+                {ix.pageSize.documents.toLocaleString()} pages · {bytesText(ix.pageSize.bytes)}
+              </td>
+              <td />
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SourceRow({ x, clusters, run, busy }: { x: SourceIndexView; clusters: string[]; run: Run; busy: boolean }) {
+  const [trust, setTrust] = useState<'' | TrustLevel>(x.trustDefault ? '' : x.trust)
+  const [product, setProduct] = useState(x.product ?? '')
+  const [version, setVersion] = useState(x.productVersion ?? '')
+  const [follows, setFollows] = useState(!!x.followsClusterVersions)
+  const changed = trust !== (x.trustDefault ? '' : x.trust) || product.trim() !== (x.product ?? '') || version.trim() !== (x.productVersion ?? '') || follows !== !!x.followsClusterVersions
+  const kindDefault = x.trustDefault ? x.trust : (({ git: 'high', upload: 'high', console: 'high', fixes: 'high' } as Record<string, TrustLevel>)[x.kind] ?? 'normal')
+  return (
+    <tr data-testid="knowledge-index-source" data-source={x.id}>
+      <td>
+        <strong>{x.name}</strong>
+        <div className="rk-fhint">{SOURCE_KIND_LABEL[x.kind]}</div>
+      </td>
+      <td>
+        <Select
+          label={`Trust of ${x.name}`}
+          value={trust}
+          onChange={(t) => setTrust(t as '' | TrustLevel)}
+          testId="knowledge-index-trust"
+          options={[
+            ['', `${TRUST_WORDS[kindDefault]} (its kind’s)`],
+            ['high', 'High'],
+            ['normal', 'Normal'],
+            ['low', 'Low'],
+          ]}
+        />
+      </td>
+      <td>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="rk-field" style={{ width: 110 }}>
+            <input value={product} onChange={(e) => setProduct(e.target.value)} placeholder="product" aria-label={`Product of ${x.name}`} data-testid="knowledge-index-product" />
+          </span>
+          <span className="rk-field" style={{ width: 70 }}>
+            <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.33" aria-label={`Version of ${x.name}`} data-testid="knowledge-index-version" />
+          </span>
+        </div>
+        <label className="rk-fhint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }} title={clusters.length ? `The clusters run ${clusters.join(', ')}` : 'No cluster version is known yet'}>
+          <input type="checkbox" checked={follows} onChange={(e) => setFollows(e.target.checked)} data-testid="knowledge-index-follows" />
+          Only the versions the clusters run{clusters.length ? ` (${clusters.join(', ')})` : ''}
+        </label>
+      </td>
+      <td data-testid="knowledge-index-size">
+        {x.documents.toLocaleString()} {x.documents === 1 ? 'document' : 'documents'} · {x.passages.toLocaleString()} passages · {bytesText(x.bytes)}
+      </td>
+      <td>
+        <button
+          className="rk-link"
+          disabled={busy || !changed}
+          onClick={() => void run(() => saveSourceIndex(x.id, { trust, product: product.trim(), productVersion: version.trim(), followsClusterVersions: follows }), 'Saved.')}
+          data-testid="knowledge-index-save"
+        >
+          Save
+        </button>
+      </td>
+    </tr>
   )
 }

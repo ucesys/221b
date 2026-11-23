@@ -209,6 +209,44 @@ export interface IndexView {
   embedError?: string
   embeddedAt?: string
   providers: EmbeddingProvider[]
+  /** Each source's trust, what it is about and what the index holds of it (KN-56 to KN-58). */
+  sources: SourceIndexView[]
+  pageSize?: SourceSize
+  /** The database's size, its volume's as the chart says (none: not known), and whether it holds 80 % of it or more. */
+  databaseBytes: number
+  volumeBytes?: number
+  full?: boolean
+  /** The versions the clusters run, major.minor. */
+  clusterVersions: string[]
+}
+
+export type TrustLevel = 'high' | 'normal' | 'low'
+
+export interface SourceSize {
+  id: string
+  documents: number
+  passages: number
+  embedded: number
+  bytes: number
+}
+
+export interface SourceIndexView extends SourceSize {
+  name: string
+  kind: SourceKind
+  trust: TrustLevel
+  /** The trust is its kind's. */
+  trustDefault?: boolean
+  product?: string
+  productVersion?: string
+  followsClusterVersions?: boolean
+}
+
+/** A source's index settings, as a SuperAdmin sets them (KN-56, KN-57): trust '' is its kind's. */
+export interface SourceIndexSettings {
+  trust: '' | TrustLevel
+  product: string
+  productVersion: string
+  followsClusterVersions: boolean
 }
 
 export interface KnowledgeView {
@@ -383,6 +421,8 @@ const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
+/** Sets a source's trust and what it is about (KN-56, KN-57). */
+export const saveSourceIndex = (id: string, s: SourceIndexSettings) => call<KnowledgeSource>(base + 'sources/' + enc(id) + '/index', { method: 'PUT', body: JSON.stringify(s) })
 /** Chooses the embedding model of the search, or none (KN-55). */
 export const saveEmbeddings = (e: EmbeddingSettings) => call<KnowledgeView>(base + 'embeddings', { method: 'PUT', body: JSON.stringify(e) })
 /** Adds a source, naming its credential (CR-11): no secret goes with it. */

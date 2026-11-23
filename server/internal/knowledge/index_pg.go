@@ -61,7 +61,7 @@ type indexDoc struct {
 
 // docsOf are the documents of a copy of the wiki: its approved pages (a
 // retired one is never searched, KN-24) and its excerpts that hold text.
-func docsOf(files map[string]File, m *Manifest) []indexDoc {
+func docsOf(files map[string]File, m *Manifest, sources map[string]Source) []indexDoc {
 	if m == nil {
 		m = newManifest()
 	}
@@ -82,7 +82,10 @@ func docsOf(files map[string]File, m *Manifest) []indexDoc {
 				continue
 			}
 			d := indexDoc{path: f.Path, kind: "excerpt", source: e.Source, itemKey: e.Key, title: e.Title, heading: e.Heading, version: e.Version, url: e.URL, date: e.Date, passages: e.Chunks}
-			d.hash = hashOf(f.Body)
+			// Its tags (KN-56): a change of its source's settings indexes
+			// it again.
+			d.product, d.productVersion = tagsOf(e, sources[e.Source])
+			d.hash = hashOf([]byte(string(f.Body) + "\x00" + d.product + "\x00" + d.productVersion))
 			out = append(out, d)
 		}
 	}
@@ -221,6 +224,12 @@ type IndexQuery struct {
 	// Vector is the query's embedding by Model, for semantic search.
 	Vector []float32
 	Model  string
+	// Follow are the sources kept to the versions in Minors (KN-56): a
+	// passage of theirs of another version is left out; none of a version
+	// is kept.
+	Follow, Minors []string
+	// Weight weights a passage's rank (KN-57); nil weighs all alike.
+	Weight func(indexHit) float64
 }
 
 func (q IndexQuery) mode(m string) bool { return len(q.Modes) == 0 || slices.Contains(q.Modes, m) }
@@ -258,10 +267,16 @@ func tsQuery(text string) string {
 // docFilter is the condition on knowledge_documents d a search keeps,
 // its arguments from $first on.
 func docFilter(q IndexQuery, first int) (string, []any) {
-	if q.Kind == "" {
-		return "true", nil
+	where, args := []string{"true"}, []any{}
+	if q.Kind != "" {
+		args = append(args, q.Kind)
+		where = append(where, fmt.Sprintf("d.kind = $%d", first+len(args)-1))
 	}
-	return fmt.Sprintf("d.kind = $%d", first), []any{q.Kind}
+	if len(q.Follow) > 0 && len(q.Minors) > 0 {
+		args = append(args, q.Follow, q.Minors)
+		where = append(where, fmt.Sprintf("NOT (coalesce(d.knowledge_source_id, '') = ANY($%d) AND d.product_version <> '' AND NOT (d.product_version = ANY($%d)))", first+len(args)-2, first+len(args)-1))
+	}
+	return strings.Join(where, " AND "), args
 }
 
 // keyword ranks the passages whose words match the query's.
@@ -325,7 +340,7 @@ func (x *PGIndex) Search(ctx context.Context, q IndexQuery) ([]indexHit, error) 
 		}
 		fuse(ranked)
 	}
-	return x.hits(ctx, score, q.Limit, nil)
+	return x.hits(ctx, score, q.Limit, q.Weight)
 }
 
 // hits reads the passages scored, weights each by weight (nil: 1), keeps

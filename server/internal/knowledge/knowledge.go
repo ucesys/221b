@@ -199,6 +199,14 @@ type Options struct {
 	// Embedder embeds the passages and the queries with the embedding
 	// model chosen (KN-55); nil offers none.
 	Embedder Embedder
+	// ClusterVersions are the Kubernetes versions the clusters run
+	// (v1.33.5+rke2r1), for the sources that follow them (KN-56); nil is
+	// none known.
+	ClusterVersions func(context.Context) []string
+	// VolumeBytes is the size of the database's volume, as the chart
+	// says (database.bundled.storage.size, or database.external.volumeSize);
+	// 0 is not known. The index warns at 80 % of it (KN-58).
+	VolumeBytes int64
 	// Model is how Mycroft is asked; nil reads sources and keeps their
 	// excerpts, but writes no pages.
 	Model Completer

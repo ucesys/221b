@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -40,4 +43,33 @@ func (e knowledgeEmbedder) Providers(ctx context.Context) []knowledge.EmbeddingP
 		out = append(out, knowledge.EmbeddingProvider{ID: p.ID, Name: p.Name, Endpoint: p.Resolved.Endpoint})
 	}
 	return out
+}
+
+// clusterVersions are the Kubernetes versions the clusters run, for the
+// knowledge sources that follow them (KN-56).
+func (w *wiring) clusterVersions(context.Context) []string {
+	var out []string
+	if w.manager == nil {
+		return out
+	}
+	for _, c := range w.manager.List() {
+		if c.Version != "" {
+			out = append(out, c.Version)
+		}
+	}
+	return out
+}
+
+// volumeBytes is the database volume's size the chart gives (KN-58); 0
+// when it gives none or one that is not a quantity, which is logged.
+func volumeBytes(size string, log *slog.Logger) int64 {
+	if size == "" {
+		return 0
+	}
+	q, err := resource.ParseQuantity(size)
+	if err != nil {
+		log.Warn("the database's volume size is not a quantity; the knowledge index does not warn when the database fills it", "size", size, "err", err)
+		return 0
+	}
+	return q.Value()
 }

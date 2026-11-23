@@ -212,7 +212,7 @@ func (s *Service) reindexWith(ctx context.Context) {
 	s.index = idx
 	s.mu.Unlock()
 	if s.pg != nil {
-		s.docs.Store(int64(len(docsOf(files, m))))
+		s.docs.Store(int64(len(docsOf(files, m, nil))))
 		s.kickIndex()
 	}
 }

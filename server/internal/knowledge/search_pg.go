@@ -73,15 +73,15 @@ func (s *Service) SyncIndex(ctx context.Context) (IndexSync, error) {
 		}
 		s.sourcesSaved.Store(true)
 	}
-	sources := map[string]bool{}
+	sources, bySource := map[string]bool{}, map[string]Source{}
 	for _, x := range set.Sources {
-		sources[x.ID] = true
+		sources[x.ID], bySource[x.ID] = true, x
 	}
 	s.mu.RLock()
 	files, m := s.files, s.manifest
 	s.mu.RUnlock()
 	s.pg.ensureExtensions(ctx)
-	res, err := s.pg.Sync(ctx, docsOf(files, m), sources)
+	res, err := s.pg.Sync(ctx, docsOf(files, m, bySource), sources)
 	if err == nil && (res.Written > 0 || res.Deleted > 0) {
 		s.o.Logger.Info("the knowledge index follows the wiki", "written", res.Written, "deleted", res.Deleted, "kept", res.Kept)
 	}
@@ -102,6 +102,27 @@ func (s *Service) searchModes(ctx context.Context, query, kind string, limit int
 	if iq.mode(ModeSemantic) {
 		iq.Vector, iq.Model = s.queryVector(ctx, query)
 	}
+	// Each source's trust weighs its passages, and an approved page more
+	// (KN-57); a source that follows the clusters keeps to their versions
+	// (KN-56).
+	levels := map[string]string{}
+	if set, err := s.Settings(ctx); err == nil {
+		for _, x := range set.Sources {
+			levels[x.ID] = x.trustLevel()
+			if x.FollowsClusters {
+				iq.Follow = append(iq.Follow, x.ID)
+			}
+		}
+	}
+	if len(iq.Follow) > 0 {
+		iq.Minors = s.clusterMinors(ctx)
+	}
+	iq.Weight = func(h indexHit) float64 {
+		if h.reviewed {
+			return weightPage
+		}
+		return trustWeight(levels[h.source])
+	}
 	found, err := s.pg.Search(ctx, iq)
 	if err != nil {
 		return nil, err
@@ -116,14 +137,15 @@ func (s *Service) searchModes(ctx context.Context, query, kind string, limit int
 	}
 	out := make([]Hit, 0, len(found))
 	for _, f := range found {
-		h := Hit{Kind: f.kind, Title: f.title, Date: f.date, Score: math.Round(f.score*1e4) / 1e4, Text: bestText(paragraphs(f.body), q)}
+		h := Hit{Kind: f.kind, Title: f.title, Date: f.date, Score: math.Round(f.score*1e4) / 1e4, Text: bestText(paragraphs(f.body), q),
+			Reviewed: f.reviewed, Heading: f.heading, Product: f.product, ProductVersion: f.productVersion}
 		if f.kind == "page" {
 			h.Path, h.PageKind = f.path, f.pageKind
 			if p, ok := pages[f.path]; ok {
 				h.Stale, h.Sources, h.Date = p.Stale, p.Sources, p.Updated
 			}
 		} else {
-			h.Source, h.Version, h.URL = f.itemKey, f.version, f.url
+			h.Source, h.Version, h.URL, h.Trust = f.itemKey, f.version, f.url, levels[f.source]
 		}
 		out = append(out, h)
 	}

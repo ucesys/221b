@@ -660,6 +660,12 @@ database:
     # The read-write endpoint: for CloudNativePG the cluster's -rw Service,
     # for Patroni the primary's Service or a load balancer that follows it.
     host: ""
+    # The size of the volume the database's data is on, a quantity such as
+    # 100Gi, when it is known: Administration › AI › Knowledge warns when
+    # the database holds 80 % of it (the knowledge index has no cap of its
+    # own, KN-58). Empty: no warning. The bundled database's is its
+    # storage.size.
+    volumeSize: ""
     port: 5432
     # Made beforehand, owned by the user below; the console makes its
     # tables in it. PostgreSQL 16 or later.

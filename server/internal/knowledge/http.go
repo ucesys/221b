@@ -54,6 +54,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET settings", h.getSettings)
 	route("PUT settings", h.putSettings)
 	route("PUT embeddings", h.putEmbeddings)
+	route("PUT sources/{id}/index", h.putSourceIndex)
 	route("POST sources", h.postSource)
 	route("PUT sources/{id}", h.putSource)
 	route("DELETE sources/{id}", h.deleteSource)
@@ -186,6 +187,20 @@ func (h *handler) putEmbeddings(w http.ResponseWriter, r *http.Request, c Caller
 		return
 	}
 	h.getSettings(w, r, c)
+}
+
+// putSourceIndex sets a source's trust and what it is about (KN-56, KN-57).
+func (h *handler) putSourceIndex(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in SourceIndex
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	x, err := h.s.SetSourceIndex(r.Context(), c, r.PathValue("id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, x)
 }
 
 // sourceInput is a source as its dialog sends it: it names its

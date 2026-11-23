@@ -42,6 +42,16 @@ type Hit struct {
 	// Terms are the query's words the hit holds, as searched (lower
 	// case, stemmed), for the snippet to mark.
 	Terms []string `json:"terms,omitempty"`
+	// --- Knowledge at scale (phase-13.1-ai, part B) ---
+	// Reviewed says people approved it: a page is, an excerpt is not
+	// (KN-57). Trust is an excerpt's source's trust level, Heading a
+	// section's heading path, Product and ProductVersion what it is
+	// about (KN-56).
+	Reviewed       bool   `json:"reviewed,omitempty"`
+	Trust          string `json:"trust,omitempty"`
+	Heading        string `json:"heading,omitempty"`
+	Product        string `json:"product,omitempty"`
+	ProductVersion string `json:"productVersion,omitempty"`
 }
 
 type doc struct {

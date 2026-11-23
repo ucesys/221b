@@ -93,6 +93,7 @@ The console needs, of a PostgreSQL you run:
 - **The password** in a Secret (`passwordSecret.name` and `key`). It is read at every new connection, so a rotated Secret needs no restart. Or no password: a token of the cloud's IAM (below).
 - **Connections.** `maxConnections` (20) is what all the console's replicas open between them; each replica also holds up to four direct sessions for its listener and its locks.
 - **`track_commit_timestamp = on`** is recommended; the console warns when it is off.
+- **`volumeSize`** (optional): the size of the volume the data is on, such as `100Gi`. Administration › AI › Knowledge warns when the database holds 80 % of it (the knowledge index has no cap of its own, KN-58); without it there is no warning. The bundled database's is its `storage.size`.
 
 **A token of the cloud's IAM in place of a password** (`iamAuth`, DB-83). On RDS, Aurora PostgreSQL and Cloud SQL the console can sign in with a token made from its own identity, so no password is kept in the cluster. The token is made for each new connection, in the pool's `BeforeConnect` where the password file is read otherwise; it is never logged, and is sent over TLS only. `iamAuth` with `passwordSecret.name`, or with `sslMode: disable`, is refused by the chart and by the console.
 

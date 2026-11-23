@@ -175,6 +175,9 @@ type readItem struct {
 	text   string
 	// doc is a section's document, by key (KN-52).
 	doc string
+	// product and version are what its document's front matter says it
+	// is about (KN-56).
+	product, version string
 }
 
 // Status reads the syncs' status.
@@ -344,11 +347,15 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					gone = append(gone, key)
 				}
 				read, dropped := readSections(m, x, it, st, secs, req.Rebuild, now)
+				if len(secs) == 0 {
+					read = append(read, readItem{source: x, item: it, key: key, text: text})
+				}
+				product, version := frontTags(text)
+				for i := range read {
+					read[i].product, read[i].version = product, version
+				}
 				changed = append(changed, read...)
 				gone = append(gone, dropped...)
-				if len(secs) == 0 {
-					changed = append(changed, readItem{source: x, item: it, key: key, text: text})
-				}
 				res.Read++
 			}
 			if complete {
@@ -403,7 +410,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// The excerpts of what changed, and none for what is gone.
 	var writes []Change
 	for _, ri := range changed {
-		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Heading: m.Items[ri.key].Heading, Chunks: chunks(ri.text)}
+		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Heading: m.Items[ri.key].Heading, Product: ri.product, ProductVersion: ri.version, Chunks: chunks(ri.text)}
 		b, _ := json.Marshal(ex)
 		writes = append(writes, Change{Path: excerptPath(ri.key), Body: b})
 	}

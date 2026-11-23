@@ -151,7 +151,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	}
 	rows, err = q.Query(ctx, `SELECT knowledge_source_id, name, kind, is_enabled, base_url, flavor, email, space, url, branch, path, username, repository_name, bucket, prefix, region,
 			endpoint, is_path_style, credentials_kind, auth, depth, page_limit, migrated_from, ca_pem, pinned_cert_sha256, pinned_cert_subject, pinned_cert_issuer,
-			pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, coalesce(credential_id, ''), is_credential_migrated
+			pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, coalesce(credential_id, ''), is_credential_migrated, trust, product, product_version, follows_cluster_versions
 		FROM knowledge_sources ORDER BY position`)
 	if err != nil {
 		return set, false, err
@@ -165,7 +165,7 @@ func readSettings(ctx context.Context, q db.Querier) (Settings, bool, error) {
 	var notAfter, pinnedAt, added *time.Time
 	if _, err := pgx.ForEachRow(rows, []any{&s.ID, &s.Name, &s.Kind, &on, &s.BaseURL, &s.Flavor, &s.Email, &s.Space, &s.URL, &s.Branch, &s.Path, &s.Username, &s.Repository, &s.Bucket,
 		&s.Prefix, &s.Region, &s.Endpoint, &s.PathStyle, &s.Credentials, &s.Auth, &s.Depth, &s.Pages, &migrated, &s.CAPEM, &sha, &pin.Subject, &pin.Issuer,
-		&notAfter, &pin.By, &pinnedAt, &added, &s.AddedBy, &s.Credential, &s.CredMigrated}, func() error {
+		&notAfter, &pin.By, &pinnedAt, &added, &s.AddedBy, &s.Credential, &s.CredMigrated, &s.Trust, &s.Product, &s.ProductVersion, &s.FollowsClusters}, func() error {
 		x := s
 		x.Off, x.MigratedFrom, x.Added, x.PinnedCert = !on, pgListOf(migrated), pgTimeOf(added), nil
 		x.Addresses, x.Excluded = addresses[x.ID], excluded[x.ID]
@@ -203,8 +203,11 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 			}
 			continue
 		}
-		// Whole: its addresses and exclusions go with the row.
-		b.Queue("DELETE FROM knowledge_sources WHERE knowledge_source_id = $1", s.ID)
+		// Whole, in its row (its key stays, and with it what is keyed to
+		// it: the search index's documents, KN-53); its addresses and
+		// exclusions are written again.
+		b.Queue("DELETE FROM knowledge_source_addresses WHERE knowledge_source_id = $1", s.ID)
+		b.Queue("DELETE FROM source_exclusions WHERE knowledge_source_id = $1", s.ID)
 		var sha string
 		var pin certpin.Pin
 		if s.PinnedCert != nil {
@@ -222,11 +225,23 @@ func writeSettings(ctx context.Context, tx pgx.Tx, old, next Settings) error {
 		}
 		b.Queue(`INSERT INTO knowledge_sources (knowledge_source_id, position, name, kind, is_enabled, base_url, flavor, email, space, url, branch, path, username, repository_name,
 				bucket, prefix, region, endpoint, is_path_style, credentials_kind, auth, depth, page_limit, migrated_from, ca_pem, pinned_cert_sha256, pinned_cert_subject,
-				pinned_cert_issuer, pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, credential_id, is_credential_migrated)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)`,
+				pinned_cert_issuer, pinned_cert_not_after, pinned_by, pinned_at, added_at, added_by, credential_id, is_credential_migrated, trust, product, product_version,
+				follows_cluster_versions)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35,
+				$36, $37, $38, $39)
+			ON CONFLICT (knowledge_source_id) DO UPDATE SET position = excluded.position, name = excluded.name, kind = excluded.kind, is_enabled = excluded.is_enabled,
+				base_url = excluded.base_url, flavor = excluded.flavor, email = excluded.email, space = excluded.space, url = excluded.url, branch = excluded.branch,
+				path = excluded.path, username = excluded.username, repository_name = excluded.repository_name, bucket = excluded.bucket, prefix = excluded.prefix,
+				region = excluded.region, endpoint = excluded.endpoint, is_path_style = excluded.is_path_style, credentials_kind = excluded.credentials_kind,
+				auth = excluded.auth, depth = excluded.depth, page_limit = excluded.page_limit, migrated_from = excluded.migrated_from, ca_pem = excluded.ca_pem,
+				pinned_cert_sha256 = excluded.pinned_cert_sha256, pinned_cert_subject = excluded.pinned_cert_subject, pinned_cert_issuer = excluded.pinned_cert_issuer,
+				pinned_cert_not_after = excluded.pinned_cert_not_after, pinned_by = excluded.pinned_by, pinned_at = excluded.pinned_at, added_at = excluded.added_at,
+				added_by = excluded.added_by, credential_id = excluded.credential_id, is_credential_migrated = excluded.is_credential_migrated, trust = excluded.trust,
+				product = excluded.product, product_version = excluded.product_version, follows_cluster_versions = excluded.follows_cluster_versions`,
 			s.ID, i, s.Name, s.Kind, !s.Off, s.BaseURL, s.Flavor, s.Email, s.Space, s.URL, s.Branch, s.Path, s.Username, s.Repository,
 			s.Bucket, s.Prefix, s.Region, s.Endpoint, s.PathStyle, s.Credentials, s.Auth, s.Depth, s.Pages, pgList(s.MigratedFrom), s.CAPEM, sha, pin.Subject,
-			pin.Issuer, pgAtOrNone(pin.NotAfter), pin.By, pgAtOrNone(pin.At), pgAtOrNone(s.Added), s.AddedBy, cred, s.CredMigrated)
+			pin.Issuer, pgAtOrNone(pin.NotAfter), pin.By, pgAtOrNone(pin.At), pgAtOrNone(s.Added), s.AddedBy, cred, s.CredMigrated, s.Trust, s.Product, s.ProductVersion,
+			s.FollowsClusters)
 		for n, a := range s.Addresses {
 			b.Queue("INSERT INTO knowledge_source_addresses (knowledge_source_id, position, kind, url, space) VALUES ($1, $2, $3, $4, $5)", s.ID, n, a.Kind, a.URL, a.Space)
 		}
