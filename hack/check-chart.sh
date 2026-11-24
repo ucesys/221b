@@ -793,6 +793,12 @@ roles_refused() {
     ! render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://idp.example --set auth.oidc.clientID=c --set auth.oidc.clientSecret=s --set 'auth.oidc.roles.admin[0].group=g' --set 'auth.oidc.roles.admin[0].namespaces[0]=consoles' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.superAdmin[0].namespaces[0]=a' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=system:masters' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.prefixes.local=221b:' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.prefixes.ldap=system:' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=221b:' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=sys' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.userPrefix=system:oidc:' > /dev/null 2>&1 &&
+    render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=oidc:' --set 'auth.kubernetes.userPrefix=oidc:' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.existingSecret= > /dev/null 2>&1 &&
     render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example --set auth.ldap.startTLS=true > /dev/null 2>&1

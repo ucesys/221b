@@ -151,6 +151,21 @@ name of what is wrong. Renders nothing.
 {{- fail (printf "auth.prefixes must be lowercase and end with a colon, such as 221b-local: (not %q)" $p) -}}
 {{- end -}}
 {{- end -}}
+{{- /* A prefix in a reserved name space, or one a name could complete into
+       one ("sys", "221b"), makes an ordinary group a reserved one: with
+       auth.prefixes.local 221b: the local group superadmins is
+       221b:superadmins (RB-17). The console refuses them at start too. */ -}}
+{{- $k8s := $v.auth.kubernetes | default dict -}}
+{{- range $k, $p := dict "auth.prefixes.local" $v.auth.prefixes.local "auth.prefixes.ldap" $v.auth.prefixes.ldap "auth.kubernetes.userPrefix" ($k8s.userPrefix | default "") "auth.kubernetes.groupPrefix" ($k8s.groupPrefix | default "") -}}
+{{- if ne (toString $p) (trim (toString $p)) -}}
+{{- fail (printf "%s %q has white space at an end" $k (toString $p)) -}}
+{{- end -}}
+{{- range $r := list "system:" "221b:" -}}
+{{- if and $p (or (hasPrefix $r (toString $p)) (hasPrefix (toString $p) $r)) -}}
+{{- fail (printf "%s %q would put names in %s, which Kubernetes and 221B reserve: choose another prefix" $k (toString $p) $r) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if eq $v.auth.prefixes.local $v.auth.prefixes.ldap -}}
 {{- fail "auth.prefixes.local and auth.prefixes.ldap must differ, so a local and a directory user of the same name are different subjects" -}}
 {{- end -}}

@@ -117,3 +117,33 @@ func TestBuildDropsPaddedAndControlNames(t *testing.T) {
 		t.Errorf("dropped = %q", dropped)
 	}
 }
+
+// Finding 2 of the roles review: a prefix that starts a reserved name space
+// made an ordinary group a reserved one.
+func TestBuildDropsNamesAPrefixMakesReserved(t *testing.T) {
+	for _, p := range []Prefixes{{Local: "221b:", LDAP: "221b-ldap:"}, {Local: "221b-local:", LDAP: "system:"}, {Local: "221b-local:", LDAP: "221b-ldap:", OIDCGroup: "221b:"}, {Local: "221b-local:", LDAP: "221b-ldap:", OIDCGroup: "sys"}} {
+		for _, src := range []Source{Local, LDAP, OIDC} {
+			got, _ := GroupSet{Prefixes: p}.Build(Identity{Source: src, Groups: []string{"superadmins", "masters", "tem:masters"}})
+			for _, g := range got {
+				if g != GroupConsoleUsers && inReservedSpace(g) {
+					t.Errorf("%+v, %s: asserted %s", p, src, g)
+				}
+			}
+		}
+		if p.Check() == nil {
+			t.Errorf("%+v passes the check", p)
+		}
+	}
+	_, dropped := GroupSet{Prefixes: Prefixes{Local: "221b:"}}.Build(Identity{Source: Local, Groups: []string{"superadmins"}})
+	if !slices.Equal(dropped, []string{"221b:superadmins"}) {
+		t.Errorf("dropped = %q", dropped)
+	}
+	for _, p := range []Prefixes{DefaultPrefixes(), {Local: "corp-local:", LDAP: "corp:", OIDCUser: "oidc:", OIDCGroup: "oidc:"}, {Local: "221b-local:", LDAP: "221b-ldap:", OIDCUser: "-"}} {
+		if err := p.Check(); err != nil {
+			t.Errorf("%+v: %v", p, err)
+		}
+	}
+	if (Prefixes{OIDCUser: "oidc: "}).Check() == nil {
+		t.Error("a padded prefix passes")
+	}
+}

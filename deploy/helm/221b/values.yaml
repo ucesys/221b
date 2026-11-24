@@ -116,7 +116,10 @@ auth:
   # The names Kubernetes sees for people and groups from each source, so a
   # local "ops" and an LDAP "ops" are different subjects. OIDC names carry
   # auth.kubernetes.userPrefix and groupPrefix. Names that start with
-  # system: or 221b: are never accepted from any source.
+  # system: or 221b: are never accepted from any source, and neither is a
+  # prefix here or in auth.kubernetes that starts with one of them or that a
+  # name could complete into one ("sys", "221b"): it would make an ordinary
+  # group a reserved one.
   prefixes:
     local: "221b-local:"
     ldap: "221b-ldap:"

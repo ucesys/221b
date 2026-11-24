@@ -111,6 +111,11 @@ func (w *wiring) wireAuthConfig() error {
 	}
 	authFile.Apply(&authCfg)
 	authCfg.Prefixes.OIDCUser, authCfg.Prefixes.OIDCGroup = cfg.ImpersonateUserPrefix, cfg.ImpersonateGroupPrefix
+	// A prefix in a reserved name space would make an ordinary group a
+	// reserved one (RB-17); the chart refuses it too.
+	if err := authCfg.Prefixes.Check(); err != nil {
+		return err
+	}
 	authCfg.SetupToken = cfg.SetupToken
 	authCfg.AccessTTL = cfg.AccessTTL
 	if authCfg.Mode == auth.ModeLDAP {

@@ -1,6 +1,7 @@
 package roles
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"unicode"
@@ -40,6 +41,47 @@ func (p Prefixes) of(s Source, group bool) string {
 		return p.OIDCGroup
 	}
 	return p.OIDCUser
+}
+
+// reservedSpaces are the name spaces Kubernetes and 221B keep for
+// themselves (RB-17).
+var reservedSpaces = []string{"system:", "221b:"}
+
+// inReservedSpace reports whether a name as Kubernetes sees it, prefix
+// included, is in a reserved name space.
+func inReservedSpace(full string) bool {
+	for _, r := range reservedSpaces {
+		if strings.HasPrefix(full, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// Check says what is wrong with the prefixes, or nil (RB-15, RB-17). A
+// prefix that starts a reserved name space ("221b:", "system:") or that a
+// name could complete into one ("sys", "221b") would turn an ordinary
+// name of its source into a reserved one: auth.prefixes.local "221b:" makes
+// the local group superadmins the group 221b:superadmins. The chart's
+// b221.validate refuses the same prefixes.
+func (p Prefixes) Check() error {
+	for _, x := range []struct{ key, v string }{
+		{"auth.prefixes.local", p.Local}, {"auth.prefixes.ldap", p.LDAP},
+		{"auth.kubernetes.userPrefix", p.OIDCUser}, {"auth.kubernetes.groupPrefix", p.OIDCGroup},
+	} {
+		if x.v == "" {
+			continue
+		}
+		if Unclean(x.v) {
+			return fmt.Errorf("%s %q has white space at an end or a control character", x.key, x.v)
+		}
+		for _, r := range reservedSpaces {
+			if strings.HasPrefix(x.v, r) || strings.HasPrefix(r, x.v) {
+				return fmt.Errorf("%s %q would put names in %s, which Kubernetes and 221B reserve: choose another prefix", x.key, x.v, r)
+			}
+		}
+	}
+	return nil
 }
 
 // User is a person's name as Kubernetes sees it.
@@ -150,8 +192,14 @@ func (g GroupSet) Build(id Identity) (groups, dropped []string) {
 			dropped = append(dropped, name)
 		case !g.allows(id.Source, name):
 		default:
+			// The prefix may make a reserved name of an ordinary one
+			// (Prefixes.Check refuses such prefixes at start): checked again
+			// with it, so system:masters and the 221b: groups never pass.
 			full := g.Prefixes.Group(id.Source, name)
-			if full != "system:masters" && !slices.Contains(groups, full) {
+			switch {
+			case inReservedSpace(full) || Unclean(full):
+				dropped = append(dropped, full)
+			case !slices.Contains(groups, full):
 				groups = append(groups, full)
 			}
 		}
