@@ -138,7 +138,8 @@ type SubjectRow struct {
 	// AccountNamespace is a ServiceAccount's own namespace: two accounts of
 	// one name in two namespaces are two subjects.
 	AccountNamespace string `json:"accountNamespace,omitempty"`
-	Members          int    `json:"members,omitempty"`
+	// Members counts a local group's members, 0 included; nil for others.
+	Members *int `json:"members,omitempty"`
 	Managed          bool   `json:"managed"`
 	Orphaned         bool   `json:"orphaned,omitempty"`
 }
@@ -161,7 +162,9 @@ type RoleRow struct {
 	Can         []string     `json:"can"`
 	Cannot      []string     `json:"cannot"`
 	Subjects    []SubjectRow `json:"subjects"`
-	Holders     Holders      `json:"holders"`
+	// Holders is sent to a SuperAdmin alone (RB-42); nil otherwise, so a
+	// count nobody showed is not read as none.
+	Holders *Holders `json:"holders,omitempty"`
 }
 
 // DefinitionsOf names the definitions in use.
@@ -238,7 +241,11 @@ func BuildRoles(in RolesInput) RolesResponse {
 			missing++
 		}
 		row := RoleRow{ID: id, Name: id.Name(), Description: Description(id, t, in.Options), Scope: Scope(id), Definition: t, ClusterRole: id.ClusterRole(), Present: dep.Present,
-			Can: Can(id, t, in.Options), Cannot: Cannot(id, t, in.Options), Subjects: []SubjectRow{}, Holders: in.Holders[id]}
+			Can: Can(id, t, in.Options), Cannot: Cannot(id, t, in.Options), Subjects: []SubjectRow{}}
+		if in.Holders != nil {
+			h := in.Holders[id]
+			row.Holders = &h
+		}
 		if in.Visible {
 			row.Subjects = in.subjects(id)
 		}
@@ -270,7 +277,8 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 			if !ok {
 				r = &SubjectRow{Kind: s.Kind, Name: name, Source: src, Namespaces: []string{}, Managed: b.Managed, AccountNamespace: k.ns}
 				if src == string(Local) && s.Kind == "Group" && in.Members != nil {
-					r.Members = in.Members(name)
+					n := in.Members(name)
+					r.Members = &n
 				}
 				if src == string(Local) && s.Kind == "User" && in.Exists != nil && !in.Exists(name) {
 					r.Orphaned = true

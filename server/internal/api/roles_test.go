@@ -72,7 +72,7 @@ func TestRolesPages(t *testing.T) {
 		t.Errorf("a Viewer's roles page = %d %+v, want 200 with the four roles", code, seen)
 	}
 	for _, row := range seen.Roles {
-		if row.Holders != (roles.Holders{}) {
+		if row.Holders != nil {
 			t.Errorf("a Viewer sees the holders of %s: %+v", row.ID, row.Holders)
 		}
 	}

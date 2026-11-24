@@ -57,8 +57,8 @@ export interface RoleRow {
   can: string[]
   cannot: string[]
   subjects: Subject[]
-  /** Super roles are held in 221B, so these are the people and groups 221B lists, shown to SuperAdmin only. */
-  holders: { groups: number; users: number }
+  /** Super roles are held in 221B, so these are the people and groups 221B lists, sent to SuperAdmin only. */
+  holders?: { groups: number; users: number }
 }
 
 export interface RolesResponse {

@@ -117,7 +117,7 @@ func TestBuildRolesClassifiesSubjectsByPrefix(t *testing.T) {
 	if s := got["Group/team-a-ops"]; s.Source != "ldap" || !slices.Equal(s.Namespaces, []string{"api", "web"}) || !s.Managed {
 		t.Errorf("ldap group: %+v", s)
 	}
-	if s := got["Group/checkout-ops"]; s.Source != "local" || s.Members != 2 {
+	if s := got["Group/checkout-ops"]; s.Source != "local" || s.Members == nil || *s.Members != 2 {
 		t.Errorf("local group: %+v", s)
 	}
 	if s := got["User/carol"]; s.Source != "other" || s.Managed {
@@ -395,5 +395,25 @@ func TestTheChartsOwnSubjectsHaveASource(t *testing.T) {
 	}
 	if src[GroupSuperAdmins] != "221b" || src["devs"] != "oidc" || src["by-hand"] != "other" {
 		t.Errorf("sources: %v", src)
+	}
+}
+
+// Roles review, cut list: a local group of no members said nothing
+// (members was left out at 0), and a person who is not a SuperAdmin was
+// told the super roles had "0 groups" when the count is simply not theirs.
+func TestRolesPageZeroCounts(t *testing.T) {
+	in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Members: func(string) int { return 0 },
+		Bindings: []Binding{{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-local:empty"}}}}}
+	b, _ := json.Marshal(BuildRoles(in))
+	if !strings.Contains(string(b), `"members":0`) {
+		t.Errorf("no member count for an empty group: %s", b)
+	}
+	if strings.Contains(string(b), `"holders"`) {
+		t.Errorf("holders sent to a person who is not a SuperAdmin: %s", b)
+	}
+	in.Holders = map[ID]Holders{SuperAdmin: {Groups: 0, Users: 2}}
+	b, _ = json.Marshal(BuildRoles(in))
+	if !strings.Contains(string(b), `"holders":{"groups":0,"users":2}`) {
+		t.Errorf("a SuperAdmin's holders: %s", b)
 	}
 }

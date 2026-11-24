@@ -16,11 +16,13 @@ export function roleTerms(r: RoleRow): Term[] {
   return [{ kind: 'name', text: ROLE_NAME[r.id] }, { kind: 'name', text: r.clusterRole }, ...r.subjects.map((s) => ({ kind: 'name', text: s.name })), ...r.subjects.flatMap((s) => s.namespaces.map((n) => ({ kind: 'namespace', text: n })))]
 }
 
-function holdersText(r: RoleRow): string {
+export function holdersText(r: RoleRow): string {
   const g = r.subjects.filter((s) => s.kind === 'Group' && s.managed).length
   const others = r.subjects.filter((s) => !s.managed).length
   const parts: string[] = []
   if (r.id === 'superAdmin' || r.id === 'superViewer') {
+    // Who holds a super role is told to SuperAdmins alone (RB-42).
+    if (!r.holders) return others ? `${others} not managed by 221B` : ''
     parts.push(`${r.holders.groups} ${r.holders.groups === 1 ? 'group' : 'groups'}`)
     if (r.holders.users) parts.push(`${r.holders.users} ${r.holders.users === 1 ? 'user' : 'users'}`)
   } else {
