@@ -58,6 +58,19 @@ type Conn struct {
 	r       *bufio.Reader
 	id      int
 	timeout time.Duration
+	// until is the deadline of the context Dial was given, which bounds
+	// every request on the connection as well as the dial; zero for none.
+	until time.Time
+}
+
+// deadline is when the next request must be done: its timeout, or the
+// caller's deadline when that is sooner.
+func (c *Conn) deadline() time.Time {
+	d := time.Now().Add(c.timeout)
+	if !c.until.IsZero() && c.until.Before(d) {
+		return c.until
+	}
+	return d
 }
 
 // Dial connects, and with StartTLS or ldaps:// protects the connection
@@ -87,6 +100,9 @@ func Dial(ctx context.Context, cfg Config) (*Conn, error) {
 	}
 	tlsCfg := &tls.Config{ServerName: u.Hostname(), RootCAs: cfg.RootCAs, MinVersion: tls.VersionTLS12}
 	conn := &Conn{c: raw, timeout: cfg.Timeout}
+	if until, ok := ctx.Deadline(); ok {
+		conn.until = until
+	}
 	if u.Scheme == "ldaps" {
 		t := tls.Client(raw, tlsCfg)
 		_ = raw.SetDeadline(time.Now().Add(cfg.Timeout))
@@ -115,7 +131,7 @@ func (c *Conn) Close() {
 func (c *Conn) write(op *element) error {
 	c.id++
 	msg := seq(tagSequence, integer(tagInteger, c.id), op)
-	_ = c.c.SetWriteDeadline(time.Now().Add(c.timeout))
+	_ = c.c.SetWriteDeadline(c.deadline())
 	_, err := c.c.Write(msg.bytes())
 	return err
 }
@@ -128,7 +144,7 @@ type message struct {
 }
 
 func (c *Conn) read() (*message, error) {
-	_ = c.c.SetReadDeadline(time.Now().Add(c.timeout))
+	_ = c.c.SetReadDeadline(c.deadline())
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(c.r, head); err != nil {
 		return nil, err
@@ -237,7 +253,7 @@ func (c *Conn) startTLS(cfg *tls.Config) error {
 		return fmt.Errorf("the server refused StartTLS: %w", r)
 	}
 	t := tls.Client(c.c, cfg)
-	_ = c.c.SetDeadline(time.Now().Add(c.timeout))
+	_ = c.c.SetDeadline(c.deadline())
 	if err := t.Handshake(); err != nil {
 		return fmt.Errorf("the TLS handshake after StartTLS: %w", err)
 	}
@@ -307,7 +323,7 @@ func (c *Conn) Search(req SearchRequest) ([]Entry, error) {
 			ctl := seq(tagSequence, octets(tagOctetString, oidPaged), boolean(false), octets(tagOctetString, string(value.bytes())))
 			msg.children = append(msg.children, &element{id: classContext | constructed, children: []*element{ctl}})
 		}
-		_ = c.c.SetWriteDeadline(time.Now().Add(c.timeout))
+		_ = c.c.SetWriteDeadline(c.deadline())
 		if _, err := c.c.Write(msg.bytes()); err != nil {
 			return nil, err
 		}
