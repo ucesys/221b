@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -164,5 +165,35 @@ func TestATestOnAnotherModelFollowsItsContextReview4(t *testing.T) {
 	}
 	if tested == 0 {
 		t.Fatal("no case ran on the 27b")
+	}
+}
+
+// Finding 13: the estimate of a run on another model prices the grading
+// of a case at the agent's own model, which grades it: one graded case
+// on Haiku, the Troubleshooter on Opus, adds Opus's price of a grading.
+func TestTheEstimatePricesGradingOnTheAgentsModelReview13(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	o := TestOptions{Model: auto.Haiku}
+	estimate := func(points []string) float64 {
+		t.Helper()
+		c := crashCase("graded?", "")
+		c.Expect.Points = points
+		saved, err := w.ai.SaveTest(ctx, c, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = w.ai.DeleteTest(ctx, saved.ID) }()
+		usd, _, _, err := w.ai.Estimate(ctx, Troubleshooter, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return usd
+	}
+	graded, plain := estimate([]string{"CrashLoopBackOff"}), estimate(nil)
+	opus, _ := sherlock.ModelOf("claude-opus-5-5")
+	want := opus.Cost(sherlock.Usage{InputTokens: 1500, OutputTokens: 100})
+	if got := graded - plain; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("a grading priced at $%.6f, want Opus's $%.6f", got, want)
 	}
 }

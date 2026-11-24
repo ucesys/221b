@@ -47,6 +47,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **The estimate of a test on another model prices the grading right** (AI-56): each graded case was priced at the model tested on, though the agent's own model grades it, so a run on Haiku for an agent on Opus was estimated two to three times too low.
 - **A test on another model follows that model's context** (AI-48): a run with `model` kept the reply bound and, for Sherlock, the form chosen for the agent's own model, so Sherlock on a long-context model tested on a 16k model asked for 16,000 tokens with its whole form and every case failed *it did not finish*. The run now resolves the agent as if it were set to that model.
 - **A test on model `auto`, or on a model the provider does not offer, is refused** (AI-48): `POST /api/v1/ai/agents/{id}/test` with `"model":"auto"` started a run that sent the model id `auto` to the provider, and every case failed; it now answers 400, as `"effort":"auto"` did, and so does a model the agent's provider does not offer its agents.
 - **An agent on Auto whose provider lost its last tier can be saved and turned off** (AI-57): every save of it, its On/Off switch in the agents' table too, answered 400 *none has a tier* until its model was changed. Its model stays Auto (it answers on the provider's default model), and the table now says *no tier: on the default model* under it.

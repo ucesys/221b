@@ -490,6 +490,14 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	// The answers are graded on the agent's own model, as runCases grades
+	// them, whatever the run tests at.
+	grader := a
+	if o.overridden() {
+		if grader, err = s.resolve(snap, id, "", nil, over, nil, false); err != nil {
+			return 0, 0, 0, err
+		}
+	}
 	cases, err := s.TestsOf(ctx, id)
 	if err != nil {
 		return 0, 0, 0, err
@@ -529,7 +537,7 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	for _, c := range cases {
 		run(c.Question, c.Recorded)
 		if len(c.Expect.Points) > 0 {
-			usd += a.Price.Cost(sherlock.Usage{InputTokens: 1500, OutputTokens: 100})
+			usd += grader.Price.Cost(sherlock.Usage{InputTokens: 1500, OutputTokens: 100})
 		}
 	}
 	for _, t := range traces {
