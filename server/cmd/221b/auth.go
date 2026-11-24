@@ -310,7 +310,10 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 		})
 	if failed {
 		w.sessionsLeft = func(ctx context.Context) bool {
-			failed = false
+			// Failed until the emptying has run and gone through: a try
+			// that never runs it (the database cannot say the copy was
+			// made) is not taken for done, so the retry goes on.
+			failed = true
 			w.removeCopiedFromSecrets(ctx, auth.SessionsImportID, what, func(ctx context.Context) (int, error) {
 				n, err := empty(ctx)
 				failed = err != nil
