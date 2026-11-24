@@ -9,6 +9,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
 // The findings of the review of the auth package (2026-11-23), each with
@@ -114,3 +115,33 @@ func TestAResetPasswordIsCheckedAsSavedOnEveryReplica(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// Finding 4: a user created with an email, or a name, in the deployment's
+// admin list is a SuperAdmin from its first sign-in, so creating one is
+// held to the two-person rule as changing an email to one is.
+func TestANewUserInTheAdminListIsHeldToTwoPeople(t *testing.T) {
+	cfg := localConfig(t)
+	cfg.Admins = []string{"ops@corp.example", "chief"}
+	cfg.Local = []auth.LocalUser{{Username: "root", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}}
+	cfg.TwoPerson = twoperson.New(nil, nil)
+	e := newEnv(t, cfg)
+	root := e.mustSignIn("root", goodPassword)
+	for _, in := range []map[string]any{
+		{"username": "x", "email": " Ops@Corp.example ", "password": goodPassword},
+		{"username": "chief", "password": goodPassword},
+	} {
+		code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", in)
+		if code != http.StatusConflict || !strings.Contains(string(b), "admin list") {
+			t.Fatalf("creating %v: %d %s", in["username"], code, b)
+		}
+		if _, ok := e.svc.Accounts().Find(in["username"].(string)); ok {
+			t.Fatalf("%v was created", in["username"])
+		}
+	}
+	if !strings.Contains(e.audit.String(), `"outcome":"denied"`) {
+		t.Errorf("the refusal is not audited: %s", e.audit.String())
+	}
+	if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "y", "email": "y@corp.example", "password": goodPassword}); code != http.StatusCreated {
+		t.Fatalf("another email: %d %s", code, b)
+	}
+}

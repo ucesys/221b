@@ -1004,6 +1004,20 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 		}
 		return auth.SuperChange{Super: u.Super, Groups: u.Groups}
 	}
+	// An email in the deployment's admin list makes a SuperAdmin at once,
+	// which cannot wait for approval: where another SuperAdmin could
+	// approve, the backup's email is left out, as the Users page refuses it.
+	listed := func(before *auth.Account, u backupUser) bool {
+		tp := s.twoPersonAuth()
+		if tp == nil {
+			return false
+		}
+		held, _ := tp.ListMakesSuperAdmin(sess, before, auth.Account{Username: u.Username, Email: u.Email})
+		if held {
+			note("user %s: the email %s is in the deployment's admin list, which would make them a SuperAdmin without another SuperAdmin's approval; it is left out", u.Username, u.Email)
+		}
+		return held
+	}
 	acc := s.accounts()
 	if acc == nil || !acc.Persistent() {
 		note("users: this console keeps no local users of its own (sign-in is off, or they are not kept in a Secret)")
@@ -1018,6 +1032,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 		}
 		var c auth.SuperChange
 		if !exists {
+			if listed(nil, u) {
+				u.Email = ""
+			}
 			c = split(auth.Account{Username: u.Username, Email: u.Email}, u)
 			if _, err := acc.Create(ctx, auth.NewAccount{Username: u.Username, Name: u.Name, Email: u.Email, Password: randomPassword(), Groups: c.Groups}); err != nil {
 				note("user %s: %v", u.Username, err)
@@ -1041,6 +1058,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 			}
 			cur, _ = acc.Find(u.Username)
 		} else {
+			if u.Email != "" && listed(&cur, u) {
+				u.Email = cur.Email
+			}
 			c = split(cur, u)
 			// A file with no name or email has nothing to say about them.
 			name, email, disabled := cmp.Or(u.Name, cur.Name), cmp.Or(u.Email, cur.Email), u.Disabled

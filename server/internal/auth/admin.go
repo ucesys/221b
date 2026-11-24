@@ -306,10 +306,22 @@ func (s *Service) postUser(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	c := s.SuperAdminHold(sess, Account{Username: strings.TrimSpace(in.Username), Email: in.Email}, nil, in.Groups)
+	name := strings.TrimSpace(in.Username)
+	// A new account whose name or email is in the deployment's admin list is
+	// a SuperAdmin from its first sign-in: that cannot wait for approval, so
+	// it is refused when another SuperAdmin could approve, as an email
+	// changed to one is.
+	held, alone := s.ListMakesSuperAdmin(sess, nil, Account{Username: name, Email: in.Email})
+	if held {
+		s.recordUser(r, sess, audit.ActionUserCreate, name, "the user name or email is in the deployment's admin list, which would make the user a SuperAdmin without another SuperAdmin's approval", audit.OutcomeDenied)
+		fail(w, http.StatusConflict, "That user name or email is in the deployment's admin list, so it would make "+name+" a SuperAdmin, which waits for another SuperAdmin's approval. Create the user with another email, then make them a SuperAdmin on their roles (it waits for approval).")
+		return
+	}
+	c := s.SuperAdminHold(sess, Account{Username: name, Email: in.Email}, nil, in.Groups)
+	c.Alone = c.Alone || alone
 	a, err := s.accounts.Create(ctx, NewAccount{Username: in.Username, Name: in.Name, Email: in.Email, Password: in.Password, Groups: c.Groups})
 	if err != nil {
-		s.recordUser(r, sess, audit.ActionUserCreate, strings.TrimSpace(in.Username), err.Error(), audit.OutcomeFailed)
+		s.recordUser(r, sess, audit.ActionUserCreate, name, err.Error(), audit.OutcomeFailed)
 		refuseChange(w, err)
 		return
 	}
@@ -405,18 +417,38 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // emailMakesSuperAdmin says whether a new email would make a local account
-// a SuperAdmin by the deployment's admin list: held when another
-// SuperAdmin could approve, which an email change cannot wait for, so it is
-// refused; alone when nobody else could, so it is made at once, as other
-// grants are.
+// a SuperAdmin by the deployment's admin list (ListMakesSuperAdmin).
 func (s *Service) emailMakesSuperAdmin(sess Session, name, email string) (held, alone bool) {
 	cur, ok := s.accounts.Find(name)
 	if !ok {
 		return false, false
 	}
 	after := cur
-	after.Email = strings.ToLower(strings.TrimSpace(email))
-	if s.accountAdmin(cur) || !s.accountAdmin(after) || s.cfg.TwoPerson == nil {
+	after.Email = email
+	return s.ListMakesSuperAdmin(sess, &cur, after)
+}
+
+// ListMakesSuperAdmin says whether a local account's name or email, as
+// after has them, would make it a SuperAdmin by the deployment's admin
+// list where before (nil for an account not made yet) was none: held when
+// another SuperAdmin could approve, which a name or an email cannot wait
+// for, so the change is refused; alone when nobody else could, so it is
+// made at once, as other grants are. The groups and super roles of after
+// count as before's: SuperAdminHold holds those.
+func (s *Service) ListMakesSuperAdmin(sess Session, before *Account, after Account) (held, alone bool) {
+	if s.cfg.TwoPerson == nil {
+		return false, false
+	}
+	after.Username, after.Email = Login(after.Username), Login(after.Email)
+	if before != nil {
+		if s.accountAdmin(*before) {
+			return false, false
+		}
+		after.Groups, after.Super = before.Groups, before.Super
+	} else {
+		after.Groups, after.Super = nil, nil
+	}
+	if !s.accountAdmin(after) {
 		return false, false
 	}
 	if !s.OtherSuperAdmin(sess) {

@@ -83,6 +83,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 - **A SuperAdmin role taken away is gone from a session exchanged after an outage** (DB-65): a session signed in while the session store was away, and exchanged for a stored one when the store came back, was given the roles saved at the exchange on every later request that showed the signed cookie, so a person whose SuperAdmin role was removed kept it by replaying that cookie until it expired (30 minutes by default, up to 24 hours). The exchanged session is now checked as every session is, and refused when the account is disabled or gone.
 - **A password reset can no longer be undone or got round with the old password** (RB-46): for up to 5 seconds after a reset, another replica still held the old hash, so whoever knew the old password could sign in there (a session valid on every replica for up to 7 days) or change the password from the sign-in page, writing over the reset. The password is now checked against the account as saved.
+- **One SuperAdmin can no longer make a second alone through the admin list** (RB-51): creating a local user whose email or name is in `auth.admins` made a SuperAdmin at its first sign-in without the second SuperAdmin's approval (the same email set by editing a user was refused), and so did restoring a backup that carried such an email. Creating one is now refused with 409 when another SuperAdmin could approve, and a restore leaves the email out and says so.
 
 ## 0.13.0 (2026-11-22)
 
