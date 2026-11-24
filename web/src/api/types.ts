@@ -497,6 +497,8 @@ export interface Settings {
   fleetsPage?: boolean
   /** Whether the leader looks for newer images than the Helm releases run (HA-23); absent is true. */
   imageChecks?: boolean
+  /** Whether the installers are asked to star 221B on GitHub (CU-21); absent is true. */
+  starPrompt?: boolean
   /** Whether dollar amounts show anywhere (CF-40); absent is true. Set by a SuperAdmin at /api/v1/settings/ui. */
   showCosts?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */

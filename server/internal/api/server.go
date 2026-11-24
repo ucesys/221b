@@ -150,6 +150,10 @@ type Options struct {
 	Store    Store
 	Clusters Clusters
 	Auth     Auth
+	// Installer says whether a person installed the console: a SuperAdmin
+	// the Helm values name, whom the Star us on GitHub dialog asks
+	// (CU-21); nil asks nobody.
+	Installer Installer
 	// Audit records the settings changes; nil records nothing.
 	Audit *audit.Log
 	// SSH is the SSH tools' authority and pairings (Phase 11); nil leaves
@@ -500,6 +504,9 @@ func New(o Options) *Server {
 		// --- Show costs (Phase 12, wave 6c, CF-40).
 		s.handle("GET /api/v1/settings/ui", "settings-ui", s.getUISettings)
 		s.handle("PUT /api/v1/settings/ui", "settings-ui-update", s.putUISettings)
+		// --- Star us on GitHub (0.14.0, CU-21).
+		s.handle("GET /api/v1/star-prompt", "star-prompt", s.getStarPrompt)
+		s.handle("POST /api/v1/star-prompt/never", "star-prompt-never", s.postStarNever)
 		s.handle("PUT /api/v1/fleets", "fleets-update", s.putFleets)
 		s.handle("POST /api/v1/alerts/ack", "alert-ack", s.postAck)
 		s.handle("POST /api/v1/clusters/{cluster}/alerts/ack", "alert-ack", s.postAck)
@@ -1236,6 +1243,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if !st.ChecksImages() {
 		detail += ", newer images not checked"
+	}
+	if before.AsksForStar() != st.AsksForStar() {
+		detail += map[bool]string{true: ", asking to star 221B on GitHub on", false: ", asking to star 221B on GitHub off"}[st.AsksForStar()]
 	}
 	detail += changedByCluster("fleets", before.Fleets, st.Fleets) + changedByCluster("acknowledged alerts", before.Acks, st.Acks)
 	s.record(r, audit.ActionSettings, "settings", detail)

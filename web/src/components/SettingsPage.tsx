@@ -301,6 +301,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [imagesDraft, setImagesDraft] = useState<boolean | undefined>(undefined)
   const currentImages = settings?.imageChecks ?? true
   const pickedImages = imagesDraft ?? currentImages
+  // Ask to star 221B on GitHub (CU-21): on by default; the dialog's Never show this again turns it off.
+  const [starDraft, setStarDraft] = useState<boolean | undefined>(undefined)
+  const currentStar = settings?.starPrompt ?? true
+  const pickedStar = starDraft ?? currentStar
   // The company or IT name on the report page (IS-29): the issue service's
   // setting, kept where it was, set here since 0.12.1. Without the issue
   // service the field is not shown.
@@ -317,7 +321,8 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     }
   }, [])
   const companyChanged = company !== null && companyDraft !== undefined && companyDraft.trim() !== company
-  const settingsChanged = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined
+  const settingsChanged =
+    (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined || starDraft !== undefined
   // Email (EM-11) is saved by the same bar (CU-16).
   const mail = useMailForm()
   const changed = settingsChanged || companyChanged || mail.changed
@@ -334,8 +339,9 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
     if (settingsChanged && picked !== undefined) {
       try {
-        await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
+        await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages, starPrompt: pickedStar })
         setDraft(undefined)
+        setStarDraft(undefined)
         setBannersDraft(undefined)
         setFleetsDraft(undefined)
         setImagesDraft(undefined)
@@ -411,6 +417,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
       <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
       <ImageChecksSection picked={pickedImages} disabled={!settings || busy} onPick={(b) => setImagesDraft(b === currentImages ? undefined : b)} />
+      <StarPromptSection picked={pickedStar} disabled={!settings || busy} onPick={(b) => setStarDraft(b === currentStar ? undefined : b)} />
       {company !== null && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Company or IT name">
           <h3 className="rk-h">Company or IT name</h3>
@@ -440,6 +447,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           setBannersDraft(undefined)
           setFleetsDraft(undefined)
           setImagesDraft(undefined)
+          setStarDraft(undefined)
           setCompanyDraft(undefined)
           mail.undo()
           setError('')
@@ -487,6 +495,22 @@ function FleetsPageSection({ picked, disabled, onPick }: { picked: boolean; disa
       </div>
       <p className="rk-fhint" style={{ margin: 0 }}>
         For everyone: the Fleets tab, with every node against every label and taint. Fleets are made, changed and deleted from the Nodes tab’s fleet list either way, and filter the nodes there.
+      </p>
+    </section>
+  )
+}
+
+/** Whether the people who installed the console are asked to star 221B on GitHub (CU-21): a switch, on by default. */
+function StarPromptSection({ picked, disabled, onPick }: { picked: boolean; disabled: boolean; onPick: (b: boolean) => void }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Star 221B on GitHub">
+      <h3 className="rk-h">Star 221B on GitHub</h3>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', alignSelf: 'flex-start', fontSize: 13 }}>
+        <input type="checkbox" role="switch" checked={picked} disabled={disabled} onChange={(e) => onPick(e.target.checked)} data-testid="settings-star-prompt" />
+        Ask to star 221B on GitHub
+      </label>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        At sign-in, a dialog asks the SuperAdmins the Helm values name, who installed the console, to star 221B on GitHub, until one of them ticks Never show this again. The console never calls GitHub and keeps nothing about it.
       </p>
     </section>
   )

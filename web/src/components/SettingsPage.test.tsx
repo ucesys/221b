@@ -89,6 +89,21 @@ describe('Settings (0.12.1)', () => {
     await waitFor(() => expect(issues.saveIssueSettings).toHaveBeenCalledWith({ ...issueSettings, company: 'Acme IT' }))
   })
 
+  it('has Ask to star 221B on GitHub, a switch on by default, saved with the settings (CU-21)', async () => {
+    vi.mocked(settingsApi.saveSettings).mockResolvedValue(settings)
+    render(<SettingsPanel route={parseHash('#/admin/settings')} settings={{ ...settings, starPrompt: false }} refreshedAt={null} />)
+    const sw = (await screen.findByTestId('settings-star-prompt')) as HTMLInputElement
+    expect(sw.getAttribute('role')).toBe('switch')
+    expect(sw.checked).toBe(false)
+    expect(sw.closest('label')!.textContent).toBe('Ask to star 221B on GitHub')
+    fireEvent.click(sw)
+    fireEvent.click(screen.getByTestId('settings-save'))
+    await waitFor(() => expect(settingsApi.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ refreshSeconds: 10, starPrompt: true })))
+    cleanup()
+    render(<SettingsPanel route={parseHash('#/admin/settings')} settings={settings} refreshedAt={null} />)
+    expect(((await screen.findByTestId('settings-star-prompt')) as HTMLInputElement).checked).toBe(true)
+  })
+
   it('leaves the field out without the issue service', async () => {
     vi.mocked(issues.fetchIssueSettings).mockRejectedValue(new Error('not found'))
     render(<SettingsPanel route={parseHash('#/admin/settings')} settings={settings} refreshedAt={null} />)

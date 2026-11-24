@@ -69,6 +69,12 @@ type Settings struct {
 	// CF-40): a SuperAdmin's switch, Administration › AI › Agents › Show costs. The
 	// budgets are kept all the same. A State says it as showCosts.
 	HideCosts bool `json:"hideCosts,omitempty"`
+	// StarPrompt says whether the console asks the people who installed
+	// it, the SuperAdmins the Helm values name, to star 221B on GitHub, in
+	// a dialog at sign-in (0.14.0, CU-21); nil is true. Never show this
+	// again turns it off, and a SuperAdmin turns it on again in
+	// Administration › Settings › General.
+	StarPrompt *bool `json:"starPrompt,omitempty"`
 }
 
 // ShowsCosts says whether the pages show what AI costs (CF-40).
@@ -76,6 +82,10 @@ func (s Settings) ShowsCosts() bool { return !s.HideCosts }
 
 // ShowsFleets says whether the Fleets tab shows.
 func (s Settings) ShowsFleets() bool { return s.FleetsPage == nil || *s.FleetsPage }
+
+// AsksForStar says whether the installers are asked to star 221B on
+// GitHub (CU-21).
+func (s Settings) AsksForStar() bool { return s.StarPrompt == nil || *s.StarPrompt }
 
 // ChecksImages says whether newer images are looked for (HA-23).
 func (s Settings) ChecksImages() bool { return s.ImageChecks == nil || *s.ImageChecks }
@@ -519,6 +529,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		if next.ImageChecks == nil {
 			next.ImageChecks = cur.ImageChecks
 		}
+		if next.StarPrompt == nil {
+			next.StarPrompt = cur.StarPrompt
+		}
 		// Show costs has its own route, a SuperAdmin's (CF-40).
 		next.HideCosts = cur.HideCosts
 		*cur = next
@@ -570,6 +583,15 @@ func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
 func (s *Service) UpdateCosts(ctx context.Context, show bool) (State, error) {
 	return s.change(ctx, func(cur *Settings) error {
 		cur.HideCosts = !show
+		return nil
+	})
+}
+
+// UpdateStarPrompt turns asking the installers to star 221B on GitHub on
+// or off (CU-21).
+func (s *Service) UpdateStarPrompt(ctx context.Context, on bool) (State, error) {
+	return s.change(ctx, func(cur *Settings) error {
+		cur.StarPrompt = &on
 		return nil
 	})
 }
