@@ -426,17 +426,6 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		if c, err := r.Cookie(cookieSession); err == nil && s.sessions.Unknown(c.Value) {
-			// The session store cannot be asked and this replica has never
-			// held the session (the leader, sent a request another replica
-			// took): nothing says it ended. A 401 would send the browser to
-			// the sign-in page, where the replica that holds it sends it
-			// back, and round again.
-			w.Header().Set("Retry-After", "10")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "The session store is unavailable just now, so this session cannot be checked here. Try again in a minute."})
-			return nil
-		}
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "sign in to use the console", "signin": "/signin"})
 		return nil

@@ -343,15 +343,7 @@ func TestATamperedSignedCookieIsNoSession(t *testing.T) {
 	} {
 		for _, e := range []*env{a, b} {
 			c := o.holding(e, v)
-			// A value shaped like a stored session's ID cannot be told,
-			// with the store away, from one another replica holds: it is
-			// answered 503, not served and not sent to sign in (the review
-			// of the auth package, cut by its cap).
-			want := http.StatusUnauthorized
-			if name == "the MAC, which is shaped like an ID" {
-				want = http.StatusServiceUnavailable
-			}
-			if w, code := e.whoami(c); code != want {
+			if w, code := e.whoami(c); code != http.StatusUnauthorized {
 				t.Errorf("%s: answered %d as %+v", name, code, w)
 			}
 			resp, _ := c.Get(e.app.URL + "/")

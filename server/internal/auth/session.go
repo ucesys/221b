@@ -887,18 +887,6 @@ func (s *Sessions) Get(id string) (Session, bool) {
 	return cp, true
 }
 
-// Unknown says whether nothing can be said of a stored session's cookie:
-// the shared store is away (StoreAway; one that refuses is not) and this
-// replica does not hold it.
-// That is no sign that it ended.
-func (s *Sessions) Unknown(id string) bool {
-	if signedShape(id) || !plausibleID(id) {
-		return false
-	}
-	_, _, state := s.find(id)
-	return state == unknown && s.away()
-}
-
 // Alive says whether a session exists and has not expired, without
 // counting as activity. A session nothing can be said of, because the
 // shared store cannot be asked and this replica does not hold it, is

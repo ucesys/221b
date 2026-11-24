@@ -450,30 +450,6 @@ func TestASignOutWhereTheSessionCannotBeLookedUpStillEndsIt(t *testing.T) {
 	}
 }
 
-// Cut by the review's cap (session.go:663-666): while the session store
-// is away, a replica asked about a session it has never held (the leader,
-// sent a request another replica took) answers that the store is away,
-// not 401: the 401 sent the browser to the sign-in page, where the
-// replica that holds the session sent it back, and round again.
-func TestASessionNobodyCanAskAboutIsNotRefusedAsSignedOut(t *testing.T) {
-	o := newOutage(t)
-	cfg := outageConfig(t)
-	a, leader := o.replica(cfg, nil), o.replica(cfg, nil)
-	root := a.mustSignIn("root", goodPassword)
-	o.cookie(a, root)
-	o.store.Fail(errStoreAway)
-	if _, code := a.whoami(root); code != http.StatusOK {
-		t.Fatalf("on the replica that holds it: %d", code)
-	}
-	if _, code := leader.whoami(root); code != http.StatusServiceUnavailable {
-		t.Fatalf("on the replica that cannot ask about it: %d, want 503", code)
-	}
-	// A cookie this console never issued is still a 401.
-	if _, code := leader.whoami(o.holding(leader, "not-a-session")); code != http.StatusUnauthorized {
-		t.Fatalf("a made-up cookie: %d", code)
-	}
-}
-
 // Cut by the review's cap (accounts.go:163-168): an account defined in
 // values hides a console account of the same name wholly: the hidden one
 // does not sign in by its email, is not listed twice, and does not count
