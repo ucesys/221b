@@ -300,7 +300,8 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 	s.mu.Lock()
 	keys := s.key
 	// The key of the map is a hash of the whole value: what is here was
-	// verified when it was put here.
+	// verified when it was put here, with the key as it was then, so it is
+	// checked again against the key as it is now (one HMAC).
 	sess := s.byID[key]
 	s.mu.Unlock()
 	if sess == nil {
@@ -327,6 +328,11 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 			s.byID[key] = sess
 		}
 		s.mu.Unlock()
+	} else if !verified(keys.current(), signedText, mac) {
+		// Taken before with a key this replica no longer has: the key was
+		// replaced by hand, which ends what the old one signed, here too.
+		s.forget(key, false)
+		return key, nil, gone
 	}
 	s.mu.Lock()
 	sid, expires := sess.sid, sess.Expires

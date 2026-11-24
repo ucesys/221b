@@ -309,3 +309,25 @@ func TestASessionTheStoreRefusedIsKeptOnItsReplica(t *testing.T) {
 		t.Fatal("an idle session was kept")
 	}
 }
+
+// Cut by the review's cap (signed.go:302-306): once a replica has the key
+// put back by hand, it refuses what the old key signed, also the cookies
+// it had already taken and holds in memory.
+func TestAReplacedKeyEndsTheSignedSessionsAReplicaHolds(t *testing.T) {
+	c, _, keys, a, b := signedPair(t)
+	first, _ := a.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+	if _, ok := b.Get(first.ID); !ok {
+		t.Fatal("not taken")
+	}
+	keys.Set(strings.Repeat("0123456789abcdef", 4))
+	c.add(keyReread + time.Second)
+	second, _ := a.Open(Session{User: User{Subject: "local:bob", Username: "bob"}, Method: "local"})
+	if _, ok := b.Get(second.ID); !ok {
+		t.Fatal("a session signed with the new key was refused")
+	}
+	for name, s := range map[string]*Sessions{"the replica that signed it": a, "the other": b} {
+		if _, ok := s.Get(first.ID); ok {
+			t.Errorf("%s still takes a session the replaced key signed", name)
+		}
+	}
+}
