@@ -529,11 +529,19 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 		s.aiFail(w, err)
 		return
 	}
-	d := fmt.Sprintf("agent %s: provider %s, model %s, caps $%.2f/$%.2f, clusters [%s], tools [%s]", id, firstOf(in.Provider, ai.DefaultProvider), firstOf(in.Model, "the provider's default"), in.DailyUSD, in.MonthlyUSD, strings.Join(in.Clusters, ", "), strings.Join(in.Tools, ", "))
+	d := fmt.Sprintf("agent %s: provider %s, model %s, caps $%.2f/$%.2f, ", id, firstOf(in.Provider, ai.DefaultProvider), firstOf(in.Model, "the provider's default"), in.DailyUSD, in.MonthlyUSD)
+	if id == ai.Sherlock {
+		// Sherlock is on where its clusters say, with or without view
+		// control, as SaveAgent saves them; its On is not used.
+		d += sherlockClustersText(in)
+	} else {
+		d += fmt.Sprintf("clusters [%s]", strings.Join(in.Clusters, ", "))
+	}
+	d += fmt.Sprintf(", tools [%s]", strings.Join(in.Tools, ", "))
 	// A change of what is left to Auto is saved at once and said in the
 	// audit record, before and after (the owner, November 22; AI-47).
 	d += autoChange(before, in.AgentSettings)
-	if in.On != nil {
+	if in.On != nil && id != ai.Sherlock {
 		d += fmt.Sprintf(", on %v", *in.On)
 	}
 	if in.ConfirmSingleProvider {
@@ -541,6 +549,25 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(r, audit.ActionAISettings, "agent "+id, d)
 	s.getAI(w, r)
+}
+
+// sherlockClustersText says where a save turns Sherlock on, and its view
+// control, as SaveAgent saves them: the clusters given (those the console
+// has), none being off on every cluster; what is not given stays.
+func sherlockClustersText(in ai.AgentChange) string {
+	var d string
+	switch {
+	case in.SherlockClusters == nil:
+		d = "on the clusters it was on"
+	case len(in.SherlockClusters) == 0:
+		d = "off on every cluster"
+	default:
+		d = "on clusters [" + strings.Join(in.SherlockClusters, ", ") + "]"
+	}
+	if in.ViewControl != nil {
+		d += fmt.Sprintf(", view control %v", *in.ViewControl)
+	}
+	return d
 }
 
 // autoChange says an agent's effort, Auto and floor settings for its audit

@@ -92,3 +92,18 @@ func TestTheAuditSaysWhatTheSaveReplacedReview14(t *testing.T) {
 		t.Fatalf("audit: %s", aud.String())
 	}
 }
+
+// Finding 6: turning Sherlock off or on for clusters, and its view
+// control, are in the audit record, as SaveAgent saves them.
+func TestSherlocksClustersAreAuditedReview6(t *testing.T) {
+	srv, ops, _, _, _, aud := aiSetupWith(t, nil)
+	var o aiOverview
+	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/sherlock", `{"sherlockClusters":[],"viewControl":false,"on":true}`, 200, &o)
+	if !strings.Contains(aud.String(), "caps $0.00/$0.00, off on every cluster, view control false, tools []") || strings.Contains(aud.String(), ", on true") {
+		t.Fatalf("off: %s", aud.String())
+	}
+	aiJSON(t, ops, http.MethodPut, srv.URL+"/api/v1/ai/agents/sherlock", `{"sherlockClusters":["local","nosuch"],"viewControl":true}`, 200, &o)
+	if !strings.Contains(aud.String(), "on clusters [local], view control true, tools []") {
+		t.Fatalf("on: %s", aud.String())
+	}
+}
