@@ -68,6 +68,15 @@ func Grants(rules []Rule) []Grant {
 		names := r.ResourceNames
 		if len(names) == 0 {
 			names = []string{""}
+		} else if slices.Contains(names, "") {
+			// "" in a list allows only the requests that name no object
+			// (list, watch, create), not any object as no list does.
+			names = slices.Clone(names)
+			for i, n := range names {
+				if n == "" {
+					names[i] = NoName
+				}
+			}
 		}
 		for _, g := range r.APIGroups {
 			for _, res := range r.Resources {
@@ -82,13 +91,39 @@ func Grants(rules []Rule) []Grant {
 	return out
 }
 
+// NoName stands for "" in a rule's resourceNames: the requests that name
+// no object.
+const NoName = "(no name)"
+
+// resourceCovers says whether a rule's resource h matches g as the API
+// server reads it: equal, "*", or "*/sub" for that subresource of any kind.
+func resourceCovers(h, g string) bool {
+	if h == g || h == "*" {
+		return true
+	}
+	if sub, ok := strings.CutPrefix(h, "*/"); ok {
+		_, gsub, has := strings.Cut(g, "/")
+		return has && gsub == sub
+	}
+	return false
+}
+
+// urlCovers says whether a rule's URL h matches g: equal, "*", or a prefix
+// ending in "*"; "/*" is every URL, as every URL starts with /.
+func urlCovers(h, g string) bool {
+	if h == g || h == "*" || h == "/*" {
+		return true
+	}
+	return strings.HasSuffix(h, "*") && strings.HasPrefix(g, strings.TrimSuffix(h, "*"))
+}
+
 // covers says whether the grant h allows everything g does: equal, or with a
 // wildcard where g has a value, or for any object where g names one.
 func (h Grant) covers(g Grant) bool {
 	if h.URL != "" || g.URL != "" {
-		return h.URL != "" && g.URL != "" && (h.Verb == g.Verb || h.Verb == "*") && (h.URL == g.URL || h.URL == "*" || (strings.HasSuffix(h.URL, "*") && strings.HasPrefix(g.URL, strings.TrimSuffix(h.URL, "*"))))
+		return h.URL != "" && g.URL != "" && (h.Verb == g.Verb || h.Verb == "*") && urlCovers(h.URL, g.URL)
 	}
-	return (h.Verb == g.Verb || h.Verb == "*") && (h.Group == g.Group || h.Group == "*") && (h.Resource == g.Resource || h.Resource == "*") && (h.Name == "" || h.Name == g.Name)
+	return (h.Verb == g.Verb || h.Verb == "*") && (h.Group == g.Group || h.Group == "*") && resourceCovers(h.Resource, g.Resource) && (h.Name == "" || h.Name == g.Name)
 }
 
 // grantRule is a grant as a rule of one of each.
@@ -164,8 +199,13 @@ func ruleCovers(h, r Rule) bool {
 		return false
 	}
 	if len(r.APIGroups) > 0 && len(r.Resources) > 0 {
-		if !in(h.APIGroups, r.APIGroups) || !in(h.Resources, r.Resources) {
+		if !in(h.APIGroups, r.APIGroups) {
 			return false
+		}
+		for _, res := range r.Resources {
+			if !slices.ContainsFunc(h.Resources, func(hr string) bool { return resourceCovers(hr, res) }) {
+				return false
+			}
 		}
 		if len(h.ResourceNames) > 0 && (len(r.ResourceNames) == 0 || !in(h.ResourceNames, r.ResourceNames)) {
 			return false
@@ -174,7 +214,7 @@ func ruleCovers(h, r Rule) bool {
 	for _, u := range r.NonResourceURLs {
 		ok := false
 		for _, hu := range h.NonResourceURLs {
-			if (Grant{Verb: "*", URL: hu}).covers(Grant{Verb: "*", URL: u}) {
+			if urlCovers(hu, u) {
 				ok = true
 				break
 			}

@@ -352,3 +352,28 @@ func TestPermissionFlagsArePerRow(t *testing.T) {
 		t.Errorf("pods/ephemeralcontainers flagged %v", f)
 	}
 }
+
+// Roles review, cut list: a deployed "*/scale" or URL "/*" covers what the
+// shipped role lists, so it is no "lacks" line; and resourceNames [""],
+// which allows only requests without a name, is narrower than any object.
+func TestCompareReadsRBACWildcardsAsTheAPIServerDoes(t *testing.T) {
+	shipped := []Rule{
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale"}, Verbs: []string{"update"}},
+		{NonResourceURLs: []string{"*"}, Verbs: []string{"get"}},
+	}
+	deployed := []Rule{
+		{APIGroups: []string{"apps"}, Resources: []string{"*/scale"}, Verbs: []string{"update"}},
+		{NonResourceURLs: []string{"/*"}, Verbs: []string{"get"}},
+	}
+	if d := Compare(shipped, deployed); len(d.Missing) != 0 {
+		t.Errorf("false lacks: %v", d.Missing)
+	}
+	if d := Compare(shipped, deployed); len(d.Extra) != 1 || !strings.Contains(d.Extra[0], "*/scale") {
+		t.Errorf("*/scale is wider than deployments/scale: %v", d.Extra)
+	}
+	pods := []Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}}
+	named := []Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, ResourceNames: []string{""}, Verbs: []string{"get"}}}
+	if d := Compare(pods, named); len(d.Missing) != 1 || len(d.Extra) != 0 {
+		t.Errorf("resourceNames [\"\"] against any pod: %+v", d)
+	}
+}
