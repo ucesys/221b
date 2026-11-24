@@ -193,7 +193,9 @@ func (s *Service) live(sess Session) (Session, bool) {
 			s.sessions.Delete(sess.ID)
 			return Session{}, false
 		}
-		sess.User.Groups = a.Groups
+		// The account as it is now: its email and name decide the admin
+		// list's grant (auth.admins), not the ones read at sign-in.
+		sess.User.Groups, sess.User.Email, sess.User.Name = a.Groups, a.Email, a.Name
 		s.grant(roles.Local, sess.User, a.Super).apply(&sess)
 		return sess, true
 	case string(ModeLDAP):

@@ -342,3 +342,29 @@ func TestAMalformedLocalUsersFileIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Finding 13: an email changed away from one in the admin list takes the
+// SuperAdmin role from the person's open sessions too.
+func TestAnEmailChangedAwayFromTheAdminListEndsTheRoleInOpenSessions(t *testing.T) {
+	cfg := outageConfig(t)
+	cfg.Admins = []string{"boss@corp.example"}
+	e := newEnv(t, cfg)
+	if _, err := e.svc.Accounts().Create(context.Background(), auth.NewAccount{Username: "alice", Email: "boss@corp.example", Password: goodPassword}); err != nil {
+		t.Fatal(err)
+	}
+	alice := e.mustSignIn("alice", goodPassword)
+	if w, _ := e.whoami(alice); !w.Admin {
+		t.Fatalf("alice with the listed email: %+v", w)
+	}
+	if _, _, err := e.svc.Accounts().Update(context.Background(), "alice", auth.Change{Email: ptrTo("alice@other.example")}); err != nil {
+		t.Fatal(err)
+	}
+	if w, code := e.whoami(alice); code != http.StatusOK || w.Admin || strings.Contains(strings.Join(w.KubeGroups, ","), "superadmins") {
+		t.Fatalf("alice's open session after the email changed: %d %+v", code, w)
+	}
+	var me auth.Me
+	getJSON(t, alice, e.app.URL+"/api/v1/me", &me)
+	if me.User.Email != "alice@other.example" {
+		t.Fatalf("/api/v1/me says %q", me.User.Email)
+	}
+}
