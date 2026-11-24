@@ -264,3 +264,48 @@ func TestAnotherReplicaDoesNotEndASessionOnStaleActivity(t *testing.T) {
 		t.Fatal("an idle session was taken on its replica")
 	}
 }
+
+// refusingPuts is a shared store that answers and refuses every write, as
+// one over its quota does.
+type refusingPuts struct{ *OutageStore }
+
+func (refusingPuts) Put(context.Context, string, []byte, func([]byte) bool) (bool, error) {
+	return false, errors.New("secrets is forbidden: exceeded quota")
+}
+
+// Cut by the review's cap (session.go:435-436): a sign-in whose record the
+// store refuses to write (it answered, so no signed session is made) is
+// this replica's own, as the sign-in says, and is not lost at the next
+// request because the store has no record of it.
+func TestASessionTheStoreRefusedIsKeptOnItsReplica(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	s := NewSessions(time.Hour, 7*24*time.Hour, clock)
+	s.Share(refusingPuts{NewOutageStore()}, nil)
+	sess, err := s.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+	if err != nil || sess.Signed {
+		t.Fatalf("the sign-in: %+v %v", sess, err)
+	}
+	now = now.Add(time.Minute)
+	if _, ok := s.Get(sess.ID); !ok {
+		t.Fatal("the session is lost at the next request")
+	}
+	s.Sweep()
+	if _, ok := s.Get(sess.ID); !ok {
+		t.Fatal("the sweep dropped the session")
+	}
+	if n := len(s.Live()); n != 1 {
+		t.Fatalf("%d sessions live", n)
+	}
+	s.Delete(sess.ID)
+	if _, ok := s.Get(sess.ID); ok {
+		t.Fatal("the session outlived its sign-out")
+	}
+	now = now.Add(2 * time.Hour)
+	other, _ := s.Open(Session{User: User{Subject: "local:bo", Username: "bo"}, Method: "local"})
+	now = now.Add(2 * time.Hour)
+	s.Sweep()
+	if _, ok := s.Get(other.ID); ok {
+		t.Fatal("an idle session was kept")
+	}
+}

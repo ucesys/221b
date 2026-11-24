@@ -87,6 +87,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A sign-in abandoned while the provider's configuration is read no longer blocks the others** (P3-01): the read ran under that one request's context, and its "context canceled" was kept for everyone for 10 seconds.
 - **No 401 right after the database is back** (DB-66): the row of a session exchanged after an outage was not announced, so another replica that had just looked for it and found nothing answered 401 for up to 2 seconds. A new row is now announced to the replicas.
 - **A replica no longer signs someone out everywhere on stale activity** (P3-01): a replica that read a session's last activity from the store, which is written back every 5 minutes, took a session used minutes ago on another replica for idle and deleted it for every replica. It now refuses it there only, and ends it everywhere once it is idle by any count.
+- **A sign-in the session store refused to write is kept on its replica** (DB-65): when the store answered and refused the write (a quota, forbidden), the session was meant to be that replica's own, but its next request found no record in the store and ended it, so the person was signed out at once.
 
 ### Security
 

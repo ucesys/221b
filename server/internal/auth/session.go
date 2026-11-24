@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -148,7 +149,11 @@ type Sessions struct {
 	extra map[string]map[string]json.RawMessage
 	// newer marks records a newer console wrote: read, never written back.
 	newer map[string]bool
-	log   *slog.Logger
+	// unstored are the sessions started here whose record the shared store
+	// refused (it answered, so no signed session was made): this replica's
+	// own, which the store not holding them does not end.
+	unstored map[string]bool
+	log      *slog.Logger
 
 	// key signs the sessions made while the shared store is away, and
 	// outage is how long one lasts (DB-65).
@@ -242,7 +247,7 @@ func NewSessions(idle, max time.Duration, now func() time.Time) *Sessions {
 	if now == nil {
 		now = time.Now
 	}
-	return &Sessions{idle: idle, max: max, now: now, byID: map[string]*Session{}, written: map[string]time.Time{}, extra: map[string]map[string]json.RawMessage{}, newer: map[string]bool{}, log: slog.Default(),
+	return &Sessions{idle: idle, max: max, now: now, byID: map[string]*Session{}, written: map[string]time.Time{}, extra: map[string]map[string]json.RawMessage{}, newer: map[string]bool{}, unstored: map[string]bool{}, log: slog.Default(),
 		key: NewSessionKey(nil, now), outage: defaultOutage, ended: map[string]ending{}, revoked: map[string]time.Time{}, exchanged: map[string]exchange{}, tryAfter: map[string]time.Time{}}
 }
 
@@ -447,6 +452,11 @@ func (s *Sessions) open(sess Session, refuse bool) (*Session, error) {
 	}
 	_, err := s.store(key, sess, true)
 	if !StoreAway(err) {
+		if err != nil {
+			s.mu.Lock()
+			s.unstored[key] = true
+			s.mu.Unlock()
+		}
 		return &sess, nil
 	}
 	signed, err := s.sign(sess)
@@ -554,6 +564,7 @@ func (s *Sessions) forgetOf(key string, ended bool, known *Session) {
 	delete(s.written, key)
 	delete(s.extra, key)
 	delete(s.newer, key)
+	delete(s.unstored, key)
 	shared := s.shared
 	if sess != nil && sess.Signed {
 		s.revoked[sess.sid] = sess.Expires
@@ -651,8 +662,9 @@ func (s *Sessions) find(id string) (string, *Session, int) {
 	shared := s.shared
 	local := s.byID[key]
 	_, ended := s.ended[key]
+	unstored := s.unstored[key]
 	s.mu.Unlock()
-	if shared == nil {
+	if shared == nil || (unstored && local != nil) {
 		if local == nil {
 			return key, nil, gone
 		}
@@ -768,6 +780,7 @@ func (s *Sessions) listed() (map[string]Session, map[string]time.Time, error) {
 	for k := range s.ended {
 		ended[k] = true
 	}
+	unstored := maps.Clone(s.unstored)
 	s.mu.Unlock()
 	if shared == nil {
 		return out, nil, nil
@@ -778,7 +791,7 @@ func (s *Sessions) listed() (map[string]Session, map[string]time.Time, error) {
 	}
 	markers := map[string]time.Time{}
 	for k, v := range out {
-		if _, ok := stored[k]; !ok && !v.Signed {
+		if _, ok := stored[k]; !ok && !v.Signed && !unstored[k] {
 			delete(out, k)
 		}
 	}
@@ -1017,7 +1030,7 @@ func (s *Sessions) Sweep() {
 	}
 	s.mu.Lock()
 	for key, sess := range s.byID {
-		if b, ok := stored[key]; (!ok || isEnded(b)) && !sess.Signed {
+		if b, ok := stored[key]; (!ok || isEnded(b)) && !sess.Signed && !s.unstored[key] {
 			delete(s.byID, key)
 			delete(s.written, key)
 			delete(s.extra, key)
