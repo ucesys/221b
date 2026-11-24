@@ -631,7 +631,15 @@ func (s *Service) syncDirectory(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	next := s.now().Add(s.cfg.SyncInterval)
+	// Every group that lets a person in: the role lists, and the admin
+	// and reporter groups, whose members sign in too and are not to be
+	// shown as disabled.
 	listed := s.cfg.Lists.Listed()
+	for _, g := range append(slices.Clone(s.cfg.AdminGroups), s.cfg.ReporterGroups...) {
+		if g != "" && !slices.Contains(listed, g) {
+			listed = append(listed, g)
+		}
+	}
 	members, err := s.dir.Members(ctx, listed)
 	if err != nil {
 		s.people.failed(err, next)

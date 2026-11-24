@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -572,5 +573,65 @@ func TestTheAdminListMatchesASCIICaseOnly(t *testing.T) {
 	}
 	if g := auth.GrantFor(cfg, roles.OIDC, auth.User{Username: "Kate@Corp.Example"}, nil); !g.Admin() {
 		t.Fatal("the listed admin in other capitals is not")
+	}
+}
+
+// groupsDir is fakeDir whose sync lists the members of the groups asked
+// for, as a directory does.
+type groupsDir struct{ *fakeDir }
+
+func (d groupsDir) Members(ctx context.Context, groups []string) ([]auth.Person, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []auth.Person
+	for _, p := range d.people {
+		for _, g := range p.Groups {
+			if slices.Contains(groups, g) {
+				out = append(out, *p)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// Cut by the review's cap (admin.go:589, directory.go:114): the directory
+// sync reads the members of every group that lets a person in, the admin
+// and reporter groups too, so the Users page does not show those people
+// as disabled.
+func TestTheDirectorySyncKeepsPeopleOfTheAdminAndReporterGroups(t *testing.T) {
+	var dir *fakeDir
+	e, d := ldapEnvWith(t, func(c *auth.Config) {
+		c.AdminGroups = []string{"ops-leads"}
+		c.ReporterGroups = []string{"support"}
+		dir = c.Directory.(*fakeDir)
+		c.Directory = groupsDir{dir}
+	})
+	d.mu.Lock()
+	d.people["sue"] = &auth.Person{Ref: "uid=sue", Username: "sue", Groups: []string{"support"}}
+	d.people["lee"] = &auth.Person{Ref: "uid=lee", Username: "lee", Groups: []string{"ops-leads"}}
+	d.pw["sue"], d.pw["lee"] = goodPassword, goodPassword
+	d.mu.Unlock()
+	e.mustSignIn("sue", goodPassword)
+	e.mustSignIn("lee", goodPassword)
+	root := e.mustSignIn("break-glass", goodPassword)
+	if code, b := e.api(root, http.MethodPost, "/api/v1/admin/ldap/refresh", nil); code != http.StatusAccepted {
+		t.Fatalf("refresh: %d %s", code, b)
+	}
+	var view struct {
+		Users []auth.UserRow `json:"users"`
+		LDAP  struct {
+			Running bool `json:"running"`
+		} `json:"ldap"`
+	}
+	waitFor(t, func() bool {
+		_, b := e.api(root, http.MethodGet, "/api/v1/admin/users", nil)
+		_ = json.Unmarshal(b, &view)
+		return !view.LDAP.Running
+	})
+	for _, u := range view.Users {
+		if (u.Username == "sue" || u.Username == "lee") && u.Status != "active" {
+			t.Errorf("%s after the sync: %s (%s)", u.Username, u.Status, u.StatusNote)
+		}
 	}
 }
