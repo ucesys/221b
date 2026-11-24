@@ -1,6 +1,8 @@
 package roles
 
 import (
+	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -262,5 +264,54 @@ func TestRefusalWantsACurrentVerdict(t *testing.T) {
 	d.Of = "cluster-b"
 	if !m.Set("prod", d) {
 		t.Error("a verdict of another connection is not a change")
+	}
+}
+
+// Roles review, finding 5: one deployed rule with a large cross product
+// was expanded grant by grant, enough to exhaust the console's memory.
+func TestCheckDoesNotExpandAnOversizedRule(t *testing.T) {
+	n := func(p string, k int) []string {
+		out := make([]string, k)
+		for i := range out {
+			out[i] = fmt.Sprintf("%s%d", p, i)
+		}
+		return out
+	}
+	big := Rule{APIGroups: n("g", 60), Resources: n("r", 60), ResourceNames: n("n", 60), Verbs: n("v", 10)}
+	tpl, o := Defaults(), Options{}
+	dep := shippedAll(tpl, o)
+	v := dep[Viewer]
+	v.Rules = append(slices.Clone(v.Rules), big)
+	dep[Viewer] = v
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	d := Check(tpl, o, dep, shippedNodes, time.Now())
+	runtime.ReadMemStats(&after)
+	if used := after.TotalAlloc - before.TotalAlloc; used > 64<<20 {
+		t.Errorf("the check allocated %d MiB for a 2,160,000-grant rule", used>>20)
+	}
+	if !d.More || d.State != "differs" || len(d.Roles) != 1 || d.Roles[0].ID != Viewer {
+		t.Fatalf("an oversized rule: %+v", d.State)
+	}
+	// The shipped grants the oversized rule covers are not reported missing.
+	cover := Rule{APIGroups: append(n("g", 60), ""), Resources: append(n("r", 70), "pods"), Verbs: []string{"get", "list", "watch", "x", "y", "z", "a", "b", "c", "d"}}
+	if Compare([]Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}}, []Rule{cover}).Missing != nil {
+		t.Error("a grant inside an oversized rule is reported missing")
+	}
+}
+
+func TestAnOversizedRuleUnderAWildcardIsNotExtra(t *testing.T) {
+	var groups []string
+	for i := range 5000 {
+		groups = append(groups, fmt.Sprintf("g%d.example", i))
+	}
+	big := Rule{APIGroups: groups, Resources: []string{"widgets"}, Verbs: []string{"get"}}
+	if d := Compare(Definition(SuperAdmin, Full, Options{}).Rules, []Rule{big}); len(d.Extra) != 0 {
+		t.Errorf("under the full SuperAdmin: %v", d.Extra)
+	}
+	d := Compare(Definition(Viewer, ReadOnly, Options{}).Rules, []Rule{big})
+	if len(d.Extra) != 1 || !strings.Contains(d.Lines()[0], "too large to compare") {
+		t.Errorf("against Viewer: %v", d.Extra)
 	}
 }
