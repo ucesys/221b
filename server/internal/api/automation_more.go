@@ -461,7 +461,7 @@ func (s *Server) postAutomationDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	answer, err := s.opts.Sherlock.CompleteAs(ctx, s.agentID(ai.AutomationAuthor), who, clusters.LocalID, "write a script", automation.DraftPrompt, b.String())
 	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		jsonError(w, agentCallStatus(err), err.Error())
 		return
 	}
 	d := fixDraft(answer, func(ask string) (string, error) {
@@ -487,6 +487,16 @@ func (s *Server) postAutomationDraft(w http.ResponseWriter, r *http.Request) {
 
 // agentID is the agent that answers a model call (Phase 12): "" is
 // Sherlock, the only one without the agents.
+// agentCallStatus is the status of a failed call to an agent: 409 for an
+// agent that is off, not on the cluster or whose provider cannot answer
+// now (AI-54), which is no failure of the provider's; else 502.
+func agentCallStatus(err error) int {
+	if errors.Is(err, ai.ErrUnavailable) || errors.Is(err, ai.ErrUnusable) {
+		return http.StatusConflict
+	}
+	return http.StatusBadGateway
+}
+
 func (s *Server) agentID(id string) string {
 	if s.opts.AI == nil {
 		return ""
@@ -539,7 +549,7 @@ func (s *Server) postAutomationReview(w http.ResponseWriter, r *http.Request) {
 	}
 	text, err := s.opts.Sherlock.CompleteAs(r.Context(), s.agentID(ai.ScriptReviewer), s.watsonWho(r).Audit, clusters.LocalID, "review a script", automation.ReviewPrompt, v.Text)
 	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		jsonError(w, agentCallStatus(err), err.Error())
 		return
 	}
 	var rev automation.Review

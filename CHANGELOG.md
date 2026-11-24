@@ -47,6 +47,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **Asking for a script with the Automation author off answers 409** (AI-54): Automation's draft and review answered 502 Bad Gateway with *the Automation author is off* (or the Script reviewer) and logged a failed request; they now answer 409, as every AI request for an agent that is off does.
 - **The test panel of an agent whose provider cannot answer answers 409** (AI-54): an agent on a provider with no credential, or one that is gone, answered 500 and logged a warning each time the panel opened or its replays changed; it now answers 409 with the reason, and an agent id that is not one 404.
 - **A test run at an effort or on a model of its own says so** (AI-48): the test dialog showed it as the draft's own test (*Draft 4 · Done · 6 of 6 passed*) while the drawer said *Last test: 3 of 6*. The run now carries its `model` and `effort`, and the dialog says *This run measured … it is not kept as the draft's test*.
 - **The estimate of a test on another model prices the grading right** (AI-56): each graded case was priced at the model tested on, though the agent's own model grades it, so a run on Haiku for an agent on Opus was estimated two to three times too low.

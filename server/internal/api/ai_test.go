@@ -36,8 +36,9 @@ func aiSetupWith(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.
 }
 
 // aiSetupOn is aiSetupWith with the agents' records and the two-person
-// requests in the database d, when d is not nil.
-func aiSetupOn(t *testing.T, wrap func(http.Handler) http.Handler, d *db.DB) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service, *lockedBuffer) {
+// requests in the database d, when d is not nil; mods change the
+// server's options after it.
+func aiSetupOn(t *testing.T, wrap func(http.Handler) http.Handler, d *db.DB, mods ...func(*Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *ai.Service, *sherlock.Service, *lockedBuffer) {
 	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = 0
@@ -54,7 +55,7 @@ func aiSetupOn(t *testing.T, wrap func(http.Handler) http.Handler, d *db.DB) (*h
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var aiSvc *ai.Service
 	var svc *sherlock.Service
-	srv, c, _, aud, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+	setAI := func(o *Options) {
 		var backend kv.Backend
 		tp := twoperson.New(nil, nil)
 		if d != nil {
@@ -74,7 +75,8 @@ func aiSetupOn(t *testing.T, wrap func(http.Handler) http.Handler, d *db.DB) (*h
 		aiSvc.SetEngine(svc)
 		o.Sherlock, o.SherlockKeys, o.AI, o.SherlockDefaultURL = svc, keys, aiSvc, api.URL
 		o.TwoPerson = tp
-	})
+	}
+	srv, c, _, aud, _, _ := multiSetupWith(t, "ops@corp.example", nil, append([]func(*Options){setAI}, mods...)...)
 	t.Cleanup(svc.Wait)
 	return srv, c, fake, aiSvc, svc, aud
 }
