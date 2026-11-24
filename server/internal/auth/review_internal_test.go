@@ -135,3 +135,19 @@ func TestAnEndedSessionIsNotServedFromMemoryInALaterOutage(t *testing.T) {
 		t.Fatal("the ended session is served from memory while the store cannot be asked")
 	}
 }
+
+// Finding 15: a groups claim whose name has a dot, as a namespaced claim
+// has, is read by its name first, and as a path only when there is no
+// such claim.
+func TestAGroupsClaimNamedWithADotIsReadByItsName(t *testing.T) {
+	all := map[string]any{
+		"https://corp.example/groups": []any{"devs", "ops"},
+		"realm_access":                map[string]any{"roles": []any{"r1"}},
+	}
+	if got := stringsClaim(all, "https://corp.example/groups"); len(got) != 2 || got[0] != "devs" {
+		t.Fatalf("the namespaced claim: %v", got)
+	}
+	if got := stringsClaim(all, "realm_access.roles"); len(got) != 1 || got[0] != "r1" {
+		t.Fatalf("the path: %v", got)
+	}
+}

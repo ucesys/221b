@@ -286,15 +286,21 @@ func nestedClaim(all map[string]any, name string) string {
 }
 
 // stringsClaim reads a claim as a list of strings; a single string counts
-// as a list of one, and nested claims use dots ("realm_access.roles").
+// as a list of one. A claim of that name is read first, as nestedClaim
+// does, since a namespaced claim's name has dots
+// ("https://corp.example/groups"); without one, dots are a path into
+// nested claims ("realm_access.roles").
 func stringsClaim(all map[string]any, name string) []string {
-	var v any = all
-	for _, part := range strings.Split(name, ".") {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return nil
+	v, ok := all[name]
+	if !ok {
+		v = any(all)
+		for _, part := range strings.Split(name, ".") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil
+			}
+			v = m[part]
 		}
-		v = m[part]
 	}
 	switch x := v.(type) {
 	case string:
