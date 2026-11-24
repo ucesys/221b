@@ -77,6 +77,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 - **A test run's cost and its estimate count the agents it hands work to** (AI-53): the test dialog said up to half less than the console spent when a case was handed over.
 - **Testing an agent that is off answers 409** with "the Summarizer is off", not 500 (AI-54); a test of the instructions in force says *instructions in force* in each agent call's audit record, not *instructions draft*.
 - **Each request to a model is logged at Debug** with its agent, model, effort and betas as sent (AI-55): set `logLevel: debug` to see what effort and betas a request went with.
+- **The first administrator is no longer signed out by a second replica** (RB-46, P7-02): with two or more replicas, a request reaching a replica that had not yet read a newly created account (it reads them every 5 seconds) ended the person's session for every replica and could show the first-run page again; the same happened to every account created in the console on a replica that could not read the users' Secret at its start. A replica now reads the accounts again before it ends a session for a missing account, and refuses the request without ending anything when they cannot be read.
 
 ### Security
 

@@ -196,6 +196,22 @@ func (a *Accounts) Find(login string) (Account, bool) {
 	return *found, true
 }
 
+// FindRead is Find for an account this replica's copy may not hold yet: a
+// replica reads the saved accounts again every few seconds, so one created
+// on another replica may be missing here. On a miss it reads them again,
+// once, and looks again. sure says whether a miss can be trusted: it
+// cannot when the saved accounts could not be read.
+func (a *Accounts) FindRead(ctx context.Context, login string) (acct Account, ok, sure bool) {
+	if u, found := a.Find(login); found {
+		return u, true, true
+	}
+	if err := a.load(ctx); err != nil {
+		return Account{}, false, false
+	}
+	u, found := a.Find(login)
+	return u, found, true
+}
+
 // List returns every account, by user name.
 func (a *Accounts) List() []Account {
 	a.mu.Lock()

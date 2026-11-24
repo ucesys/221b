@@ -174,7 +174,17 @@ func (s *Service) live(sess Session) (Session, bool) {
 		if s.accounts == nil {
 			return sess, true
 		}
-		a, ok := s.accounts.Find(sess.User.Username)
+		// This replica's copy of the accounts may lag a change made on
+		// another, by seconds, or not be read at all: a miss is read
+		// again, and only a miss after a read that succeeded ends the
+		// session. One that could not be read refuses the request and
+		// ends nothing.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		a, ok, sure := s.accounts.FindRead(ctx, sess.User.Username)
+		cancel()
+		if !sure {
+			return Session{}, false
+		}
 		if !ok || a.Disabled {
 			s.sessions.Delete(sess.ID)
 			return Session{}, false
