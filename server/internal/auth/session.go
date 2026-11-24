@@ -62,6 +62,23 @@ type Session struct {
 	Signed bool
 	// sid tells one signed session from another.
 	sid string
+	// state is, for a signed session, the ID of the stored session it is
+	// exchanged for (exchangeID): see StateID.
+	state string
+}
+
+// StateID names what the console keeps for a session (a conversation
+// with Sherlock, Watson's cards and grants, the window a view action goes
+// to, the toolbox's sessions): the session's ID, or, for a signed session,
+// the ID of the stored session it is exchanged for once the store is back,
+// so what the person started while the store was away is still theirs
+// after the exchange. It is as secret as the ID: never shown, logged or
+// sent.
+func (s Session) StateID() string {
+	if s.state != "" {
+		return s.state
+	}
+	return s.ID
 }
 
 // SharedStore keeps session records where every replica of the console
@@ -897,8 +914,32 @@ func (s *Sessions) Alive(id string) bool {
 	if state == unknown {
 		return true
 	}
+	if state == gone && s.signedAlive(id) {
+		// The StateID of a signed session not exchanged yet: what is kept
+		// for it lives as long as the signed session does.
+		return true
+	}
 	_, ok := s.peekAt(key, sess, state == here)
 	return ok
+}
+
+// signedAlive says whether this replica holds a signed session, not
+// exchanged, not ended and not expired, whose StateID is id.
+func (s *Sessions) signedAlive(id string) bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.byID {
+		if !sess.Signed || sess.state != id {
+			continue
+		}
+		_, ended := s.revoked[sess.sid]
+		_, exchanged := s.exchanged[sess.sid]
+		if !ended && !exchanged && !s.expired(sess, now) {
+			return true
+		}
+	}
+	return false
 }
 
 // peek is Get without counting as activity, and without dropping an expired

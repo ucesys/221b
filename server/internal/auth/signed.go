@@ -227,6 +227,7 @@ func (s *Sessions) sign(sess Session) (*Session, error) {
 		return nil, err
 	}
 	signed := p.session(id, sess.LastSeen)
+	signed.state = exchangeIDWith(key, p.Sid)
 	// What the sign-in worked out stands on the replica that signed; every
 	// other replica works it out again (Service.live).
 	signed.User.KubeName, signed.User.KubeGroups = sess.User.KubeName, sess.User.KubeGroups
@@ -250,7 +251,12 @@ func (s *Sessions) exchangeID(sid string) (string, bool) {
 	if len(key) == 0 || sid == "" {
 		return "", false
 	}
-	return base64.RawURLEncoding.EncodeToString(macOf(key, "221b exchange\x00"+sid)), true
+	return exchangeIDWith(key, sid), true
+}
+
+// exchangeIDWith is exchangeID with a given key.
+func exchangeIDWith(key []byte, sid string) string {
+	return base64.RawURLEncoding.EncodeToString(macOf(key, "221b exchange\x00"+sid))
 }
 
 // endedInStore says whether the shared store holds the ending of a signed
@@ -325,6 +331,9 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 			sess = cur
 		} else {
 			sess = p.session(id, now)
+			// The key the cookie was verified with is the one an exchange
+			// works the stored session's ID out with.
+			sess.state = exchangeIDWith(keys.current(), p.Sid)
 			s.byID[key] = sess
 		}
 		s.mu.Unlock()

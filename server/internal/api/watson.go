@@ -147,7 +147,7 @@ func (s *Server) watsonWho(r *http.Request) watson.Who {
 }
 
 func (s *Server) whoOf(sess auth.Session, person kube.Person, from string) watson.Who {
-	w := watson.Who{Session: sess.ID, Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
+	w := watson.Who{Session: sess.StateID(), Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
 		ManageApps: s.opts.Auth == nil || sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin),
 		Audit:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: from}
 	if !w.Person.Nobody() {
@@ -571,7 +571,7 @@ func (s *Server) sherlockWrote(r *http.Request, cluster, command string) bool {
 		return false
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.ID, Cluster: cluster}, command)
+	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.StateID(), Cluster: cluster}, command)
 }
 
 // watsonAnswer turns the service's answer into a response.

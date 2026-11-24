@@ -1218,7 +1218,7 @@ func (s *Server) postAICase(w http.ResponseWriter, r *http.Request) {
 		c = *in.Case
 	case s.opts.Sherlock != nil && in.Message > 0:
 		sess, _ := auth.SessionFrom(r.Context())
-		t, ok := s.opts.Sherlock.TraceOf(sherlock.Key{Session: sess.ID, Cluster: firstOf(in.Cluster, clusters.LocalID)}, in.Message)
+		t, ok := s.opts.Sherlock.TraceOf(sherlock.Key{Session: sess.StateID(), Cluster: firstOf(in.Cluster, clusters.LocalID)}, in.Message)
 		if !ok {
 			jsonError(w, http.StatusNotFound, "That answer is not in your conversation any more.")
 			return

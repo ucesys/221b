@@ -176,7 +176,7 @@ func (s *Server) postProposalSherlockUI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	s.deliverUI(w, r, key, r.PathValue("uid"), sess.ID)
+	s.deliverUI(w, r, key, r.PathValue("uid"), sess.StateID())
 }
 
 // postProposalSherlockStop stops the answer coming on a proposal's

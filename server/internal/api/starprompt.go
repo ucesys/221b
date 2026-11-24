@@ -48,7 +48,7 @@ type starPrompt struct {
 // starSession is the key of a session for the dialog: a hash of its ID,
 // never the ID.
 func starSession(sess auth.Session) string {
-	h := sha256.Sum256([]byte("221b-star-prompt\x00" + sess.ID))
+	h := sha256.Sum256([]byte("221b-star-prompt\x00" + sess.StateID()))
 	return hex.EncodeToString(h[:8])
 }
 

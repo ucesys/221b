@@ -184,7 +184,7 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 		From:         fromAddr(r),
 		// The view actions go to the asker's window only (SR-19).
 		Window:        windowID(in.Window),
-		WindowSession: sess.ID,
+		WindowSession: sess.StateID(),
 		View:          in.View,
 		ViewChanges:   s.sherlockSettings().ChangesView(),
 		// Asked from a case or a proposed change, Sherlock knows the Cases
@@ -219,7 +219,7 @@ func (s *Server) postCaseSherlockUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	s.deliverUI(w, r, key, r.PathValue("uid"), sess.ID)
+	s.deliverUI(w, r, key, r.PathValue("uid"), sess.StateID())
 }
 
 // postCaseSherlockStop stops the answer coming on a case's conversation:

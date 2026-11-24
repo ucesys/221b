@@ -96,7 +96,7 @@ func (s *Server) sherlockProvider(sh settings.Sherlock) sherlock.Provider {
 // convKey is the conversation a request is about.
 func convKey(r *http.Request) sherlock.Key {
 	sess, _ := auth.SessionFrom(r.Context())
-	return sherlock.Key{Session: sess.ID, Cluster: clusterID(r)}
+	return sherlock.Key{Session: sess.StateID(), Cluster: clusterID(r)}
 }
 
 func (s *Server) getSherlock(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +341,7 @@ func (s *Server) conversationPart(r *http.Request, key sherlock.Key, id string) 
 				var reqs []sherlock.UIRequest
 				reqs, uiSeq = conv.UIRequestsAfter(uiSeq)
 				for _, q := range reqs {
-					if !q.For(sess.ID) {
+					if !q.For(sess.StateID()) {
 						continue
 					}
 					if write("ui", q) != nil {
@@ -536,7 +536,7 @@ func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
 	if question == "" {
 		question = "In three sentences, and without reading the cluster: what do your instructions and the administrators' notes tell you about this infrastructure, and what would you check first if a node went NotReady?"
 	}
-	key := sherlock.Key{Session: sess.ID + "/settings-test", Cluster: id}
+	key := sherlock.Key{Session: sess.StateID() + "/settings-test", Cluster: id}
 	s.opts.Sherlock.Reset(key)
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
 		Key: key, Text: question, Cluster: name, Version: version,
