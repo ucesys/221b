@@ -161,8 +161,8 @@ func (p *people) snapshot() (DirectoryState, []directoryPerson) {
 // looks like a credential.
 func cleanErr(err error) string {
 	m := strings.Join(strings.Fields(plainText(err.Error())), " ")
-	if len(m) > 300 {
-		m = m[:300] + "…"
+	if r := []rune(m); len(r) > 300 {
+		m = string(r[:300]) + "…"
 	}
 	return m
 }

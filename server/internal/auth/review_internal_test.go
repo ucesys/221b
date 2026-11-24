@@ -2,11 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/db"
 )
@@ -149,5 +152,14 @@ func TestAGroupsClaimNamedWithADotIsReadByItsName(t *testing.T) {
 	}
 	if got := stringsClaim(all, "realm_access.roles"); len(got) != 1 || got[0] != "r1" {
 		t.Fatalf("the path: %v", got)
+	}
+}
+
+// Cut by the review's cap: cleanErr cuts a long message on a character,
+// never inside one, so what it gives is valid UTF-8.
+func TestCleanErrCutsOnACharacter(t *testing.T) {
+	msg := cleanErr(errors.New("a" + strings.Repeat("é", 400)))
+	if !utf8.ValidString(msg) || !strings.HasSuffix(msg, "…") || utf8.RuneCountInString(msg) > 301 {
+		t.Fatalf("%q", msg)
 	}
 }
