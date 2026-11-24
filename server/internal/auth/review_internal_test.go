@@ -229,3 +229,38 @@ func TestASignedSessionKeepsToShorterLimits(t *testing.T) {
 		}
 	}
 }
+
+// Cut by the review's cap (session.go:838-840): a replica that finds a
+// session idle by the last activity stored does not delete it for every
+// replica while another may hold activity not written back yet (it is
+// written every 5 minutes): the session goes on where it was used.
+func TestAnotherReplicaDoesNotEndASessionOnStaleActivity(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	store := NewOutageStore()
+	on := func() *Sessions {
+		s := NewSessions(time.Hour, 7*24*time.Hour, clock)
+		s.Share(store, nil)
+		return s
+	}
+	a, b := on(), on()
+	sess := a.Create(User{Subject: "local:ann", Username: "ann"}, false, "local")
+	now = now.Add(4 * time.Minute)
+	if _, ok := a.Get(sess.ID); !ok {
+		t.Fatal("the session on its replica")
+	}
+	now = now.Add(time.Hour - 2*time.Minute)
+	// By the stored activity, 62 minutes ago, it is idle; by a's, 58.
+	b.Get(sess.ID)
+	if _, ok := a.Get(sess.ID); !ok {
+		t.Fatal("the other replica ended a session used 58 minutes ago, within the idle hour")
+	}
+	// Idle by any count, it ends.
+	now = now.Add(2 * time.Hour)
+	if _, ok := b.Get(sess.ID); ok {
+		t.Fatal("an idle session was taken")
+	}
+	if _, ok := a.Get(sess.ID); ok {
+		t.Fatal("an idle session was taken on its replica")
+	}
+}

@@ -852,8 +852,16 @@ func (s *Sessions) Get(id string) (Session, bool) {
 	now := s.now()
 	s.mu.Lock()
 	if s.expired(sess, now) {
+		// With a shared store another replica may hold activity it has not
+		// written back yet (every seenEvery): by the last activity known
+		// here the session is idle, so it is refused here, but it is ended
+		// for every replica only once it is idle by any count, as the
+		// sweep does.
+		gone := s.shared == nil || now.Sub(sess.LastSeen) > s.idle+seenEvery || now.After(sess.Expires)
 		s.mu.Unlock()
-		s.forget(key, false)
+		if gone {
+			s.forget(key, false)
+		}
 		return Session{}, false
 	}
 	sess.LastSeen = now
