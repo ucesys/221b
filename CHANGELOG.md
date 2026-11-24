@@ -93,6 +93,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **The directory sync no longer shows admin and reporter group members as disabled** (RB-24): it read the members of the role lists only, so people who sign in through `auth.adminGroups` or a reporter group were listed as "Not in a listed group" on the Users page after each sync.
 - **The sign-in page keeps where you were going, and works in two tabs** (P3-01): after a failed attempt the page forgot the page asked for and sent the person to the start page once signed in; each sign-in page served made the forms of the others refused ("That sign-in did not come from this console"), and so did a page left open for an hour. The form's token now serves every tab for a day, and a failed attempt keeps the page asked for.
 - **A slow directory holds a request no longer than its bound** (RB-23): reading a person's groups again is given 5 seconds, but the LDAP client applied that only to connecting, and each request on the connection could take 15 seconds. The caller's time now bounds every request; a directory sync is held to its 2 minutes the same way.
+- **One roll forward after a rollback ends the sessions once** (DB-66): a replica of the release before, still running during the roll forward, signed people in, and each upgraded replica that started after found a newer sign and ended every session again, those of people who had just signed in on the upgraded replicas too. A newer sign within 10 minutes of the last one is now taken for the same roll forward.
 
 ### Security
 

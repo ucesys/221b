@@ -139,3 +139,58 @@ func TestTheSessionsFromBeforeARollbackAreEnded(t *testing.T) {
 		t.Fatalf("said twice:\n%s", logged.String())
 	}
 }
+
+// The final sweep of the review of the auth package (pg_sessions.go:
+// 571-605): during one roll forward a replica of the release before goes
+// on signing people in until it is replaced, and each such session is a
+// newer sign. A start that finds one a moment after the ending was done
+// does not end again the sessions started since on the upgraded replicas.
+func TestOneRollForwardEndsTheSessionsOnce(t *testing.T) {
+	ctx := t.Context()
+	d := dbtest.Open(t)
+	cs := fake.NewClientset()
+	const ns, release = "221b", "k8s-console-221b"
+	secretsOf := func() *kube.SessionStore {
+		return kube.NewSessionStoreFor(cs, ns, release, map[string]string{"app.kubernetes.io/instance": release})
+	}
+	var mu sync.Mutex
+	var ahead time.Duration
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(ahead) }
+	at := func(d time.Duration) { mu.Lock(); defer mu.Unlock(); ahead = d }
+	store := secretsOf()
+	wctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	go store.Run(wctx)
+	if !store.Synced(wctx) {
+		t.Fatal("the session cache did not sync")
+	}
+	old := auth.NewSessions(8*time.Hour, 7*24*time.Hour, now)
+	old.Share(store, slog.New(slog.DiscardHandler))
+	var logged, audited lockedBuffer
+	start := func() *auth.Sessions {
+		t.Helper()
+		w := &wiring{database: d, log: slog.New(slog.NewJSONHandler(&logged, nil)), auditLog: audit.New(audit.Options{Out: &audited}), authCfg: auth.Config{SessionIdle: 8 * time.Hour}}
+		s := auth.NewSessions(8*time.Hour, 7*24*time.Hour, nil)
+		s.Share(w.sessionsInDatabase(ctx, secretsOf()), slog.New(slog.DiscardHandler))
+		return s
+	}
+	old.Start(auth.Session{User: auth.User{Username: "ann"}, Method: "local"})
+	start()
+	// The rollback, and cy signed in on it.
+	at(auth.RollbackGrace + time.Minute)
+	old.Start(auth.Session{User: auth.User{Username: "cy"}, Method: "local"})
+	// The roll forward: the first upgraded replica ends what was from
+	// before, and dee signs in on it.
+	s := start()
+	dee := s.Start(auth.Session{User: auth.User{Username: "dee"}, Method: "local"})
+	// A replica of the release before, not replaced yet, signs ed in.
+	at(auth.RollbackGrace + 2*time.Minute)
+	old.Start(auth.Session{User: auth.User{Username: "ed"}, Method: "local"})
+	// The next upgraded replica starts.
+	if _, ok := start().Get(dee.ID); !ok {
+		t.Fatal("dee, signed in on an upgraded replica, was signed out again by the same roll forward")
+	}
+	if n := strings.Count(audited.String(), `"session.end-all"`); n != 1 {
+		t.Fatalf("the sessions were ended %d times", n)
+	}
+}
