@@ -397,20 +397,37 @@ func (s *Service) checkTestModel(snap snapshot, id string, o TestOptions) error 
 // overridden says the run tests at an effort or on a model of its own.
 func (o TestOptions) overridden() bool { return o.Effort != "" || o.Model != "" }
 
-// override puts the run's effort and model on an agent, priced on its
-// provider.
-func (s *Service) override(snap snapshot, a *sherlock.Agent, o TestOptions) {
+// measuring is the snapshot a run at an effort or on a model of its own
+// resolves the agent in (AI-48): its settings with that effort and model,
+// Auto off, so that its price, its reply bound and Sherlock's form follow
+// the model it runs on, as they would were the agent set to it. What is
+// not given stays as set, or as Auto would start it: an effort left to
+// Auto is the model's own default, a model left to Auto the standard
+// tier's. A run of the agent's own settings resolves in snap.
+func (s *Service) measuring(snap snapshot, id string, o TestOptions) snapshot {
 	if !o.overridden() {
-		return
+		return snap
 	}
-	if o.Model != "" {
-		p, _ := s.provider(snap, a.Provider)
-		a.Model, a.Price = o.Model, priceOf(o.Model, p)
+	set := s.settingsOf(snap, id)
+	p, _ := s.provider(snap, set.Provider)
+	switch {
+	case o.Model != "" && o.Model != set.Model:
+		// Its own context window is that of its own model.
+		set.Model, set.ContextWindow = o.Model, 0
+	case o.Model == "" && set.Model == auto.Auto:
+		set.Model, set.ContextWindow = modelOfAuto(set, p), 0
 	}
-	if o.Effort != "" {
-		a.Effort = o.Effort
+	switch {
+	case o.Effort != "":
+		set.Effort = o.Effort
+	case set.Effort == auto.Auto:
+		set.Effort = ""
 	}
-	a.Auto = nil
+	set.FloorEffort, set.FloorModel = "", ""
+	out := snap
+	out.agents.Agents = cloneAgents(snap.agents.Agents)
+	out.agents.Agents[id] = set
+	return out
 }
 
 // MaxReplays bounds a test's replays.
@@ -469,11 +486,10 @@ func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	a, err := s.resolve(snap, id, "", nil, over, nil, false)
+	a, err := s.resolve(s.measuring(snap, id, o), id, "", nil, over, nil, false)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	s.override(snap, &a, o)
 	cases, err := s.TestsOf(ctx, id)
 	if err != nil {
 		return 0, 0, 0, err
@@ -672,13 +688,12 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 			if ctx.Err() != nil {
 				break
 			}
-			a, err := s.resolve(snap, id, t.Cluster, nil, over, nil, false)
+			a, err := s.resolve(s.measuring(snap, id, o), id, t.Cluster, nil, over, nil, false)
 			if err != nil {
 				run.Replays = append(run.Replays, ReplayResult{Question: clip(t.Question, 300), Cluster: t.Cluster, Before: clip(t.Answer, 800), Error: err.Error()})
 				s.publish(id, run)
 				continue
 			}
-			s.override(snap, &a, o)
 			s.capsNow(ctx, &a)
 			q := sherlock.Question{Key: sherlock.Key{Session: "replay", Cluster: t.Cluster}, Text: t.Question, Cluster: t.Cluster, Tools: newRecorded(defs, t.Tools), Who: o.Who}
 			res := s.engine.RunAgent(ctx, a, q, t.Question)
@@ -758,6 +773,7 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 		}
 		s.publish(id, run)
 	}
+	measured := s.measuring(snap, id, o)
 	slots := make(chan struct{}, TestParallel)
 	started := 0
 	for i, c := range cases {
@@ -778,7 +794,9 @@ func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap s
 		// The answers are graded on the agent's own model, whatever the run
 		// tests at.
 		grader := a
-		s.override(snap, &a, o)
+		if err == nil && o.overridden() {
+			a, err = s.resolve(measured, id, cluster, nil, over, recordedSetup(c.Recorded), false)
+		}
 		if err != nil {
 			run.Planned[i].State = CaseFailed
 			halt, haltAt = err, i+1

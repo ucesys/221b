@@ -2,7 +2,9 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/ai/auto"
@@ -112,5 +114,55 @@ func TestATestOnAutoOrAModelNotOfferedIsRefusedReview5(t *testing.T) {
 		if _, _, _, err := w.ai.Estimate(ctx, Troubleshooter, TestOptions{Model: model}); err != nil {
 			t.Fatalf("the estimate on %s: %v", model, err)
 		}
+	}
+}
+
+// Finding 4: a test run on another model is sent with that model's reply
+// bound and, for Sherlock, the form that fits its context: Sherlock on
+// the A5000's long model (131,072 tokens) answers whole and unbounded;
+// tested on the 27b (16,384), each case asks for 4,096 tokens in the
+// compact form, as Sherlock set to the 27b would.
+func TestATestOnAnotherModelFollowsItsContextReview4(t *testing.T) {
+	w := setup(t, nil)
+	w.ai.opts.ToolDefs = func() []sherlock.ToolDef { return testDefs(t) }
+	ctx := context.Background()
+	if err := w.ai.SaveProvider(ctx, Provider{ID: "a5000", Name: "A5000", Provider: sherlock.Provider{Kind: sherlock.KindOpenAI, Endpoint: w.ai.opts.DefaultURL + "/open/v1"}, Model: "qwen3.8-27b", ContextWindow: 16384}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ai.RecordTest(ctx, "a5000", "qwen3.8-27b", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ai.SaveAgent(ctx, Sherlock, AgentChange{AgentSettings: AgentSettings{Provider: "a5000", Model: "qwen3.8-27b-long", ContextWindow: 131072}}); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}}); a.Compact || a.MaxTokens != 0 {
+		t.Fatalf("on its own model: compact %v, max %d", a.Compact, a.MaxTokens)
+	}
+	w.fake.Reset()
+	run, err := w.ai.RunTests(ctx, Sherlock, TestOptions{By: "ann", Model: "qwen3.8-27b"})
+	if err != nil || run.Cases == 0 {
+		t.Fatalf("%+v %v", run, err)
+	}
+	tested := 0
+	for _, raw := range w.fake.Requests() {
+		var r struct {
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
+			Messages  []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(raw, &r)
+		if r.Model != "qwen3.8-27b" {
+			continue
+		}
+		tested++
+		if r.MaxTokens != 4096 || len(r.Messages) == 0 || !strings.HasPrefix(r.Messages[0].Content, CompactCore()) {
+			t.Fatalf("a case on the 27b: max %d, compact %v", r.MaxTokens, len(r.Messages) > 0 && strings.HasPrefix(r.Messages[0].Content, CompactCore()))
+		}
+	}
+	if tested == 0 {
+		t.Fatal("no case ran on the 27b")
 	}
 }
