@@ -429,3 +429,22 @@ func TestTheAccountLimitCountsTheNameAndTheEmailTogether(t *testing.T) {
 		t.Fatalf("six attempts at one account by name and email: %v", codes)
 	}
 }
+
+// Cut by the review's cap (auth.go:982-986): a sign-out on a replica that
+// cannot look the session up (the store away, and it never held it)
+// still ends it: the store is told when it is back.
+func TestASignOutWhereTheSessionCannotBeLookedUpStillEndsIt(t *testing.T) {
+	o := newOutage(t)
+	cfg := outageConfig(t)
+	a, b := o.replica(cfg, nil), o.replica(cfg, nil)
+	root := a.mustSignIn("root", goodPassword)
+	o.cookie(a, root)
+	o.store.Fail(errStoreAway)
+	signOutOn(t, b, root)
+	o.back()
+	b.svc.Sessions().StoreIsBack()
+	c := o.holding(a, o.cookies[0])
+	if _, code := a.whoami(c); code != http.StatusUnauthorized {
+		t.Fatalf("the session signed out on the other replica: %d", code)
+	}
+}

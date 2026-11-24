@@ -1080,6 +1080,11 @@ func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		s.sessions.Delete(sess.ID)
 		s.record(r, audit.ActionSignOut, sess.User, audit.OutcomeOK, "")
+	} else if c, err := r.Cookie(cookieSession); err == nil && (plausibleID(c.Value) || signedShape(c.Value)) && s.cfg.Mode != ModeNone {
+		// This replica cannot look the session up (the store away, and it
+		// never held it): it is ended all the same, refused here and the
+		// store told when it can be, so the sign-out holds everywhere.
+		s.sessions.Delete(c.Value)
 	}
 	// The gate may have started, for this very request, a stored session
 	// in place of one made while the session store was away: that one ends

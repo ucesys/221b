@@ -108,6 +108,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **The sign-in limits hold against a flood of keys and IPv6 addresses** (RB-46): the limit per address counted each IPv6 address apart, so a client with a /64 had no limit in practice, and the limiter's bound on what it remembers could forget an address or account at its limit once enough other keys were tried. The limit per address now counts an IPv6 /64, and a key at its limit is forgotten last.
 - **A session made while the session store is away keeps to a shorter idle limit or lifetime** (DB-65): it lasted `auth.outageSession` (30 minutes) even where `auth.sessionIdle` or `auth.sessionMax` was set shorter; it now lasts the shortest of the three.
 - **The emptying of copied session Secrets is retried until it is done** (DB-66): the per-minute retry stopped for good, silently, after a try that found the database away, leaving Secrets that a console from before the move could take a session up from.
+- **A sign-out always ends the session** (P3-01): a sign-out reaching a replica that could not look the session up (the store away, and the replica had never held it) cleared the cookie and reported success but ended nothing, so a copy of the cookie went on working on the other replicas. The session is now ended by its cookie, and the store told when it is back.
 
 ## 0.13.0 (2026-11-22)
 
