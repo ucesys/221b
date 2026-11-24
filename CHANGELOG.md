@@ -115,6 +115,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A user defined in values wholly hides a console user of the same name** (RB-46): the hidden console user was still listed beside it, still counted as a SuperAdmin (another to approve, or not the last), and its old password could sign in by its email. It is now left out of all of these.
 - **With LDAP, the sign-in's answer time no longer tells local account names** (RB-21): a name with no local account went straight to the directory, without the password check a local account's wrong password costs, so timing the answers told local account names (break-glass accounts) from the others.
 - **No session cookie on a publicly cacheable answer** (DB-65): the exchange of a session made during an outage of the session store could set the new session's cookie on the answer to a static file (a stylesheet, a script), which is marked publicly cacheable; a shared cache that keeps `Set-Cookie` would have handed the session to others. Static files no longer exchange.
+- **The admin list no longer matches by Unicode case folding** (RB-04): `auth.admins` was compared with Unicode case folding, so an identity provider that lets people choose their name could issue `Kate@corp.example` (a Kelvin sign) and make that person the listed `kate@corp.example`, a SuperAdmin. Names now match without regard to ASCII case only.
 
 ## 0.13.0 (2026-11-22)
 

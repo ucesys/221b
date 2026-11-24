@@ -560,3 +560,17 @@ func TestNoSessionCookieOnAStaticFile(t *testing.T) {
 		t.Fatalf("the API: %d", code)
 	}
 }
+
+// From the review's "not confirmed" list (auth.go:279): the admin list
+// matches names and emails without regard to ASCII case only; a name a
+// provider issues with a character that Unicode folds onto a letter (the
+// Kelvin sign onto k) is not the listed one.
+func TestTheAdminListMatchesASCIICaseOnly(t *testing.T) {
+	cfg := auth.Config{Mode: auth.ModeOIDC, Admins: []string{"kate@corp.example"}}
+	if g := auth.GrantFor(cfg, roles.OIDC, auth.User{Username: "Kate@corp.example", Email: "Kate@corp.example"}, nil); g.Admin() {
+		t.Fatal("a name with the Kelvin sign is the listed admin")
+	}
+	if g := auth.GrantFor(cfg, roles.OIDC, auth.User{Username: "Kate@Corp.Example"}, nil); !g.Admin() {
+		t.Fatal("the listed admin in other capitals is not")
+	}
+}

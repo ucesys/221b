@@ -280,10 +280,33 @@ func (s *Service) RunAccounts(ctx context.Context, every time.Duration) {
 	})
 }
 
+// asciiFold says whether two names are the same but for ASCII case. Not
+// strings.EqualFold, whose Unicode folding takes the Kelvin sign for k and
+// the long s for s: a name a provider lets someone choose must not match a
+// listed administrator's by such a character.
+func asciiFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 // isAdmin says whether a person manages the console.
 func (s *Service) isAdmin(u User) bool {
 	for _, a := range s.cfg.Admins {
-		if a != "" && (strings.EqualFold(a, u.Username) || a == u.Subject || (u.Email != "" && strings.EqualFold(a, u.Email))) {
+		if a != "" && (asciiFold(a, u.Username) || a == u.Subject || (u.Email != "" && asciiFold(a, u.Email))) {
 			return true
 		}
 	}
