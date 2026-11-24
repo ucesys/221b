@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -144,4 +145,43 @@ func TestANewUserInTheAdminListIsHeldToTwoPeople(t *testing.T) {
 	if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "y", "email": "y@corp.example", "password": goodPassword}); code != http.StatusCreated {
 		t.Fatalf("another email: %d %s", code, b)
 	}
+}
+
+// Finding 5: a reset or End sessions while the session store's list
+// cannot be had ends the sessions every replica holds all the same, at
+// their next request, and the audit record says what was ended where.
+func TestSessionsEndedWhileTheStoreIsAwayEndEverywhere(t *testing.T) {
+	o := newOutage(t)
+	cfg := outageConfig(t)
+	a, b := o.replica(cfg, nil), o.replica(cfg, nil)
+	o.create(a, "ann")
+	o.create(a, "bea")
+	reread(t, b)
+	root := a.mustSignIn("root", goodPassword)
+	o.cookie(a, root)
+	// Their sessions are rows a has never been shown.
+	ann, bea := b.mustSignIn("ann", goodPassword), b.mustSignIn("bea", goodPassword)
+	o.cookie(b, ann)
+	o.cookie(b, bea)
+	*o.now = o.now.Add(time.Minute)
+	o.store.Fail(errStoreAway)
+	if code, body := a.api(root, http.MethodPatch, "/api/v1/admin/users/ann", map[string]any{"password": "ann's new long password", "currentPassword": goodPassword}); code != http.StatusOK {
+		t.Fatalf("the reset: %d %s", code, body)
+	}
+	if code, body := a.api(root, http.MethodDelete, "/api/v1/admin/users/bea/sessions", nil); code != http.StatusNoContent {
+		t.Fatalf("End sessions: %d %s", code, body)
+	}
+	if !strings.Contains(a.audit.String(), "the session store could not be listed") {
+		t.Errorf("the audit record does not say the ending was partial: %s", a.audit.String())
+	}
+	o.back()
+	reread(t, b)
+	for name, c := range map[string]*http.Client{"ann": ann, "bea": bea} {
+		if _, code := b.whoami(c); code != http.StatusUnauthorized {
+			t.Errorf("%s's session after it was ended while the store was away: %d", name, code)
+		}
+	}
+	// Signing in again works.
+	o.cookie(b, b.mustSignIn("ann", "ann's new long password"))
+	o.cookie(b, b.mustSignIn("bea", goodPassword))
 }

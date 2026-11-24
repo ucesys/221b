@@ -294,7 +294,7 @@ func TestEndingAPersonsSessionsReachesEveryReplica(t *testing.T) {
 		other := b.Start(Session{User: User{Username: "cy"}, Method: "local"})
 		eventually(t, "replica A does not list replica B's sessions", func() bool { return len(a.Live()) == 3 })
 		// As endSessions does after a password reset on replica A.
-		if n := a.DeleteWhere(func(x Session) bool { return x.User.Username == "bob" }); n != 2 {
+		if n, _ := a.DeleteWhere(func(x Session) bool { return x.User.Username == "bob" }); n != 2 {
 			t.Fatalf("ended %d sessions", n)
 		}
 		eventually(t, "bob still has a session on replica B", func() bool {

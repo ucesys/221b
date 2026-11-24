@@ -409,8 +409,7 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 		what = append(what, "made a SuperAdmin at once by the admin list: the only SuperAdmin, so nobody else could approve")
 	}
 	if end {
-		s.endSessions(name)
-		what = append(what, "sessions ended")
+		what = append(what, s.endSessions(name))
 	}
 	s.recordUser(r, sess, audit.ActionUserUpdate, name, strings.Join(what, ", "), audit.OutcomeOK)
 	writeJSON(w, http.StatusOK, s.row(name, sess))
@@ -478,9 +477,16 @@ func (s *Service) ownPassword(w http.ResponseWriter, r *http.Request, sess Sessi
 	return true
 }
 
-// endSessions signs a local user out everywhere.
-func (s *Service) endSessions(username string) int {
-	return s.sessions.DeleteWhere(func(x Session) bool { return x.Method == string(ModeLocal) && x.User.Username == username })
+// endSessions signs a local user out everywhere, and says so for the audit
+// record. The account's note of the ending (Accounts.SessionsEnded), made
+// with the change that asks for it, ends on every replica the sessions the
+// session store could not be asked to end, at their next request.
+func (s *Service) endSessions(username string) string {
+	n, err := s.sessions.DeleteWhere(func(x Session) bool { return x.Method == string(ModeLocal) && x.User.Username == username })
+	if err != nil {
+		return fmt.Sprintf("%d sessions ended on this replica; the session store could not be listed, so the others end at their next request", n)
+	}
+	return fmt.Sprintf("%d sessions ended", n)
 }
 
 func (s *Service) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -496,8 +502,7 @@ func (s *Service) deleteUser(w http.ResponseWriter, r *http.Request) {
 		refuseChange(w, err)
 		return
 	}
-	n := s.endSessions(name)
-	s.recordUser(r, sess, audit.ActionUserDelete, name, fmt.Sprintf("memberships and super roles removed with the user; %d sessions ended", n), audit.OutcomeOK)
+	s.recordUser(r, sess, audit.ActionUserDelete, name, "memberships and super roles removed with the user; "+s.endSessions(name), audit.OutcomeOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -581,8 +586,16 @@ func (s *Service) deleteSessions(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "No such user.")
 		return
 	}
-	n := s.endSessions(name)
-	s.recordUser(r, sess, audit.ActionUserSessions, name, fmt.Sprintf("%d sessions ended", n), audit.OutcomeOK)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	// Noted on the account first, so a session the store cannot be asked
+	// to end is refused on every replica all the same.
+	if err := s.accounts.EndSessions(ctx, name); err != nil {
+		s.recordUser(r, sess, audit.ActionUserSessions, name, err.Error(), audit.OutcomeFailed)
+		refuseChange(w, err)
+		return
+	}
+	s.recordUser(r, sess, audit.ActionUserSessions, name, s.endSessions(name), audit.OutcomeOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 

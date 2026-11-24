@@ -177,7 +177,7 @@ func TestEndingSessionsWhileTheStoreIsAwayIsDoneWhenItIsBack(t *testing.T) {
 	bob := s.Start(Session{User: User{Username: "bob"}, Method: "local"})
 	cat := s.Start(Session{User: User{Username: "cat"}, Method: "local"})
 	store.Fail(errAwayDB)
-	if n := s.DeleteWhere(func(x Session) bool { return x.User.Username == "ann" }); n != 1 {
+	if n, _ := s.DeleteWhere(func(x Session) bool { return x.User.Username == "ann" }); n != 1 {
 		t.Fatalf("ended %d sessions", n)
 	}
 	s.Delete(cat.ID) // a sign-out
@@ -825,7 +825,7 @@ func TestASignedSessionEndedOnAReplicaIsRefusedThere(t *testing.T) {
 		t.Fatal("the replica that was not told refuses it: the document says otherwise")
 	}
 	// Ending a person's sessions ends the signed ones this replica holds.
-	if n := a.DeleteWhere(func(x Session) bool { return x.User.Username == "ann" }); n != 2 {
+	if n, _ := a.DeleteWhere(func(x Session) bool { return x.User.Username == "ann" }); n != 2 {
 		t.Fatalf("ended %d", n)
 	}
 	if _, ok := a.Get(sess.ID); ok {

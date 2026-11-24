@@ -228,6 +228,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 		}
 		external := len(cfg.Admins) > 0 || len(cfg.AdminGroups) > 0 || len(cfg.Lists[roles.SuperAdmin]) > 0
 		s.accounts = NewAccounts(backend, managed, cfg.LocalGroups, external, now)
+		s.accounts.KeepEndings(max(cfg.SessionMax, longestOutage))
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := s.accounts.Load(ctx); err != nil {
 			s.log.Error("reading the saved accounts failed; the first-run page stays closed and accounts cannot change until they can be read", "err", err)

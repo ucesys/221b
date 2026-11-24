@@ -121,7 +121,11 @@ type Accounts struct {
 	managed    map[string]*Account
 	stored     map[string]*Account
 	groups     map[string]LocalGroup
-	loaded     bool
+	// ended is when each account's sessions were last ended (document), and
+	// endedKept how long an ending is kept: as long as a session can live.
+	ended     map[string]time.Time
+	endedKept time.Duration
+	loaded    bool
 	// version is the backend's version of what is in memory, "" when it
 	// must be read again; extra and userExtra are the saved fields this
 	// version does not know; newer says a newer console saved them, so
@@ -143,7 +147,7 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 		now = time.Now
 	}
 	_, memory := backend.(*MemoryBackend)
-	a := &Accounts{backend: versioned(backend), persistent: !memory, managed: map[string]*Account{}, stored: map[string]*Account{}, groups: map[string]LocalGroup{}, external: external, now: now}
+	a := &Accounts{backend: versioned(backend), persistent: !memory, managed: map[string]*Account{}, stored: map[string]*Account{}, ended: map[string]time.Time{}, endedKept: defaultEndedKept, groups: map[string]LocalGroup{}, external: external, now: now}
 	for i := range managed {
 		m := managed[i]
 		m.Managed = true
@@ -153,6 +157,56 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 		a.groups[g.Name] = g
 	}
 	return a
+}
+
+// defaultEndedKept is how long the ending of an account's sessions is kept
+// when the sessions' maximum life is not given: the default maximum.
+const defaultEndedKept = 7 * 24 * time.Hour
+
+// KeepEndings sets how long the ending of an account's sessions is kept:
+// the longest a session can live, after which no session from before it
+// is left to refuse.
+func (a *Accounts) KeepEndings(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if d > 0 {
+		a.endedKept = d
+	}
+}
+
+// pruneEnded forgets endings no session can be older than. Callers hold
+// the lock.
+func (a *Accounts) pruneEnded() {
+	cut := a.now().Add(-a.endedKept)
+	for name, t := range a.ended {
+		if t.Before(cut) {
+			delete(a.ended, name)
+		}
+	}
+}
+
+// SessionsEnded is when an account's sessions were last ended, as this
+// replica last read the accounts: a session signed in before then is
+// refused (RB-46).
+func (a *Accounts) SessionsEnded(username string) (time.Time, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	t, ok := a.ended[username]
+	return t, ok
+}
+
+// EndSessions notes that an account's sessions end now, so every replica
+// refuses those signed in before, also ones the session store could not
+// be asked to end. An account of the deployment's values has its ending
+// noted too.
+func (a *Accounts) EndSessions(ctx context.Context, username string) error {
+	return a.change(ctx, func() error {
+		if a.get(username) == nil {
+			return ErrNotFound
+		}
+		a.ended[username] = a.now()
+		return nil
+	})
 }
 
 // Persistent says whether accounts created here survive a restart.
@@ -466,6 +520,9 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 			}
 			u.Disabled = *c.Disabled
 		}
+		if end {
+			a.ended[username] = a.now()
+		}
 		return nil
 	})
 	return u, end, err
@@ -501,6 +558,9 @@ func (a *Accounts) Delete(ctx context.Context, username string) error {
 		}
 		delete(a.stored, username)
 		delete(a.userExtra, username)
+		// A user made again with the name later does not take up the
+		// sessions of this one.
+		a.ended[username] = a.now()
 		return nil
 	})
 }

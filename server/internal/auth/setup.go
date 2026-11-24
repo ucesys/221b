@@ -185,7 +185,7 @@ func (s *Service) live(sess Session) (Session, bool) {
 		if !sure {
 			return Session{}, false
 		}
-		if !ok || a.Disabled {
+		if !ok || a.Disabled || s.endedBefore(sess) {
 			s.sessions.Delete(sess.ID)
 			return Session{}, false
 		}
@@ -206,6 +206,22 @@ func (s *Service) live(sess Session) (Session, bool) {
 		}
 	}
 	return sess, true
+}
+
+// endedBefore says whether a local account's sessions were ended after this
+// one was signed in (a reset, End sessions): it is refused on every
+// replica, though the session store could not be told of the ending. A
+// signed session's time of sign-in is in whole seconds, and so is the
+// ending it is compared with.
+func (s *Service) endedBefore(sess Session) bool {
+	at, ok := s.accounts.SessionsEnded(sess.User.Username)
+	if !ok {
+		return false
+	}
+	if sess.Signed {
+		at = at.Truncate(time.Second)
+	}
+	return sess.Created.Before(at)
 }
 
 // signsIn says whether this console signs people in that way: the local

@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -140,8 +139,7 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 		s.renderPassword(w, r, msg, "", http.StatusBadRequest)
 		return
 	}
-	n := s.endSessions(acct.Username)
-	s.record(r, audit.ActionPasswordChange, who, audit.OutcomeOK, fmt.Sprintf("changed from the sign-in page; %d sessions ended", n))
+	s.record(r, audit.ActionPasswordChange, who, audit.OutcomeOK, "changed from the sign-in page; "+s.endSessions(acct.Username))
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	http.Redirect(w, r, "/signin?changed=1&next="+url.QueryEscape(safeNext(r.PostFormValue("next"))), http.StatusSeeOther)
 }

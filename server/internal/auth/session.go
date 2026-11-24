@@ -810,20 +810,22 @@ func (s *Sessions) Live() []Session {
 // DeleteWhere ends every session the test selects, on every replica, and
 // says how many. While the shared store's list cannot be had it ends the
 // ones this replica holds, and no other: those it refuses from then on and
-// removes from the store when the store can be reached. A signed session
-// this replica holds is ended here, and its ending kept in the store for
-// the replicas that do not remember it; one this replica has never seen
-// cannot be found, and lasts until it expires (DB-65).
-func (s *Sessions) DeleteWhere(match func(Session) bool) int {
+// removes from the store when the store can be reached, and the error says
+// the ending is partial. A signed session this replica holds is ended
+// here, and its ending kept in the store for the replicas that do not
+// remember it; one this replica has never seen cannot be found here
+// (DB-65). What ends the others is the account's note of the ending
+// (Accounts.SessionsEnded), which every replica checks.
+func (s *Sessions) DeleteWhere(match func(Session) bool) (int, error) {
 	n := 0
-	all, _ := s.all()
+	all, err := s.all()
 	for key, sess := range all {
 		if match(sess) {
 			s.forgetOf(key, true, &sess)
 			n++
 		}
 	}
-	return n
+	return n, err
 }
 
 // Get finds a live session and notes the activity; an expired one is
