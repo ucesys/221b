@@ -353,15 +353,22 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 		ended := false
 		if sess.Signed && !streams(r) {
 			if stored, made, ok := s.sessions.Exchange(sess); ok {
-				s.setSession(w, r, stored)
-				// What handles the request from here on, the leader it may
-				// be forwarded to as well, finds the stored session.
-				carry(r, stored.ID)
-				if made {
-					s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
-						"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+				// The stored session holds the roles of its exchange, which
+				// may have been taken away since: the person is what they are
+				// now, as for any session, or is refused.
+				if now, alive := s.live(*stored); !alive {
+					ended = true
+				} else {
+					s.setSession(w, r, stored)
+					// What handles the request from here on, the leader it
+					// may be forwarded to as well, finds the stored session.
+					carry(r, stored.ID)
+					if made {
+						s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
+							"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+					}
+					sess = now
 				}
-				sess = *stored
 			} else if s.sessions.Revoked(sess) {
 				// The store holds the ending of this session: it was signed
 				// out, or ended by an administrator, where this replica did

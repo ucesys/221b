@@ -78,6 +78,10 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 - **Testing an agent that is off answers 409** with "the Summarizer is off", not 500 (AI-54); a test of the instructions in force says *instructions in force* in each agent call's audit record, not *instructions draft*.
 - **Each request to a model is logged at Debug** with its agent, model, effort and betas as sent (AI-55): set `logLevel: debug` to see what effort and betas a request went with.
 
+### Security
+
+- **A SuperAdmin role taken away is gone from a session exchanged after an outage** (DB-65): a session signed in while the session store was away, and exchanged for a stored one when the store came back, was given the roles saved at the exchange on every later request that showed the signed cookie, so a person whose SuperAdmin role was removed kept it by replaying that cookie until it expired (30 minutes by default, up to 24 hours). The exchanged session is now checked as every session is, and refused when the account is disabled or gone.
+
 ## 0.13.0 (2026-11-22)
 
 Phase 13: **the console keeps its records in PostgreSQL, and does not run without it** ([docs/database.md](docs/database.md), [docs/data-model.md](docs/data-model.md), DB-01 to DB-72). Every record set that was kept in a ConfigMap, and the part of what was kept in Secrets that is not secret, is now rows of a proper data model. **The chart runs a bundled PostgreSQL by default** (`database.mode: bundled`, one member); `database.mode: none` is gone. **Every installation changes at this upgrade**: a 0.12 release gets the bundled database, and its first start copies its ConfigMaps and Secrets in, once, and removes what it copied. Where an entry below says *with a database*, that is every console now.
