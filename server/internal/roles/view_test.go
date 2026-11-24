@@ -330,3 +330,25 @@ func TestPermissionsNeverSendsNullRules(t *testing.T) {
 		t.Errorf("null rules: %s", b)
 	}
 }
+
+// Roles review, finding 11: a rule's flags were stamped on every row of
+// the rule, so the read-only SuperAdmin's core get rule marked configmaps,
+// pods and 25 more as Secrets.
+func TestPermissionFlagsArePerRow(t *testing.T) {
+	rows := permRules(SuperAdmin, Definition(SuperAdmin, ReadOnly, Options{}).Rules)
+	flagged := map[string][]string{}
+	for _, r := range rows {
+		if r.Group == "" && slices.Equal(r.Verbs, []string{"get"}) {
+			flagged[r.Resource] = r.Flags
+		}
+	}
+	if f := flagged["configmaps"]; len(f) != 0 {
+		t.Errorf("configmaps flagged %v", f)
+	}
+	if f := flagged["secrets"]; !slices.Equal(f, []string{"Secrets"}) {
+		t.Errorf("secrets flagged %v", f)
+	}
+	if f := flagged["pods/ephemeralcontainers"]; !slices.Equal(f, []string{"pods/ephemeralcontainers"}) {
+		t.Errorf("pods/ephemeralcontainers flagged %v", f)
+	}
+}

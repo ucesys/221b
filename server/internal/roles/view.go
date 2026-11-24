@@ -319,11 +319,16 @@ type PermissionsResponse struct {
 func permRules(id ID, rules []Rule) []PermRule {
 	// Never nil: a role with no rules is an empty list on the page, not null.
 	out := []PermRule{}
-	for _, r := range Normalized(rules) {
-		flags := r.Flags()
-		if flags == nil {
-			flags = []string{}
+	// What a row is flagged for is worked out for that row alone, from the
+	// rule narrowed to its group and resource: a rule that lists secrets
+	// among 27 kinds flags the secrets row, not the other 26.
+	flagsOf := func(r Rule) []string {
+		if f := r.Flags(); f != nil {
+			return f
 		}
+		return []string{}
+	}
+	for _, r := range Normalized(rules) {
 		scope := "bound"
 		if id.Super() {
 			scope = "all"
@@ -333,6 +338,7 @@ func permRules(id ID, rules []Rule) []PermRule {
 			kind = "write"
 		}
 		for _, u := range r.NonResourceURLs {
+			flags := flagsOf(Rule{NonResourceURLs: []string{u}, Verbs: r.Verbs})
 			out = append(out, PermRule{Group: "", Resource: u, Verbs: r.Verbs, Kind: kind, Scope: "cluster", Flags: flags, NonResource: true})
 		}
 		for _, g := range r.APIGroups {
@@ -345,6 +351,7 @@ func permRules(id ID, rules []Rule) []PermRule {
 				case id.Super() && isClusterScoped(g, res):
 					s = "cluster"
 				}
+				flags := flagsOf(Rule{APIGroups: []string{g}, Resources: []string{res}, ResourceNames: r.ResourceNames, Verbs: r.Verbs})
 				out = append(out, PermRule{Group: g, Resource: res, Verbs: r.Verbs, Kind: kind, Scope: s, Flags: flags, ResourceNames: r.ResourceNames})
 			}
 		}
