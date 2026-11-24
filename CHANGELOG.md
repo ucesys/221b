@@ -47,6 +47,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **An agent on Auto whose provider lost its last tier can be saved and turned off** (AI-57): every save of it, its On/Off switch in the agents' table too, answered 400 *none has a tier* until its model was changed. Its model stays Auto (it answers on the provider's default model), and the table now says *no tier: on the default model* under it.
 - **An agent on model Auto keeps its model's context window** (AI-44): on an OpenAI-compatible provider, Auto's model was judged by the word `auto`, so the agent lost the provider's context window: it asked for 16,000-token replies and Sherlock never took its compact form, which a 16k vLLM server refuses. The window is now the smallest known of the models Auto may put the agent on, and holds when Auto changes the model.
 - **Backups to S3 keep "The bucket's default" encryption once saved** (BK-04): it was read back as SSE-S3, so a bucket that refuses SSE-S3 (MinIO without KMS) failed its test, and its backups, after saving.
 

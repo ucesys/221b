@@ -122,6 +122,11 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
                       on {a.providerName}
                     </span>
                   )}
+                  {a.autoNoTier && (
+                    <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 11 }} data-testid="agent-auto-no-tier" title={`None of the models ${a.providerName} offers has a tier, so Auto cannot pick the model`}>
+                      no tier: on the default model
+                    </span>
+                  )}
                   {a.unusable && a.enabled && (
                     <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 11 }} title={a.unusable}>
                       cannot answer now

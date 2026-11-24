@@ -1290,12 +1290,15 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 	}
 	// The models its provider offers (A9). A model or floor set before
 	// that its provider no longer offers may stay as it is, so that the
-	// agent's other settings can be saved; a new one must be offered.
+	// agent's other settings can be saved; a new one must be offered. So
+	// may Auto's model on a provider that lost its last tier (it answers
+	// on the default model, AutoNoTier): the agent can still be turned
+	// off or its caps lowered.
 	before := snap.agents.Agents[id]
 	kept := cmp.Or(before.Provider, s.defaultID(snap)) == cmp.Or(set.Provider, s.defaultID(snap))
 	ladder := ladderOf(prov)
 	switch {
-	case set.Model == auto.Auto && ladder.Empty():
+	case set.Model == auto.Auto && ladder.Empty() && !(kept && before.Model == auto.Auto):
 		return fmt.Errorf("%w: Auto picks among the models %s offers by their tiers, and none has a tier: give its models tiers in Administration › AI › Providers, or pick its model", ErrInvalid, prov.Name)
 	case set.Model != "" && set.Model != auto.Auto && !offers(prov, set.Model) && !(kept && set.Model == before.Model):
 		return fmt.Errorf("%w: %s does not offer %s to the agents: pick one of the models it offers, or offer it in Administration › AI › Providers", ErrInvalid, prov.Name, set.Model)

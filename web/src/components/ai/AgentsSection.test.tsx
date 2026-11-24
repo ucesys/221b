@@ -165,6 +165,19 @@ describe('the Agents section', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/summarizer', body: { on: true } }))
   })
 
+  it('says in the table when Auto has no tiered model to pick, and the agent still turns off (A9, review finding 2)', async () => {
+    const noTier = overview()
+    noTier.agents[2] = { ...noTier.agents[2]!, model: 'auto', autoNoTier: true, providerId: 'gw', providerName: 'Gateway', settings: { provider: 'gw', model: 'auto' } }
+    const served = globalThis.fetch
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => (String(url) === '/api/v1/ai' ? new Response(JSON.stringify(noTier)) : served(url, init)))
+    render(<AgentsSection />)
+    const rows = within(await screen.findByTestId('agents-table')).getAllByTestId('agent-row')
+    expect(within(rows[2]!).getByTestId('agent-auto-no-tier').textContent).toBe('no tier: on the default model')
+    expect(within(rows[0]!).queryByTestId('agent-auto-no-tier')).toBeNull()
+    fireEvent.click(within(rows[2]!).getByTestId('agent-on'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/automationAuthor', body: { model: 'auto', on: false } }))
+  })
+
   it('opens an agent in a drawer with its instructions, values key, stages and versions', async () => {
     render(<AgentsSection />)
     fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
