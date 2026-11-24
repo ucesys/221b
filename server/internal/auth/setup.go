@@ -100,7 +100,10 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	// The first-run page keeps its limit per address behind a proxy too: it
 	// is all that slows guessing at the setup token, and it stands only
 	// until the first administrator exists.
-	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin)}
+	// Named in the record as typed, as at sign-in (the record keeps a
+	// subject, an email and a name, not a user name).
+	typed, _ := formLogin(r.PostFormValue("username"))
+	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin), Email: typed}
 	if !s.setup.allow(addressKey(from(r))) {
 		s.recordRefusal(r, audit.ActionSetupFailed, who, "address "+addressKey(from(r)))
 		s.renderSetup(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)

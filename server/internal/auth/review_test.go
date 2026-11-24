@@ -515,3 +515,24 @@ func TestAnAccountInValuesHidesAConsoleAccountOfItsName(t *testing.T) {
 		t.Fatal("the hidden account counts as another SuperAdmin")
 	}
 }
+
+// Cut by the review's cap (auth.go:835, setup.go:100): a failure's audit
+// record names whom it was about, as typed: a sign-in the directory could
+// not answer, and the first-run page's refusals.
+func TestFailureRecordsNameWhomTheyAreAbout(t *testing.T) {
+	e, dir := ldapEnv(t)
+	dir.mu.Lock()
+	dir.down = true
+	dir.mu.Unlock()
+	_, resp := e.signIn("omar", "his password")
+	readAll(t, resp)
+	if rec := e.audit.String(); !strings.Contains(rec, `"action":"signin.failed"`) || !strings.Contains(rec, `"email":"omar"`) {
+		t.Errorf("the directory's outage: %s", rec)
+	}
+	local := newEnv(t, localConfig(t))
+	c := client(t)
+	readAll(t, local.post(c, "/setup", url.Values{"form": {formIn(t, c, local.app.URL+"/setup")}, "token": {"wrong"}, "username": {"mikhail"}, "password": {goodPassword}, "again": {goodPassword}}))
+	if rec := local.audit.String(); !strings.Contains(rec, `"action":"setup.failed"`) || !strings.Contains(rec, `"email":"mikhail"`) {
+		t.Errorf("the first-run page: %s", rec)
+	}
+}

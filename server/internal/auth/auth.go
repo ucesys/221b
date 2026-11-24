@@ -927,7 +927,7 @@ func (s *Service) signInDirectory(w http.ResponseWriter, r *http.Request, login,
 		refuse("wrong password for the local account, and the directory cannot be reached: " + cleanErr(err))
 		return
 	case errors.Is(err, ErrDirectoryDown):
-		s.record(r, audit.ActionSignInFailed, User{Username: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
+		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
 		s.renderSignIn(w, r, "The directory cannot be reached, so nobody can sign in just now. People already signed in can keep working. Try again in a minute.", http.StatusServiceUnavailable)
 		return
 	case err != nil:
