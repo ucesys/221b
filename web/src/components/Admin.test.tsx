@@ -317,6 +317,21 @@ describe('Roles (RB-42)', () => {
     render(<RolesPage {...common('#/admin/roles', viewer)} />)
     expect((await screen.findByTestId('roles-hidden')).textContent).toContain('cannot list RoleBindings')
   })
+
+  // Roles review, cut list: why a cluster shows nothing reached nobody
+  // who could not list RoleBindings, and the YAML link, a SuperAdmin's
+  // download, was offered to everyone.
+  it('says that the roles are missing to everyone, and offers their YAML to a SuperAdmin alone', async () => {
+    const message = 'The four 221B roles are not on this cluster.'
+    serve(() => ({ body: { ...roles, visible: false, roles: [], message } }))
+    render(<RolesPage {...common('#/admin/roles', viewer)} />)
+    expect((await screen.findByTestId('roles-hidden')).textContent).toContain(message)
+    cleanup()
+    serve(() => ({ body: { ...roles, message } }))
+    const { container } = render(<RolesPage {...common('#/admin/roles', viewer)} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-role]')).toHaveLength(4))
+    expect(screen.queryByTestId('roles-yaml')).toBeNull()
+  })
 })
 
 describe('Permissions (RB-44)', () => {

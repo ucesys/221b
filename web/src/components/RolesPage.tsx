@@ -159,6 +159,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
       <section className="rk-card" aria-label="Roles" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="roles-hidden">
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Roles</h2>
         <p style={{ margin: 0, color: 'var(--fg2)' }}>Your role cannot list RoleBindings on this cluster, so there is nothing to show here. Permissions shows what each role may do.</p>
+        {loaded.data.message && <p style={{ margin: 0, color: 'var(--fg2)' }}>{loaded.data.message}</p>}
       </section>
     )
   }
@@ -206,10 +207,17 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
           <Note>
             Everyone who signs in can also see the nodes, through <span className="rk-mono">{loaded.data?.nodesRole ?? '221b-nodes'}</span>. A person with no role sees an otherwise empty console.
             {loaded.data?.message ? ` ${loaded.data.message}` : ''}{' '}
-            <a className="rk-link" href="/api/v1/admin/roles/manifest" download="221b-roles.yaml" data-testid="roles-yaml">
-              Download the roles as YAML
-            </a>{' '}
-            to apply on a cluster the chart is not installed in; 221B never writes a role itself.
+            {/* The YAML is a SuperAdmin's download (RB-29): anyone else would get a 403. */}
+            {sup ? (
+              <>
+                <a className="rk-link" href="/api/v1/admin/roles/manifest" download="221b-roles.yaml" data-testid="roles-yaml">
+                  Download the roles as YAML
+                </a>{' '}
+                to apply on a cluster the chart is not installed in; 221B never writes a role itself.
+              </>
+            ) : (
+              '221B never writes a role itself.'
+            )}
           </Note>
         </div>
       </section>
