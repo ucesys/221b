@@ -1005,6 +1005,20 @@ func (m *Manager) Stop() {
 	}
 }
 
+// Fingerprint is what a running connection connects to and with (the
+// server, how its certificate is checked, the credential), or "" for the
+// local cluster and a connection not running: the role check keeps its
+// verdict with it, so a connection re-pointed at another cluster is
+// compared again (RB-36).
+func (m *Manager) Fingerprint(id string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if inst := m.instances[id]; inst != nil {
+		return inst.conn
+	}
+	return ""
+}
+
 // Lookup returns a connection's store and cluster for the API; nil ones
 // when the connection could not start.
 func (m *Manager) Lookup(id string) (*live.Store, Client, bool) {

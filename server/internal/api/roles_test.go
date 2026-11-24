@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -184,5 +185,25 @@ func TestWideningTheNodesRoleIsADrift(t *testing.T) {
 	}
 	if why := s.RoleRefusal(clusters.LocalID); !strings.Contains(why, "221b-nodes allows") {
 		t.Fatalf("strict with a widened nodes role: %q", why)
+	}
+}
+
+// Roles review, finding 4: under strict, a verdict kept from before was
+// used however old it was, and whatever the connection now reached.
+func TestStrictDoesNotTrustAnOldVerdict(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog(), Roles: RolesOptions{Enforce: "strict"}})
+	for _, id := range roles.All {
+		rules := (roles.Templates{}).For(id, roles.Options{}).Rules
+		if id == roles.Admin {
+			rules = append(rules, roles.Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
+		}
+		local.Put(clusterRoleOf(id.ClusterRole(), rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	// A "match" an hour old, from before the role was widened.
+	s.monitor().Set(clusters.LocalID, roles.Drift{State: "match", Roles: []roles.RoleDrift{}, CheckedAt: time.Now().Add(-time.Hour)})
+	if why := s.RoleRefusal(clusters.LocalID); !strings.Contains(why, "delete nodes") {
+		t.Fatalf("an hour-old match was trusted: %q", why)
 	}
 }

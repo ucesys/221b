@@ -284,6 +284,9 @@ type Drift struct {
 	// More says that some role allows more than the shipped one.
 	More      bool      `json:"-"`
 	CheckedAt time.Time `json:"-"`
+	// Of fingerprints the connection the roles were read through (what it
+	// connects to and with): a verdict of another is not this one's.
+	Of string `json:"-"`
 }
 
 // PermissionsResponse is the Permissions page.
@@ -418,11 +421,19 @@ func Check(templates Templates, o Options, deployed map[ID]Deployed, nodes Deplo
 	return d
 }
 
+// MaxCheckAge is how old a comparison may be and still decide whether a
+// change runs under strict (RB-36): three rounds of the five-minute check.
+// An older one, as from a cluster whose roles can no longer be read, is no
+// comparison at all.
+const MaxCheckAge = 15 * time.Minute
+
 // Monitor keeps the last comparison for each cluster, for the Permissions
 // page, the audit log and rbac.enforce (RB-36).
 type Monitor struct {
 	mu    sync.Mutex
 	byKey map[string]Drift
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
 }
 
 // Set stores a comparison and says whether it differs from the last one,
@@ -439,7 +450,7 @@ func (m *Monitor) Set(cluster string, d Drift) (changed bool) {
 }
 
 func sameDrift(a, b Drift) bool {
-	if len(a.Roles) != len(b.Roles) {
+	if a.Of != b.Of || len(a.Roles) != len(b.Roles) {
 		return false
 	}
 	for i := range a.Roles {
@@ -458,16 +469,36 @@ func (m *Monitor) Get(cluster string) (Drift, bool) {
 	return d, ok
 }
 
+// Current returns the last comparison when it is of the connection the
+// cluster runs now (of, its fingerprint) and not older than MaxCheckAge:
+// the one strict may decide by.
+func (m *Monitor) Current(cluster, of string) (Drift, bool) {
+	d, ok := m.Get(cluster)
+	if !ok || d.Of != of {
+		return Drift{}, false
+	}
+	now := time.Now
+	if m.Now != nil {
+		now = m.Now
+	}
+	if now().Sub(d.CheckedAt) > MaxCheckAge {
+		return Drift{}, false
+	}
+	return d, true
+}
+
 // Refusal says why every change on a cluster is refused, or "" when it is
 // not: with rbac.enforce strict, a cluster whose roles allow more than the
 // shipped ones refuses every change, naming the difference, and so does a
 // cluster whose roles have not been compared yet: strict fails closed
-// (RB-36).
-func (m *Monitor) Refusal(cluster, enforce string) string {
+// (RB-36). A comparison counts only while Current: of the connection the
+// cluster runs now (of), and recent; a connection re-pointed at another
+// cluster, or one whose roles can no longer be read, is not compared.
+func (m *Monitor) Refusal(cluster, of, enforce string) string {
 	if enforce != "strict" {
 		return ""
 	}
-	d, ok := m.Get(cluster)
+	d, ok := m.Current(cluster, of)
 	if !ok {
 		return "Changes are refused on this cluster until 221B has compared its roles with the ones it ships (rbac.enforce is strict). Try again in a minute; if this stays, check that the console can read ClusterRoles there."
 	}

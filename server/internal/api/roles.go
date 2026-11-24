@@ -147,6 +147,7 @@ func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles
 		return roles.Drift{}, nil, roles.Deployed{}, false
 	}
 	d := roles.Check(s.opts.Roles.Templates, s.rolesOptions(), dep, nodes, time.Now().UTC())
+	d.Of = s.connOf(id)
 	if s.monitor().Set(id, d) && s.opts.Audit != nil && (d.State != "match") {
 		detail := d.State
 		for _, r := range d.Roles {
@@ -157,10 +158,48 @@ func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles
 	return d, dep, nodes, true
 }
 
+// connOf fingerprints the connection a cluster runs now, what it connects
+// to and with (*clusters.Manager's Fingerprint); "" without one. A
+// comparison made through another connection of the same id is not used
+// (RB-36).
+func (s *Server) connOf(id string) string {
+	if f, ok := s.opts.Clusters.(interface{ Fingerprint(string) string }); ok {
+		return f.Fingerprint(id)
+	}
+	return ""
+}
+
+// clusterOf is the running connection of a cluster, or nil.
+func (s *Server) clusterOf(id string) Cluster {
+	if s.opts.Clusters == nil {
+		if id == clusters.LocalID && s.opts.Cluster != nil {
+			return s.opts.Cluster
+		}
+		return nil
+	}
+	if _, client, ok := s.opts.Clusters.Lookup(id); ok {
+		cl, _ := client.(Cluster)
+		return cl
+	}
+	return nil
+}
+
 // RoleRefusal is why every change on a cluster is refused for its roles
-// (rbac.enforce strict), or "" (RB-36).
+// (rbac.enforce strict), or "" (RB-36). A cluster with no current
+// comparison (none yet, one of the connection before it was re-pointed,
+// or an old one) is compared now, from the cache, on any replica; one
+// whose roles cannot be read stays refused.
 func (s *Server) RoleRefusal(cluster string) string {
-	return s.monitor().Refusal(cluster, s.opts.Roles.Enforce)
+	if s.opts.Roles.Enforce != "strict" {
+		return ""
+	}
+	of := s.connOf(cluster)
+	if _, ok := s.monitor().Current(cluster, of); !ok {
+		if cl := s.clusterOf(cluster); cl != nil {
+			s.checkRoles(cluster, cl)
+		}
+	}
+	return s.monitor().Refusal(cluster, of, s.opts.Roles.Enforce)
 }
 
 // RunRoleChecks compares the roles of every cluster with the shipped ones,

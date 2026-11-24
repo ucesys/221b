@@ -50,7 +50,7 @@ func (s *Server) watsonRoutes() {
 
 // watsonCluster describes the request's cluster to Watson.
 func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.Cluster, bool) {
-	_, cl, ok := s.lookup(w, r)
+	_, _, ok := s.lookup(w, r)
 	if !ok {
 		return watson.Cluster{}, false
 	}
@@ -86,13 +86,8 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 	}
 	c.Config = cfg
 	// With rbac.enforce strict, a cluster whose roles have not been compared
-	// yet refuses changes (RB-36). A connection just made or a console just
-	// started is compared now, from the cache, rather than at the next round.
-	if s.opts.Roles.Enforce == "strict" {
-		if _, ok := s.monitor().Get(id); !ok {
-			s.checkRoles(id, cl)
-		}
-	}
+	// refuses changes (RB-36); RoleRefusal compares a connection just made
+	// or re-pointed now, from the cache, rather than at the next round.
 	c.Locked = s.RoleRefusal(id)
 	return c, true
 }

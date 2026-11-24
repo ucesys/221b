@@ -67,19 +67,19 @@ func TestMonitorRefusesOnlyWhenStrictAndWider(t *testing.T) {
 	if !m.Set("local", d) || m.Set("local", d) {
 		t.Fatal("Set must report a change once")
 	}
-	if m.Refusal("local", "off") != "" || m.Refusal("other", "off") != "" {
+	if m.Refusal("local", "", "off") != "" || m.Refusal("other", "", "off") != "" {
 		t.Error("refused when it should not")
 	}
 	// A cluster not compared yet: strict fails closed (RB-36).
-	if msg := m.Refusal("other", "strict"); !strings.Contains(msg, "until 221B has compared its roles") {
+	if msg := m.Refusal("other", "", "strict"); !strings.Contains(msg, "until 221B has compared its roles") {
 		t.Errorf("an unchecked cluster under strict: %q", msg)
 	}
-	msg := m.Refusal("local", "strict")
+	msg := m.Refusal("local", "", "strict")
 	if !strings.Contains(msg, "refused") || !strings.Contains(msg, "delete nodes") || !strings.Contains(msg, "Admin") {
 		t.Errorf("message: %s", msg)
 	}
 	m.Set("local", Check(tpl, o, shippedAll(tpl, o), shippedNodes, time.Now()))
-	if m.Refusal("local", "strict") != "" {
+	if m.Refusal("local", "", "strict") != "" {
 		t.Error("still refusing after the roles match")
 	}
 }
@@ -229,10 +229,38 @@ func TestCheckComparesTheNodesRole(t *testing.T) {
 	}
 	var m Monitor
 	m.Set("c", d)
-	if why := m.Refusal("c", "strict"); !strings.Contains(why, "221b-nodes allows") {
+	if why := m.Refusal("c", "", "strict"); !strings.Contains(why, "221b-nodes allows") {
 		t.Errorf("refusal: %q", why)
 	}
 	if d := Check(tpl, o, shippedAll(tpl, o), Deployed{}, at); d.State != "differs" || d.More || d.Roles[0].ID != NodesID {
 		t.Errorf("no nodes role: %+v", d)
+	}
+}
+
+// Roles review, finding 4: a verdict counts only for the connection it was
+// made through, and only while recent.
+func TestRefusalWantsACurrentVerdict(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	m := Monitor{Now: func() time.Time { return now }}
+	tpl, o := Defaults(), Options{}
+	d := Check(tpl, o, shippedAll(tpl, o), shippedNodes, now)
+	d.Of = "cluster-a"
+	m.Set("prod", d)
+	if why := m.Refusal("prod", "cluster-a", "strict"); why != "" {
+		t.Fatalf("a current match refused: %q", why)
+	}
+	// Re-pointed at cluster B: A's verdict is not B's.
+	if why := m.Refusal("prod", "cluster-b", "strict"); !strings.Contains(why, "until 221B has compared its roles") {
+		t.Errorf("another connection's verdict was used: %q", why)
+	}
+	// An old verdict, as when the roles can no longer be read, is none.
+	now = now.Add(MaxCheckAge + time.Second)
+	if why := m.Refusal("prod", "cluster-a", "strict"); !strings.Contains(why, "until 221B has compared its roles") {
+		t.Errorf("an old verdict was used: %q", why)
+	}
+	// A new fingerprint is a change, so it is audited.
+	d.Of = "cluster-b"
+	if !m.Set("prod", d) {
+		t.Error("a verdict of another connection is not a change")
 	}
 }
