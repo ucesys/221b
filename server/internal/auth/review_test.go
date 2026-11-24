@@ -185,3 +185,18 @@ func TestSessionsEndedWhileTheStoreIsAwayEndEverywhere(t *testing.T) {
 	o.cookie(b, b.mustSignIn("ann", "ann's new long password"))
 	o.cookie(b, b.mustSignIn("bea", goodPassword))
 }
+
+// Finding 8: what someone not signed in types, or a provider's error, is
+// recorded as plain text: no zero byte, no control character.
+func TestATypedUserNameIsRecordedAsPlainText(t *testing.T) {
+	e := newEnv(t, outageConfig(t))
+	_, resp := e.signIn("x\x00\n", "y")
+	readAll(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("the sign-in: %s", resp.Status)
+	}
+	rec := e.audit.String()
+	if !strings.Contains(rec, `"action":"signin.failed"`) || strings.Contains(rec, `\u0000`) || strings.Contains(rec, `\n`) {
+		t.Fatalf("the record: %s", rec)
+	}
+}

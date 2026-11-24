@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -710,14 +712,29 @@ const (
 	maxFormBody = 64 << 10
 )
 
-// formLogin reads the user name of a form, and says whether it is short
-// enough to be one. One that is not comes back cut to maxLogin.
+// formLogin reads the user name of a form, and says whether it can be one:
+// short enough, and without a control character (a zero byte, a line
+// break). One that cannot comes back cut to maxLogin, its control
+// characters and any text that is not UTF-8 replaced, so what the audit
+// record keeps of it is plain text.
 func formLogin(s string) (string, bool) {
 	login := Login(s)
-	if len(login) > maxLogin {
-		return audit.Clip(login, maxLogin), false
+	clean := plainText(login)
+	if len(login) > maxLogin || clean != login {
+		return audit.Clip(clean, maxLogin), false
 	}
 	return login, true
+}
+
+// plainText replaces in text a request sent the control characters and
+// what is not UTF-8, for a record or a page.
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return utf8.RuneError
+		}
+		return r
+	}, strings.ToValidUTF8(s, string(utf8.RuneError)))
 }
 
 // attempt counts a password attempt and says whether it may proceed:
@@ -770,7 +787,7 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, refusedText, http.StatusUnauthorized)
 	}
 	if !fits {
-		refuse("the user name is too long")
+		refuse("the user name is too long or holds a control character")
 		return
 	}
 	acct, local := s.accounts.Find(login)
@@ -960,7 +977,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		if d := q.Get("error_description"); d != "" {
 			msg += ": " + d
 		}
-		msg = audit.Clip(msg, maxDetail)
+		msg = audit.Clip(plainText(msg), maxDetail)
 		s.record(r, audit.ActionSignInFailed, User{}, audit.OutcomeFailed, "the provider refused: "+msg)
 		s.renderSignIn(w, r, "The provider did not sign you in ("+msg+").", http.StatusUnauthorized)
 		return
