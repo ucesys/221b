@@ -61,6 +61,8 @@ export interface WatsonStatus {
   available: boolean
   readOnly: boolean
   how?: string
+  /** The fully protected read-only deployment (RB-03): Admin and SuperAdmin are both read-only, so no role of 221B changes anything. */
+  impossible?: boolean
   twoPerson: boolean
   env: string
   signedIn: boolean

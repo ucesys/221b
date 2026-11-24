@@ -191,6 +191,10 @@ type watsonStatus struct {
 	// allow them.
 	ReadOnly bool   `json:"readOnly"`
 	How      string `json:"how,omitempty"`
+	// Impossible says the deployment is the fully protected read-only one
+	// (RB-03): Admin and SuperAdmin are both read-only, so no role of 221B
+	// can change anything, on any cluster whose roles are 221B's.
+	Impossible bool `json:"impossible,omitempty"`
 	// TwoPerson says changes here need a second person (P6-07).
 	TwoPerson bool   `json:"twoPerson"`
 	Env       string `json:"env"`
@@ -273,6 +277,7 @@ func (s *Server) watsonStatusFor(r *http.Request, c watson.Cluster) watsonStatus
 	if c.ReadOnly {
 		st.How = c.ReadOnlyHow
 	}
+	st.Impossible = s.opts.Roles.Templates.ReadOnlyOnly()
 	user := "watson"
 	if who.User != "" {
 		user, _, _ = strings.Cut(who.User, "@")
