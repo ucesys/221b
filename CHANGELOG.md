@@ -114,6 +114,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **Replacing the session key ends the signed sessions a replica already holds** (DB-65): a replica refused cookies of the old key it had not seen, but went on taking those it held in memory until they expired. Each is now checked against the key as it is.
 - **A user defined in values wholly hides a console user of the same name** (RB-46): the hidden console user was still listed beside it, still counted as a SuperAdmin (another to approve, or not the last), and its old password could sign in by its email. It is now left out of all of these.
 - **With LDAP, the sign-in's answer time no longer tells local account names** (RB-21): a name with no local account went straight to the directory, without the password check a local account's wrong password costs, so timing the answers told local account names (break-glass accounts) from the others.
+- **No session cookie on a publicly cacheable answer** (DB-65): the exchange of a session made during an outage of the session store could set the new session's cookie on the answer to a static file (a stylesheet, a script), which is marked publicly cacheable; a shared cache that keeps `Set-Cookie` would have handed the session to others. Static files no longer exchange.
 
 ## 0.13.0 (2026-11-22)
 

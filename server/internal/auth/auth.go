@@ -344,6 +344,13 @@ func openPath(p string) bool {
 	return false
 }
 
+// staticPath says whether a path is one of the static files, the same for
+// everyone and answered as publicly cacheable: no cookie is set on them,
+// since a shared cache could keep it and hand it to others.
+func staticPath(p string) bool {
+	return strings.HasPrefix(p, "/assets/") || p == "/favicon.svg" || p == "/favicon.ico" || p == "/manifest.webmanifest" || p == "/signin.css" || p == "/signin.js"
+}
+
 // Gate checks the session. It returns the request with the session in its
 // context, or nil after answering: a 401 for the API, the sign-in page for
 // a page.
@@ -354,11 +361,12 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	if sess, ok := s.sessionOf(r); ok {
 		// A session made while the session store was away becomes a stored
 		// one at its first request after the store is back (DB-65). Not on
-		// a stream: its answer may carry no cookie, and it stays open.
+		// a stream: its answer may carry no cookie, and it stays open. Not
+		// on a static file, whose answer a shared cache may keep.
 		// The stored session ends when the signed one would have: the
 		// exchange gives no more than the signed session had.
 		ended := false
-		if sess.Signed && !streams(r) {
+		if sess.Signed && !streams(r) && !staticPath(r.URL.Path) {
 			if stored, made, ok := s.sessions.Exchange(sess); ok {
 				// The stored session holds the roles of its exchange, which
 				// may have been taken away since: the person is what they are

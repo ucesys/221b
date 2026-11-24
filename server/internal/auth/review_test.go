@@ -536,3 +536,27 @@ func TestFailureRecordsNameWhomTheyAreAbout(t *testing.T) {
 		t.Errorf("the first-run page: %s", rec)
 	}
 }
+
+// Cut by the review's cap (auth.go:354-356): the exchange of a signed
+// session does not set a cookie on a static file's answer, which a shared
+// cache may keep and hand to others; the page's own requests exchange it.
+func TestNoSessionCookieOnAStaticFile(t *testing.T) {
+	o := newOutage(t)
+	a := o.replica(outageConfig(t), nil)
+	o.store.Fail(errStoreAway)
+	root := o.signInAway(a, "root", goodPassword)
+	signed := o.cookie(a, root)
+	o.back()
+	c := o.holding(a, signed)
+	resp, err := c.Get(a.app.URL + "/signin.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readAll(t, resp)
+	if len(resp.Header.Values("Set-Cookie")) != 0 || !strings.Contains(resp.Header.Get("Cache-Control"), "public") {
+		t.Fatalf("a static file's answer sets %d cookies, Cache-Control %q", len(resp.Header.Values("Set-Cookie")), resp.Header.Get("Cache-Control"))
+	}
+	if _, code := a.whoami(c); code != http.StatusOK {
+		t.Fatalf("the API: %d", code)
+	}
+}
