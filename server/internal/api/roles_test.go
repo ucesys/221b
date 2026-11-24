@@ -301,3 +301,32 @@ func TestAChangedRoleIsComparedAtOnce(t *testing.T) {
 		t.Fatalf("after an edit: %+v", d)
 	}
 }
+
+// Roles review, cut list: the Roles page asked Kubernetes only whether the
+// person may list RoleBindings, and showed ClusterRoleBindings' subjects
+// to a person who may not list those.
+func TestRolesPageShowsClusterBindingsOnlyToWhoMayListThem(t *testing.T) {
+	srv, ops, _, _, local, _ := multiSetupWith(t, "ops@corp.example", map[string]bool{"list clusterrolebindings/": true}, func(o *Options) {
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes()}
+	})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	admin := rbacv1.RoleRef{Kind: "ClusterRole", Name: roles.Admin.ClusterRole()}
+	local.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "everywhere"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "hidden-wide"}}})
+	local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "here", Namespace: "web"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "seen-here"}}})
+	var page roles.RolesResponse
+	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/roles", &page); code != http.StatusOK || !page.Visible {
+		t.Fatalf("roles = %d, visible %v", code, page.Visible)
+	}
+	names := map[string]bool{}
+	for _, r := range page.Roles {
+		for _, s := range r.Subjects {
+			names[s.Name] = true
+		}
+	}
+	if names["hidden-wide"] || !names["seen-here"] {
+		t.Errorf("subjects shown: %v", names)
+	}
+}

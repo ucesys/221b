@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -353,6 +354,17 @@ func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in.Visible = allowed
+		// ClusterRoleBindings are shown only to a person who may list them.
+		if allowed {
+			wide, err := cl.CanI(ctx, p, "list", "rbac.authorization.k8s.io", "clusterrolebindings", "")
+			if err != nil {
+				jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+				return
+			}
+			if !wide {
+				in.Bindings = slices.DeleteFunc(in.Bindings, func(b roles.Binding) bool { return b.Namespace == "" })
+			}
+		}
 	}
 	writeValue(w, r, roles.BuildRoles(in))
 }
