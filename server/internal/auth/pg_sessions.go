@@ -295,8 +295,8 @@ func (p *PGSessions) Get(ctx context.Context, key string) ([]byte, bool, error) 
 // Put writes a session's record as its row: it makes the row when there
 // is none and replace, given nil, says so, and changes it when replace,
 // given the record as the row has it now (the row is locked meanwhile),
-// says so. It reports whether it wrote. A change to anything but the last
-// activity is announced to the other replicas.
+// says so. It reports whether it wrote. A new row, and a change to anything
+// but the last activity, is announced to the other replicas.
 func (p *PGSessions) Put(ctx context.Context, key string, b []byte, replace func(current []byte) bool) (bool, error) {
 	next, err := rowOfRecord(key, b)
 	if err != nil {
@@ -317,13 +317,16 @@ func (p *PGSessions) Put(ctx context.Context, key string, b []byte, replace func
 			if _, err := tx.Exec(ctx, sessionInsertSQL, db.Fields(&next)...); err != nil {
 				return err
 			}
-			if next.Method == endedMethod {
-				// The ending of a signed session that was never exchanged:
-				// the replicas that looked for it a moment ago and found
-				// nothing must not go on answering from that.
-				if err := p.d.Notify(ctx, tx, sessionsTopic); err != nil {
-					return err
-				}
+			// A new row is announced: the replicas that looked for its key a
+			// moment ago and found nothing must not go on answering from
+			// that. That is the ending of a signed session that was never
+			// exchanged, and the stored session a signed one is exchanged
+			// for, whose key every replica shown the cookie looks up
+			// (exchangeID); a sign-in's random key was looked up by nobody,
+			// and sign-ins are rare enough that telling them apart is not
+			// worth it.
+			if err := p.d.Notify(ctx, tx, sessionsTopic); err != nil {
+				return err
 			}
 		case err != nil:
 			return err

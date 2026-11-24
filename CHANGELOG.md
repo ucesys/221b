@@ -85,6 +85,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A directory's long error is cut on a character**: an LDAP error over 300 bytes shown on the Users page, in the log and in the audit record was cut inside a character, leaving text that is not UTF-8.
 - **OIDC sign-in survives a key rotated under the same kid, or with none** (P3-01): the provider's keys were read again only for a kid not seen yet, so after such a rotation every sign-in failed with "the signature does not verify" until the day-old key set expired. A signature that does not verify now has the keys read again, at most once a minute.
 - **A sign-in abandoned while the provider's configuration is read no longer blocks the others** (P3-01): the read ran under that one request's context, and its "context canceled" was kept for everyone for 10 seconds.
+- **No 401 right after the database is back** (DB-66): the row of a session exchanged after an outage was not announced, so another replica that had just looked for it and found nothing answered 401 for up to 2 seconds. A new row is now announced to the replicas.
 
 ### Security
 
