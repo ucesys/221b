@@ -158,7 +158,9 @@ func ValidUsername(name string, strict bool) bool {
 	if !strict {
 		max = MaxEmailUsername
 	}
-	if name == "" || len(name) > max {
+	// "." and ".." are path segments a browser folds away, so the
+	// account's own endpoints could not be reached.
+	if name == "" || len(name) > max || name == "." || name == ".." {
 		return false
 	}
 	for _, c := range name {

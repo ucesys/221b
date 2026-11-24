@@ -795,6 +795,7 @@ roles_refused() {
     ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=system:masters' > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.prefixes.local=221b:' > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].email=ops k8s@corp.example' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].username=..' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=a-very-long-group-name-that-is-more-than-sixty-four-characters-long' --set 'auth.local.groups[0].role=viewer' --set 'auth.local.groups[0].namespaces[0]=web' > /dev/null 2>&1 &&
     render k8s-console --set clusterName=ci --set 'auth.local.users[0].email=Ops+K8s@corp.example' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.prefixes.ldap=system:' > /dev/null 2>&1 &&

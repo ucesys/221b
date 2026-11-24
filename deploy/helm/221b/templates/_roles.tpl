@@ -204,7 +204,7 @@ name of what is wrong. Renders nothing.
 {{- /* The name the console uses: the username, or else the email, in
        lower case (roles.ValidUsername, not strict). */ -}}
 {{- $login := lower (trim (toString (coalesce $u.username $u.email ""))) -}}
-{{- if or (gt (len $login) 254) (not (regexMatch "^[a-z0-9._@+-]+$" $login)) -}}
+{{- if or (gt (len $login) 254) (not (regexMatch "^[a-z0-9._@+-]+$" $login)) (has $login (list "." "..")) -}}
 {{- fail (printf "auth.local.users: %s: a user's username, or its email when it has none, uses letters, digits, '.', '-', '_', '@' and '+', up to 254 characters" $who) -}}
 {{- end -}}
 {{- if not $u.passwordHash -}}

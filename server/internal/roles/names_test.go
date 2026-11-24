@@ -169,3 +169,17 @@ func TestUsernamesFromValuesTakeAnEmail(t *testing.T) {
 		t.Error("a 65-character group name allowed")
 	}
 }
+
+// Roles review, cut list: "." and ".." were valid user names, which a
+// browser's per-user URL (/api/v1/admin/users/local:..) folds away, so such
+// an account could not be disabled or deleted from the console.
+func TestDotNamesAreNotUserNames(t *testing.T) {
+	for _, n := range []string{".", ".."} {
+		if ValidUsername(n, true) || ValidUsername(n, false) || ValidGroupName(n) {
+			t.Errorf("%q allowed", n)
+		}
+	}
+	if !ValidUsername("a.b", true) || !ValidUsername("...", true) {
+		t.Error("a name with dots refused")
+	}
+}
