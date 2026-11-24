@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -162,4 +163,37 @@ func TestCleanErrCutsOnACharacter(t *testing.T) {
 	if !utf8.ValidString(msg) || !strings.HasSuffix(msg, "…") || utf8.RuneCountInString(msg) > 301 {
 		t.Fatalf("%q", msg)
 	}
+}
+
+// Cut by the review's cap (local.go:247-254): filling the limiter with
+// other keys does not forget a key that is at its limit, and the limit
+// per address holds for a whole IPv6 /64, which one client has to itself.
+func TestTheLimiterKeepsWhatItRefusesAndCountsAnIPv6Network(t *testing.T) {
+	l := newLimiter(2, time.Minute, time.Now)
+	l.keys = 10
+	for range 3 {
+		l.allow("victim")
+	}
+	for i := range 50 {
+		l.allow(fmt.Sprintf("other%d", i))
+	}
+	if l.allow("victim") {
+		t.Fatal("other keys made the limiter forget one at its limit")
+	}
+	s := &Service{perAddress: newLimiter(3, time.Minute, time.Now), perAccount: newLimiter(100, time.Minute, time.Now)}
+	got := 0
+	for i := range 10 {
+		if s.attempt(httptestRequest(fmt.Sprintf("[2001:db8:1:2::%x]:4000", i+1)), fmt.Sprintf("user%d", i)) {
+			got++
+		}
+	}
+	if got != 3 {
+		t.Fatalf("%d attempts from one /64 passed, want 3", got)
+	}
+}
+
+func httptestRequest(peer string) *http.Request {
+	r, _ := http.NewRequest(http.MethodPost, "/signin", nil)
+	r.RemoteAddr = peer
+	return r
 }

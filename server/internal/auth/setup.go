@@ -101,8 +101,8 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	// is all that slows guessing at the setup token, and it stands only
 	// until the first administrator exists.
 	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin)}
-	if !s.setup.allow(from(r)) {
-		s.recordRefusal(r, audit.ActionSetupFailed, who, "address "+from(r))
+	if !s.setup.allow(addressKey(from(r))) {
+		s.recordRefusal(r, audit.ActionSetupFailed, who, "address "+addressKey(from(r)))
 		s.renderSetup(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}

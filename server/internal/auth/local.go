@@ -272,11 +272,14 @@ func (l *limiter) allow(key string) bool {
 
 // evict forgets the keys whose attempts have aged out and, when they are
 // not enough, the oldest of the rest, down to nine tenths of the bound so
-// that the next few attempts need no sweep. The caller holds the lock.
+// that the next few attempts need no sweep. A key at its limit is
+// forgotten last: filling the limiter with other keys must not let one it
+// refuses start again. The caller holds the lock.
 func (l *limiter) evict(now time.Time) {
 	type last struct {
-		key [sha256.Size]byte
-		at  time.Time
+		key     [sha256.Size]byte
+		at      time.Time
+		refuses bool
 	}
 	var live []last
 	for k, ts := range l.hits {
@@ -284,13 +287,18 @@ func (l *limiter) evict(now time.Time) {
 			delete(l.hits, k)
 			continue
 		}
-		live = append(live, last{k, ts[len(ts)-1]})
+		live = append(live, last{k, ts[len(ts)-1], len(ts) >= l.limit})
 	}
 	over := len(live) - (l.keys - l.keys/10)
 	if over <= 0 {
 		return
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].at.Before(live[j].at) })
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].refuses != live[j].refuses {
+			return !live[i].refuses
+		}
+		return live[i].at.Before(live[j].at)
+	})
 	for _, e := range live[:over] {
 		delete(l.hits, e.key)
 	}

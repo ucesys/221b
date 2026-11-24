@@ -100,6 +100,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **An email changed away from the admin list takes SuperAdmin from open sessions** (RB-05): changing a local account's email away from one in `auth.admins` left the SuperAdmin role, and `221b:superadmins`, on the person's open sessions until they ended (8 hours idle, 7 days at most), though the Users page showed them without it. A session now reads the account's email and name as they are.
 - **A session no longer goes on as another account that has its name as email** (RB-46): a local session was looked up like a sign-in, by user name and then by email, so the session of an account named by its email (`ops@corp.example`), taken out of the values, went on as the console user whose email that is, with that user's roles. A session is now looked up by its user name only.
 - **The per-account sign-in limit counts a name and an email together** (RB-46): it was kept by the text typed, so typing an account's user name and its email gave twice the guesses a minute.
+- **The sign-in limits hold against a flood of keys and IPv6 addresses** (RB-46): the limit per address counted each IPv6 address apart, so a client with a /64 had no limit in practice, and the limiter's bound on what it remembers could forget an address or account at its limit once enough other keys were tried. The limit per address now counts an IPv6 /64, and a key at its limit is forgotten last.
 
 ## 0.13.0 (2026-11-22)
 

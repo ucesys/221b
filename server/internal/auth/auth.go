@@ -699,6 +699,17 @@ func from(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// addressKey is what the limits per address count by: an IPv4 address, or
+// an IPv6 address's /64, which one client has to itself and can change
+// its address within at will.
+func addressKey(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.To4() != nil {
+		return addr
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // maxDetail bounds the detail of a record the sign-in pages write: some of
 // it comes from a request nobody has signed in to make.
 const maxDetail = 1024
@@ -759,8 +770,8 @@ func (s *Service) attemptBy(r *http.Request, login string) (ok bool, refusedBy s
 	if hashingFull() {
 		return false, "the hashing queue"
 	}
-	if !s.perAddress.allow(from(r)) {
-		return false, "address " + from(r)
+	if !s.perAddress.allow(addressKey(from(r))) {
+		return false, "address " + addressKey(from(r))
 	}
 	// An account is one bucket, whether its user name or its email was
 	// typed.
@@ -991,8 +1002,8 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	// Anyone can come here with a state cookie of their own making, so the
 	// callback counts against the per-address limit before it records
 	// anything or asks the provider.
-	if !s.perAddress.allow(from(r)) {
-		s.recordRefusal(r, audit.ActionSignInFailed, User{}, "address "+from(r))
+	if !s.perAddress.allow(addressKey(from(r))) {
+		s.recordRefusal(r, audit.ActionSignInFailed, User{}, "address "+addressKey(from(r)))
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
