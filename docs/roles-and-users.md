@@ -46,7 +46,7 @@ Today there are two console roles, decided from the sign-in provider's claims (`
 | --- | --- | --- | --- | --- |
 | **SuperAdmin** | Everything: all reads, every change Watson supports, node operations, connections, settings, fleets, assignments and users | Every namespace, every connected cluster | ClusterRole `221b-super-admin` (full or read-only), bound to the group `221b:superadmins` | In 221B: LDAP groups and local users |
 | **SuperViewer** | Read everything except Secrets, including cluster-scoped kinds and RBAC | Every namespace, every connected cluster | ClusterRole `221b-super-viewer`, bound to `221b:superviewers` | In 221B: LDAP groups and local users |
-| **Admin** | Read what Viewer reads, and (full definition) make the namespaced changes Watson supports | The namespaces it is bound in | ClusterRole `221b-admin` (full or read-only), bound by RoleBindings | A group (LDAP, local or OIDC) with namespaces, in values |
+| **Admin** | Read what Viewer reads, and (full definition) make the namespaced changes Watson supports, port forwards and debug pods (TB-50) | The namespaces it is bound in | ClusterRole `221b-admin` (full or read-only), bound by RoleBindings | A group (LDAP, local or OIDC) with namespaces, in values |
 | **Viewer** | Read the namespaced kinds the console shows, Secrets included as keys and sizes (X-01), and Roles and RoleBindings | The namespaces it is bound in | ClusterRole `221b-viewer`, bound by RoleBindings | A group (LDAP, local or OIDC) with namespaces, in values |
 
 Everyone who signs in also gets the nodes (RB-07). A person with no assignment sees an empty console.
@@ -69,10 +69,11 @@ Everyone who signs in also gets the nodes (RB-07). A person with no assignment s
 | See namespaces, volumes, storage classes and other cluster-scoped kinds | All | All | Own namespaces only | Own namespaces only |
 | Read workloads, services, events, logs and the other namespaced kinds | All namespaces | All namespaces | Bound namespaces | Bound namespaces |
 | See Secret keys and sizes (when `secrets.read` is on) | Yes | No | Yes, in bound namespaces | Yes, in bound namespaces |
-| Edit a Secret's keys, make a Secret, and with `secrets.reveal` see a value, one key at a time, audited (Phase 10, SE-02, SE-03) | Full definition only | No | Full definition only, in bound namespaces | No |
-| Install, upgrade, switch and remove Helm applications from a git repository (Phase 10, HA-02; runs as the person) | Full definition only | No | May ask; the shipped Admin role creates no workloads, so Kubernetes refuses most installs | No |
+| Edit a Secret's keys, make or delete a Secret, and with `secrets.reveal` see a value, one key at a time, audited (Phase 10, SE-02, SE-03) | Full definition only | No | Full definition with `secrets.read` only, in bound namespaces (Helm rollback needs these rights, RB-12) | No |
+| Install, upgrade, switch and remove Helm applications from a git repository (Phase 10, HA-02; runs as the person) | Full definition only | No | May ask; the shipped Admin role creates no workloads but Jobs (for debug pods, TB-50), so Kubernetes refuses most installs | No |
 | Prepare a Watson card | Yes | Yes | Yes | Yes |
 | Approve a change (ADR-52: the approver's own rights decide) | Any, full definition only | No | Namespaced changes in bound namespaces, full definition only | No |
+| Use the Toolbox: Shell, Port forward, Debug container, Debug pod, Node shell (TB-50; as the chart's `toolbox` values allow) | Every tool, full definition only | No | Full definition only, in bound namespaces: Port forward; Shell and Debug pod (its shell is an exec, TB-28) only with `rbac.roles.admin.exec` | No |
 | Node operations: cordon, uncordon, drain, label, annotate and taint nodes | Full definition only | No | No | No |
 | Create, change or remove roles and bindings | Not in the console: they come from the chart (RB-06, RB-52) | No | No | No |
 | Connections, settings and fleets (ADR-26, ADR-32) | Yes | No | No | No |
@@ -86,7 +87,7 @@ Sherlock answers as the person (P5-02), so it sees exactly what the table says a
 
 | Role | Full | Read-only |
 | --- | --- | --- |
-| **Admin** | Viewer's reads, plus scale, rollout restart and undo, delete pod, expand and delete a volume claim (ST-18), label and annotate, and Helm rollback (the namespaced changes of P6-02) | Exactly Viewer's rights. The role still exists, so assignments do not change when you switch. |
+| **Admin** | Viewer's reads, plus scale, rollout restart and undo, delete pod, expand and delete a volume claim (ST-18), label and annotate, and Helm rollback (the namespaced changes of P6-02); with `secrets.read`, `create`, `update` and `delete` on Secrets, which Helm rollback needs (RB-12); port forwards and Jobs, for debug pods (TB-50); and `create pods/exec` only with `rbac.roles.admin.exec` | Exactly Viewer's rights. The role still exists, so assignments do not change when you switch. |
 | **SuperAdmin** | All verbs on all resources, in every namespace and cluster-scoped (`*`) | `get`, `list` and `watch` on all resources, and `get` on the non-resource URLs. No other verb. |
 
 Choosing the read-only definition for both roles gives the **fully protected read-only deployment**: no identity 221B can send to Kubernetes holds a write right, so no change can be made through the console, and Watson's cards fail with Kubernetes' own refusal even if the console's own lock were bypassed.
