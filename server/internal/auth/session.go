@@ -985,14 +985,17 @@ func (s *Sessions) Sweep() {
 	if !s.tellEnded(ended) {
 		return
 	}
-	// Drop what this replica holds of sessions it no longer uses.
+	// Drop what this replica holds of sessions it no longer uses, and of
+	// sessions ended elsewhere, whose key the store keeps for the record of
+	// their ending (endedRecord): a copy kept here would be served while
+	// the store cannot be asked.
 	stored, err := s.list()
 	if err != nil {
 		return
 	}
 	s.mu.Lock()
 	for key, sess := range s.byID {
-		if _, ok := stored[key]; !ok && !sess.Signed {
+		if b, ok := stored[key]; (!ok || isEnded(b)) && !sess.Signed {
 			delete(s.byID, key)
 			delete(s.written, key)
 			delete(s.extra, key)

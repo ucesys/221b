@@ -2,10 +2,13 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/db"
 )
 
 // The findings of the review of the auth package (2026-11-23) that are
@@ -102,5 +105,33 @@ func TestAFailedSaveDoesNotKeepOldAccountsUnderANewVersion(t *testing.T) {
 	}
 	if u, _ := other.Find("mallory"); !u.Disabled {
 		t.Fatal("the replica's next save enabled mallory again")
+	}
+}
+
+// Finding 7: a session ended on one replica, whose ending the store keeps
+// as a marker, is dropped from another replica's memory by its sweep, so
+// that replica does not serve it from memory when the store later cannot
+// be asked.
+func TestAnEndedSessionIsNotServedFromMemoryInALaterOutage(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	store := NewOutageStore()
+	on := func() *Sessions {
+		s := NewSessions(8*time.Hour, 12*time.Hour, clock)
+		s.Share(store, nil)
+		return s
+	}
+	a, b := on(), on()
+	sess := a.Create(User{Subject: "local:ann", Username: "ann"}, false, "local")
+	if _, ok := b.Get(sess.ID); !ok {
+		t.Fatal("the other replica does not find the session")
+	}
+	a.Delete(sess.ID)
+	now = now.Add(time.Minute)
+	b.Sweep()
+	now = now.Add(3 * time.Hour)
+	store.Fail(fmt.Errorf("reading the session: %w", db.ErrUnavailable))
+	if _, ok := b.Get(sess.ID); ok {
+		t.Fatal("the ended session is served from memory while the store cannot be asked")
 	}
 }
