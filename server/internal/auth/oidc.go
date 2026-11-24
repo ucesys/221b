@@ -122,6 +122,11 @@ func (p *Provider) discover(ctx context.Context) (*discovery, error) {
 	if p.discErr != nil && p.now().Sub(p.discAt) < 10*time.Second {
 		return nil, p.discErr
 	}
+	// Read for everyone, not for the request that happens to ask: one that
+	// goes away meanwhile must not leave its "context canceled" for the
+	// next 10 seconds. The client's own timeout bounds the read.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	var d discovery
 	err := p.getJSON(ctx, strings.TrimSuffix(p.cfg.Issuer, "/")+"/.well-known/openid-configuration", &d)
 	p.discAt = p.now()

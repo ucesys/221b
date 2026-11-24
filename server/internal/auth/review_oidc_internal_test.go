@@ -102,3 +102,17 @@ func TestARotatedKeyWithTheSameKidOrNoneIsFetched(t *testing.T) {
 		}
 	}
 }
+
+// Cut by the review's cap (oidc.go:126): a request that goes away while
+// the provider's configuration is read does not leave its "context
+// canceled" for everyone for 10 seconds.
+func TestDiscoveryOutlivesTheRequestThatAsked(t *testing.T) {
+	idp := newRotatingIdP(t)
+	p := NewProvider(OIDCConfig{Issuer: idp.srv.URL, ClientID: "c"}, nil, nil)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = p.discover(gone)
+	if _, err := p.discover(context.Background()); err != nil {
+		t.Fatalf("the next sign-in: %v", err)
+	}
+}

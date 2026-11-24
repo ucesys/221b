@@ -84,6 +84,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A groups claim whose name has a dot works** (P3-01): `auth.oidc.groupsClaim: "https://corp.example/groups"` (a namespaced claim, as Auth0 issues) was always walked as a path, found nothing, and everyone signed in with no groups, so no role list or admin group applied. The claim is now read by its name first, and as a path only when there is none.
 - **A directory's long error is cut on a character**: an LDAP error over 300 bytes shown on the Users page, in the log and in the audit record was cut inside a character, leaving text that is not UTF-8.
 - **OIDC sign-in survives a key rotated under the same kid, or with none** (P3-01): the provider's keys were read again only for a kid not seen yet, so after such a rotation every sign-in failed with "the signature does not verify" until the day-old key set expired. A signature that does not verify now has the keys read again, at most once a minute.
+- **A sign-in abandoned while the provider's configuration is read no longer blocks the others** (P3-01): the read ran under that one request's context, and its "context canceled" was kept for everyone for 10 seconds.
 
 ### Security
 
