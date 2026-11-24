@@ -2,6 +2,7 @@ package roles
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -145,5 +146,26 @@ func TestBuildDropsNamesAPrefixMakesReserved(t *testing.T) {
 	}
 	if (Prefixes{OIDCUser: "oidc: "}).Check() == nil {
 		t.Error("a padded prefix passes")
+	}
+}
+
+// Roles review, finding 8: a user from values keeps an email as the name,
+// and the check refused a '+' and anything past 64 characters, so a chart
+// that rendered cleanly stopped the console at start.
+func TestUsernamesFromValuesTakeAnEmail(t *testing.T) {
+	long := strings.Repeat("a", 70) + "@corp.example"
+	for _, n := range []string{"ops+k8s@corp.example", long} {
+		if !ValidUsername(n, false) {
+			t.Errorf("%q from values refused", n)
+		}
+		if ValidUsername(n, true) {
+			t.Errorf("%q made in the console allowed", n)
+		}
+	}
+	if ValidUsername(strings.Repeat("a", 255), false) || ValidUsername("a b@c", false) {
+		t.Error("too long, or a space, allowed")
+	}
+	if ValidGroupName(strings.Repeat("g", 65)) {
+		t.Error("a 65-character group name allowed")
 	}
 }

@@ -138,18 +138,33 @@ func Unclean(name string) bool {
 	return strings.IndexFunc(name, unicode.IsControl) >= 0
 }
 
+// MaxUsername and MaxEmailUsername are the longest local user names: one
+// made in the console, and one from values, which may be an email
+// address (254 characters at most).
+const (
+	MaxUsername      = 64
+	MaxEmailUsername = 254
+)
+
 // ValidUsername reports whether a local user name is allowed (RB-16):
-// lowercase letters, digits, dot, dash and underscore. Users defined in
-// values keep their email as the name, so the one place that reads them
-// passes strict=false and allows an @ as well.
+// lowercase letters, digits, dot, dash and underscore, up to MaxUsername.
+// Users defined in values keep their email as the name, so the one place
+// that reads them passes strict=false and allows what an address commonly
+// holds as well, @ and + (ops+k8s@corp.example), up to MaxEmailUsername.
+// The chart's b221.validate checks the same, so a mistake is a helm error
+// rather than a console that exits at start.
 func ValidUsername(name string, strict bool) bool {
-	if name == "" || len(name) > 64 {
+	max := MaxUsername
+	if !strict {
+		max = MaxEmailUsername
+	}
+	if name == "" || len(name) > max {
 		return false
 	}
 	for _, c := range name {
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '.', c == '-', c == '_':
-		case c == '@' && !strict:
+		case (c == '@' || c == '+') && !strict:
 		default:
 			return false
 		}
@@ -157,7 +172,9 @@ func ValidUsername(name string, strict bool) bool {
 	return true
 }
 
-// ValidGroupName reports whether a local group's name is allowed.
+// ValidGroupName reports whether a local group's name is allowed: as a
+// user name made in the console, up to MaxUsername (the chart checks the
+// length too).
 func ValidGroupName(name string) bool { return ValidUsername(name, true) }
 
 // Identity is what 221B knows about a signed-in person's groups.

@@ -178,6 +178,9 @@ name of what is wrong. Renders nothing.
 {{- if not (regexMatch "^[a-z0-9][a-z0-9._-]*$" $g.name) -}}
 {{- fail (printf "auth.local.groups: the name %q must use lowercase letters, digits, '.', '-' and '_'" $g.name) -}}
 {{- end -}}
+{{- if gt (len $g.name) 64 -}}
+{{- fail (printf "auth.local.groups: the name %q is longer than 64 characters" $g.name) -}}
+{{- end -}}
 {{- if hasKey $names $g.name -}}
 {{- fail (printf "auth.local.groups: %q is defined twice" $g.name) -}}
 {{- end -}}
@@ -197,6 +200,12 @@ name of what is wrong. Renders nothing.
 {{- $who := coalesce $u.username $u.email "an account" -}}
 {{- if not (or $u.username $u.email) -}}
 {{- fail "every entry of auth.local.users needs a username or an email" -}}
+{{- end -}}
+{{- /* The name the console uses: the username, or else the email, in
+       lower case (roles.ValidUsername, not strict). */ -}}
+{{- $login := lower (trim (toString (coalesce $u.username $u.email ""))) -}}
+{{- if or (gt (len $login) 254) (not (regexMatch "^[a-z0-9._@+-]+$" $login)) -}}
+{{- fail (printf "auth.local.users: %s: a user's username, or its email when it has none, uses letters, digits, '.', '-', '_', '@' and '+', up to 254 characters" $who) -}}
 {{- end -}}
 {{- if not $u.passwordHash -}}
 {{- fail (printf "auth.local.users: %s needs a passwordHash (make one with the hash-password command)" $who) -}}
