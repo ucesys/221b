@@ -523,8 +523,9 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		in.SherlockClusters = append([]string{}, keep...)
 	}
-	before := agentSettingsOf(s.opts.AI.View(r.Context()), id)
-	if err := s.opts.AI.SaveAgent(r.Context(), id, in); err != nil {
+	// What the save replaced, read in the save itself (AI-47).
+	before, err := s.opts.AI.ChangeAgent(r.Context(), id, in)
+	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
@@ -540,16 +541,6 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(r, audit.ActionAISettings, "agent "+id, d)
 	s.getAI(w, r)
-}
-
-// agentSettingsOf is an agent's settings in an overview.
-func agentSettingsOf(o ai.Overview, id string) ai.AgentSettings {
-	for _, a := range o.Agents {
-		if a.ID == id {
-			return a.Settings
-		}
-	}
-	return ai.AgentSettings{}
 }
 
 // autoChange says an agent's effort, Auto and floor settings for its audit

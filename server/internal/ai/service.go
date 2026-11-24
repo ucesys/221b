@@ -1289,19 +1289,28 @@ type AgentChange struct {
 
 // SaveAgent changes an agent's settings.
 func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) error {
+	_, err := s.ChangeAgent(ctx, id, in)
+	return err
+}
+
+// ChangeAgent is SaveAgent saying the settings the save replaced, read in
+// the same read-modify-write as the save: for the audit record's "was",
+// which a read before the save could take from another save that came
+// between (AI-47).
+func (s *Service) ChangeAgent(ctx context.Context, id string, in AgentChange) (was AgentSettings, err error) {
 	defer s.forget()
 	info, ok := InfoOf(id)
 	if !ok {
-		return ErrNotFound
+		return was, ErrNotFound
 	}
 	set := in.AgentSettings
 	if err := set.Validate(info); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return was, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	snap := s.read(ctx)
 	prov, ok := s.provider(snap, set.Provider)
 	if !ok {
-		return fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
+		return was, fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
 	}
 	// The models its provider offers (A9). A model or floor set before
 	// that its provider no longer offers may stay as it is, so that the
@@ -1314,11 +1323,11 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 	ladder := ladderOf(prov)
 	switch {
 	case set.Model == auto.Auto && ladder.Empty() && !(kept && before.Model == auto.Auto):
-		return fmt.Errorf("%w: Auto picks among the models %s offers by their tiers, and none has a tier: give its models tiers in Administration › AI › Providers, or pick its model", ErrInvalid, prov.Name)
+		return was, fmt.Errorf("%w: Auto picks among the models %s offers by their tiers, and none has a tier: give its models tiers in Administration › AI › Providers, or pick its model", ErrInvalid, prov.Name)
 	case set.Model != "" && set.Model != auto.Auto && !offers(prov, set.Model) && !(kept && set.Model == before.Model):
-		return fmt.Errorf("%w: %s does not offer %s to the agents: pick one of the models it offers, or offer it in Administration › AI › Providers", ErrInvalid, prov.Name, set.Model)
+		return was, fmt.Errorf("%w: %s does not offer %s to the agents: pick one of the models it offers, or offer it in Administration › AI › Providers", ErrInvalid, prov.Name, set.Model)
 	case set.FloorModel != "" && ladder.Rank(set.FloorModel) < 0 && !(kept && set.FloorModel == before.FloorModel):
-		return fmt.Errorf("%w: the lowest model Auto may pick is one of the models %s offers with a tier, not %s", ErrInvalid, prov.Name, set.FloorModel)
+		return was, fmt.Errorf("%w: the lowest model Auto may pick is one of the models %s offers with a tier, not %s", ErrInvalid, prov.Name, set.FloorModel)
 	}
 	if set.Provider == s.defaultID(snap) {
 		set.Provider = ""
@@ -1338,13 +1347,15 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 			sh.ViewControl = in.ViewControl
 		}
 		if _, err := s.opts.Settings.UpdateSherlock(ctx, sh); err != nil {
-			return err
+			return was, err
 		}
 	}
-	_, err := change(ctx, s.opts.Backend, AgentsKey, func(a *Agents) error {
+	_, err = change(ctx, s.opts.Backend, AgentsKey, func(a *Agents) error {
 		if a.Agents == nil {
 			a.Agents = map[string]AgentSettings{}
 		}
+		// Each try reads what it replaces: the last is the one saved.
+		was = a.Agents[id]
 		next := cloneAgents(a.Agents)
 		next[id] = set
 		author, reviewer := cmp.Or(next[AutomationAuthor].Provider, s.defaultID(snap)), cmp.Or(next[ScriptReviewer].Provider, s.defaultID(snap))
@@ -1359,7 +1370,10 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 		a.Agents = next
 		return nil
 	})
-	return err
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	return was, nil
 }
 
 func cloneAgents(m map[string]AgentSettings) map[string]AgentSettings {
