@@ -77,7 +77,7 @@ func (w *wiring) wireAPI() error {
 		Settings:                w.shared,
 		Clusters:                w.manager,
 		Auth:                    w.authSvc,
-		Installer:               installerOf(w.authCfg), // Star us on GitHub (CU-21)
+		Installer:               installerOf(w.authCfg, w.localAccounts), // Star us on GitHub (CU-21)
 		Audit:                   w.auditLog,
 		Access:                  w.people,
 		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},

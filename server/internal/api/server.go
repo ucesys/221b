@@ -151,7 +151,8 @@ type Options struct {
 	Clusters Clusters
 	Auth     Auth
 	// Installer says whether a person installed the console: a SuperAdmin
-	// the Helm values name, whom the Star us on GitHub dialog asks
+	// the Helm values name or the first-run page created, whom the Star us
+	// on GitHub dialog asks
 	// (CU-21); nil asks nobody.
 	Installer Installer
 	// Audit records the settings changes; nil records nothing.

@@ -14,10 +14,12 @@ import (
 // of auth.admins (a username, a subject or an email, as the sign-in
 // matches them), a member of a group of auth.adminGroups, of a group given
 // superAdmin under auth.ldap.roles or auth.oidc.roles, or a local user of
-// auth.local.users with the role superAdmin. A SuperAdmin made in the
-// console (a local account given the role there, or the first-run page's)
-// is not one.
-func installerOf(cfg auth.Config) api.Installer {
+// auth.local.users with the role superAdmin. In local mode the SuperAdmin
+// the first-run page created installed the console too (its account's
+// Installer mark), while it is still a SuperAdmin. A SuperAdmin made later
+// in the console (a local account given the role there) is not one.
+// accounts gives the local accounts; nil, or nil returned, without them.
+func installerOf(cfg auth.Config, accounts func() *auth.Accounts) api.Installer {
 	return func(sess auth.Session) bool {
 		if !sess.Admin {
 			return false
@@ -46,6 +48,22 @@ func installerOf(cfg auth.Config) api.Installer {
 				return true
 			}
 		}
-		return false
+		if accounts == nil {
+			return false
+		}
+		acc := accounts()
+		if acc == nil {
+			return false
+		}
+		a, ok := acc.Find(u.Username)
+		return ok && a.Installer && a.Username == strings.ToLower(u.Username)
 	}
+}
+
+// localAccounts is the local accounts, nil without sign-in or without them.
+func (w *wiring) localAccounts() *auth.Accounts {
+	if w.authSvc == nil {
+		return nil
+	}
+	return w.authSvc.Accounts()
 }

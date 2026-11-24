@@ -243,7 +243,8 @@ auth:
   # claim, an email for local accounts) and groups. With LDAP, list the
   # directory's SuperAdmin groups under auth.ldap.roles.superAdmin instead.
   # The SuperAdmins named in these values (here, in the roles' superAdmin
-  # groups and in auth.local.users) are the console's installers: a dialog
+  # groups and in auth.local.users) are the console's installers, as is the
+  # SuperAdmin the first-run page creates in local mode: a dialog
   # at sign-in asks them to star 221B on GitHub, until one ticks Never show
   # this again (Administration > Settings > General turns it on again).
   admins: []

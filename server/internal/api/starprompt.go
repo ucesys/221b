@@ -18,7 +18,8 @@ import (
 // Never show this again. Who installed it the console knows as the
 // SuperAdmins the Helm values name (auth.admins and auth.adminGroups, the
 // groups given superAdmin under auth.ldap.roles or auth.oidc.roles, and
-// the local users of auth.local.users with the role superAdmin), never a
+// the local users of auth.local.users with the role superAdmin) and, in
+// local mode, the SuperAdmin the first-run page created; never a
 // SuperAdmin made later in the console (Options.Installer). It is a
 // console-wide setting of the general settings (settings.StarPrompt), on
 // by default, a switch in Administration › Settings › General; Never show
@@ -29,7 +30,7 @@ import (
 // nothing about starring.
 
 // Installer says whether a signed-in person installed the console: a
-// SuperAdmin the Helm values name (CU-21).
+// SuperAdmin the Helm values name or the first-run page created (CU-21).
 type Installer func(auth.Session) bool
 
 // starSetter turns the dialog on or off; *settings.Service is one.
@@ -76,7 +77,7 @@ func (s *Server) getStarPrompt(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postStarNever(w http.ResponseWriter, r *http.Request) {
 	sess, ok := auth.SessionFrom(r.Context())
 	if s.opts.Auth == nil || !ok || !sess.Admin || s.opts.Installer == nil || !s.opts.Installer(sess) {
-		jsonError(w, http.StatusForbidden, "Only the SuperAdmins the Helm values name are asked to star 221B.")
+		jsonError(w, http.StatusForbidden, "Only the SuperAdmins who installed the console are asked to star 221B.")
 		return
 	}
 	set, ok := s.opts.Settings.(starSetter)

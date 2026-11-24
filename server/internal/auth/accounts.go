@@ -81,6 +81,10 @@ type Account struct {
 	Disabled     bool       `json:"disabled,omitempty"`
 	Created      time.Time  `json:"created"`
 	LastSignIn   time.Time  `json:"lastSignIn,omitzero"`
+	// Installer marks the account the first-run page created: whoever
+	// installed the console, asked to star 221B on GitHub as the
+	// SuperAdmins the values name are (CU-21). Only Setup sets it.
+	Installer bool `json:"installer,omitempty"`
 	// Managed accounts come from the deployment's values, and are never
 	// changed or kept here.
 	Managed bool `json:"-"`
@@ -397,7 +401,7 @@ func (a *Accounts) Setup(ctx context.Context, n NewAccount) (Account, error) {
 		if len(a.managed) > 0 || len(a.stored) > 0 {
 			return ErrFirstRunClosed
 		}
-		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Created: a.now()}
+		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Installer: true, Created: a.now()}
 		a.stored[u.Username] = u
 		out = *u
 		return nil

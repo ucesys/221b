@@ -136,7 +136,7 @@ type document struct {
 
 var (
 	documentFields = []string{"version", "users", "sessionsEnded"}
-	accountFields  = []string{"username", "name", "email", "passwordHash", "groups", "super", "disabled", "created", "lastSignIn"}
+	accountFields  = []string{"username", "name", "email", "passwordHash", "groups", "super", "disabled", "created", "lastSignIn", "installer"}
 )
 
 func parseDocument(b []byte) (document, error) {

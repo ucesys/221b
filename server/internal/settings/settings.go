@@ -70,10 +70,10 @@ type Settings struct {
 	// budgets are kept all the same. A State says it as showCosts.
 	HideCosts bool `json:"hideCosts,omitempty"`
 	// StarPrompt says whether the console asks the people who installed
-	// it, the SuperAdmins the Helm values name, to star 221B on GitHub, in
-	// a dialog at sign-in (0.14.0, CU-21); nil is true. Never show this
-	// again turns it off, and a SuperAdmin turns it on again in
-	// Administration › Settings › General.
+	// it, the SuperAdmins the Helm values name and the first-run page's,
+	// to star 221B on GitHub, in a dialog at sign-in (0.14.0, CU-21); nil
+	// is true. Never show this again turns it off, and a SuperAdmin turns
+	// it on again in Administration › Settings › General.
 	StarPrompt *bool `json:"starPrompt,omitempty"`
 }
 

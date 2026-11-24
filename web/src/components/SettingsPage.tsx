@@ -510,7 +510,8 @@ function StarPromptSection({ picked, disabled, onPick }: { picked: boolean; disa
         Ask to star 221B on GitHub
       </label>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        At sign-in, a dialog asks the SuperAdmins the Helm values name, who installed the console, to star 221B on GitHub, until one of them ticks Never show this again. The console never calls GitHub and keeps nothing about it.
+        At sign-in, a dialog asks the SuperAdmins who installed the console (those the Helm values name, and the one the first-run page created) to star 221B on GitHub, until one of them ticks Never show this again. The console never calls
+        GitHub and keeps nothing about it.
       </p>
     </section>
   )

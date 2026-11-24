@@ -680,7 +680,7 @@ function Shell() {
               />
             )}
             {toast && <Toast message={toast} onDone={clearToast} />}
-            {/* Star us on GitHub (CU-21): the server says whom it asks, a SuperAdmin the values name. */}
+            {/* Star us on GitHub (CU-21): the server says whom it asks, a SuperAdmin the values name or the first-run page's. */}
             {me?.admin && <StarPrompt />}
             <TipLayer />
           </div>
