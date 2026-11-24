@@ -47,6 +47,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **An agent on model Auto keeps its model's context window** (AI-44): on an OpenAI-compatible provider, Auto's model was judged by the word `auto`, so the agent lost the provider's context window: it asked for 16,000-token replies and Sherlock never took its compact form, which a 16k vLLM server refuses. The window is now the smallest known of the models Auto may put the agent on, and holds when Auto changes the model.
 - **Backups to S3 keep "The bucket's default" encryption once saved** (BK-04): it was read back as SSE-S3, so a bucket that refuses SSE-S3 (MinIO without KMS) failed its test, and its backups, after saving.
 
 - **Run now on a job whose agent is off is refused, and the Jobs tab says why** (JB-25): *Run now* on the Daily digest with the Summarizer off said "Daily digest started." and the run failed at once with "the Summarizer is off", shown only on Jobs › Runs. Now *Run now*, *Rebuild now* and a start by hand are refused with a 409 that says *The Daily digest runs on the Summarizer, which is off: turn it on in Administration › AI › Agents.* (or the provider's own reason), shown in the drawer, and no run is recorded. A job whose agent is off says so on its row and in its drawer, with a link to the agent (`agentOff` on `GET /api/v1/jobs`); a failed or stopped last run shows its reason on the row and in the drawer, linked to the run. Scheduled and event runs still run and fail with the note.

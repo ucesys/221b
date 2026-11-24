@@ -531,19 +531,54 @@ const CompactShare = 0.5
 // windowOf is the context window of an agent's model on its provider, in
 // tokens, and where it was found: the agent's own (for a model of its
 // own), the provider's (for its default model), or a Claude model's.
-// 0 is not known.
+// 0 is not known. A model left to Auto is judged by the models Auto may
+// put it on (autoWindow), never by the word "auto".
 func windowOf(set AgentSettings, p Provider, model string) (int, string) {
 	switch {
+	case set.Model == auto.Auto:
+		return autoWindow(set, p, model)
 	case set.Model != "" && set.ContextWindow > 0:
 		return set.ContextWindow, "agent"
-	case (set.Model == "" || set.Model == p.Model) && p.ContextWindow > 0:
+	}
+	return modelWindow(p, model, set.Model == "")
+}
+
+// modelWindow is the context window of a model on a provider, for an
+// agent that gives none of its own: the provider's for its default model
+// (providerDefault: the agent names none), a Claude model's, or 0.
+func modelWindow(p Provider, model string, providerDefault bool) (int, string) {
+	switch {
+	case (providerDefault || model == p.Model) && p.ContextWindow > 0:
 		return p.ContextWindow, "provider"
-	case p.Provider.Kind == "" || p.Provider.Kind == sherlock.KindAnthropic || strings.HasPrefix(model, "claude"):
+	case anthropicKind(p) || strings.HasPrefix(model, "claude"):
 		if _, ok := sherlock.ModelOf(model); ok {
 			return sherlock.ClaudeContext, "model"
 		}
 	}
 	return 0, ""
+}
+
+// autoWindow is the context window of an agent whose model Auto picks:
+// the smallest known of the model it starts on and of every tiered model
+// it may move to (from its floor up), so that its reply bound and
+// Sherlock's form hold on whichever model Auto puts it on, a model changed
+// in the middle of a conversation or a job's run too. The agent's own
+// context window is not used: it is that of a model of its own, and the
+// drawer clears it under Auto.
+func autoWindow(set AgentSettings, p Provider, model string) (int, string) {
+	w, from := modelWindow(p, model, false)
+	ladder := ladderOf(p)
+	floor := ladder.Rank(set.FloorModel)
+	for _, o := range ladder {
+		r := auto.TierRank(o.Tier)
+		if r < 0 || floor >= 0 && r < floor {
+			continue
+		}
+		if x, f := modelWindow(p, o.Model, false); x > 0 && (w == 0 || x < w) {
+			w, from = x, f
+		}
+	}
+	return w, from
 }
 
 // replyBound bounds one reply on a model whose context is known: a
