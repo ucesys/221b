@@ -136,6 +136,15 @@ func CheckPassword(hash, password string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
+// localUserRule says what a local user's name from values or a file may
+// be (roles.ValidUsername, not strict): the user name, or the email when
+// there is none, read in lowercase.
+var localUserRule = fmt.Sprintf("the user name, or the email when there is none, may have letters (read in lowercase), digits, dot, dash, underscore, @ and +, at most %d characters, and may not be . or ..", roles.MaxEmailUsername)
+
+// localGroupRule says what a local group's name may be
+// (roles.ValidGroupName).
+var localGroupRule = fmt.Sprintf("a name of lowercase letters, digits, dot, dash and underscore, at most %d characters, not . or ..", roles.MaxUsername)
+
 // ValidateLocalUsers checks the accounts a file or the chart provides.
 func ValidateLocalUsers(users []LocalUser) error {
 	seen := map[string]bool{}
@@ -145,7 +154,7 @@ func ValidateLocalUsers(users []LocalUser) error {
 			return fmt.Errorf("local user %d: a username or an email address is needed", i+1)
 		}
 		if !roles.ValidUsername(name, false) {
-			return fmt.Errorf("local user %s: use lowercase letters, digits, dot, dash, underscore and @", name)
+			return fmt.Errorf("local user %s: %s", name, localUserRule)
 		}
 		if seen[name] {
 			return fmt.Errorf("local user %s appears twice", name)

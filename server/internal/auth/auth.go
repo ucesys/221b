@@ -220,8 +220,11 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 			s.people = newPeople(cfg.Directory.URL(), now)
 		}
 		for _, g := range cfg.LocalGroups {
-			if !roles.ValidGroupName(g.Name) || (g.Role != roles.Viewer && g.Role != roles.Admin && g.Role != roles.Reporter) {
-				return nil, fmt.Errorf("local group %q: a name of lowercase letters, digits, dot, dash and underscore, and the role viewer, admin or reporter", g.Name)
+			if !roles.ValidGroupName(g.Name) {
+				return nil, fmt.Errorf("local group %q: %s", g.Name, localGroupRule)
+			}
+			if g.Role != roles.Viewer && g.Role != roles.Admin && g.Role != roles.Reporter {
+				return nil, fmt.Errorf("local group %q: the role %q is not one: use viewer, admin or reporter", g.Name, g.Role)
 			}
 		}
 		var managed []Account
