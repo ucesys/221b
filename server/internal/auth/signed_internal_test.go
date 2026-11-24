@@ -106,7 +106,7 @@ func TestASweepWithAStoreThatFailsForgetsNothing(t *testing.T) {
 				t.Fatalf("the store lost a record: %d", store.Len())
 			}
 			// With the list back the idle ones go, as they always did.
-			c.add(awayFor + time.Second)
+			c.add(11 * time.Second)
 			s.Sweep()
 			if held(s) != 0 || store.Len() != 0 {
 				t.Fatalf("after the store came back: held %d, stored %d", held(s), store.Len())
@@ -160,7 +160,7 @@ func TestASessionThatCannotBeAskedAboutIsAlive(t *testing.T) {
 			t.Errorf("%s: a session this replica holds is not alive", name)
 		}
 		store.Fail(nil)
-		c.add(awayFor + time.Second)
+		c.add(11 * time.Second)
 	}
 	store.Fail(errAwayDB)
 	c.add(9 * time.Hour)
@@ -193,7 +193,7 @@ func TestEndingSessionsWhileTheStoreIsAwayIsDoneWhenItIsBack(t *testing.T) {
 	// The store is back and still holds the records: this replica goes on
 	// refusing them, and does not count them.
 	store.Fail(nil)
-	c.add(awayFor + time.Second)
+	c.add(11 * time.Second)
 	if store.Len() != 3 {
 		t.Fatalf("stored %d", store.Len())
 	}
@@ -218,45 +218,104 @@ func TestEndingSessionsWhileTheStoreIsAwayIsDoneWhenItIsBack(t *testing.T) {
 	}
 }
 
-func TestAStoreThatIsAwayIsLeftAloneForAWhile(t *testing.T) {
+// The review of November 23, 2026 ("not confirmed", session.go:298-300),
+// and the owner, November 24, 2026: one call that found the store away, or
+// ran out of time, left the store alone for 10 seconds, in which a session
+// ended on another replica was still served here. Every call now asks the
+// store, with its own time.
+func TestEveryCallAsksTheStoreAfterOneTimedOut(t *testing.T) {
 	c := newClock()
 	store := NewOutageStore()
-	s := outageSessions(c, store, nil)
-	sess := s.Start(Session{User: User{Username: "ann"}, Method: "local"})
-	store.Fail(errAwayDB)
-	before := store.Calls()
-	for range 50 {
-		if _, ok := s.Get(sess.ID); !ok {
-			t.Fatal("the session did not stand")
-		}
-		s.Alive(randomID())
+	a, b := outageSessions(c, store, nil), outageSessions(c, store, nil)
+	sess := a.Start(Session{User: User{Username: "ann"}, Method: "local"})
+	if _, ok := b.Get(sess.ID); !ok {
+		t.Fatal("the other replica does not take the session")
 	}
-	if n := store.Calls() - before; n != 1 {
-		t.Fatalf("a store that is away was asked %d times", n)
+	// One call runs out of time: the session this replica holds stands.
+	store.Fail(context.DeadlineExceeded)
+	if _, ok := b.Get(sess.ID); !ok {
+		t.Fatal("the session did not stand while the store did not answer")
 	}
-	c.add(awayFor + time.Second)
-	for range 50 {
-		s.Get(sess.ID)
-	}
-	if n := store.Calls() - before; n != 2 {
-		t.Fatalf("after the wait it was asked %d times in all", n)
-	}
+	// The store answers again at once; the session is signed out on the
+	// other replica.
 	store.Fail(nil)
-	c.add(awayFor + time.Second)
-	for range 5 {
-		s.Get(sess.ID)
+	a.Delete(sess.ID)
+	before := store.Calls()
+	if _, ok := b.Get(sess.ID); ok {
+		t.Fatal("a session signed out on another replica was served after one timed-out call")
 	}
-	if n := store.Calls() - before; n != 7 {
-		t.Fatalf("a store that is back is asked each time: %d calls", n)
+	if store.Calls() == before {
+		t.Fatal("the store was not asked after one timed-out call")
+	}
+	// Away, it is asked on every call all the same.
+	store.Fail(errAwayDB)
+	before = store.Calls()
+	for range 20 {
+		b.Alive(randomID())
+	}
+	if n := store.Calls() - before; n != 20 {
+		t.Fatalf("a store that is away was asked %d times for 20 calls", n)
 	}
 	// A refusal is an answer: the store is asked again next time.
 	store.Fail(errors.New("forbidden"))
 	before = store.Calls()
 	for range 5 {
-		s.Get(sess.ID)
+		b.Alive(randomID())
 	}
 	if n := store.Calls() - before; n != 5 {
 		t.Fatalf("a store that refuses was asked %d times", n)
+	}
+}
+
+// heldStore is a shared store whose calls wait until let go, as one that
+// swallows what it is sent does; it counts the calls with it at once.
+type heldStore struct {
+	SharedStore
+	mu        sync.Mutex
+	now, most int
+	release   chan struct{}
+}
+
+func (h *heldStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	h.mu.Lock()
+	h.now++
+	h.most = max(h.most, h.now)
+	h.mu.Unlock()
+	defer func() { h.mu.Lock(); h.now--; h.mu.Unlock() }()
+	select {
+	case <-h.release:
+		return nil, false, nil
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
+}
+
+func (h *heldStore) inFlight() int { h.mu.Lock(); defer h.mu.Unlock(); return h.now }
+
+// Without the breaker, what bounds the calls that a store which swallows
+// them holds is their number: at most maxStoreCalls are with the store at
+// once, and the others wait for a place within their own time.
+func TestTheCallsWithTheStoreAreBounded(t *testing.T) {
+	c := newClock()
+	store := &heldStore{SharedStore: NewOutageStore(), release: make(chan struct{})}
+	s := outageSessions(c, store, nil)
+	var wg sync.WaitGroup
+	for range maxStoreCalls + 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.Alive(randomID()) }()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for store.inFlight() < maxStoreCalls && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := store.inFlight(); n != maxStoreCalls {
+		t.Fatalf("%d calls with the store at once, want %d", n, maxStoreCalls)
+	}
+	close(store.release)
+	wg.Wait()
+	if store.most != maxStoreCalls {
+		t.Fatalf("at most %d calls were with the store at once, want %d", store.most, maxStoreCalls)
 	}
 }
 
@@ -489,13 +548,14 @@ func TestASignedSessionCarriesWhoThePersonIsAndNothingTheyMayDo(t *testing.T) {
 	// The cookie is checked with the key and the clock; the store is asked
 	// one thing only, whether it holds the session's ending (DB-65, after
 	// the ninth cluster test's F1: until then this test asserted that the
-	// store was not asked at all), and a store found away is then left
-	// alone like any other.
+	// store was not asked at all). A store found away is asked again at the
+	// next check, as every call asks it (the owner, November 24, 2026: no
+	// breaker; until then it was left alone for 10 seconds).
 	if n := store.Calls() - calls; n != 1 || store.Gets() == 0 {
 		t.Fatalf("checking a signed session made %d calls to the store", n)
 	}
-	if _, ok := b.Get(sess.ID); !ok || store.Calls() != calls+1 {
-		t.Fatalf("checking it again, with the store known to be away, made %d calls more", store.Calls()-calls-1)
+	if _, ok := b.Get(sess.ID); !ok || store.Calls() != calls+2 {
+		t.Fatalf("checking it again, with the store away, made %d calls more", store.Calls()-calls-1)
 	}
 	if !got.Signed || got.User.Subject != "ldap:priya" || got.User.Username != "priya" || got.User.Email != "priya@corp.example" || got.User.Name != "Priya" || strings.Join(got.User.Groups, ",") != "platform-admins,readers" || got.Method != "ldap" || got.Ref != "uid=priya" {
 		t.Fatalf("the other replica reads %+v", got)
@@ -625,6 +685,7 @@ func TestATamperedSignedSessionIsRefusedAndCostsNothing(t *testing.T) {
 	loads := keys.Loads()
 	for name, v := range cases {
 		for which, s := range map[string]*Sessions{"the replica that signed": a, "another replica": b} {
+			calls := store.Calls()
 			if _, ok := s.Get(v); ok {
 				t.Errorf("%s: %s took it", name, which)
 			}
@@ -640,17 +701,19 @@ func TestATamperedSignedSessionIsRefusedAndCostsNothing(t *testing.T) {
 				t.Errorf("%s: %s says alive = %v", name, which, s.Alive(v))
 			}
 			s.Delete(v)
+			// None of it reached the store but the value shaped like an
+			// ID, which the store is asked about as any ID is (each time:
+			// since the owner's decision of November 24, 2026 a store found
+			// away is not left alone; until then this test counted two
+			// calls in all).
+			if n := store.Calls() - calls; n != 0 && !plausibleID(v) {
+				t.Errorf("%s: %s asked the store %d times", name, which, n)
+			}
 		}
 	}
-	// None of it reached the store. The key's Secret was read again at most
-	// once by each replica, however many values came: a stranger's guesses
-	// cost one read each half minute.
-	// The store was asked twice in all: the first sign-in's write, and one
-	// read on the other replica for the value shaped like an ID, each of
-	// which found it away.
-	if n := store.Calls(); n != 2 {
-		t.Fatalf("the store was asked %d times", n)
-	}
+	// The key's Secret was read again at most once by each replica,
+	// however many values came: a stranger's guesses cost one read each
+	// half minute.
 	if n := keys.Loads() - loads; n > 2 {
 		t.Fatalf("the key was read again %d times", n)
 	}
@@ -702,7 +765,7 @@ func TestTheTwoShapesOfCookieAreNeverMistaken(t *testing.T) {
 	store.Fail(errAwayDB)
 	signed, _ := s.Open(Session{User: User{Subject: "local:bob", Username: "bob"}, Method: "local"})
 	store.Fail(nil)
-	c.add(awayFor + time.Second)
+	c.add(11 * time.Second)
 	payload, mac, _ := SplitSignedForTest(signed.ID)
 	if !plausibleID(mac) {
 		t.Fatal("the MAC is not shaped like an ID; the test means it to be")
@@ -792,10 +855,14 @@ func TestASignedSessionEndedOnAReplicaIsRefusedThere(t *testing.T) {
 	if _, ok := b.Get(sess.ID); !ok {
 		t.Fatal("not taken")
 	}
+	// Ending it asks the store whether it holds the ending and to keep it
+	// there (it is away: nothing is written), and it is refused here at
+	// once. Until the owner took the breaker out (November 24, 2026) the
+	// store, found away, was not asked at all.
 	calls := store.Calls()
 	b.Delete(sess.ID)
-	if store.Calls() != calls {
-		t.Fatal("ending a signed session asked the store")
+	if n := store.Calls() - calls; n > 2 {
+		t.Fatalf("ending a signed session asked the store %d times", n)
 	}
 	if _, ok := b.Get(sess.ID); ok {
 		t.Fatal("the replica that ended it still takes it")

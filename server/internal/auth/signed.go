@@ -276,7 +276,7 @@ func (s *Sessions) endedInStore(sid string) bool {
 	if here {
 		return true
 	}
-	if shared == nil || s.away() {
+	if shared == nil {
 		return false
 	}
 	var b []byte
@@ -401,7 +401,15 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 	if !cur.Signed || cur.sid == "" {
 		return nil, false, false
 	}
-	s.exMu.Lock()
+	// One exchange at a time. A request that finds one under way does not
+	// wait for it: the signed session serves it, and a later request
+	// exchanges (what is kept for the person is under the same StateID
+	// either way). A store that swallows what it is sent so holds one
+	// request for its time, not every request with a signed cookie, one
+	// after the other.
+	if !s.exMu.TryLock() {
+		return nil, false, false
+	}
 	defer s.exMu.Unlock()
 	now := s.now()
 	s.mu.Lock()
@@ -423,7 +431,7 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 		}
 		return nil, false, false
 	}
-	if now.Before(wait) || s.away() || !now.Before(cur.Expires) {
+	if now.Before(wait) || !now.Before(cur.Expires) {
 		return nil, false, false
 	}
 	id, ok := s.exchangeID(cur.sid)
@@ -455,7 +463,7 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 	})
 	switch {
 	case err != nil:
-		// A store that is away is left alone for a while as it is (reach);
+		// A store that is away is asked again at the next request (reach);
 		// one that refuses is not asked on every request.
 		if !StoreAway(err) {
 			s.log.Warn("a session made while the session store was away could not be stored; it stands as it is until it expires", "err", err)

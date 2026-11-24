@@ -197,7 +197,8 @@ func TestAFollowersSessionIsTakenByTheLeaderWhileTheStoreIsAway(t *testing.T) {
 
 	// With the store back the store decides: a session it no longer holds
 	// is refused, vouched or not.
-	// A store found away is left alone for 10 seconds (DB-65).
+	// Every call asks the store again (DB-65); the clock moves on all the
+	// same.
 	store.setAway(false)
 	clockMu.Lock()
 	now = now.Add(11 * time.Second)

@@ -352,9 +352,11 @@ func TestATamperedSignedCookieIsNoSession(t *testing.T) {
 			}
 		}
 	}
-	// One read at most: the value shaped like an ID, on the replica that
-	// had not yet found the store away.
-	if n := o.store.Calls() - calls; n > 1 {
+	// The value shaped like an ID is asked about as any ID is, once a
+	// request (two requests on each of two replicas): a store found away
+	// is not left alone (the owner, November 24, 2026; until then this was
+	// one read at most). No signed-shaped value reaches the store.
+	if n := o.store.Calls() - calls; n > 4 {
 		t.Fatalf("made-up cookies cost the store %d calls", n)
 	}
 	// The real ones still work.
