@@ -762,8 +762,16 @@ func (s *Service) attemptBy(r *http.Request, login string) (ok bool, refusedBy s
 	if !s.perAddress.allow(from(r)) {
 		return false, "address " + from(r)
 	}
-	if !s.perAccount.allow(login) {
-		return false, "account " + login
+	// An account is one bucket, whether its user name or its email was
+	// typed.
+	key := login
+	if s.accounts != nil {
+		if a, ok := s.accounts.Find(login); ok {
+			key = a.Username
+		}
+	}
+	if !s.perAccount.allow(key) {
+		return false, "account " + key
 	}
 	return true, ""
 }

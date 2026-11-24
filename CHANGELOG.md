@@ -99,6 +99,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A malformed local-users file no longer opens the first-run page** (RB-26): a `users.yaml` of the wrong shape (one account written without the leading `- `, a list under another key, an empty file) was read as no accounts without a word, and in local mode the first visitor could create the SuperAdmin. Such a file now stops the start with an error saying what is wrong; write `[]` for no accounts. Each start logs how many accounts the file names.
 - **An email changed away from the admin list takes SuperAdmin from open sessions** (RB-05): changing a local account's email away from one in `auth.admins` left the SuperAdmin role, and `221b:superadmins`, on the person's open sessions until they ended (8 hours idle, 7 days at most), though the Users page showed them without it. A session now reads the account's email and name as they are.
 - **A session no longer goes on as another account that has its name as email** (RB-46): a local session was looked up like a sign-in, by user name and then by email, so the session of an account named by its email (`ops@corp.example`), taken out of the values, went on as the console user whose email that is, with that user's roles. A session is now looked up by its user name only.
+- **The per-account sign-in limit counts a name and an email together** (RB-46): it was kept by the text typed, so typing an account's user name and its email gave twice the guesses a minute.
 
 ## 0.13.0 (2026-11-22)
 

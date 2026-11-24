@@ -407,3 +407,25 @@ func TestASessionIsNotTakenUpByAnotherAccountWithItsNameAsEmail(t *testing.T) {
 		t.Fatalf("the session of the account taken out of values: %d %+v", code, w)
 	}
 }
+
+// Cut by the review's cap (auth.go:726): the per-account limit counts an
+// account's attempts by its user name and by its email alike.
+func TestTheAccountLimitCountsTheNameAndTheEmailTogether(t *testing.T) {
+	e := newEnv(t, outageConfig(t))
+	if _, err := e.svc.Accounts().Create(context.Background(), auth.NewAccount{Username: "gina", Email: "gina@corp.example", Password: goodPassword}); err != nil {
+		t.Fatal(err)
+	}
+	codes := []int{}
+	for i := range 6 {
+		login := "gina"
+		if i%2 == 1 {
+			login = "GINA@corp.example"
+		}
+		_, resp := e.signIn(login, "wrong wrong wrong")
+		readAll(t, resp)
+		codes = append(codes, resp.StatusCode)
+	}
+	if codes[5] != http.StatusTooManyRequests {
+		t.Fatalf("six attempts at one account by name and email: %v", codes)
+	}
+}
