@@ -2,17 +2,21 @@
 // roles and sources, the totals the Permissions page shows, and what a
 // person can do after joining a group.
 
-import type { Drift, DriftId, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
+import type { Drift, DriftId, HeldRole, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
 
-export const ROLE_NAME: Record<RoleId, string> = {
+export const ROLE_NAME: Record<HeldRole, string> = {
   superAdmin: 'SuperAdmin',
   superViewer: 'SuperViewer',
   admin: 'Admin',
   viewer: 'Viewer',
+  reporter: 'Reporter',
 }
 
-/** Highest first: the role shown for a person who holds several (RB-21). */
-export const ROLE_ORDER: RoleId[] = ['superAdmin', 'superViewer', 'admin', 'viewer']
+/** The four Kubernetes roles, highest first (RB-01). */
+export const KUBE_ROLES: RoleId[] = ['superAdmin', 'superViewer', 'admin', 'viewer']
+
+/** Highest first: the role shown for a person who holds several (RB-21); Reporter, which reports problems alone (IS-20), last. */
+export const ROLE_ORDER: HeldRole[] = [...KUBE_ROLES, 'reporter']
 
 export const SOURCE_NAME: Record<Source | 'other', string> = {
   local: 'Local',
@@ -26,12 +30,12 @@ export const LOCAL_PREFIX = '221b-local:'
 export const LDAP_PREFIX = '221b-ldap:'
 
 /** Whether a role is bound per namespace (Admin and Viewer) or held for every namespace (RB-05, RB-06). */
-export function perNamespace(id: RoleId): boolean {
+export function perNamespace(id: HeldRole): boolean {
   return id === 'admin' || id === 'viewer'
 }
 
 /** The highest role a person holds, or null for none. */
-export function topRole(h: Holding[]): RoleId | null {
+export function topRole(h: Holding[]): HeldRole | null {
   for (const r of ROLE_ORDER) if (h.some((x) => x.role === r)) return r
   return null
 }

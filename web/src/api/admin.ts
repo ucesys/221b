@@ -10,6 +10,9 @@ import { BACKGROUND, unauthorized } from './auth'
 
 export type RoleId = 'superAdmin' | 'superViewer' | 'admin' | 'viewer'
 
+/** A role a person holds: the four, or the issue service's Reporter (IS-20), which is no Kubernetes role and grants nothing in a cluster. */
+export type HeldRole = RoleId | 'reporter'
+
 /** The roles held in 221B, applied to every cluster (RB-05). */
 export type SuperRole = 'superAdmin' | 'superViewer'
 
@@ -109,14 +112,14 @@ export interface PermissionsResponse {
 
 export interface LocalGroup {
   name: string
-  role: 'viewer' | 'admin'
+  role: 'viewer' | 'admin' | 'reporter'
   namespaces: string[]
   members: number
 }
 
 /** A role a person holds, and why. */
 export interface Holding {
-  role: RoleId
+  role: HeldRole
   /** The group it comes through; empty when it was given to the person. */
   via?: string
   namespaces?: string[]

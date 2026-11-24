@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { fetchPermissions, fetchRoles, useAdmin, type PermRole, type RoleId, type RoleRow } from '../api/admin'
 import { MATRIX_COLUMNS, matrixTerms } from '../columns/admin'
-import { driftName, driftText, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
+import { driftName, driftText, KUBE_ROLES, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
 import { fmtClock } from '../lib/format'
 import { navigate, authHref } from '../lib/router'
 import { useTable } from '../lib/useTable'
@@ -125,7 +125,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   // A role's See every permission opens the page on that role (?role=).
   const [role, setRole] = useState<RoleId | null>(() => {
     const r = route.params.get('role')
-    return r && r in ROLE_NAME ? (r as RoleId) : null
+    return r && (KUBE_ROLES as string[]).includes(r) ? (r as RoleId) : null
   })
   const [sensitive, setSensitive] = useState(false)
   const all = useMemo(() => (data ? matrixOf(data.roles) : []), [data])
