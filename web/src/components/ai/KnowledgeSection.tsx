@@ -42,7 +42,7 @@ import { fetchCredentials, type CredentialUse } from '../../api/credentials'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { UploadedDocuments } from './UploadedDocuments'
-import { SearchCard } from './KnowledgeSearch'
+import { SearchCard, SourceIndexCell } from './KnowledgeSearch'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -211,6 +211,12 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                 <th scope="col">Source</th>
                 <th scope="col">Kind</th>
                 <th scope="col">Mode</th>
+                <th
+                  scope="col"
+                  title="Ranks its passages in the search: high above normal above low; Mycroft writes pages from a source of high trust by itself. Under it, the product and version its documents are about, where their front matter or path says nothing"
+                >
+                  Trust
+                </th>
                 <th scope="col">Last read</th>
                 <th scope="col">State</th>
                 <th scope="col">
@@ -224,6 +230,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                 .map((s) => {
                   const st = sourceState(v, s)
                   const lastRead = v.status.sources?.[s.id]?.lastRead
+                  const ix = v.index?.sources.find((x) => x.id === s.id)
                   return (
                     <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
                       <td>
@@ -279,6 +286,10 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                       <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
                         {sourceMode(s)}
                       </td>
+                      <td data-testid="knowledge-source-trust">
+                        {/* Its trust and what it is about (KN-56, KN-57): a live source is never indexed. */}
+                        {ix && v.index ? <SourceIndexCell key={`${ix.trust}${ix.trustDefault}${ix.product}${ix.productVersion}${ix.followsClusterVersions}`} x={ix} clusters={v.index.clusterVersions} run={run} busy={busy} /> : '—'}
+                      </td>
                       <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
                       <td style={{ maxWidth: 320 }}>
                         {st.tone === 'err' ? (
@@ -314,6 +325,7 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
             </tbody>
           </table>
         </div>
+        <UploadsTrust v={v} run={run} busy={busy} />
         <p className="rk-fhint" style={{ margin: 0 }}>
           What each source holds, and what is excluded from it, is in{' '}
           <a className="rk-link" href={SOURCES_HREF} data-testid="knowledge-items-link">
@@ -355,6 +367,28 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
         />
       )}
     </section>
+  )
+}
+
+/**
+ * The trust of the sources of uploads (KN-57), not rows of the Sources table: an uploaded document takes it
+ * unless it has its own (KN-61), chosen at its upload or on its row in AIOps › Mycroft › Sources.
+ */
+function UploadsTrust({ v, run, busy }: { v: KnowledgeView; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void>; busy: boolean }) {
+  const ups = (v.index?.sources ?? []).filter((x) => x.kind === 'upload')
+  if (!v.index || ups.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', fontSize: 12.5 }} data-testid="knowledge-uploads-trust">
+      <span className="rk-fhint" style={{ flex: '1 1 260px' }}>
+        Uploaded documents and notes take the trust of their source, unless a document has its own, chosen at its upload or on its row in AIOps › Mycroft › Sources.
+      </span>
+      {ups.map((x) => (
+        <span key={x.id} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+          <span style={{ paddingTop: 6 }}>{x.name}</span>
+          <SourceIndexCell key={`${x.trust}${x.trustDefault}`} x={x} clusters={v.index!.clusterVersions} run={run} busy={busy} about={false} />
+        </span>
+      ))}
+    </div>
   )
 }
 

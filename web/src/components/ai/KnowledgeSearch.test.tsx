@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IndexView, KnowledgeView } from '../../api/knowledge'
-import { bytesText, modesText, SearchCard } from './KnowledgeSearch'
+import { bytesText, modesText, SearchCard, SourceIndexCell } from './KnowledgeSearch'
 
 function view(index: Partial<IndexView> = {}, over: Partial<KnowledgeView['settings']> = {}): KnowledgeView {
   return {
@@ -60,11 +60,15 @@ describe('Administration › AI › Knowledge › Search', () => {
     fireEvent.change(screen.getByTestId('knowledge-embedding-provider'), { target: { value: 'a5000' } })
     const save = screen.getByTestId('knowledge-embedding-save') as HTMLButtonElement
     expect(save.disabled).toBe(true)
-    fireEvent.change(screen.getByTestId('knowledge-embedding-model'), { target: { value: 'Qwen/Qwen3-Embedding-0.6B' } })
+    // The name as the endpoint knows it: the A5000 serves qwen3-embedding-0.6b, not the Hugging Face name.
+    const model = screen.getByTestId('knowledge-embedding-model') as HTMLInputElement
+    expect(model.placeholder).toBe('The model’s name, as its /v1/models lists it')
+    expect(screen.getByTestId('knowledge-embeddings').textContent).toContain('Type the model’s name as the endpoint knows it')
+    fireEvent.change(model, { target: { value: 'qwen3-embedding-0.6b' } })
     expect(save.disabled).toBe(false)
     fireEvent.click(save)
     await vi.waitFor(() => expect(fetched).toHaveLength(1))
-    expect(fetched[0]).toEqual({ url: '/api/v1/knowledge/embeddings', body: { provider: 'a5000', model: 'Qwen/Qwen3-Embedding-0.6B' } })
+    expect(fetched[0]).toEqual({ url: '/api/v1/knowledge/embeddings', body: { provider: 'a5000', model: 'qwen3-embedding-0.6b' } })
   })
   it('says what is embedded, and what the database lacks', () => {
     const on = view({ embedded: 1200, embedError: 'embedding with m: the endpoint does not answer' }, { embeddings: { provider: 'a5000', model: 'm' } })
@@ -80,7 +84,18 @@ describe('Administration › AI › Knowledge › Search', () => {
     expect(screen.getByTestId('knowledge-embedding-state').textContent).toContain('no pgvector')
     expect(screen.getByTestId('knowledge-embedding-none')).toBeTruthy()
   })
-  it('sets a source’s trust and versions, and says its size (KN-56 to KN-58)', async () => {
+  it('says what the index holds of each source; its trust is set in the Sources table (KN-58)', () => {
+    render(<SearchCard v={view()} run={vi.fn()} busy={false} />)
+    expect(screen.getByTestId('knowledge-volume').textContent).toContain('2.0 GiB of its volume’s 10 GiB (20 %)')
+    expect(screen.queryByTestId('knowledge-volume-full')).toBeNull()
+    const rows = screen.getAllByTestId('knowledge-index-source')
+    expect(rows).toHaveLength(2)
+    expect(rows[1]!.querySelector('[data-testid="knowledge-index-size"]')!.textContent).toBe('80 documents · 2,100 passages · 40 MiB')
+    expect(screen.queryByTestId('knowledge-index-trust')).toBeNull()
+    expect(screen.queryByTestId('knowledge-index-product')).toBeNull()
+    expect(screen.getByTestId('knowledge-index-sources').textContent).not.toContain('Trust')
+  })
+  it('sets a source’s trust and versions in one cell, saved together (KN-56, KN-57)', async () => {
     const fetched: { url: string; body?: unknown }[] = []
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       fetched.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
@@ -89,22 +104,25 @@ describe('Administration › AI › Knowledge › Search', () => {
     const run = vi.fn(async (fn: () => Promise<unknown>) => {
       await fn()
     })
-    render(<SearchCard v={view()} run={run} busy={false} />)
-    expect(screen.getByTestId('knowledge-volume').textContent).toContain('2.0 GiB of its volume’s 10 GiB (20 %)')
-    expect(screen.queryByTestId('knowledge-volume-full')).toBeNull()
-    const rows = screen.getAllByTestId('knowledge-index-source')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]!.textContent).toContain('High (its kind’s)')
-    expect(rows[1]!.querySelector('[data-testid="knowledge-index-size"]')!.textContent).toBe('80 documents · 2,100 passages · 40 MiB')
-    const save = rows[1]!.querySelector('[data-testid="knowledge-index-save"]') as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.change(rows[1]!.querySelector('[data-testid="knowledge-index-trust"]')!, { target: { value: 'low' } })
-    fireEvent.change(rows[1]!.querySelector('[data-testid="knowledge-index-product"]')!, { target: { value: 'rke2' } })
-    fireEvent.click(rows[1]!.querySelector('[data-testid="knowledge-index-follows"]')!)
-    expect(rows[1]!.textContent).toContain('Only the versions the clusters run (1.33)')
-    fireEvent.click(save)
+    const ix = view().index!
+    render(<SourceIndexCell x={ix.sources[1]!} clusters={ix.clusterVersions} run={run} busy={false} />)
+    const cell = screen.getByTestId('knowledge-index-cell')
+    expect(cell.textContent).toContain('Normal (its kind’s)')
+    expect(screen.queryByTestId('knowledge-index-save')).toBeNull()
+    fireEvent.change(screen.getByTestId('knowledge-index-trust'), { target: { value: 'low' } })
+    fireEvent.change(screen.getByTestId('knowledge-index-product'), { target: { value: 'rke2' } })
+    fireEvent.click(screen.getByTestId('knowledge-index-follows'))
+    expect(cell.textContent).toContain('Only the versions the clusters run (1.33)')
+    fireEvent.click(screen.getByTestId('knowledge-index-save'))
     await vi.waitFor(() => expect(fetched).toHaveLength(1))
     expect(fetched[0]).toEqual({ url: '/api/v1/knowledge/sources/rke2/index', body: { trust: 'low', product: 'rke2', productVersion: '', followsClusterVersions: true } })
+    cleanup()
+    render(<SourceIndexCell x={{ ...ix.sources[0]!, product: 'ops' }} clusters={[]} run={run} busy={false} about={false} />)
+    expect(screen.queryByTestId('knowledge-index-product')).toBeNull()
+    fireEvent.change(screen.getByTestId('knowledge-index-trust'), { target: { value: 'normal' } })
+    fireEvent.click(screen.getByTestId('knowledge-index-save'))
+    await vi.waitFor(() => expect(fetched).toHaveLength(2))
+    expect(fetched[1]!.body).toEqual({ trust: 'normal', product: 'ops', productVersion: '', followsClusterVersions: false })
   })
   it('warns at 80 % of the volume, and says when its size is not known', () => {
     render(<SearchCard v={view({ databaseBytes: 9 * 2 ** 30, full: true })} run={vi.fn()} busy={false} />)

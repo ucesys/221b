@@ -124,6 +124,41 @@ describe('Administration › AI › Knowledge', () => {
     expect(screen.getByTestId('knowledge-model-link').getAttribute('href')).toContain('admin/ai/agents')
   })
 
+  it('sets a source’s trust and what it is about on its row of the Sources table, and the uploads’ trust under it (KN-57)', async () => {
+    const index = {
+      documents: 10,
+      passages: 40,
+      fuzzy: true,
+      semantic: false,
+      embedded: 0,
+      providers: [],
+      sources: [
+        { id: 'console', name: 'This console', kind: 'console' as const, trust: 'high' as const, trustDefault: true, documents: 4, passages: 8, embedded: 0, bytes: 1024 },
+        { id: 'infra', name: 'Confluence space: Infrastructure', kind: 'confluence' as const, trust: 'low' as const, product: 'rke2', documents: 5, passages: 30, embedded: 0, bytes: 4096 },
+        { id: 'documents', name: 'Uploaded documents', kind: 'upload' as const, trust: 'high' as const, trustDefault: true, documents: 1, passages: 2, embedded: 0, bytes: 512 },
+      ],
+      databaseBytes: 1 << 20,
+      clusterVersions: ['1.33'],
+    }
+    current = view({ index })
+    render(<KnowledgeSection />)
+    const rows = await screen.findAllByTestId('knowledge-source')
+    expect(screen.getByTestId('knowledge-sources').querySelector('thead')!.textContent).toContain('Trust')
+    const infra = within(rows[1]!).getByTestId('knowledge-source-trust')
+    expect((within(infra).getByTestId('knowledge-index-trust') as HTMLSelectElement).value).toBe('low')
+    expect((within(infra).getByTestId('knowledge-index-product') as HTMLInputElement).value).toBe('rke2')
+    expect(within(rows[2]!).getByTestId('knowledge-source-trust').textContent).toBe('—')
+    fireEvent.change(within(infra).getByTestId('knowledge-index-trust'), { target: { value: 'high' } })
+    fireEvent.click(within(infra).getByTestId('knowledge-index-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT' && c.url === '/api/v1/knowledge/sources/infra/index')?.body).toEqual({ trust: 'high', product: 'rke2', productVersion: '', followsClusterVersions: false }))
+    // The sources of uploads are not rows: their trust is under the table, the trust alone.
+    const up = screen.getByTestId('knowledge-uploads-trust')
+    expect(up.textContent).toContain('Uploaded documents')
+    expect(within(up).queryByTestId('knowledge-index-product')).toBeNull()
+    // The Search card keeps what the index holds, without the trust.
+    expect(within(screen.getByTestId('knowledge-search')).queryByTestId('knowledge-index-trust')).toBeNull()
+  })
+
   it('adds a Confluence source naming its credential, which the only one that covers it preselects (CR-10)', async () => {
     choices = { 'confluence-cloud': [cred('cr-ops', 'Ops Confluence', 'token', 'https://ops.atlassian.net')] }
     render(<KnowledgeSection />)

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { saveEmbeddings, saveSourceIndex, SOURCE_KIND_LABEL, type KnowledgeView, type SourceIndexView, type TrustLevel } from '../../api/knowledge'
+import { saveEmbeddings, saveSourceIndex, SOURCE_KIND_LABEL, TRUST_LABEL, type KnowledgeView, type SourceIndexView, type TrustLevel } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Select } from '../Select'
 
@@ -7,8 +7,10 @@ type Run = (fn: () => Promise<unknown>, msg?: string) => Promise<void>
 
 /**
  * Administration › AI › Knowledge › Search (phase-13.1-ai, part B): the
- * index in the database (KN-53), the ways it searches (KN-54) and the
- * embedding model of its semantic search (KN-55).
+ * index in the database (KN-53), the ways it searches (KN-54), the
+ * embedding model of its semantic search (KN-55) and what it holds of each
+ * source (KN-58). A source's trust and what it is about (KN-56, KN-57) are
+ * set on its row of the Sources table (SourceIndexCell), since 0.14.0.
  */
 export function SearchCard({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolean }) {
   const ix = v.index
@@ -26,7 +28,7 @@ export function SearchCard({ v, run, busy }: { v: KnowledgeView; run: Run; busy:
       )}
       <Embeddings v={v} run={run} busy={busy} />
       <Volume v={v} />
-      <SourcesTable v={v} run={run} busy={busy} />
+      <SourcesTable v={v} />
     </section>
   )
 }
@@ -62,7 +64,7 @@ function Embeddings({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolea
   const changed = provider !== (e.provider ?? '') || (provider !== '' && model.trim() !== (e.model ?? ''))
   const on = !!(e.provider && e.model)
   return (
-    <Row label="Embedding model" hint="For semantic search: an OpenAI-compatible provider’s /v1/embeddings, the A5000’s vLLM by default" testId="knowledge-embeddings">
+    <Row label="Embedding model" hint="For semantic search: an OpenAI-compatible provider’s /v1/embeddings. Type the model’s name as the endpoint knows it (its /v1/models)" testId="knowledge-embeddings">
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <Select
           label="Embedding provider"
@@ -73,7 +75,7 @@ function Embeddings({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolea
         />
         {provider !== '' && (
           <span className="rk-field" style={{ width: 260 }}>
-            <input value={model} onChange={(x) => setModel(x.target.value)} placeholder="Qwen/Qwen3-Embedding-0.6B" aria-label="Embedding model" data-testid="knowledge-embedding-model" />
+            <input value={model} onChange={(x) => setModel(x.target.value)} placeholder="The model’s name, as its /v1/models lists it" aria-label="Embedding model" data-testid="knowledge-embedding-model" />
           </span>
         )}
         <button
@@ -139,10 +141,8 @@ function Volume({ v }: { v: KnowledgeView }) {
   )
 }
 
-const TRUST_WORDS: Record<TrustLevel, string> = { high: 'High', normal: 'Normal', low: 'Low' }
-
-/** Each source's trust, what it is about and what the index holds of it (KN-56 to KN-58). */
-function SourcesTable({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolean }) {
+/** What the index holds of each source (KN-58): its trust and what it is about are set on its row of the Sources table. */
+function SourcesTable({ v }: { v: KnowledgeView }) {
   const ix = v.index!
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -150,33 +150,29 @@ function SourcesTable({ v, run, busy }: { v: KnowledgeView; run: Run; busy: bool
         <thead>
           <tr>
             <th scope="col">Source</th>
-            <th scope="col" title="Ranks its passages: high above normal above low. Mycroft writes pages from a source of high trust">
-              Trust
-            </th>
-            <th scope="col" title="The product and version its documents are about, where their front matter or path says nothing">
-              About
-            </th>
             <th scope="col">In the index</th>
-            <th scope="col">
-              <span className="rk-sr">Actions</span>
-            </th>
           </tr>
         </thead>
         <tbody>
           {ix.sources.map((x) => (
-            <SourceRow key={x.id} x={x} clusters={ix.clusterVersions} run={run} busy={busy} />
+            <tr key={x.id} data-testid="knowledge-index-source" data-source={x.id}>
+              <td>
+                <strong>{x.name}</strong>
+                <div className="rk-fhint">{SOURCE_KIND_LABEL[x.kind]}</div>
+              </td>
+              <td data-testid="knowledge-index-size">
+                {x.documents.toLocaleString()} {x.documents === 1 ? 'document' : 'documents'} · {x.passages.toLocaleString()} passages · {bytesText(x.bytes)}
+              </td>
+            </tr>
           ))}
           {ix.pageSize && ix.pageSize.documents > 0 && (
             <tr data-testid="knowledge-index-pages">
               <td>
                 <strong>Approved pages</strong>
               </td>
-              <td>Reviewed</td>
-              <td>—</td>
               <td>
                 {ix.pageSize.documents.toLocaleString()} pages · {bytesText(ix.pageSize.bytes)}
               </td>
-              <td />
             </tr>
           )}
         </tbody>
@@ -185,60 +181,61 @@ function SourcesTable({ v, run, busy }: { v: KnowledgeView; run: Run; busy: bool
   )
 }
 
-function SourceRow({ x, clusters, run, busy }: { x: SourceIndexView; clusters: string[]; run: Run; busy: boolean }) {
+/** A source's default trust, its kind's: the organisation's own high, web sites and buckets normal (KN-57). */
+const kindTrust = (kind: string): TrustLevel => (({ confluence: 'high', git: 'high', upload: 'high', console: 'high', fixes: 'high' }) as Record<string, TrustLevel>)[kind] ?? 'normal'
+
+/**
+ * A source's trust and what it is about (KN-56, KN-57), on its row of Administration › AI › Knowledge's Sources:
+ * the trust on top, the product, version and Only the versions the clusters run under it, saved together.
+ * about false shows the trust alone (the sources of uploads), keeping what they are about as it is.
+ */
+export function SourceIndexCell({ x, clusters, run, busy, about = true }: { x: SourceIndexView; clusters: string[]; run: Run; busy: boolean; about?: boolean }) {
   const [trust, setTrust] = useState<'' | TrustLevel>(x.trustDefault ? '' : x.trust)
   const [product, setProduct] = useState(x.product ?? '')
   const [version, setVersion] = useState(x.productVersion ?? '')
   const [follows, setFollows] = useState(!!x.followsClusterVersions)
   const changed = trust !== (x.trustDefault ? '' : x.trust) || product.trim() !== (x.product ?? '') || version.trim() !== (x.productVersion ?? '') || follows !== !!x.followsClusterVersions
-  const kindDefault = x.trustDefault ? x.trust : (({ confluence: 'high', git: 'high', upload: 'high', console: 'high', fixes: 'high' } as Record<string, TrustLevel>)[x.kind] ?? 'normal')
+  const kindDefault = x.trustDefault ? x.trust : kindTrust(x.kind)
   return (
-    <tr data-testid="knowledge-index-source" data-source={x.id}>
-      <td>
-        <strong>{x.name}</strong>
-        <div className="rk-fhint">{SOURCE_KIND_LABEL[x.kind]}</div>
-      </td>
-      <td>
-        <Select
-          label={`Trust of ${x.name}`}
-          value={trust}
-          onChange={(t) => setTrust(t as '' | TrustLevel)}
-          testId="knowledge-index-trust"
-          options={[
-            ['', `${TRUST_WORDS[kindDefault]} (its kind’s)`],
-            ['high', 'High'],
-            ['normal', 'Normal'],
-            ['low', 'Low'],
-          ]}
-        />
-      </td>
-      <td>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="rk-field" style={{ width: 110 }}>
-            <input value={product} onChange={(e) => setProduct(e.target.value)} placeholder="product" aria-label={`Product of ${x.name}`} data-testid="knowledge-index-product" />
-          </span>
-          <span className="rk-field" style={{ width: 70 }}>
-            <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.33" aria-label={`Version of ${x.name}`} data-testid="knowledge-index-version" />
-          </span>
-        </div>
-        <label className="rk-fhint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }} title={clusters.length ? `The clusters run ${clusters.join(', ')}` : 'No cluster version is known yet'}>
-          <input type="checkbox" checked={follows} onChange={(e) => setFollows(e.target.checked)} data-testid="knowledge-index-follows" />
-          Only the versions the clusters run{clusters.length ? ` (${clusters.join(', ')})` : ''}
-        </label>
-      </td>
-      <td data-testid="knowledge-index-size">
-        {x.documents.toLocaleString()} {x.documents === 1 ? 'document' : 'documents'} · {x.passages.toLocaleString()} passages · {bytesText(x.bytes)}
-      </td>
-      <td>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }} data-testid="knowledge-index-cell" data-source={x.id}>
+      <Select
+        label={`Trust of ${x.name}`}
+        value={trust}
+        onChange={(t) => setTrust(t as '' | TrustLevel)}
+        testId="knowledge-index-trust"
+        options={[
+          ['', `${TRUST_LABEL[kindDefault]} (its kind’s)`],
+          ['high', 'High'],
+          ['normal', 'Normal'],
+          ['low', 'Low'],
+        ]}
+      />
+      {about && (
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }} title="The product and version its documents are about, where their front matter or path says nothing">
+            <span className="rk-field" style={{ width: 110 }}>
+              <input value={product} onChange={(e) => setProduct(e.target.value)} placeholder="product" aria-label={`Product of ${x.name}`} data-testid="knowledge-index-product" />
+            </span>
+            <span className="rk-field" style={{ width: 70 }}>
+              <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.33" aria-label={`Version of ${x.name}`} data-testid="knowledge-index-version" />
+            </span>
+          </div>
+          <label className="rk-fhint" style={{ display: 'flex', gap: 6, alignItems: 'center' }} title={clusters.length ? `The clusters run ${clusters.join(', ')}` : 'No cluster version is known yet'}>
+            <input type="checkbox" checked={follows} onChange={(e) => setFollows(e.target.checked)} data-testid="knowledge-index-follows" />
+            Only the versions the clusters run{clusters.length ? ` (${clusters.join(', ')})` : ''}
+          </label>
+        </>
+      )}
+      {changed && (
         <button
           className="rk-link"
-          disabled={busy || !changed}
+          disabled={busy}
           onClick={() => void run(() => saveSourceIndex(x.id, { trust, product: product.trim(), productVersion: version.trim(), followsClusterVersions: follows }), 'Saved.')}
           data-testid="knowledge-index-save"
         >
           Save
         </button>
-      </td>
-    </tr>
+      )}
+    </div>
   )
 }
