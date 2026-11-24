@@ -199,12 +199,16 @@ type RolesInput struct {
 }
 
 // sourceOf says where a bound name comes from, by its prefix, and the name
-// without it (RB-15).
-func (in RolesInput) sourceOf(kind, name string) (string, string) {
+// without it (RB-15): "221b" for the reserved groups 221B adds (RB-05,
+// RB-07), and "oidc" for a name the chart bound (managed) that carries no
+// local or directory prefix when OIDC has none, as by default.
+func (in RolesInput) sourceOf(kind, name string, managed bool) (string, string) {
 	p := in.Prefixes
 	switch {
 	case kind == "ServiceAccount":
 		return "other", name
+	case kind == "Group" && strings.HasPrefix(name, "221b:"):
+		return "221b", name
 	case p.Local != "" && strings.HasPrefix(name, p.Local):
 		return string(Local), strings.TrimPrefix(name, p.Local)
 	case p.LDAP != "" && strings.HasPrefix(name, p.LDAP):
@@ -216,6 +220,9 @@ func (in RolesInput) sourceOf(kind, name string) (string, string) {
 	}
 	if oidc != "" && strings.HasPrefix(name, oidc) {
 		return string(OIDC), strings.TrimPrefix(name, oidc)
+	}
+	if oidc == "" && managed && !strings.HasPrefix(name, "system:") {
+		return string(OIDC), name
 	}
 	return "other", name
 }
@@ -254,7 +261,7 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 			continue
 		}
 		for _, s := range b.Subjects {
-			src, name := in.sourceOf(s.Kind, s.Name)
+			src, name := in.sourceOf(s.Kind, s.Name, b.Managed)
 			k := key{s.Kind, "", s.Name}
 			if s.Kind == "ServiceAccount" {
 				k.ns = s.Namespace

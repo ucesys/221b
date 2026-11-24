@@ -27,8 +27,8 @@ export interface Subject {
   kind: 'Group' | 'User' | 'ServiceAccount'
   /** The name without 221B's prefix (RB-15). */
   name: string
-  /** Where it comes from; "other" for a binding 221B did not make. */
-  source: Source | 'other'
+  /** Where it comes from; "221b" for the reserved groups 221B adds, "other" for a binding 221B did not make. */
+  source: Source | '221b' | 'other'
   /** The namespaces it is bound in; empty for a role that is not bound per namespace. */
   namespaces: string[]
   /** Bound by a ClusterRoleBinding: the role in every namespace, whatever `namespaces` also lists. */

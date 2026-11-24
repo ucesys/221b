@@ -377,3 +377,23 @@ func TestCompareReadsRBACWildcardsAsTheAPIServerDoes(t *testing.T) {
 		t.Errorf("resourceNames [\"\"] against any pod: %+v", d)
 	}
 }
+
+// Roles review, cut list: the reserved groups, and OIDC groups under the
+// default empty prefix, were classed "other", so the chart's own bindings
+// read "Not managed by 221B" beside the Helm tag.
+func TestTheChartsOwnSubjectsHaveASource(t *testing.T) {
+	in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Bindings: []Binding{
+		{Role: SuperAdmin.ClusterRole(), Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: GroupSuperAdmins}}},
+		{Role: Admin.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "devs"}}},
+		{Role: Admin.ClusterRole(), Namespace: "web", Subjects: []BoundSubject{{Kind: "Group", Name: "by-hand"}}},
+	}}
+	src := map[string]string{}
+	for _, r := range BuildRoles(in).Roles {
+		for _, s := range r.Subjects {
+			src[s.Name] = s.Source
+		}
+	}
+	if src[GroupSuperAdmins] != "221b" || src["devs"] != "oidc" || src["by-hand"] != "other" {
+		t.Errorf("sources: %v", src)
+	}
+}

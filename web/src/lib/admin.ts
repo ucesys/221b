@@ -18,10 +18,11 @@ export const KUBE_ROLES: RoleId[] = ['superAdmin', 'superViewer', 'admin', 'view
 /** Highest first: the role shown for a person who holds several (RB-21); Reporter, which reports problems alone (IS-20), last. */
 export const ROLE_ORDER: HeldRole[] = [...KUBE_ROLES, 'reporter']
 
-export const SOURCE_NAME: Record<Source | 'other', string> = {
+export const SOURCE_NAME: Record<Source | '221b' | 'other', string> = {
   local: 'Local',
   ldap: 'LDAP',
   oidc: 'OIDC',
+  '221b': '221B',
   other: 'Not managed by 221B',
 }
 
