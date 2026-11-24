@@ -136,9 +136,10 @@ func (t Templates) ReadOnlyOnly() bool {
 
 // Options vary the definitions without changing the roles.
 type Options struct {
-	// Secrets adds the rules on Secrets (RB-10): reads for Viewer, Admin
-	// and the read-only SuperAdmin, and Helm's release records for Admin.
-	// SuperViewer never has them (RB-11).
+	// Secrets adds the rules on Secrets (RB-10): reads for Viewer and
+	// Admin, and Helm's release records for the full Admin. SuperViewer
+	// never has them (RB-11); the read-only SuperAdmin always reads them
+	// (RB-13), and the full one holds every verb, whatever this says.
 	Secrets bool
 	// Exec adds create on pods/exec to the full Admin: shells and one
 	// commands in its namespaces (rbac.roles.admin.exec, TB-50).

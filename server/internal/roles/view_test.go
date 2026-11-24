@@ -25,10 +25,17 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" || len(d.Roles) != 0 || d.More {
 		t.Fatalf("shipped roles differ: %+v", d)
 	}
-	// Order inside a rule does not matter.
+	// Order does not matter: of the rules, and inside each rule.
 	rev := dep[Admin]
 	rev.Rules = slices.Clone(rev.Rules)
 	slices.Reverse(rev.Rules)
+	for i, r := range rev.Rules {
+		for _, l := range []*[]string{&r.APIGroups, &r.Resources, &r.ResourceNames, &r.NonResourceURLs, &r.Verbs} {
+			*l = slices.Clone(*l)
+			slices.Reverse(*l)
+		}
+		rev.Rules[i] = r
+	}
 	dep[Admin] = rev
 	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" {
 		t.Fatalf("a reordered role differs: %+v", d)

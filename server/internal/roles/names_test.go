@@ -86,15 +86,19 @@ func TestBuildOnlyListedGroups(t *testing.T) {
 }
 
 func TestImpersonable(t *testing.T) {
-	g := GroupSet{Prefixes: DefaultPrefixes(), Allowed: map[Source][]string{LDAP: {"ops"}, Local: {"ops"}}}
+	// A prefix that makes masters system:masters (refused at start, and
+	// still filtered here), so the last check below can fail.
+	p := DefaultPrefixes()
+	p.OIDCGroup = "system:"
+	g := GroupSet{Prefixes: p, Allowed: map[Source][]string{LDAP: {"ops"}, Local: {"ops"}, OIDC: {"masters", " padded"}}}
 	got := g.Impersonable()
 	for _, w := range []string{"221b-ldap:ops", "221b-local:ops", GroupConsoleUsers, GroupSuperAdmins, GroupSuperViewers, "system:authenticated"} {
 		if !slices.Contains(got, w) {
 			t.Errorf("missing %s in %v", w, got)
 		}
 	}
-	if slices.Contains(got, "system:masters") {
-		t.Error("system:masters is impersonable")
+	if slices.Contains(got, "system:masters") || slices.Contains(got, "system: padded") {
+		t.Errorf("a reserved name is impersonable: %v", got)
 	}
 }
 

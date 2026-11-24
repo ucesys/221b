@@ -246,7 +246,10 @@ func (g GroupSet) Impersonable() []string {
 	out := []string{GroupConsoleUsers, GroupSuperAdmins, GroupSuperViewers, "system:authenticated"}
 	for src, names := range g.Allowed {
 		for _, n := range names {
-			out = append(out, g.Prefixes.Group(src, n))
+			// What Build would drop is not impersonable either.
+			if full := g.Prefixes.Group(src, n); !g.Prefixes.Reserved(n) && !inReservedSpace(full) && !Unclean(full) {
+				out = append(out, full)
+			}
 		}
 	}
 	slices.Sort(out)
