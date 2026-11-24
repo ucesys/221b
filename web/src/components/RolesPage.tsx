@@ -206,8 +206,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
         <div style={{ padding: '12px 16px' }}>
           <Note>
             Everyone who signs in can also see the nodes, through <span className="rk-mono">{loaded.data?.nodesRole ?? '221b-nodes'}</span>. A person with no role sees an otherwise empty console.
-            {loaded.data?.message ? ` ${loaded.data.message}` : ''}{' '}
-            {/* The YAML is a SuperAdmin's download (RB-29): anyone else would get a 403. */}
+            {loaded.data?.message ? ` ${loaded.data.message}` : ''} {/* The YAML is a SuperAdmin's download (RB-29): anyone else would get a 403. */}
             {sup ? (
               <>
                 <a className="rk-link" href="/api/v1/admin/roles/manifest" download="221b-roles.yaml" data-testid="roles-yaml">
