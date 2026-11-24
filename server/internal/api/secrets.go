@@ -78,6 +78,9 @@ func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.writeRefused(w, r, ActionNamespaceCreate, in.Name) {
+		return
+	}
 	if err := cl.CreateNamespace(r.Context(), s.person(r), in.Name, in.Labels); err != nil {
 		s.recordOn(r, refusedOr(err), ActionNamespaceCreate, in.Name, "")
 		jsonError(w, kubeStatus(err), err.Error())
@@ -298,6 +301,9 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "nothing to change")
 		return
 	}
+	if s.writeRefused(w, r, ActionSecretUpdate, ns+"/"+name) {
+		return
+	}
 	p := s.person(r)
 	sec, err := cl.GetSecret(r.Context(), p, ns, name)
 	if err != nil {
@@ -359,6 +365,9 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: ns}, Type: typ, Data: set}
 	detail := "type=" + strconv.Quote(string(typ)) + " " + editDetail(set, nil)
+	if s.writeRefused(w, r, ActionSecretCreate, ns+"/"+in.Name) {
+		return
+	}
 	if _, err := cl.CreateSecret(r.Context(), s.person(r), sec); err != nil {
 		s.recordOn(r, refusedOr(err), ActionSecretCreate, ns+"/"+in.Name, detail)
 		jsonError(w, kubeStatus(err), err.Error())

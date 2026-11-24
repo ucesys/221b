@@ -984,7 +984,8 @@ rbac:
       template: full
   # strict: when a cluster's 221b roles allow more than the ones this chart
   # installs (someone edited them), the console refuses every change there
-  # and says what differs. off only reports it, on the Permissions page and
+  # and says what differs: Watson's, Automation's, the Toolbox's, and its
+  # own writes (a Secret's edit, a new Secret, a new namespace). off only reports it, on the Permissions page and
   # in the audit log.
   enforce: "off"
 
