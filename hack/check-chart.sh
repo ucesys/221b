@@ -806,6 +806,7 @@ roles_refused() {
     render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=oidc:' --set 'auth.kubernetes.userPrefix=oidc:' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.existingSecret= > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set-json 'auth.ldap.roles={"viewer":[],"admin":null,"superViewer":null,"superAdmin":null}' > /dev/null 2>&1 &&
     render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example --set auth.ldap.startTLS=true > /dev/null 2>&1
 }
 # Whose X-Forwarded-For the console believes comes from values; nobody's

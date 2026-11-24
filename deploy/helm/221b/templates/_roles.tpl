@@ -276,6 +276,13 @@ name of what is wrong. Renders nothing.
 {{- if and (hasPrefix "ldap://" $l.url) (not $l.startTLS) -}}
 {{- fail "auth.ldap.url is ldap:// without startTLS: passwords would cross the network in the clear. Use ldaps://, or set auth.ldap.startTLS to true." -}}
 {{- end -}}
+{{- /* Only members of a listed group sign in, so the console refuses to
+       start without one: roles: {viewer: []} is no list (RB-20). */ -}}
+{{- $listed := 0 -}}
+{{- range $role, $entries := $lists -}}{{- $listed = add $listed (len (default list $entries)) -}}{{- end -}}
+{{- if eq (int $listed) 0 -}}
+{{- fail "LDAP sign-in needs at least one group under auth.ldap.roles: only members of a listed group may sign in" -}}
+{{- end -}}
 {{- if not $l.bindDN -}}{{- fail "LDAP sign-in needs auth.ldap.bindDN, the search account" -}}{{- end -}}
 {{- if not $l.existingSecret -}}{{- fail "LDAP sign-in needs auth.ldap.existingSecret, naming a Secret with the search account's password under the key bind-password" -}}{{- end -}}
 {{- if not $l.userSearch.baseDN -}}{{- fail "LDAP sign-in needs auth.ldap.userSearch.baseDN" -}}{{- end -}}
