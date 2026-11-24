@@ -21,13 +21,15 @@ RUN npm run build
 
 # The server, with the browser app embedded.
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS server
+WORKDIR /src/server
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+# The build's version and commit come after the download: an argument declared
+# before it changes the step's cache key, so every commit fetched every module again.
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG TARGETOS=linux
 ARG TARGETARCH
-WORKDIR /src/server
-COPY server/go.mod server/go.sum ./
-RUN go mod download
 COPY server/ ./
 COPY --from=web /src/web/dist/ ./internal/ui/dist/
 # The chart's version, which the account menu shows with the commit (RB-58).
