@@ -370,10 +370,28 @@ func (o TestOptions) CheckOverride() error {
 	if o.Effort != "" && auto.Rank(o.Effort) < 0 {
 		return fmt.Errorf("%w: test at low, medium, high, xhigh or max, not %q", ErrInvalid, o.Effort)
 	}
+	if o.Model == auto.Auto {
+		return fmt.Errorf("%w: test on one of the models the provider offers, not auto: a run at a model of its own runs with Auto off", ErrInvalid)
+	}
 	if o.Model != "" && !reModel.MatchString(o.Model) {
 		return fmt.Errorf("%w: %q is not a model name", ErrInvalid, o.Model)
 	}
 	return nil
+}
+
+// checkTestModel refuses a model to test on that the agent's provider
+// does not offer its agents (A9), as SaveAgent does; the agent's own
+// model, offered or not, may be tested on.
+func (s *Service) checkTestModel(snap snapshot, id string, o TestOptions) error {
+	if err := o.CheckOverride(); err != nil || o.Model == "" {
+		return err
+	}
+	set := s.settingsOf(snap, id)
+	p, ok := s.provider(snap, set.Provider)
+	if !ok || o.Model == set.Model || offers(p, o.Model) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s does not offer %s to the agents: test on one of the models it offers", ErrInvalid, p.Name, o.Model)
 }
 
 // overridden says the run tests at an effort or on a model of its own.
@@ -444,6 +462,9 @@ func OutputPerRound(effort string) int {
 // sends: every round sends the instructions and what came before.
 func (s *Service) Estimate(ctx context.Context, id string, o TestOptions) (float64, int, int, error) {
 	snap := s.read(ctx)
+	if err := s.checkTestModel(snap, id, o); err != nil {
+		return 0, 0, 0, err
+	}
 	over, _, err := s.testHouse(snap, id, o.Draft)
 	if err != nil {
 		return 0, 0, 0, err
@@ -568,6 +589,9 @@ func (s *Service) claim(ctx context.Context, id string, o TestOptions) (context.
 	}
 	if _, ok := InfoOf(id); !ok {
 		return nil, nil, ErrNotFound
+	}
+	if err := s.checkTestModel(s.read(ctx), id, o); err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	if s.opts.Context != nil {

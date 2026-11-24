@@ -88,3 +88,29 @@ func TestAutoWithNoTierLeftCanBeSavedReview2(t *testing.T) {
 		t.Fatalf("Auto newly set with no tier: %v", err)
 	}
 }
+
+// Finding 5: a test run on model auto, or on a model the agent's provider
+// does not offer, is refused before it starts, its estimate too; an
+// offered model, and the agent's own, are tested on.
+func TestATestOnAutoOrAModelNotOfferedIsRefusedReview5(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	tieredA5000(t, w)
+	if err := w.ai.SaveAgent(ctx, Troubleshooter, AgentChange{AgentSettings: AgentSettings{Provider: "a5000", Model: "qwen3.8-27b"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{auto.Auto, "qwen3.8-235b"} {
+		o := TestOptions{Model: model}
+		if _, _, _, err := w.ai.Estimate(ctx, Troubleshooter, o); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("the estimate on %s: %v", model, err)
+		}
+		if _, err := w.ai.RunTests(ctx, Troubleshooter, o); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("a run on %s: %v", model, err)
+		}
+	}
+	for _, model := range []string{"qwen3.8-8b", "qwen3.8-27b"} {
+		if _, _, _, err := w.ai.Estimate(ctx, Troubleshooter, TestOptions{Model: model}); err != nil {
+			t.Fatalf("the estimate on %s: %v", model, err)
+		}
+	}
+}
