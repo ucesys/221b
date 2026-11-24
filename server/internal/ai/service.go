@@ -1182,31 +1182,40 @@ func (s *Service) usersOf(snap snapshot, id string) []string {
 // credential (KI-2). The default stays until another is made the
 // default; one the chart fixes, or whose key the chart sets, stays.
 func (s *Service) DeleteProvider(ctx context.Context, id string) error {
+	_, err := s.RemoveProvider(ctx, id)
+	return err
+}
+
+// RemoveProvider is DeleteProvider saying whether it turned Auto's
+// classifier off, which asked the provider removed (AI-45): for the audit
+// record.
+func (s *Service) RemoveProvider(ctx context.Context, id string) (classifierOff bool, err error) {
 	defer s.forget()
 	snap := s.read(ctx)
 	p, ok := s.provider(snap, id)
 	if id == "" || !ok {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
 	if id == DefaultProvider && s.opts.ProviderLocked {
-		return refusal(fmt.Sprintf("%s stays: the chart fixes it (sherlock.lockProvider).", p.Name))
+		return false, refusal(fmt.Sprintf("%s stays: the chart fixes it (sherlock.lockProvider).", p.Name))
 	}
 	if users := s.usersOf(snap, id); len(users) > 0 {
 		verb, them := "use", "them"
 		if len(users) == 1 {
 			verb, them = "uses", "it"
 		}
-		return refusal(fmt.Sprintf("%s cannot be removed: %s %s it. Move %s to another provider first.", p.Name, joinAnd(users), verb, them))
+		return false, refusal(fmt.Sprintf("%s cannot be removed: %s %s it. Move %s to another provider first.", p.Name, joinAnd(users), verb, them))
 	}
 	if id == s.defaultID(snap) {
-		return refusal(fmt.Sprintf("%s cannot be removed: it is the default. Make another provider the default first.", p.Name))
+		return false, refusal(fmt.Sprintf("%s cannot be removed: it is the default. Make another provider the default first.", p.Name))
 	}
 	if id == DefaultProvider && s.opts.Keys.Fixed() {
-		return refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
+		return false, refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
 	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
 		delete(ps.Limits, id)
-		if ps.ClassifierID == id {
+		classifierOff = ps.ClassifierID == id
+		if classifierOff {
 			ps.ClassifierID = ""
 		}
 		if id == DefaultProvider {
@@ -1220,10 +1229,10 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 		ps.List = slices.Delete(ps.List, i, i+1)
 		return nil
 	}); err != nil {
-		return err
+		return false, err
 	}
 	if err := s.KeysFor(id).Delete(ctx); err != nil && !errors.Is(err, sherlock.ErrNoKey) {
-		return err
+		return classifierOff, err
 	}
 	s.mu.Lock()
 	if id != DefaultProvider {
@@ -1231,7 +1240,7 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 	}
 	delete(s.clients, id)
 	s.mu.Unlock()
-	return nil
+	return classifierOff, nil
 }
 
 // MakeDefault makes a provider the one agents that name none use (KI-2):

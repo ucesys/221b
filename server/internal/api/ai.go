@@ -224,11 +224,17 @@ func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.opts.AI.DeleteProvider(r.Context(), id); err != nil {
+	classifierOff, err := s.opts.AI.RemoveProvider(r.Context(), id)
+	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAISettings, "provider "+id, "provider "+id+" removed, with its credential")
+	d := "provider " + id + " removed, with its credential"
+	if classifierOff {
+		// As putAIClassifier says a change of it (AI-45).
+		d += "; Auto's classifier: " + id + " → off"
+	}
+	s.record(r, audit.ActionAISettings, "provider "+id, d)
 	s.getAI(w, r)
 }
 
@@ -578,7 +584,7 @@ func autoChange(was, next ai.AgentSettings) string {
 			firstOf(a.FloorEffort, "none"), firstOf(a.FloorModel, "none"))
 	}
 	d := "; " + say(next)
-	if was.Effort != next.Effort || was.FloorEffort != next.FloorEffort || was.FloorModel != next.FloorModel || (was.Model == "auto") != (next.Model == "auto") {
+	if was.Effort != next.Effort || was.FloorEffort != next.FloorEffort || was.FloorModel != next.FloorModel || was.Model != next.Model {
 		d += " (was " + say(was) + ")"
 	}
 	return d
@@ -901,9 +907,6 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 	err = s.opts.AI.StartTests(ctx, id, o, func(run ai.TestRun, err error) {
 		defer cancel()
 		detail := fmt.Sprintf("tested: %d of %d cases passed, %d replays (%d the same), $%.4f", run.Passed, run.Cases, len(run.Replays), run.Same, run.CostUSD)
-		if o.Effort != "" || o.Model != "" {
-			detail += fmt.Sprintf(" (at effort %s on model %s)", firstOf(o.Effort, "as set"), firstOf(o.Model, "as set"))
-		}
 		outcome := audit.OutcomeOK
 		switch {
 		case err != nil:
@@ -912,6 +915,13 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 			detail = fmt.Sprintf("test stopped after %d of %d cases (%d passed), %d replays, $%.4f", run.Cases, len(run.Planned), run.Passed, len(run.Replays), run.CostUSD)
 		case run.State == ai.RunFailed:
 			detail, outcome = "the test failed: "+run.Error, audit.OutcomeFailed
+		}
+		// A run at an effort or on a model of its own says what it ran at,
+		// however it ended: for such a run it is the only lasting record
+		// (AI-48). What it ran at, not what was asked: the half not given
+		// is the agent's, or what Auto off leaves of it.
+		if o.Effort != "" || o.Model != "" {
+			detail += fmt.Sprintf(" (at effort %s on model %s)", firstOf(run.Effort, "the model's default"), firstOf(run.Model, o.Model, "the agent's"))
 		}
 		if s.opts.Audit != nil {
 			s.opts.Audit.Record(audit.Event{Action: audit.ActionAITest, Who: o.Who, Target: "agent " + id, Detail: detail, Outcome: outcome})

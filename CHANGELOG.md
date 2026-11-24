@@ -47,6 +47,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 
 ### Fixed
 
+- **The AI audit records say what was done** (AI-45, AI-47, AI-48): a test run at an effort or on a model of its own names what it ran at however it ends (a stopped, capped or failed one said nothing of it), and the half not given as it ran (*on model claude-sonnet-5-5*, *at effort the model's default*) in place of *as set*; a change from one fixed model to another says the model before; removing the provider Auto's classifier asks says the classifier went off; and an agent's *was* is what its save replaced, not what another save read just before.
 - **Turning Sherlock off or on for clusters is in the audit record**: a save of Sherlock's settings said the clusters and On it does not use (*clusters [], … on true*), so turning it off on every cluster read like any other save; it now says *off on every cluster* or *on clusters [local]*, and its view control.
 - **Asking for a script with the Automation author off answers 409** (AI-54): Automation's draft and review answered 502 Bad Gateway with *the Automation author is off* (or the Script reviewer) and logged a failed request; they now answer 409, as every AI request for an agent that is off does.
 - **The test panel of an agent whose provider cannot answer answers 409** (AI-54): an agent on a provider with no credential, or one that is gone, answered 500 and logged a warning each time the panel opened or its replays changed; it now answers 409 with the reason, and an agent id that is not one 404.
