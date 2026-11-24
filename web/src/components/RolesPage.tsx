@@ -72,20 +72,27 @@ function SubjectsTable({ role, cluster, canAdd, onAdd }: { role: RoleRow; cluste
         </thead>
         <tbody>
           {role.subjects.map((s) => (
-            <tr key={`${s.kind}:${s.source}:${s.name}`} data-subject={s.name}>
+            <tr key={`${s.kind}:${s.source}:${s.accountNamespace ?? ''}:${s.name}`} data-subject={s.name}>
               <td style={td}>
                 <div className="rk-mono" style={{ fontWeight: 600 }}>
                   {s.name}
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{subjectKind(s)}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
+                  {subjectKind(s)}
+                  {s.accountNamespace ? ` in ${s.accountNamespace}` : ''}
+                </div>
               </td>
               <td style={td}>
-                {s.namespaces.length ? (
-                  <span className="rk-mono" style={{ fontSize: 12 }}>
-                    {s.namespaces.join(', ')}
+                {/* A cluster-wide binding beside namespaced ones comes first: it is the role everywhere (RB-42). */}
+                {(s.clusterWide || !s.namespaces.length) && (
+                  <span style={{ color: 'var(--fg3)' }} data-testid="every-namespace">
+                    Every namespace
                   </span>
-                ) : (
-                  <span style={{ color: 'var(--fg3)' }}>Every namespace</span>
+                )}
+                {s.namespaces.length > 0 && (
+                  <span className="rk-mono" style={{ fontSize: 12 }}>
+                    {s.clusterWide ? ' (also bound in ' + s.namespaces.join(', ') + ')' : s.namespaces.join(', ')}
+                  </span>
                 )}
                 {s.orphaned && (
                   <div>

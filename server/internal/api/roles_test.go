@@ -207,3 +207,41 @@ func TestStrictDoesNotTrustAnOldVerdict(t *testing.T) {
 		t.Fatalf("an hour-old match was trusted: %q", why)
 	}
 }
+
+// Roles review, finding 10: a cluster-wide binding beside a namespaced one
+// vanished from the Roles page, and ServiceAccounts of the same name in two
+// namespaces became one row.
+func TestRolesPageShowsClusterWideBindingsAndEachServiceAccount(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	admin := rbacv1.RoleRef{Kind: "ClusterRole", Name: roles.Admin.ClusterRole()}
+	local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "ops", Namespace: "web", Labels: map[string]string{managedLabel: "true"}}, RoleRef: admin,
+		Subjects: []rbacv1.Subject{{Kind: "Group", Name: "221b-ldap:team-a-ops"}}})
+	local.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "x"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "221b-ldap:team-a-ops"}}})
+	for _, ns := range []string{"a", "b"} {
+		local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "sa", Namespace: ns}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "default", Namespace: ns}}})
+	}
+	page := roles.BuildRoles(roles.RolesInput{Bindings: bindingsOf(local), Prefixes: roles.DefaultPrefixes(), Visible: true})
+	var rows []byte
+	for _, r := range page.Roles {
+		if r.ID == roles.Admin {
+			rows, _ = json.Marshal(r.Subjects)
+		}
+	}
+	var subjects []map[string]any
+	_ = json.Unmarshal(rows, &subjects)
+	sas, wide := 0, false
+	for _, s := range subjects {
+		if s["kind"] == "ServiceAccount" {
+			sas++
+		}
+		if s["name"] == "team-a-ops" && s["clusterWide"] == true {
+			wide = true
+		}
+	}
+	if !wide {
+		t.Errorf("the cluster-wide binding is not shown: %s", rows)
+	}
+	if sas != 2 {
+		t.Errorf("%d ServiceAccount rows for default in a and in b: %s", sas, rows)
+	}
+}

@@ -93,11 +93,11 @@ func TestBuildRolesClassifiesSubjectsByPrefix(t *testing.T) {
 		Members: func(g string) int { return map[string]int{"checkout-ops": 2}[g] },
 		Exists:  func(u string) bool { return u != "ghost" },
 		Bindings: []Binding{
-			{Role: "221b-admin", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops"}, {"Group", "221b-local:checkout-ops"}}},
-			{Role: "221b-admin", Namespace: "api", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops"}}},
-			{Role: "221b-admin", Namespace: "web", Subjects: []BoundSubject{{"User", "carol"}, {"ServiceAccount", "ci-deployer"}, {"User", "221b-local:ghost"}, {"Group", "oidc:ops"}}},
-			{Role: "221b-viewer", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-local:web-readers"}}},
-			{Role: "somebody-elses-role", Namespace: "web", Subjects: []BoundSubject{{"Group", "x"}}},
+			{Role: "221b-admin", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops", ""}, {"Group", "221b-local:checkout-ops", ""}}},
+			{Role: "221b-admin", Namespace: "api", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops", ""}}},
+			{Role: "221b-admin", Namespace: "web", Subjects: []BoundSubject{{"User", "carol", ""}, {"ServiceAccount", "ci-deployer", ""}, {"User", "221b-local:ghost", ""}, {"Group", "oidc:ops", ""}}},
+			{Role: "221b-viewer", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-local:web-readers", ""}}},
+			{Role: "somebody-elses-role", Namespace: "web", Subjects: []BoundSubject{{"Group", "x", ""}}},
 		},
 	}
 	out := BuildRoles(in)

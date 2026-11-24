@@ -34,6 +34,8 @@ type Binding struct {
 type BoundSubject struct {
 	Kind string // User, Group or ServiceAccount
 	Name string
+	// Namespace is a ServiceAccount's own namespace.
+	Namespace string
 }
 
 // Description is what a role is for, in a line.
@@ -101,9 +103,15 @@ type SubjectRow struct {
 	Name       string   `json:"name"`
 	Source     string   `json:"source"`
 	Namespaces []string `json:"namespaces"`
-	Members    int      `json:"members,omitempty"`
-	Managed    bool     `json:"managed"`
-	Orphaned   bool     `json:"orphaned,omitempty"`
+	// ClusterWide says a ClusterRoleBinding binds the subject: the role in
+	// every namespace, whatever Namespaces also lists.
+	ClusterWide bool `json:"clusterWide,omitempty"`
+	// AccountNamespace is a ServiceAccount's own namespace: two accounts of
+	// one name in two namespaces are two subjects.
+	AccountNamespace string `json:"accountNamespace,omitempty"`
+	Members          int    `json:"members,omitempty"`
+	Managed          bool   `json:"managed"`
+	Orphaned         bool   `json:"orphaned,omitempty"`
 }
 
 // Holders counts the people and groups 221B holds a super role for.
@@ -206,7 +214,7 @@ func BuildRoles(in RolesInput) RolesResponse {
 }
 
 func (in RolesInput) subjects(id ID) []SubjectRow {
-	type key struct{ kind, name string }
+	type key struct{ kind, ns, name string }
 	rows := map[key]*SubjectRow{}
 	var order []key
 	for _, b := range in.Bindings {
@@ -215,10 +223,13 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 		}
 		for _, s := range b.Subjects {
 			src, name := in.sourceOf(s.Kind, s.Name)
-			k := key{s.Kind, s.Name}
+			k := key{s.Kind, "", s.Name}
+			if s.Kind == "ServiceAccount" {
+				k.ns = s.Namespace
+			}
 			r, ok := rows[k]
 			if !ok {
-				r = &SubjectRow{Kind: s.Kind, Name: name, Source: src, Namespaces: []string{}, Managed: b.Managed}
+				r = &SubjectRow{Kind: s.Kind, Name: name, Source: src, Namespaces: []string{}, Managed: b.Managed, AccountNamespace: k.ns}
 				if src == string(Local) && s.Kind == "Group" && in.Members != nil {
 					r.Members = in.Members(name)
 				}
@@ -229,6 +240,9 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 				order = append(order, k)
 			}
 			r.Managed = r.Managed && b.Managed
+			if b.Namespace == "" {
+				r.ClusterWide = true
+			}
 			if b.Namespace != "" && !slices.Contains(r.Namespaces, b.Namespace) {
 				r.Namespaces = append(r.Namespaces, b.Namespace)
 			}
@@ -243,7 +257,10 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].AccountNamespace < out[j].AccountNamespace
 	})
 	return out
 }

@@ -109,7 +109,7 @@ func bindingsOf(src views.Source) []roles.Binding {
 	subjects := func(in []rbacv1.Subject) []roles.BoundSubject {
 		var s []roles.BoundSubject
 		for _, x := range in {
-			s = append(s, roles.BoundSubject{Kind: x.Kind, Name: x.Name})
+			s = append(s, roles.BoundSubject{Kind: x.Kind, Name: x.Name, Namespace: x.Namespace})
 		}
 		return s
 	}

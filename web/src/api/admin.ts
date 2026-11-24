@@ -28,6 +28,10 @@ export interface Subject {
   source: Source | 'other'
   /** The namespaces it is bound in; empty for a role that is not bound per namespace. */
   namespaces: string[]
+  /** Bound by a ClusterRoleBinding: the role in every namespace, whatever `namespaces` also lists. */
+  clusterWide?: boolean
+  /** A ServiceAccount's own namespace. */
+  accountNamespace?: string
   /** Members of a local group. */
   members?: number
   /** True when 221B's chart made the binding; false for one made by hand (RB-42). */
