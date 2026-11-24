@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BACKUP_FORMAT, describeSchedule, fetchBackupFromS3, fetchBackupS3, partCount, restoreBackup, restoreParts, runBackupS3, saveBackupS3, testBackupS3, type BackupFile, type S3View } from '../api/admin'
 import { AdminBackup } from './AdminBackup'
@@ -129,6 +129,19 @@ describe('the scheduled backups to S3', () => {
     const [settings, keys] = vi.mocked(saveBackupS3).mock.calls[0]!
     expect(settings).toMatchObject({ encrypt: true, sse: 'aws:kms', kmsKeyId: 'alias/backups' })
     expect(keys).toEqual({ passphrase: 'a long passphrase here' })
+  })
+
+  it('chooses the bucket’s encryption with the destination; the console’s own stays under Encryption', async () => {
+    render(<AdminBackupS3 onToast={vi.fn()} onRestore={vi.fn()} />)
+    const dest = await screen.findByTestId('s3-destination')
+    const enc = screen.getByTestId('s3-encryption')
+    expect(within(dest).getByTestId('s3-sse')).toBeTruthy()
+    expect(within(enc).queryByTestId('s3-sse')).toBeNull()
+    fireEvent.change(within(dest).getByTestId('s3-sse'), { target: { value: 'aws:kms' } })
+    expect(within(dest).getByTestId('s3-kms')).toBeTruthy()
+    expect(within(enc).queryByTestId('s3-kms')).toBeNull()
+    expect(within(enc).getByTestId('s3-encrypt')).toBeTruthy()
+    expect(dest.textContent).toContain('Encryption in the bucket (server-side)')
   })
 
   it('lists the backups in the bucket and hands one to the restore', async () => {

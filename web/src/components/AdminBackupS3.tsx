@@ -241,7 +241,7 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
         </label>
       </div>
 
-      <Row label="Destination" hint="The bucket and where in it." testId="s3-destination">
+      <Row label="Destination" hint="The bucket, where in it, and how the bucket encrypts what it stores." testId="s3-destination">
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Labeled label="Bucket" width={200}>
             <span className="rk-field">
@@ -268,6 +268,29 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
           <input type="checkbox" checked={!!draft.pathStyle} onChange={(e) => set({ pathStyle: e.target.checked })} data-testid="s3-path-style" />
           Path-style addresses (host/bucket/key), as MinIO and most S3-compatible stores want
         </label>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }} data-testid="s3-server-side">
+          <Labeled label="Encryption in the bucket (server-side)" width={260}>
+            <Select
+              label="Server-side encryption"
+              value={draft.sse ?? ''}
+              options={[
+                ['', 'The bucket’s default'],
+                ['AES256', 'SSE-S3 (keys S3 manages)'],
+                ['aws:kms', 'SSE-KMS (a KMS key)'],
+              ]}
+              onChange={(v) => set({ sse: v as S3Settings['sse'] })}
+              testId="s3-sse"
+              width="100%"
+            />
+          </Labeled>
+          {draft.sse === 'aws:kms' && (
+            <Labeled label="KMS key (empty: the account’s default)" width={300}>
+              <span className="rk-field">
+                <input spellCheck={false} value={draft.kmsKeyId ?? ''} placeholder="alias/backups or a key ARN" onChange={(e) => set({ kmsKeyId: e.target.value })} data-testid="s3-kms" />
+              </span>
+            </Labeled>
+          )}
+        </div>
         <details open={!!draft.caPem}>
           <summary style={{ cursor: 'pointer' }}>Private CA</summary>
           <textarea
@@ -409,30 +432,7 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
         </div>
       </Row>
 
-      <Row label="Encryption" testId="s3-encryption">
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <Labeled label="In the bucket (server-side)" width={260}>
-            <Select
-              label="Server-side encryption"
-              value={draft.sse ?? ''}
-              options={[
-                ['', 'The bucket’s default'],
-                ['AES256', 'SSE-S3 (keys S3 manages)'],
-                ['aws:kms', 'SSE-KMS (a KMS key)'],
-              ]}
-              onChange={(v) => set({ sse: v as S3Settings['sse'] })}
-              testId="s3-sse"
-              width="100%"
-            />
-          </Labeled>
-          {draft.sse === 'aws:kms' && (
-            <Labeled label="KMS key (empty: the account’s default)" width={300}>
-              <span className="rk-field">
-                <input spellCheck={false} value={draft.kmsKeyId ?? ''} placeholder="alias/backups or a key ARN" onChange={(e) => set({ kmsKeyId: e.target.value })} data-testid="s3-kms" />
-              </span>
-            </Labeled>
-          )}
-        </div>
+      <Row label="Encryption" hint="Of each file, on the console, before it is sent. How the bucket encrypts what it stores is under Destination." testId="s3-encryption">
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={!!draft.encrypt} onChange={(e) => set({ encrypt: e.target.checked })} data-testid="s3-encrypt" />
           Also encrypt each file on the console (AES-256-GCM, with a key from a passphrase you hold); the file ends in .enc

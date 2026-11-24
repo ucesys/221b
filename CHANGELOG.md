@@ -49,6 +49,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 ### Changed
 
 - **A source's trust is set in the Sources table** (KN-57): Administration › AI › Knowledge's *Sources* table has a *Trust* column, the level with the product, the version and *Only the versions the clusters run* under it, saved together; the trust of the sources of uploads (not rows of the table) is under it. The *Search* card keeps the embedding model, the index's state and what it holds of each source, so the trust no longer sits under the embedding model.
+- **The bucket's encryption is chosen with the destination** (BK-04, BK-09): Administration › Backup › *Scheduled backups to S3* has the server-side encryption (the bucket's default, SSE-S3 or SSE-KMS and its KMS key) in the *Destination* row, with the bucket, prefix, region and endpoint; the *Encryption* row keeps the console's own encryption of each file and its passphrase. Nothing saved changes.
 - **The embedding model's field names no model** (KN-55): its placeholder said `Qwen/Qwen3-Embedding-0.6B`, which the A5000 does not serve under that name (it serves `qwen3-embedding-0.6b`); it now asks for the model's name as the endpoint's `/v1/models` lists it, and the hint says to type it as the endpoint knows it.
 
 ### Fixed
