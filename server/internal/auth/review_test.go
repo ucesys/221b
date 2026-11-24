@@ -472,3 +472,46 @@ func TestASessionNobodyCanAskAboutIsNotRefusedAsSignedOut(t *testing.T) {
 		t.Fatalf("a made-up cookie: %d", code)
 	}
 }
+
+// Cut by the review's cap (accounts.go:163-168): an account defined in
+// values hides a console account of the same name wholly: the hidden one
+// does not sign in by its email, is not listed twice, and does not count
+// as a SuperAdmin.
+func TestAnAccountInValuesHidesAConsoleAccountOfItsName(t *testing.T) {
+	o := newOutage(t)
+	cfg := outageConfig(t)
+	cfg.TwoPerson = twoperson.New(nil, nil)
+	// Before: kim is a console SuperAdmin with an email.
+	a := o.replica(cfg, nil)
+	if _, err := a.svc.Accounts().Create(context.Background(), auth.NewAccount{Username: "kim", Email: "kim@corp.example", Password: "kim's old long password"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.svc.Accounts().SetSuper(context.Background(), "kim", []roles.ID{roles.SuperAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	// Then the values define kim, with another password and no role.
+	withKim := cfg
+	withKim.Local = append(append([]auth.LocalUser(nil), cfg.Local...), auth.LocalUser{Username: "kim", PasswordHash: hashOf(t, goodPassword)})
+	b := o.replica(withKim, nil)
+	if _, resp := b.signIn("kim@corp.example", "kim's old long password"); resp.StatusCode != http.StatusUnauthorized {
+		readAll(t, resp)
+		t.Fatalf("the hidden account's old password signed in by its email: %s", resp.Status)
+	}
+	n := 0
+	for _, u := range b.svc.Accounts().List() {
+		if u.Username == "kim" {
+			n++
+			if !u.Managed {
+				t.Errorf("kim is listed as the console's account")
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("kim is listed %d times", n)
+	}
+	root := b.mustSignIn("root", goodPassword)
+	o.cookie(b, root)
+	if b.svc.OtherSuperAdmin(auth.Session{User: auth.User{Subject: "local:root", Username: "root"}, Method: "local"}) {
+		t.Fatal("the hidden account counts as another SuperAdmin")
+	}
+}

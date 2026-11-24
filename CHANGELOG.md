@@ -111,6 +111,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **The emptying of copied session Secrets is retried until it is done** (DB-66): the per-minute retry stopped for good, silently, after a try that found the database away, leaving Secrets that a console from before the move could take a session up from.
 - **A sign-out always ends the session** (P3-01): a sign-out reaching a replica that could not look the session up (the store away, and the replica had never held it) cleared the cookie and reported success but ended nothing, so a copy of the cookie went on working on the other replicas. The session is now ended by its cookie, and the store told when it is back.
 - **Replacing the session key ends the signed sessions a replica already holds** (DB-65): a replica refused cookies of the old key it had not seen, but went on taking those it held in memory until they expired. Each is now checked against the key as it is.
+- **A user defined in values wholly hides a console user of the same name** (RB-46): the hidden console user was still listed beside it, still counted as a SuperAdmin (another to approve, or not the last), and its old password could sign in by its email. It is now left out of all of these.
 
 ## 0.13.0 (2026-11-22)
 

@@ -238,17 +238,14 @@ func (a *Accounts) Find(login string) (Account, bool) {
 		return Account{}, false
 	}
 	var found *Account
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			if strings.EqualFold(u.Email, login) {
-				if found != nil {
-					return Account{}, false
-				}
-				found = u
-			}
+	twice := false
+	a.each(func(_ string, u *Account) {
+		if strings.EqualFold(u.Email, login) {
+			twice = twice || found != nil
+			found = u
 		}
-	}
-	if found == nil {
+	})
+	if found == nil || twice {
 		return Account{}, false
 	}
 	return *found, true
@@ -303,11 +300,7 @@ func (a *Accounts) List() []Account {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var out []Account
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			out = append(out, *u)
-		}
-	}
+	a.each(func(_ string, u *Account) { out = append(out, *u) })
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out
 }
@@ -335,13 +328,11 @@ func (a *Accounts) Members(group string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	n := 0
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			if slices.Contains(u.Groups, group) {
-				n++
-			}
+	a.each(func(_ string, u *Account) {
+		if slices.Contains(u.Groups, group) {
+			n++
 		}
-	}
+	})
 	return n
 }
 
@@ -482,17 +473,30 @@ func (a *Accounts) edit(ctx context.Context, username string, fn func(u *Account
 // `as`. Callers hold the lock.
 func (a *Accounts) superAdmins(name string, as *Account) int {
 	n := 0
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for k, u := range set {
-			if k == name && as != nil {
-				u = as
-			}
-			if !u.Disabled && slices.Contains(u.Super, roles.SuperAdmin) {
-				n++
-			}
+	a.each(func(k string, u *Account) {
+		if k == name && as != nil {
+			u = as
+		}
+		if !u.Disabled && slices.Contains(u.Super, roles.SuperAdmin) {
+			n++
+		}
+	})
+	return n
+}
+
+// each calls fn for every account as the console sees it: those of the
+// values, and the console's own but one that an account of the values of
+// the same name hides, which neither signs in, nor is listed, nor counts.
+// Callers hold the lock.
+func (a *Accounts) each(fn func(name string, u *Account)) {
+	for k, u := range a.managed {
+		fn(k, u)
+	}
+	for k, u := range a.stored {
+		if _, hidden := a.managed[k]; !hidden {
+			fn(k, u)
 		}
 	}
-	return n
 }
 
 // Update changes a local user's details, password or whether they may sign
