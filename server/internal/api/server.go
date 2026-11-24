@@ -794,7 +794,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A request another replica forwarded says whose it is (P7-02).
-	forwarded := s.trustForwarded(r)
+	r, forwarded := s.trustForwarded(r)
 	if !forwarded {
 		s.opts.ProxyWatch.Check(s.opts.Proxies, r)
 		r = s.opts.Proxies.Resolve(r)

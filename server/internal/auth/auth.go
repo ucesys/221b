@@ -481,7 +481,16 @@ func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	}
 	sess, ok := find(c.Value)
 	if !ok {
-		return Session{}, false
+		// A request another replica forwarded, for a session that replica
+		// holds and this one cannot ask about (vouch.go).
+		v, vouched := vouchedFor(r, c.Value)
+		if !vouched {
+			return Session{}, false
+		}
+		if sess, ok = s.sessions.takeVouched(c.Value, v); !ok {
+			return Session{}, false
+		}
+		return s.liveVouched(sess)
 	}
 	return s.live(sess)
 }
