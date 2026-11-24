@@ -385,3 +385,25 @@ func TestAnOIDCAdminGroupIsNotAssertedToTheClusters(t *testing.T) {
 		t.Fatalf("asserted to the clusters: %v", g.KubeGroups)
 	}
 }
+
+// Cut by the review's cap (setup.go:177): a session is its account's by
+// the account's user name only. The session of an account named by its
+// email, taken out of values, does not go on as another account that has
+// that email.
+func TestASessionIsNotTakenUpByAnotherAccountWithItsNameAsEmail(t *testing.T) {
+	o := newOutage(t)
+	cfg := outageConfig(t)
+	withOps := cfg
+	withOps.Local = append(append([]auth.LocalUser(nil), cfg.Local...), auth.LocalUser{Email: "ops@corp.example", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}})
+	a := o.replica(withOps, nil)
+	ops := a.mustSignIn("ops@corp.example", goodPassword)
+	o.cookie(a, ops)
+	// The values no longer name ops; a console user has the email.
+	b := o.replica(cfg, nil)
+	if _, err := b.svc.Accounts().Create(context.Background(), auth.NewAccount{Username: "bob", Email: "ops@corp.example", Password: goodPassword}); err != nil {
+		t.Fatal(err)
+	}
+	if w, code := b.whoami(ops); code != http.StatusUnauthorized {
+		t.Fatalf("the session of the account taken out of values: %d %+v", code, w)
+	}
+}

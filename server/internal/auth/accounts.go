@@ -259,15 +259,29 @@ func (a *Accounts) Find(login string) (Account, bool) {
 // on another replica may be missing here. On a miss it reads them again,
 // once, and looks again. sure says whether a miss can be trusted: it
 // cannot when the saved accounts could not be read.
-func (a *Accounts) FindRead(ctx context.Context, login string) (acct Account, ok, sure bool) {
-	if u, found := a.Find(login); found {
+//
+// It looks the account up by its user name alone, as a session names it:
+// never by email, which would let a session go on as another account
+// whose email is that name.
+func (a *Accounts) FindRead(ctx context.Context, username string) (acct Account, ok, sure bool) {
+	if u, found := a.byName(username); found {
 		return u, true, true
 	}
 	if err := a.load(ctx); err != nil {
 		return Account{}, false, false
 	}
-	u, found := a.Find(login)
+	u, found := a.byName(username)
 	return u, found, true
+}
+
+// byName finds an account by its user name exactly.
+func (a *Accounts) byName(username string) (Account, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if u := a.get(username); u != nil {
+		return *u, true
+	}
+	return Account{}, false
 }
 
 // Current reads the saved accounts again and returns the account as saved
