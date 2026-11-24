@@ -52,13 +52,16 @@ func (s *Service) renderSetup(w http.ResponseWriter, r *http.Request, msg string
 func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
 	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), NeedToken: s.cfg.SetupToken != ""}
 	if r.Method == http.MethodPost {
-		d.Username, d.Name = audit.Clip(r.PostFormValue("username"), maxLogin), audit.Clip(r.PostFormValue("name"), maxLogin)
+		// What postSetup parsed, within the form's limit; a POST the gate
+		// answers with this page is not read (r.PostForm is nil then).
+		f := r.PostForm
+		d.Username, d.Name = audit.Clip(f.Get("username"), maxLogin), audit.Clip(f.Get("name"), maxLogin)
 		switch field {
 		case fieldPassword:
 		case fieldAgain:
-			d.Password = r.PostFormValue("password")
+			d.Password = f.Get("password")
 		default:
-			d.Password, d.Again = r.PostFormValue("password"), r.PostFormValue("again")
+			d.Password, d.Again = f.Get("password"), f.Get("again")
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})

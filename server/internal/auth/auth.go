@@ -563,8 +563,11 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		d.Provider = s.provider.Name()
 	}
 	if r.Method == http.MethodPost {
-		d.Email = audit.Clip(r.PostFormValue("email"), maxLogin)
-		d.Next = safeNext(r.PostFormValue("next"))
+		// What the handler parsed, within the form's limit: the page is
+		// also the answer to a POST nobody signed in to make, whose body
+		// is not read here (r.PostForm is nil then).
+		d.Email = audit.Clip(r.PostForm.Get("email"), maxLogin)
+		d.Next = safeNext(r.PostForm.Get("next"))
 	} else if r.URL.Query().Get("changed") == "1" && msg == "" {
 		d.Notice = "Your password is changed. Sign in with the new one."
 	}
@@ -929,7 +932,12 @@ func (s *Service) startOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	next := r.URL.Query().Get("next")
 	if r.Method == http.MethodPost {
-		next = r.PostFormValue("next")
+		r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+		if err := r.ParseForm(); err != nil {
+			s.renderSignIn(w, r, "The form could not be read.", http.StatusBadRequest)
+			return
+		}
+		next = r.PostForm.Get("next")
 	}
 	st := signInState{State: randomID(), Nonce: randomID(), Verifier: oauth2.GenerateVerifier(), Next: safeNext(next), At: s.now().Unix()}
 	authURL, err := s.provider.AuthURL(r.Context(), s.redirectURL(r), st.State, st.Nonce, st.Verifier)

@@ -44,12 +44,14 @@ func (s *Service) passwordOn() bool { return s.cfg.Mode == ModeLocal || s.cfg.Mo
 func (s *Service) renderPassword(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
 	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
 	if r.Method == http.MethodPost {
-		d.Username, d.Next = audit.Clip(r.PostFormValue("username"), maxLogin), safeNext(r.PostFormValue("next"))
+		// What postPassword parsed, within the form's limit.
+		f := r.PostForm
+		d.Username, d.Next = audit.Clip(f.Get("username"), maxLogin), safeNext(f.Get("next"))
 		switch field {
 		case fieldNew:
-			d.Current = r.PostFormValue("current")
+			d.Current = f.Get("current")
 		case fieldNewAgain:
-			d.Current, d.Password = r.PostFormValue("current"), r.PostFormValue("password")
+			d.Current, d.Password = f.Get("current"), f.Get("password")
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})

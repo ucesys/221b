@@ -2,7 +2,9 @@ package auth_test
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -198,5 +200,62 @@ func TestATypedUserNameIsRecordedAsPlainText(t *testing.T) {
 	rec := e.audit.String()
 	if !strings.Contains(rec, `"action":"signin.failed"`) || strings.Contains(rec, `\u0000`) || strings.Contains(rec, `\n`) {
 		t.Fatalf("the record: %s", rec)
+	}
+}
+
+// countingBody is a request body of n bytes of a form, counting what is
+// read of it.
+type countingBody struct {
+	left, read int
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	if b.left == 0 {
+		return 0, io.EOF
+	}
+	n := min(len(p), b.left)
+	for i := range p[:n] {
+		p[i] = 'a'
+	}
+	b.left -= n
+	b.read += n
+	return n, nil
+}
+
+func (b *countingBody) Close() error { return nil }
+
+// Finding 9: a request nobody signed in to make is not read past the
+// forms' 64 KiB, whatever page answers it.
+func TestABodyBeforeSignInIsReadNoFurtherThanTheFormsLimit(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", http.StatusServiceUnavailable) }))
+	t.Cleanup(idp.Close)
+	local := newEnv(t, localConfig(t))
+	hash := hashOf(t, goodPassword)
+	signedIn := newEnv(t, auth.Config{Mode: auth.ModeLocal, Local: []auth.LocalUser{{Username: "root", PasswordHash: hash, Roles: []string{"superAdmin"}}}})
+	oidc := newEnv(t, auth.Config{Mode: auth.ModeOIDC, OIDC: auth.OIDCConfig{Issuer: idp.URL, ClientID: "c"}})
+	for _, tc := range []struct {
+		name string
+		e    *env
+		path string
+	}{
+		{"the first-run page", local, "/x"},
+		{"the sign-in page", signedIn, "/x"},
+		{"the OIDC start", oidc, "/signin/start"},
+	} {
+		body := &countingBody{left: 8 << 20}
+		r := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		r.Body = body
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		if next := tc.e.svc.Gate(w, r); next != nil {
+			for _, rt := range tc.e.svc.Routes() {
+				if rt.Pattern == "POST "+tc.path {
+					rt.Handler(w, next)
+				}
+			}
+		}
+		if body.read > 64<<10+4096 {
+			t.Errorf("%s read %d bytes of the body", tc.name, body.read)
+		}
 	}
 }
