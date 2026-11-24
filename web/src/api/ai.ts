@@ -301,6 +301,9 @@ export interface TestRun {
   replaysPlanned?: number
   /** The number (from 1) of the case it stopped or failed at. */
   stoppedAt?: number
+  /** A run at an effort or on a model of its own (AI-48): the model it ran on and its effort ('' the model's own); never the draft's test. */
+  effort?: string
+  model?: string
 }
 
 export interface Pilot {

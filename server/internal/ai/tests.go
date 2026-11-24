@@ -314,6 +314,13 @@ type TestRun struct {
 	// StoppedAt is the number (from 1) of the case the run stopped or
 	// failed at; 0 for none, or for one stopped during the replays.
 	StoppedAt int `json:"stoppedAt,omitempty"`
+	// --- A run at an effort or on a model of its own (AI-48) ---
+	// Model is the model such a run ran on, and Effort its effort ("" the
+	// model's own default); both "" for a run of the agent's own
+	// settings. Such a run is never kept with the draft, so they have no
+	// column: they show in the test dialog, which says the run measured.
+	Effort string `json:"effort,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 // clone copies the run's lists, so a copy reads safely while the run goes
@@ -428,6 +435,19 @@ func (s *Service) measuring(snap snapshot, id string, o TestOptions) snapshot {
 	out.agents.Agents = cloneAgents(snap.agents.Agents)
 	out.agents.Agents[id] = set
 	return out
+}
+
+// measuredAt is the effort and model a run at an effort or on a model of
+// its own runs at (effort "" is the model's own default); "" and "" for a
+// run of the agent's own settings.
+func (s *Service) measuredAt(snap snapshot, id string, o TestOptions) (effort, model string) {
+	if !o.overridden() {
+		return "", ""
+	}
+	m := s.measuring(snap, id, o)
+	set := s.settingsOf(m, id)
+	p, _ := s.provider(m, set.Provider)
+	return set.Effort, modelOf(set, p)
 }
 
 // MaxReplays bounds a test's replays.
@@ -614,9 +634,11 @@ func (s *Service) claim(ctx context.Context, id string, o TestOptions) (context.
 	if _, ok := InfoOf(id); !ok {
 		return nil, nil, ErrNotFound
 	}
-	if err := s.checkTestModel(s.read(ctx), id, o); err != nil {
+	snap := s.read(ctx)
+	if err := s.checkTestModel(snap, id, o); err != nil {
 		return nil, nil, err
 	}
+	effort, model := s.measuredAt(snap, id, o)
 	ctx, cancel := context.WithCancel(ctx)
 	if s.opts.Context != nil {
 		// A run outlives its request, not the process: shutdown stops it
@@ -625,7 +647,7 @@ func (s *Service) claim(ctx context.Context, id string, o TestOptions) (context.
 		stop := cancel
 		cancel = func() { release(); stop() }
 	}
-	lr := &liveRun{cancel: cancel, run: TestRun{At: s.opts.Now().UTC(), By: o.By, State: RunRunning}}
+	lr := &liveRun{cancel: cancel, run: TestRun{At: s.opts.Now().UTC(), By: o.By, State: RunRunning, Effort: effort, Model: model}}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.runs[id] != nil {

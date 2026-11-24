@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -195,5 +196,36 @@ func TestTheEstimatePricesGradingOnTheAgentsModelReview13(t *testing.T) {
 	want := opus.Cost(sherlock.Usage{InputTokens: 1500, OutputTokens: 100})
 	if got := graded - plain; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("a grading priced at $%.6f, want Opus's $%.6f", got, want)
+	}
+}
+
+// Finding 3: a run at an effort or on a model of its own says so where
+// the test dialog reads it, as the latest run, while the draft keeps its
+// own test; a run of the agent's own settings says no effort or model.
+func TestAMeasuringRunSaysWhatItRanAtReview3(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	if _, err := w.ai.SaveDraft(ctx, Troubleshooter, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	own, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann"})
+	if err != nil || own.Model != "" || own.Effort != "" {
+		t.Fatalf("the draft's own test: effort %q model %q, %v", own.Effort, own.Model, err)
+	}
+	if _, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann", Model: auto.Haiku}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := w.ai.TestProgress(ctx, Troubleshooter)
+	if err != nil || !ok || got.Model != auto.Haiku || got.Effort != "" {
+		t.Fatalf("the latest run: effort %q model %q, %v %v", got.Effort, got.Model, ok, err)
+	}
+	if v, _ := w.ai.Instructions(ctx, Troubleshooter); v.Draft.Test == nil || v.Draft.Test.At.Sub(own.At).Abs() > time.Millisecond || v.Draft.Test.Model != "" {
+		t.Fatalf("the draft's test: %+v", v.Draft.Test)
+	}
+	if _, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann", Effort: auto.Low}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := w.ai.TestProgress(ctx, Troubleshooter); got.Effort != auto.Low || got.Model != "claude-opus-5-5" {
+		t.Fatalf("at an effort alone: effort %q model %q", got.Effort, got.Model)
 	}
 }
