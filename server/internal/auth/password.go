@@ -42,7 +42,7 @@ const (
 func (s *Service) passwordOn() bool { return s.cfg.Mode == ModeLocal || s.cfg.Mode == ModeLDAP }
 
 func (s *Service) renderPassword(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
-	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
+	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: formTokenOf(r), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
 	if r.Method == http.MethodPost {
 		// What postPassword parsed, within the form's limit.
 		f := r.PostForm
@@ -54,7 +54,7 @@ func (s *Service) renderPassword(w http.ResponseWriter, r *http.Request, msg, fi
 			d.Current, d.Password = f.Get("current"), f.Get("password")
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)

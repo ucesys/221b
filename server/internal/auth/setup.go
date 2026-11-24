@@ -50,7 +50,7 @@ func (s *Service) renderSetup(w http.ResponseWriter, r *http.Request, msg string
 }
 
 func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
-	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), NeedToken: s.cfg.SetupToken != ""}
+	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: formTokenOf(r), NeedToken: s.cfg.SetupToken != ""}
 	if r.Method == http.MethodPost {
 		// What postSetup parsed, within the form's limit; a POST the gate
 		// answers with this page is not read (r.PostForm is nil then).
@@ -64,7 +64,7 @@ func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, 
 			d.Password, d.Again = f.Get("password"), f.Get("again")
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)

@@ -91,6 +91,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **No sign-in loop during an outage of the session store** (DB-65): the leader, sent a request by another replica for a session it had never held, could not ask the store and answered 401; the browser went to the sign-in page, where the replica that holds the session sent it back, and round again. Such a request is now answered 503, to try again.
 - **Every failed sign-in's audit record names whom it was about** (P3-10): a sign-in refused because the directory could not be reached, and the first-run page's refusals (a wrong setup token, too many attempts), were recorded with nobody in them.
 - **The directory sync no longer shows admin and reporter group members as disabled** (RB-24): it read the members of the role lists only, so people who sign in through `auth.adminGroups` or a reporter group were listed as "Not in a listed group" on the Users page after each sync.
+- **The sign-in page keeps where you were going, and works in two tabs** (P3-01): after a failed attempt the page forgot the page asked for and sent the person to the start page once signed in; each sign-in page served made the forms of the others refused ("That sign-in did not come from this console"), and so did a page left open for an hour. The form's token now serves every tab for a day, and a failed attempt keeps the page asked for.
 
 ### Security
 

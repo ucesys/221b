@@ -635,3 +635,32 @@ func TestTheDirectorySyncKeepsPeopleOfTheAdminAndReporterGroups(t *testing.T) {
 		}
 	}
 }
+
+// Cut by the review's cap (auth.go:565-566) and the final sweep: the form
+// token stays the same while its cookie lives, so a second sign-in tab
+// does not make the first one's form refused, and the cookie outlives a
+// page left open over lunch.
+func TestTheSignInFormsTokenServesEveryTab(t *testing.T) {
+	e := newEnv(t, outageConfig(t))
+	c := client(t)
+	first := formIn(t, c, e.app.URL+"/signin")
+	second := formIn(t, c, e.app.URL+"/signin")
+	if first != second {
+		t.Fatal("a second sign-in page changed the form's token")
+	}
+	resp := e.post(c, "/signin", url.Values{"email": {"root"}, "password": {goodPassword}, "form": {first}})
+	readAll(t, resp)
+	if resp.Request.URL.Path != "/" {
+		t.Fatalf("the first tab's form: %s at %s", resp.Status, resp.Request.URL)
+	}
+	resp, err := client(t).Get(e.app.URL + "/signin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readAll(t, resp)
+	for _, k := range resp.Cookies() {
+		if k.Name == "221b_form" && k.MaxAge < 12*3600 {
+			t.Fatalf("the form's cookie lives %d seconds", k.MaxAge)
+		}
+	}
+}

@@ -621,8 +621,8 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		// A fresh token for the form, in the page and in a cookie only this
 		// site's pages send (SameSite=Strict): a form posted from elsewhere
 		// cannot carry both.
-		d.Form = randomID()
-		http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+		d.Form = formTokenOf(r)
+		http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1228,6 +1228,21 @@ func sameSiteHeaders(r *http.Request, nullOrigin bool) bool {
 	}
 	u, err := url.Parse(origin)
 	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+// formLife is how long a form's token cookie lives: a day, so a sign-in
+// page left open over lunch, or overnight, still signs in.
+const formLife = 24 * 3600
+
+// formTokenOf is the token for a form: the one the browser's cookie holds
+// already, while it lives, so a page opened in a second tab does not make
+// the first one's form refused; a fresh one otherwise. A successful
+// sign-in clears it.
+func formTokenOf(r *http.Request) string {
+	if c, err := r.Cookie(cookieForm); err == nil && plausibleID(c.Value) {
+		return c.Value
+	}
+	return randomID()
 }
 
 // formToken says whether a posted sign-in form carries the token of the
