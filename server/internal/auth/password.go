@@ -89,8 +89,8 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 	login, fits := formLogin(r.PostFormValue("username"))
 	current, password := r.PostFormValue("current"), r.PostFormValue("password")
 	who := User{Username: login, Email: login}
-	if !s.attempt(r, login) {
-		s.record(r, audit.ActionPasswordChange, who, audit.OutcomeDenied, "too many attempts")
+	if ok, by := s.attemptBy(r, login); !ok {
+		s.recordRefusal(r, audit.ActionPasswordChange, who, by)
 		s.renderPassword(w, r, "Too many attempts. Wait a minute and try again.", "", http.StatusTooManyRequests)
 		return
 	}

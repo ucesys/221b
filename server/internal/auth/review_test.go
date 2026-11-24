@@ -2,6 +2,8 @@ package auth_test
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -257,5 +259,36 @@ func TestABodyBeforeSignInIsReadNoFurtherThanTheFormsLimit(t *testing.T) {
 		if body.read > 64<<10+4096 {
 			t.Errorf("%s read %d bytes of the body", tc.name, body.read)
 		}
+	}
+}
+
+// Finding 10: requests nobody signed in to make write a bounded number of
+// audit records: the OIDC callback counts against the per-address limit
+// before it records anything, and a refusal for too many attempts is
+// recorded once per minute for what refused it.
+func TestUnauthenticatedRequestsWriteABoundedNumberOfRecords(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", http.StatusServiceUnavailable) }))
+	t.Cleanup(idp.Close)
+	oidc := newEnv(t, auth.Config{Mode: auth.ModeOIDC, OIDC: auth.OIDCConfig{Issuer: idp.URL, ClientID: "c"}})
+	state := base64.RawURLEncoding.EncodeToString([]byte(`{"s":"x","t":9999999999}`))
+	for range 100 {
+		req, _ := http.NewRequest(http.MethodGet, oidc.app.URL+"/signin/callback?state=x&error="+strings.Repeat("e", 1000), nil)
+		req.AddCookie(&http.Cookie{Name: "221b_signin", Value: state})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readAll(t, resp)
+	}
+	if n := strings.Count(oidc.audit.String(), "\n"); n > 31 {
+		t.Errorf("100 callbacks wrote %d audit records", n)
+	}
+	local := newEnv(t, outageConfig(t))
+	c := client(t)
+	for i := range 60 {
+		local.post(c, "/signin", url.Values{"email": {fmt.Sprintf("guess%d", i)}, "password": {"y"}, "form": {formIn(t, c, local.app.URL+"/signin")}}).Body.Close()
+	}
+	if n := strings.Count(local.audit.String(), "too many attempts"); n != 1 {
+		t.Errorf("60 sign-ins from one address recorded %d refusals for too many attempts", n)
 	}
 }

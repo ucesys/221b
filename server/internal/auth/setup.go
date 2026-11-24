@@ -102,7 +102,7 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	// until the first administrator exists.
 	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin)}
 	if !s.setup.allow(from(r)) {
-		s.record(r, audit.ActionSetupFailed, who, audit.OutcomeDenied, "too many attempts")
+		s.recordRefusal(r, audit.ActionSetupFailed, who, "address "+from(r))
 		s.renderSetup(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}

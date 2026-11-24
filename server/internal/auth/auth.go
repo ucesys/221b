@@ -133,6 +133,10 @@ type Service struct {
 	// Proxies.Resolve works it out, and no header widens its limit.
 	perAccount *limiter
 	perAddress *limiter
+	// refusals lets one record of "too many attempts" through a minute for
+	// each thing that refused (an address, an account), so a flood of
+	// refused requests does not flood the audit log.
+	refusals *limiter
 	// anonymous is everyone's session with sign-in off.
 	anonymous Session
 	audit     *audit.Log
@@ -180,7 +184,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.ProxyWatch == nil {
 		cfg.ProxyWatch = NewProxyWatch(log, now)
 	}
-	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
+	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now), refusals: newLimiter(1, time.Minute, now)}
 	if cfg.SessionStore != nil {
 		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
 	}
@@ -745,13 +749,32 @@ func plainText(s string) string {
 // carries. Attempts wait for a hashing slot, so past a queue they are
 // refused here, before they cost anything.
 func (s *Service) attempt(r *http.Request, login string) bool {
+	ok, _ := s.attemptBy(r, login)
+	return ok
+}
+
+// attemptBy is attempt that also says what refused: the hashing queue, the
+// address or the account.
+func (s *Service) attemptBy(r *http.Request, login string) (ok bool, refusedBy string) {
 	if hashingFull() {
-		return false
+		return false, "the hashing queue"
 	}
 	if !s.perAddress.allow(from(r)) {
-		return false
+		return false, "address " + from(r)
 	}
-	return s.perAccount.allow(login)
+	if !s.perAccount.allow(login) {
+		return false, "account " + login
+	}
+	return true, ""
+}
+
+// recordRefusal writes the audit record of a request refused for too many
+// attempts, once a minute for each action and what refused it: the
+// refusals after it in that minute are of the same flood.
+func (s *Service) recordRefusal(r *http.Request, action string, who User, refusedBy string) {
+	if s.refusals.allow(action + "\x00" + refusedBy) {
+		s.record(r, action, who, audit.OutcomeDenied, "too many attempts; more in the next minute are not recorded")
+	}
 }
 
 // refusedText is what a person is told when they cannot sign in, whatever
@@ -780,8 +803,8 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	login, fits := formLogin(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if !s.attempt(r, login) {
-		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeDenied, "too many attempts")
+	if ok, by := s.attemptBy(r, login); !ok {
+		s.recordRefusal(r, audit.ActionSignInFailed, User{Username: login, Email: login}, by)
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
@@ -955,6 +978,14 @@ func (s *Service) startOIDC(w http.ResponseWriter, r *http.Request) {
 func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	if s.provider == nil {
 		http.Error(w, "OIDC sign-in is off", http.StatusNotFound)
+		return
+	}
+	// Anyone can come here with a state cookie of their own making, so the
+	// callback counts against the per-address limit before it records
+	// anything or asks the provider.
+	if !s.perAddress.allow(from(r)) {
+		s.recordRefusal(r, audit.ActionSignInFailed, User{}, "address "+from(r))
+		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
 	c, err := r.Cookie(cookieSignIn)
