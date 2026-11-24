@@ -366,7 +366,7 @@ type NewAccount struct {
 
 func (a *Accounts) validate(n NewAccount) error {
 	if !roles.ValidUsername(n.Username, true) {
-		return errors.New("use lowercase letters, digits, dot, dash and underscore for the user name")
+		return errors.New("use " + consoleUserRule + " for the user name")
 	}
 	if err := CheckPasswordRules(n.Username, n.Password); err != nil {
 		return err

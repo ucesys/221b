@@ -87,6 +87,11 @@ describe('local users', () => {
     expect(usernameProblem('system:masters')).toBe('This name is reserved.')
     expect(usernameProblem('221b:superadmins')).toBe('This name is reserved.')
     expect(usernameProblem('alice.o-1_x')).toBe('')
+    // The rule as the server states it, with its length (RB-16).
+    expect(usernameProblem('Alice')).toBe('Use lowercase letters, digits, dot, dash and underscore, at most 64 characters (not . or .. alone).')
+    expect(usernameProblem('a'.repeat(65))).toContain('at most 64 characters')
+    expect(usernameProblem('..')).toContain('not . or ..')
+    expect(usernameProblem('a'.repeat(64))).toBe('')
     expect(passwordProblem('short', 'alice')).toContain('12')
     expect(passwordProblem('alicealicealice', 'alice')).toBe('')
     expect(passwordProblem('ALICE', 'alice')).toContain('12')

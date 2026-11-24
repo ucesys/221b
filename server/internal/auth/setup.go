@@ -116,7 +116,7 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.PostFormValue("password")
 	if !roles.ValidUsername(who.Username, true) {
-		s.renderSetupField(w, r, "Use lowercase letters, digits, dot, dash and underscore.", fieldUsername, http.StatusBadRequest)
+		s.renderSetupField(w, r, "Use "+consoleUserRule+".", fieldUsername, http.StatusBadRequest)
 		return
 	}
 	if err := CheckPasswordRules(who.Username, password); err != nil {

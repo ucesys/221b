@@ -156,11 +156,18 @@ export function passwordProblem(password: string, username: string): string {
 
 const USERNAME = /^[a-z0-9._-]+$/
 
-/** Why a local user name is refused, or '' (RB-16, RB-17): lowercase letters, digits, dot, dash and underscore; nothing reserved. */
+/** The longest user name made in the console (roles.MaxUsername). */
+export const MAX_USERNAME = 64
+
+/** The rule of a user name made in the console, worded as the server's refusal (RB-16). */
+export const USERNAME_RULE = `Use lowercase letters, digits, dot, dash and underscore, at most ${MAX_USERNAME} characters (not . or .. alone).`
+
+/** Why a local user name is refused, or '' (RB-16, RB-17): lowercase letters, digits, dot, dash and underscore, at most 64 characters, not . or ..; nothing reserved. */
 export function usernameProblem(name: string): string {
   if (!name) return 'Enter a user name.'
   // A reserved name, system: or 221b:, has a colon, which the pattern refuses.
-  if (!USERNAME.test(name)) return name.includes(':') ? 'This name is reserved.' : 'Use lowercase letters, digits, dot, dash and underscore.'
+  if (!USERNAME.test(name)) return name.includes(':') ? 'This name is reserved.' : USERNAME_RULE
+  if (name.length > MAX_USERNAME || name === '.' || name === '..') return USERNAME_RULE
   return ''
 }
 

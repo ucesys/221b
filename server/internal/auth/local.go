@@ -141,6 +141,11 @@ func CheckPassword(hash, password string) bool {
 // there is none, read in lowercase.
 var localUserRule = fmt.Sprintf("the user name, or the email when there is none, may have letters (read in lowercase), digits, dot, dash, underscore, @ and +, at most %d characters, and may not be . or ..", roles.MaxEmailUsername)
 
+// consoleUserRule says what the name of a user made in the console, on
+// the first-run page or the Users page, may be (roles.ValidUsername,
+// strict).
+var consoleUserRule = fmt.Sprintf("lowercase letters, digits, dot, dash and underscore, at most %d characters (not . or .. alone)", roles.MaxUsername)
+
 // localGroupRule says what a local group's name may be
 // (roles.ValidGroupName).
 var localGroupRule = fmt.Sprintf("a name of lowercase letters, digits, dot, dash and underscore, at most %d characters, not . or ..", roles.MaxUsername)
