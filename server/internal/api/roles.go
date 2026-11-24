@@ -57,6 +57,10 @@ const (
 	// a check that found nothing read yet.
 	driftEvery = 5 * time.Minute
 	driftSoon  = 15 * time.Second
+	// rolesWatch is how often the cached roles are looked at for a change
+	// since their last comparison, which is then compared at once (RB-36:
+	// "when the roles change"). Looking is five reads from the cache.
+	rolesWatch = 20 * time.Second
 )
 
 func ruleOf(p rbacv1.PolicyRule) roles.Rule {
@@ -148,6 +152,7 @@ func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles
 	}
 	d := roles.Check(s.opts.Roles.Templates, s.rolesOptions(), dep, nodes, time.Now().UTC())
 	d.Of = s.connOf(id)
+	d.Stamp = roles.Stamp(dep, nodes)
 	if s.monitor().Set(id, d) && s.opts.Audit != nil && (d.State != "match") {
 		detail := d.State
 		for _, r := range d.Roles {
@@ -209,10 +214,17 @@ func (s *Server) RoleRefusal(cluster string) string {
 func (s *Server) RunRoleChecks(ctx context.Context) {
 	tick := time.NewTimer(driftSoon)
 	defer tick.Stop()
+	watch := time.NewTicker(rolesWatch)
+	defer watch.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-watch.C:
+			if s.opts.Active == nil || s.opts.Active() {
+				s.checkChangedRoles()
+			}
+			continue
 		case <-tick.C:
 		case <-s.roleCheck:
 			if !tick.Stop() {
@@ -242,6 +254,33 @@ func (s *Server) CheckRolesSoon() {
 	select {
 	case s.roleCheck <- struct{}{}:
 	default:
+	}
+}
+
+// checkChangedRoles compares the roles of each cluster whose cached roles
+// are not the ones last compared: an edit to a 221B ClusterRole is seen
+// within rolesWatch rather than at the next five-minute round (RB-36).
+func (s *Server) checkChangedRoles() {
+	check := func(id string, cl Cluster) {
+		dep, nodes, ok := deployedRoles(cl)
+		if !ok {
+			return
+		}
+		if d, had := s.monitor().Get(id); had && d.Stamp == roles.Stamp(dep, nodes) && d.Of == s.connOf(id) {
+			return
+		}
+		s.checkRoles(id, cl)
+	}
+	if s.opts.Clusters == nil {
+		if s.opts.Cluster != nil {
+			check(clusters.LocalID, s.opts.Cluster)
+		}
+		return
+	}
+	for _, sum := range s.opts.Clusters.List() {
+		if cl := s.clusterOf(sum.ID); cl != nil {
+			check(sum.ID, cl)
+		}
 	}
 }
 

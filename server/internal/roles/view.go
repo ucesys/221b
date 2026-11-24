@@ -1,6 +1,9 @@
 package roles
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"sort"
 	"strings"
@@ -139,9 +142,9 @@ type SubjectRow struct {
 	// one name in two namespaces are two subjects.
 	AccountNamespace string `json:"accountNamespace,omitempty"`
 	// Members counts a local group's members, 0 included; nil for others.
-	Members *int `json:"members,omitempty"`
-	Managed          bool   `json:"managed"`
-	Orphaned         bool   `json:"orphaned,omitempty"`
+	Members  *int `json:"members,omitempty"`
+	Managed  bool `json:"managed"`
+	Orphaned bool `json:"orphaned,omitempty"`
 }
 
 // Holders counts the people and groups 221B holds a super role for.
@@ -356,6 +359,9 @@ type Drift struct {
 	// Of fingerprints the connection the roles were read through (what it
 	// connects to and with): a verdict of another is not this one's.
 	Of string `json:"-"`
+	// Stamp fingerprints the roles as they were read, so a change to one
+	// is seen without comparing again (RB-36).
+	Stamp string `json:"-"`
 }
 
 // PermissionsResponse is the Permissions page.
@@ -534,6 +540,17 @@ func (m *Monitor) Set(cluster string, d Drift) (changed bool) {
 	old, had := m.byKey[cluster]
 	m.byKey[cluster] = d
 	return !had || old.State != d.State || !sameDrift(old, d)
+}
+
+// Stamp fingerprints deployed roles: equal stamps, equal rules.
+func Stamp(deployed map[ID]Deployed, nodes Deployed) string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+	for _, id := range All {
+		_ = enc.Encode(deployed[id])
+	}
+	_ = enc.Encode(nodes)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func sameDrift(a, b Drift) bool {

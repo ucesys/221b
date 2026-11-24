@@ -274,3 +274,30 @@ func TestRolesPageFollowsTheOptions(t *testing.T) {
 		}
 	}
 }
+
+// Roles review, cut list: nothing compared the roles when a ClusterRole
+// changed (RB-36 says "and when the roles change"); an edit waited for the
+// next five-minute round.
+func TestAChangedRoleIsComparedAtOnce(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog()})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	s.checkChangedRoles()
+	first, ok := s.monitor().Get(clusters.LocalID)
+	if !ok || first.State != "match" {
+		t.Fatalf("first look: %+v", first)
+	}
+	// Nothing changed: no new comparison.
+	s.checkChangedRoles()
+	if again, _ := s.monitor().Get(clusters.LocalID); !again.CheckedAt.Equal(first.CheckedAt) {
+		t.Error("compared again though nothing changed")
+	}
+	local.Put(clusterRoleOf(roles.Viewer.ClusterRole(), []roles.Rule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}))
+	s.checkChangedRoles()
+	if d, _ := s.monitor().Get(clusters.LocalID); d.State != "differs" || !d.More {
+		t.Fatalf("after an edit: %+v", d)
+	}
+}
