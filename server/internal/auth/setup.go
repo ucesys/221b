@@ -167,8 +167,9 @@ func (s *Service) live(sess Session) (Session, bool) {
 	// is and nothing of what they may do (DB-65): that is worked out here,
 	// on every request, from the configuration and the account as they are
 	// now. One of a way of signing in this console does not have is
-	// refused.
-	if sess.Signed && !s.signsIn(sess.Method) {
+	// refused, stored or signed: after a change of the sign-in mode a
+	// stored session of the old one would keep the roles saved in it.
+	if !s.signsIn(sess.Method) {
 		s.sessions.Delete(sess.ID)
 		return Session{}, false
 	}

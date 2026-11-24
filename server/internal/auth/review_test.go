@@ -292,3 +292,20 @@ func TestUnauthenticatedRequestsWriteABoundedNumberOfRecords(t *testing.T) {
 		t.Errorf("60 sign-ins from one address recorded %d refusals for too many attempts", n)
 	}
 }
+
+// Finding 11: after the sign-in mode is changed, a stored session of the
+// old mode is refused, as a signed one is.
+func TestASessionOfTheOldSignInModeIsRefused(t *testing.T) {
+	o := newOutage(t)
+	a := o.replica(outageConfig(t), nil)
+	root := a.mustSignIn("root", goodPassword)
+	o.cookie(a, root)
+	if w, code := a.whoami(root); code != http.StatusOK || !w.Admin {
+		t.Fatalf("root before the upgrade: %d %+v", code, w)
+	}
+	// The release upgraded to OIDC, over the same session store.
+	b := o.replica(auth.Config{Mode: auth.ModeOIDC, OIDC: auth.OIDCConfig{Issuer: "https://idp.example", ClientID: "c"}}, nil)
+	if w, code := b.whoami(root); code != http.StatusUnauthorized {
+		t.Fatalf("root's local session on the OIDC console: %d %+v", code, w)
+	}
+}
