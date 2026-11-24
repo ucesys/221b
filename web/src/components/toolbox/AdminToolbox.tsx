@@ -227,7 +227,8 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
     command: info.values && (info.values as { adminExec?: boolean }).adminExec ? 'SuperAdmin; Admin in its namespaces' : 'SuperAdmin (Admin with rbac.roles.admin.exec)',
     forward: 'SuperAdmin; Admin in its namespaces',
     'debug-container': 'SuperAdmin',
-    'debug-pod': 'SuperAdmin; Admin in its namespaces',
+    // A debug pod opens its shell with pods/exec (TB-28, TB-50).
+    'debug-pod': info.values && (info.values as { adminExec?: boolean }).adminExec ? 'SuperAdmin; Admin in its namespaces' : 'SuperAdmin (Admin with rbac.roles.admin.exec)',
     'node-shell': 'SuperAdmin',
     'node-command': 'SuperAdmin',
     ssh: 'SuperAdmin',

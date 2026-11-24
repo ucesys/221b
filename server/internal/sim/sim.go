@@ -81,8 +81,8 @@ type Sim struct {
 	// token, when set, is the bearer token every API request must carry.
 	token string
 	// What access reviews refuse (see /sim/deny).
-	denyVerbs, denyNamespaces, denyUsers []string
-	onlyNamespaces                       map[string][]string
+	denyVerbs, denyNamespaces, denyUsers, denyResources []string
+	onlyNamespaces                                      map[string][]string
 
 	mu       sync.Mutex
 	rv       int64

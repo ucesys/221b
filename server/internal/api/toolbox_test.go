@@ -652,3 +652,34 @@ func TestToolboxMixesCachedAndAskedNamespaces(t *testing.T) {
 		t.Fatalf("%d of %d namespaces", len(got), len(names))
 	}
 }
+
+// Roles review, finding 6 (the owner, November 23): a Debug pod opens its
+// terminal with pods/exec, so it is offered only to a person who may
+// create pods/exec in the namespace, as well as jobs.
+func TestDebugPodWantsExec(t *testing.T) {
+	srv, c, sm, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	rec := httptest.NewRecorder()
+	sm.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sim/deny", strings.NewReader(`{"resources":["pods/exec"]}`)))
+	if rec.Code >= 300 {
+		t.Fatalf("deny: %d %s", rec.Code, rec.Body)
+	}
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces=web", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	var v struct {
+		Namespaces map[string]struct {
+			Tools map[string]string `json:"tools"`
+		} `json:"namespaces"`
+	}
+	if err := json.Unmarshal([]byte(b), &v); err != nil {
+		t.Fatal(err)
+	}
+	tools := v.Namespaces["web"].Tools
+	if why := tools[tb.ToolDebugPod]; !strings.Contains(why, "pods/exec") {
+		t.Errorf("Debug pod without pods/exec: %q (%s)", why, b)
+	}
+	if tools[tb.ToolForward] != "" {
+		t.Errorf("port forward is off: %q", tools[tb.ToolForward])
+	}
+}

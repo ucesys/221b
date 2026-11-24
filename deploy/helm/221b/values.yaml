@@ -961,9 +961,9 @@ rbac:
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true
   # Which definition of the two roles that can change things is installed.
-  # full: Admin may do the namespaced changes Watson supports, forward
-  # ports and start debug pods (the Toolbox), and with admin.exec open
-  # shells; SuperAdmin may do everything. readOnly: the role exists, with no write verb, so
+  # full: Admin may do the namespaced changes Watson supports and forward
+  # ports (the Toolbox), and with admin.exec open shells and start debug
+  # pods, whose shell is an exec; SuperAdmin may do everything. readOnly: the role exists, with no write verb, so
   # nobody can change anything through the console; the read-only
   # SuperAdmin lists and watches everything and gets everything except
   # the subresources that run a command or proxy to one (pods/exec,
@@ -974,9 +974,11 @@ rbac:
   roles:
     admin:
       template: full
-      # The full Admin may also open shells and run commands in its
-      # namespaces (create pods/exec). It already forwards ports and starts
-      # debug pods; debug containers and node shells stay SuperAdmin's.
+      # The full Admin may also open shells, run commands and start debug
+      # pods in its namespaces (create pods/exec: a debug pod's shell is an
+      # exec into it, so without this the Toolbox offers it to SuperAdmins
+      # alone). It already forwards ports; debug containers and node shells
+      # stay SuperAdmin's.
       exec: false
     superAdmin:
       template: full

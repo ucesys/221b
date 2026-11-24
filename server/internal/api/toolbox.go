@@ -187,10 +187,13 @@ func (c *toolCache) put(key string, nt namespaceTools, now time.Time) {
 }
 
 const (
-	whyRole     = "your role does not allow it here"
-	whyReadOnly = "off: this connection is read-only"
-	whyChart    = "off on this console"
-	whySuper    = "only a SuperAdmin may"
+	whyRole = "your role does not allow it here"
+	// whyDebugExec: a Debug pod's terminal is opened with pods/exec, which
+	// the Admin role holds only with rbac.roles.admin.exec (TB-50).
+	whyDebugExec = "a debug pod opens its shell with pods/exec, which your role does not allow here"
+	whyReadOnly  = "off: this connection is read-only"
+	whyChart     = "off on this console"
+	whySuper     = "only a SuperAdmin may"
 )
 
 func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
@@ -267,13 +270,17 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			nsList = append(nsList, ns)
 		}
 	}
-	type nsTool struct{ tool, verb, group, resource, sub string }
+	// What each tool needs in a namespace; a tool with several needs is
+	// off at the first one refused. A Debug pod creates its Job and then
+	// opens its terminal with pods/exec, so it needs both (TB-28, TB-50).
+	type nsTool struct{ tool, verb, group, resource, sub, why string }
 	checks := []nsTool{
-		{tb.ToolShell, "create", "", "pods", "exec"},
-		{tb.ToolCommand, "create", "", "pods", "exec"},
-		{tb.ToolForward, "create", "", "pods", "portforward"},
-		{tb.ToolDebugContainer, "patch", "", "pods", "ephemeralcontainers"},
-		{tb.ToolDebugPod, "create", "batch", "jobs", ""},
+		{tb.ToolShell, "create", "", "pods", "exec", whyRole},
+		{tb.ToolCommand, "create", "", "pods", "exec", whyRole},
+		{tb.ToolForward, "create", "", "pods", "portforward", whyRole},
+		{tb.ToolDebugContainer, "patch", "", "pods", "ephemeralcontainers", whyRole},
+		{tb.ToolDebugPod, "create", "batch", "jobs", "", whyRole},
+		{tb.ToolDebugPod, "create", "", "pods", "exec", whyDebugExec},
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -294,20 +301,22 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			if n, err := console.Namespace(ctx, ns); err == nil {
 				nt.Level = sessions.PodSecurity(n)
 			}
-			answers := map[string]string{}
+			answers := map[string]bool{}
 			for _, ck := range checks {
-				k := ck.verb + ck.resource + ck.sub
-				if why, done := answers[k]; done {
-					nt.Tools[ck.tool] = why
+				if nt.Tools[ck.tool] != "" {
 					continue
 				}
-				ok, _, err := asPerson.Can(ctx, ck.verb, ck.group, ck.resource, ck.sub, ns, "")
-				why := ""
-				if err != nil || !ok {
-					why = whyRole
+				k := ck.verb + ck.resource + ck.sub
+				allowed, done := answers[k]
+				if !done {
+					ok, _, err := asPerson.Can(ctx, ck.verb, ck.group, ck.resource, ck.sub, ns, "")
+					allowed = err == nil && ok
+					answers[k] = allowed
 				}
-				answers[k] = why
-				nt.Tools[ck.tool] = why
+				nt.Tools[ck.tool] = ""
+				if !allowed {
+					nt.Tools[ck.tool] = ck.why
+				}
 			}
 			mu.Lock()
 			v.Namespaces[ns] = nt

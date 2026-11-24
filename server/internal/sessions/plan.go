@@ -191,6 +191,12 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			fmt.Sprintf("It never becomes Ready, so no Service sends it traffic; it is deleted when the session ends, at %s at the latest.", short(limit))}, notes...)
 		p.Impact = append(p.Impact, "Then opens a terminal in it. "+terms)
 		p.Object = toYAML(job)
+		// The terminal is an exec into the Job's pod: without pods/exec the
+		// Job would run and the session fail (TB-28, TB-50).
+		if why := execRefused(ctx, asker, who, r.Namespace); why != "" {
+			p.DryRun, p.DryRunExit = []string{why}, 1
+			return p
+		}
 		err = b.CreateJob(ctx, job, true)
 		p.dry(err, "job.batch/"+job.Name+" created (server dry run)")
 	case toolbox.ToolSSH:
@@ -228,6 +234,25 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		p.dry(err, "pod/"+pod.Name+" created (server dry run)")
 	}
 	return p
+}
+
+// execRefused says why a debug pod cannot open its terminal, or "": the
+// access review of create pods/exec in the namespace, as the person. With
+// no way to ask, or when the review itself fails, Kubernetes decides at
+// the exec.
+func execRefused(ctx context.Context, asker Asker, who, ns string) string {
+	if asker == nil {
+		return ""
+	}
+	ok, why, err := asker.Can(ctx, "create", "", "pods", "exec", ns, "")
+	if err != nil || ok {
+		return ""
+	}
+	msg := fmt.Sprintf("Kubernetes does not allow %s to create pods/exec in %s, and a debug pod opens its shell with it: nothing was created.", who, nsName(ns))
+	if why != "" {
+		msg += " " + why
+	}
+	return msg
 }
 
 func (p *Plan) dry(err error, ok string) {

@@ -437,6 +437,11 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
+		asker, _ := b.(Asker)
+		if why := execRefused(ctx, asker, s.Owner.Name, r.Namespace); why != "" {
+			fail(errors.New(why))
+			return
+		}
 		for _, n := range notes {
 			m.note(s, n)
 		}
