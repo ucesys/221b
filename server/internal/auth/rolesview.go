@@ -41,12 +41,15 @@ func (s *Service) Members(group string) int {
 	return s.accounts.Members(group)
 }
 
-// UserExists says whether a local user of that name exists.
+// UserExists says whether a local user of that name exists: by its user
+// name exactly, as a session finds its account (live), never by email as
+// a sign-in does. A binding of a user name that is only some account's
+// email binds nobody who signs in, and the Roles page flags it orphaned.
 func (s *Service) UserExists(username string) bool {
 	if s.accounts == nil {
 		return false
 	}
-	_, ok := s.accounts.Find(username)
+	_, ok := s.accounts.byName(username)
 	return ok
 }
 

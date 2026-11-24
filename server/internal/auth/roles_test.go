@@ -1063,6 +1063,30 @@ func TestRolesViewHelpers(t *testing.T) {
 	}
 }
 
+// The review of November 24, 2026 (outside the package): the Roles
+// page's Orphaned flag asked for the user the way a sign-in does, by user
+// name and then by email, so a binding of a user name that is only an
+// account's email (a user taken out of the values, whose binding stayed)
+// read as a user who exists. A session is found by its user name only
+// (live), and so is the user of a binding.
+func TestUserExistsMatchesTheUserNameExactly(t *testing.T) {
+	cfg := auth.Config{
+		Mode: auth.ModeLocal,
+		Local: []auth.LocalUser{
+			{Username: "ann", Email: "ann@corp.example", PasswordHash: hashOf(t, goodPassword)},
+		},
+	}
+	e := newEnv(t, cfg)
+	if !e.svc.UserExists("ann") {
+		t.Error("ann, a local user, does not exist")
+	}
+	for _, name := range []string{"ann@corp.example", "ANN@corp.example", " ann"} {
+		if e.svc.UserExists(name) {
+			t.Errorf("UserExists(%q) is true: no account has that user name", name)
+		}
+	}
+}
+
 // Making a local user a SuperAdmin waits for another SuperAdmin when there
 // is one, whether by the role or by a group that gives it; the rest of the
 // change is made. The only SuperAdmin makes one at once, and the audit log
