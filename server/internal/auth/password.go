@@ -125,8 +125,14 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if _, _, err := s.accounts.Update(ctx, acct.Username, Change{Password: &password}); err != nil {
+	// Changed only over the hash the current password was checked against:
+	// this replica's copy may hold one a reset has replaced.
+	if _, _, err := s.accounts.Update(ctx, acct.Username, Change{Password: &password, IfHash: &acct.PasswordHash}); err != nil {
 		s.record(r, audit.ActionPasswordChange, who, audit.OutcomeFailed, err.Error())
+		if errors.Is(err, ErrPasswordChanged) {
+			s.renderPassword(w, r, passwordRefuse, "", http.StatusUnauthorized)
+			return
+		}
 		msg := sentence(err.Error())
 		if errors.Is(err, ErrManaged) {
 			msg = "This account is defined in the deployment’s values, so its password is changed there, with helm upgrade."

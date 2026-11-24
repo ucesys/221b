@@ -793,6 +793,20 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		refuse("wrong user name or password")
 		return
 	}
+	// The hash checked is this replica's copy, which may be seconds older
+	// than a reset made on another: the account as saved decides.
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	now, still := s.accounts.Current(ctx, acct.Username)
+	cancel()
+	if !still || (now.PasswordHash != acct.PasswordHash && !CheckPassword(now.PasswordHash, password)) {
+		if s.dir != nil {
+			s.signInDirectory(w, r, login, password, refuse, true)
+			return
+		}
+		refuse("wrong user name or password: the password was changed meanwhile")
+		return
+	}
+	acct = now
 	if acct.Disabled {
 		if s.dir != nil {
 			s.signInDirectory(w, r, login, password, refuse, true)

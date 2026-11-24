@@ -80,3 +80,37 @@ func TestAReplicaThatHasNotReadANewAccountYetKeepsItsSession(t *testing.T) {
 		t.Fatalf("the other replica shows the first-run page: %s", body)
 	}
 }
+
+// Finding 3: a password reset is not undone, nor got round, on a replica
+// that still holds the old hash: the password is checked against the
+// account as saved, at sign-in and when it is changed.
+func TestAResetPasswordIsCheckedAsSavedOnEveryReplica(t *testing.T) {
+	o := newOutage(t)
+	cfg := outageConfig(t)
+	a, b := o.replica(cfg, nil), o.replica(cfg, nil)
+	o.create(a, "mallory")
+	reread(t, b)
+	const reset = "the administrator's reset password"
+	if _, _, err := a.svc.Accounts().Update(context.Background(), "mallory", auth.Change{Password: ptrTo(reset)}); err != nil {
+		t.Fatal(err)
+	}
+	// b has not read the accounts again: its copy holds the old hash.
+	if _, resp := b.signIn("mallory", goodPassword); resp.StatusCode != http.StatusUnauthorized {
+		readAll(t, resp)
+		t.Fatalf("the old password signed in on the other replica: %s", resp.Status)
+	}
+	reread(t, b)
+	o.create(a, "nina")
+	reread(t, b)
+	if _, _, err := a.svc.Accounts().Update(context.Background(), "nina", auth.Change{Password: ptrTo(reset)}); err != nil {
+		t.Fatal(err)
+	}
+	r := b.changePassword("nina", goodPassword, "the leaked password's owner's own", "the leaked password's owner's own")
+	if body := readAll(t, r); r.StatusCode != http.StatusUnauthorized || !strings.Contains(body, "Your password was not changed") {
+		t.Fatalf("a change given the old password on the other replica: %s at %s", r.Status, r.Request.URL)
+	}
+	o.cookie(a, a.mustSignIn("nina", reset))
+	o.cookie(b, b.mustSignIn("mallory", reset))
+}
+
+func ptrTo[T any](v T) *T { return &v }

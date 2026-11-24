@@ -26,6 +26,10 @@ var (
 	ErrNotFound = errors.New("no such user")
 	// ErrFirstRunClosed says the first administrator exists already (RB-26).
 	ErrFirstRunClosed = errors.New("the first administrator exists already")
+	// ErrPasswordChanged refuses a password change checked against a hash
+	// that is no longer the saved one: the password was changed meanwhile,
+	// on this replica or another.
+	ErrPasswordChanged = errors.New("the password was changed meanwhile")
 	// ErrUnavailable says the accounts could not be read, so nothing is
 	// allowed to change them or to open the first-run page.
 	ErrUnavailable = errors.New("the accounts could not be read; check the console's log")
@@ -212,6 +216,20 @@ func (a *Accounts) FindRead(ctx context.Context, login string) (acct Account, ok
 	return u, found, true
 }
 
+// Current reads the saved accounts again and returns the account as saved
+// now, for a password check that must not take a hash another replica
+// has replaced (a reset). When they cannot be read, this replica's copy
+// stands, as it does for every other check.
+func (a *Accounts) Current(ctx context.Context, username string) (Account, bool) {
+	_ = a.load(ctx)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if u := a.get(username); u != nil {
+		return *u, true
+	}
+	return Account{}, false
+}
+
 // List returns every account, by user name.
 func (a *Accounts) List() []Account {
 	a.mu.Lock()
@@ -357,6 +375,9 @@ type Change struct {
 	Email    *string
 	Password *string
 	Disabled *bool
+	// IfHash, with Password, makes the change only while the saved hash is
+	// this one: the one the current password was checked against.
+	IfHash *string
 }
 
 // edit applies fn to a copy of a stored account, as saved now, and saves
@@ -433,6 +454,9 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 			u.Email = strings.ToLower(strings.TrimSpace(*c.Email))
 		}
 		if c.Password != nil {
+			if c.IfHash != nil && u.PasswordHash != *c.IfHash {
+				return ErrPasswordChanged
+			}
 			u.PasswordHash = hash
 			end = true
 		}
