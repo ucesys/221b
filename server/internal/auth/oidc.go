@@ -234,8 +234,10 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Identity, err
 		return Identity{}, err
 	}
 	payload, err := verifyJWS(raw, keys)
-	if errors.Is(err, ErrNoKey) {
-		// The provider may have rotated its keys since they were read.
+	if errors.Is(err, ErrNoKey) || errors.Is(err, ErrBadSignature) {
+		// The provider may have rotated its keys since they were read: a
+		// new kid, or a new key under the same kid or with none. They are
+		// read again at most once a minute (keySet).
 		if keys, err = p.keySet(ctx, true); err == nil {
 			payload, err = verifyJWS(raw, keys)
 		}
