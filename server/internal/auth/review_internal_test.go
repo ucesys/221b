@@ -197,3 +197,35 @@ func httptestRequest(peer string) *http.Request {
 	r.RemoteAddr = peer
 	return r
 }
+
+// Cut by the review's cap (signed.go:216, session.go:925): a session made
+// while the store is away lasts no longer than the idle limit or the
+// maximum lifetime when either is shorter than auth.outageSession.
+func TestASignedSessionKeepsToShorterLimits(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	for _, tc := range []struct {
+		idle, max, want time.Duration
+	}{
+		{10 * time.Minute, 7 * 24 * time.Hour, 10 * time.Minute},
+		{8 * time.Hour, 20 * time.Minute, 20 * time.Minute},
+		{8 * time.Hour, 7 * 24 * time.Hour, 30 * time.Minute},
+	} {
+		store := NewOutageStore()
+		store.Fail(fmt.Errorf("writing the session: %w", db.ErrUnavailable))
+		s := NewSessions(tc.idle, tc.max, clock)
+		s.Share(store, nil)
+		key := NewSessionKey(&MemoryKeys{}, clock)
+		if err := key.Ensure(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		s.Outage(key, 0)
+		sess, err := s.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+		if err != nil || !sess.Signed {
+			t.Fatalf("no signed session: %v", err)
+		}
+		if got := sess.Expires.Sub(now); got != tc.want || s.OutageLasts() != tc.want {
+			t.Errorf("idle %s, max %s: the signed session lasts %s (said %s), want %s", tc.idle, tc.max, got, s.OutageLasts(), tc.want)
+		}
+	}
+}

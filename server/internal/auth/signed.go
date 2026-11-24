@@ -201,7 +201,7 @@ func (p signedPayload) session(id string, now time.Time) *Session {
 // sign makes the signed session of a session that could not be stored.
 func (s *Sessions) sign(sess Session) (*Session, error) {
 	s.mu.Lock()
-	keys, lasts := s.key, s.outage
+	keys, lasts := s.key, s.outageLasts()
 	s.mu.Unlock()
 	key := keys.fresh()
 	if key == nil {

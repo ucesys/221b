@@ -261,11 +261,25 @@ func (s *Sessions) Outage(key *SessionKey, lasts time.Duration) {
 }
 
 // OutageLasts is how long a session made while the shared store is away
-// lasts.
+// lasts: the outage session's time, or the idle limit or the maximum
+// lifetime when one is shorter. A signed session cannot carry its last
+// activity from replica to replica, so it is held to the idle limit from
+// its sign-in.
 func (s *Sessions) OutageLasts() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.outage
+	return s.outageLasts()
+}
+
+// outageLasts is OutageLasts for callers that hold the lock.
+func (s *Sessions) outageLasts() time.Duration {
+	d := s.outage
+	for _, limit := range []time.Duration{s.idle, s.max} {
+		if limit > 0 && limit < d {
+			d = limit
+		}
+	}
+	return d
 }
 
 // reach asks the shared store, unless it is known to be away: then it

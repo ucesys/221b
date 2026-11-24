@@ -101,6 +101,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A session no longer goes on as another account that has its name as email** (RB-46): a local session was looked up like a sign-in, by user name and then by email, so the session of an account named by its email (`ops@corp.example`), taken out of the values, went on as the console user whose email that is, with that user's roles. A session is now looked up by its user name only.
 - **The per-account sign-in limit counts a name and an email together** (RB-46): it was kept by the text typed, so typing an account's user name and its email gave twice the guesses a minute.
 - **The sign-in limits hold against a flood of keys and IPv6 addresses** (RB-46): the limit per address counted each IPv6 address apart, so a client with a /64 had no limit in practice, and the limiter's bound on what it remembers could forget an address or account at its limit once enough other keys were tried. The limit per address now counts an IPv6 /64, and a key at its limit is forgotten last.
+- **A session made while the session store is away keeps to a shorter idle limit or lifetime** (DB-65): it lasted `auth.outageSession` (30 minutes) even where `auth.sessionIdle` or `auth.sessionMax` was set shorter; it now lasts the shortest of the three.
 
 ## 0.13.0 (2026-11-22)
 
