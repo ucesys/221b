@@ -331,7 +331,8 @@
               ],
               "verbs": [
                 "create",
-                "update"
+                "update",
+                "delete"
               ]
             }
           ],

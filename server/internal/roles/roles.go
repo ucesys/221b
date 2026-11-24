@@ -264,8 +264,10 @@ func join(s []string) string {
 var secretReads = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: readVerbs}
 
 // helmRecords are what Helm rollback writes: a release's records are
-// Secrets of its namespace (RB-12).
-var helmRecords = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create", "update"}}
+// Secrets of its namespace (RB-12). delete because Helm prunes the oldest
+// record past its history limit (10 for Watson's rollback) before it
+// writes the new one; the Secret page's Delete uses it too.
+var helmRecords = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create", "update", "delete"}}
 
 // workloadKinds are what Admin may restart and roll back.
 var workloadKinds = []string{"deployments", "statefulsets", "daemonsets"}
