@@ -233,10 +233,14 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// goneAtStart are the items gone when the sync began: one gone since
 	// was removed while it ran, and stays gone (MY-12).
 	goneAtStart := map[string]bool{}
+	// trustAtStart are the uploaded documents' own trust levels when it
+	// began: one set since, on the document's row, is kept (KN-61).
+	trustAtStart := map[string]string{}
 	for k, st := range m.Items {
 		if st.Gone {
 			goneAtStart[k] = true
 		}
+		trustAtStart[k] = st.Trust
 	}
 	secrets := s.secretValues(ctx)
 	sources := map[string]SourceStatus{}
@@ -292,6 +296,10 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					uploads[key] = it.Version
 				}
 				st := m.Items[key]
+				// The trust chosen at an upload (KN-61).
+				if st != nil && it.SetTrust {
+					st.Trust = it.Trust
+				}
 				if st != nil && it.Version != "" && st.Version == it.Version && !st.Gone && !req.Rebuild {
 					st.LastSeen = now
 					seeSections(m, x.ID, it.ID, now)
@@ -304,7 +312,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: “%s” could not be read: %v", x.Name, it.Title, rerr))
 					// Said on the item (KN-47); it is read again next time.
 					if st == nil {
-						st = &ItemState{Source: x.ID, ID: it.ID, Title: it.Title, URL: it.URL, By: it.By, Type: it.Type}
+						st = &ItemState{Source: x.ID, ID: it.ID, Title: it.Title, URL: it.URL, By: it.By, Type: it.Type, Trust: it.Trust}
 						m.Items[key] = st
 					}
 					st.Error, st.Skipped, st.LastSeen, st.Version = clip(scrub.Known(rerr.Error(), secrets), 300), "", now, ""
@@ -313,7 +321,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				text = scrub.Known(scrub.Text(text), secrets)
 				h := hashOf([]byte(text))
 				if st == nil {
-					st = &ItemState{Source: x.ID, ID: it.ID}
+					st = &ItemState{Source: x.ID, ID: it.ID, Trust: it.Trust}
 					m.Items[key] = st
 				}
 				st.Title, st.URL, st.Modified, st.LastSeen, st.Gone = it.Title, it.URL, it.Modified.UTC(), now, false
@@ -428,7 +436,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// and indexed alone.
 	var toDraft []readItem
 	for _, ri := range changed {
-		if writesPages(ri) {
+		if writesPages(ri, m.Items[docKeyOf(ri.key)]) {
 			toDraft = append(toDraft, ri)
 		} else {
 			res.indexed++
@@ -468,13 +476,16 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 		}
 		s.noteCorrections(ctx, changed, run)
 	}
-	s.letGo(uploads)
 	// The pages retired while this sync ran are kept retired: the
 	// manifest written is this sync's, with the retirements as they are
 	// now (KN-24).
 	s.manifestMu.Lock()
+	let := s.letGo(uploads)
 	s.mu.RLock()
 	m.Retired = maps.Clone(s.manifest.Retired)
+	// So are the trust levels set on the documents' rows while it ran,
+	// and those chosen for a document it read (KN-61).
+	keepTrust(s.manifest, trustAtStart, m, let)
 	// So are the documents removed while it ran (MY-12).
 	writes = keepRemoved(s.manifest, goneAtStart, m, writes, func(p string) bool { _, ok := files[p]; return ok })
 	s.mu.RUnlock()
@@ -536,16 +547,38 @@ func keepRemoved(now *Manifest, goneAtStart map[string]bool, m *Manifest, writes
 }
 
 // letGo lets go of the uploaded documents' text a sync gave Mycroft: the
-// pending documents of those keys, at those versions.
-func (s *Service) letGo(read map[string]string) {
+// pending documents of those keys, at those versions, which it returns.
+func (s *Service) letGo(read map[string]string) []pendingDoc {
 	if len(read) == 0 {
-		return
+		return nil
 	}
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
+	var out []pendingDoc
 	for k, p := range s.pending {
 		if v, ok := read[itemKey(p.source, p.name)]; ok && len(p.hash) >= 16 && p.hash[:16] == v {
 			delete(s.pending, k)
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// keepTrust keeps, in a manifest about to be written (m), an uploaded
+// document's trust as it is now (KN-61): the one chosen at the upload of a
+// document the sync read and let go (let), which may have been changed
+// after the sync listed it, and one set on the row of a document already
+// read while the sync ran (now differs from atStart). manifestMu is held,
+// as SetDocumentTrust holds it.
+func keepTrust(now *Manifest, atStart map[string]string, m *Manifest, let []pendingDoc) {
+	for _, p := range let {
+		if st := m.Items[itemKey(p.source, p.name)]; st != nil && p.setTrust {
+			st.Trust = p.trust
+		}
+	}
+	for key, cur := range now.Items {
+		if st := m.Items[key]; st != nil && cur.Trust != atStart[key] {
+			st.Trust = cur.Trust
 		}
 	}
 }

@@ -23,9 +23,10 @@ import (
 // excerpts, which ask_knowledge gives marked unreviewed.
 
 // writesPages says whether Mycroft is given an item read to write pages
-// from.
-func writesPages(ri readItem) bool {
-	return ri.source.trustLevel() == TrustHigh || ri.item.Corrects != ""
+// from; doc is its document's manifest entry, whose own trust an uploaded
+// document's is (KN-61).
+func writesPages(ri readItem, doc *ItemState) bool {
+	return ri.source.levelOf(doc) == TrustHigh || ri.item.Corrects != ""
 }
 
 // ActionPageRequest is a person's request that Mycroft write pages from

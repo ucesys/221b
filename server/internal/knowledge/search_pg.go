@@ -117,11 +117,20 @@ func (s *Service) searchModes(ctx context.Context, query, kind string, limit int
 	if len(iq.Follow) > 0 {
 		iq.Minors = s.clusterMinors(ctx)
 	}
+	// An uploaded document's own trust weighs its passages, its
+	// sections' too (KN-61).
+	docLevels := s.documentLevels()
+	levelOf := func(source, key string) string {
+		if lv, ok := docLevels[docKeyOf(key)]; ok {
+			return lv
+		}
+		return levels[source]
+	}
 	iq.Weight = func(h indexHit) float64 {
 		if h.reviewed {
 			return weightPage
 		}
-		return trustWeight(levels[h.source])
+		return trustWeight(levelOf(h.source, h.itemKey))
 	}
 	found, err := s.pg.Search(ctx, iq)
 	if err != nil {
@@ -145,7 +154,7 @@ func (s *Service) searchModes(ctx context.Context, query, kind string, limit int
 				h.Stale, h.Sources, h.Date = p.Stale, p.Sources, p.Updated
 			}
 		} else {
-			h.Source, h.Version, h.URL, h.Trust = f.itemKey, f.version, f.url, levels[f.source]
+			h.Source, h.Version, h.URL, h.Trust = f.itemKey, f.version, f.url, levelOf(f.source, f.itemKey)
 		}
 		out = append(out, h)
 	}

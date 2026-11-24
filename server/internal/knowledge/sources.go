@@ -34,6 +34,10 @@ type Item struct {
 	// them, where it does: an exclusion of a page and its children
 	// covers a grandchild whose parent was never read.
 	Ancestors []string
+	// Trust is the trust level chosen at an upload, when SetTrust says
+	// one was (KN-61): "" is the source's.
+	Trust    string
+	SetTrust bool
 }
 
 // reader reads one source.
@@ -275,6 +279,11 @@ type pendingDoc struct {
 	corrects string
 	// kind is AddText or AddDocument (MY-12).
 	kind string
+	// trust is the trust level a SuperAdmin chose for it, when setTrust
+	// says one was ("" is its source's); an Admin's upload chooses none,
+	// and a document uploaded again keeps its own (KN-61).
+	trust    string
+	setTrust bool
 }
 
 // label is how the document is named: its title, or its file's name.
@@ -302,7 +311,7 @@ func (r *uploadReader) List(context.Context, time.Time) ([]Item, bool, error) {
 	var out []Item
 	for _, p := range r.s.pending {
 		if p.source == r.source {
-			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url, By: p.by, Corrects: p.corrects, Type: p.kind})
+			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url, By: p.by, Corrects: p.corrects, Type: p.kind, Trust: p.trust, SetTrust: p.setTrust})
 			seen[p.name] = true
 		}
 	}

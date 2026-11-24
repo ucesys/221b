@@ -125,6 +125,10 @@ type UploadItem struct {
 	Pages    []string  `json:"pages,omitempty"`
 	Corrects string    `json:"corrects,omitempty"`
 	Reported string    `json:"reported,omitempty"`
+	// Trust is a document's own trust level, "" for its source's, and
+	// SourceTrust its source's (KN-61).
+	Trust       string `json:"trust,omitempty"`
+	SourceTrust string `json:"sourceTrust"`
 }
 
 // SourceRefBrief names a source by its id and name.
@@ -145,6 +149,9 @@ type UploadsView struct {
 	// documents are not read, and nothing is added while Added in Mycroft
 	// is off; a SuperAdmin switches them on here.
 	Off []SourceRefBrief `json:"off"`
+	// SourceTrust is the trust of Added in Mycroft, where an upload
+	// lands: a document's own is chosen against it (KN-61).
+	SourceTrust string `json:"sourceTrust"`
 }
 
 func addLimits() AddLimits {
@@ -173,7 +180,10 @@ func (s *Service) Uploads(ctx context.Context, c Caller) (UploadsView, error) {
 		if x.Off {
 			v.Off = append(v.Off, SourceRefBrief{ID: x.ID, Name: x.Name})
 		}
-		for _, it := range s.uploadRows(x.ID) {
+		if x.ID == AddedSourceID {
+			v.SourceTrust = x.trustLevel()
+		}
+		for _, it := range s.uploadRows(x) {
 			if it.Type == TypeNote || it.Type == TypeDocument {
 				v.Items = append(v.Items, it)
 			}
@@ -185,7 +195,8 @@ func (s *Service) Uploads(ctx context.Context, c Caller) (UploadsView, error) {
 
 // uploadRows are a source of uploaded documents' items: those waiting to
 // be read, and those the manifest holds, a failed read's too.
-func (s *Service) uploadRows(source string) []UploadItem {
+func (s *Service) uploadRows(x Source) []UploadItem {
+	source := x.ID
 	s.mu.RLock()
 	m := s.manifest
 	s.mu.RUnlock()
@@ -197,7 +208,14 @@ func (s *Service) uploadRows(source string) []UploadItem {
 			continue
 		}
 		st := &ItemState{Source: source, ID: p.name, URL: p.url, Corrects: p.corrects, Type: p.kind}
-		out = append(out, UploadItem{Source: source, ID: p.name, Type: typeOf(SourceUpload, st), Title: p.label(), By: p.by, At: p.at, State: StateReading, Corrects: p.corrects})
+		// The trust chosen at its upload, else the one it had (KN-61).
+		trust := p.trust
+		if !p.setTrust {
+			if was := m.Items[itemKey(source, p.name)]; was != nil && !was.Gone {
+				trust = was.Trust
+			}
+		}
+		out = append(out, UploadItem{Source: source, ID: p.name, Type: typeOf(SourceUpload, st), Title: p.label(), By: p.by, At: p.at, State: StateReading, Corrects: p.corrects, Trust: trust, SourceTrust: x.trustLevel()})
 		seen[p.name] = true
 	}
 	s.pendingMu.Unlock()
@@ -206,7 +224,7 @@ func (s *Service) uploadRows(source string) []UploadItem {
 			continue
 		}
 		state, why := stateOf(st)
-		it := UploadItem{Source: source, ID: st.ID, Type: typeOf(SourceUpload, st), Title: st.Title, By: st.By, At: st.Modified, State: state, LastRead: st.LastRead, Pages: st.Pages, Corrects: st.Corrects, Reported: st.Reported}
+		it := UploadItem{Source: source, ID: st.ID, Type: typeOf(SourceUpload, st), Title: st.Title, By: st.By, At: st.Modified, State: state, LastRead: st.LastRead, Pages: st.Pages, Corrects: st.Corrects, Reported: st.Reported, Trust: st.Trust, SourceTrust: x.trustLevel()}
 		if it.At.IsZero() {
 			it.At = st.LastRead
 		}
@@ -269,6 +287,11 @@ type SourceItem struct {
 	Pages      int        `json:"pages,omitempty"`
 	Exclusion  *Exclusion `json:"exclusion,omitempty"`
 	Excludable bool       `json:"excludable,omitempty"`
+	// Trust is an uploaded document's own trust level, "" for its
+	// source's, and SourceTrust its source's: both only for the items
+	// of a source of uploaded documents (KN-61).
+	Trust       string `json:"trust,omitempty"`
+	SourceTrust string `json:"sourceTrust,omitempty"`
 	// Path is where the item is in its source, as the list shows it after
 	// the source's name: relative to the bucket's prefix, the repository's
 	// path or the web site's start address (KN-49); "" for what is shown
@@ -318,6 +341,9 @@ type ItemsPage struct {
 	Sources    []ItemSource `json:"sources"`
 	MayExclude bool         `json:"mayExclude"`
 	MayRemove  bool         `json:"mayRemove"`
+	// MayTrust says the person sets an uploaded document's trust: a
+	// SuperAdmin (KN-61).
+	MayTrust bool `json:"mayTrust"`
 }
 
 // Items lists a page of the items the agents can draw on (KN-47): an
@@ -334,7 +360,7 @@ func (s *Service) Items(ctx context.Context, c Caller, q ItemsQuery) (ItemsPage,
 	if err != nil {
 		return ItemsPage{}, err
 	}
-	out := ItemsPage{Items: []SourceItem{}, Offset: q.Offset, Limit: q.Limit, MayExclude: c.SuperAdmin, MayRemove: true,
+	out := ItemsPage{Items: []SourceItem{}, Offset: q.Offset, Limit: q.Limit, MayExclude: c.SuperAdmin, MayRemove: true, MayTrust: c.SuperAdmin,
 		Sources: []ItemSource{{ID: UploadsSource, Name: "Uploaded documents", Kind: UploadsSource}}}
 	// Then every source by itself, those of uploaded documents too: a
 	// source opened in Mycroft › Sources names itself (KN-50).
@@ -403,8 +429,8 @@ func (s *Service) allItems(set Settings) []SourceItem {
 				rows = append(rows, SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: TypeLiveAddress, ID: a.URL, Title: title, URL: a.URL, State: StateLive, Why: "looked up when asked, never copied"})
 			}
 		case SourceUpload:
-			for _, u := range s.uploadRows(x.ID) {
-				it := SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: u.Type, ID: u.ID, Title: u.Title, By: u.By, At: u.At, LastRead: u.LastRead, State: u.State, Why: u.Error, Pages: len(u.Pages), key: itemKey(x.ID, u.ID)}
+			for _, u := range s.uploadRows(x) {
+				it := SourceItem{Source: x.ID, SourceName: x.Name, Kind: x.Kind, Type: u.Type, ID: u.ID, Title: u.Title, By: u.By, At: u.At, LastRead: u.LastRead, State: u.State, Why: u.Error, Pages: len(u.Pages), key: itemKey(x.ID, u.ID), Trust: u.Trust, SourceTrust: u.SourceTrust}
 				if w, ok := migrated[u.ID]; ok && x.ID == AddedSourceID {
 					it.Source, it.SourceName, it.Kind = w.ID, w.Name, w.Kind
 					it.Why = "read when it was added in Mycroft; read again at this web site's first read"

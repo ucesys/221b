@@ -270,6 +270,41 @@ describe('AIOps › Mycroft › Sources', () => {
     expect(JSON.parse(String(post.init?.body))).toEqual({ pattern: '221b/docs/' })
   })
 
+  it('sets an uploaded document’s trust on its row, its source’s by default; an Admin sees it (KN-61)', async () => {
+    const doc: SourceItem = { source: 'added', sourceName: 'Added in Mycroft', kind: 'upload', type: 'document', id: 'vendor.pdf', title: 'vendor.pdf', state: 'read', sourceTrust: 'high' }
+    const low: SourceItem = { ...doc, id: 'old.pdf', title: 'old.pdf', trust: 'low' }
+    const uploads = (over: Partial<ItemsPage> = {}) => page({ items: [doc, low, note], total: 3, sources: [{ id: 'added', name: 'Added in Mycroft', kind: 'upload' }], mayTrust: true, ...over })
+    stub({
+      items: () => uploads(),
+      sources: (_u, init) => (init?.method === 'PUT' ? { source: 'added', id: 'vendor.pdf', trust: 'normal', sourceTrust: 'high', level: 'normal' } : {}),
+    })
+    render(<MycroftSources open="added" />)
+    const rows = await screen.findAllByTestId('sources-item')
+    const pick = within(rows[0]!).getByTestId('sources-item-trust') as HTMLSelectElement
+    expect([...pick.options].map((o) => o.textContent)).toEqual(['Source’s (High)', 'High', 'Normal', 'Low'])
+    expect(pick.value).toBe('')
+    expect((within(rows[1]!).getByTestId('sources-item-trust') as HTMLSelectElement).value).toBe('low')
+    expect(within(rows[2]!).queryByTestId('sources-item-trust')).toBeNull()
+    fireEvent.change(pick, { target: { value: 'normal' } })
+    expect((await screen.findByTestId('sources-notice')).textContent).toBe('The trust of “vendor.pdf” is normal.')
+    const sent = calls.find((c) => c.url === '/api/v1/knowledge/sources/added/documents/vendor.pdf/trust')
+    expect(sent?.init?.method).toBe('PUT')
+    expect(JSON.parse(String(sent?.init?.body))).toEqual({ trust: 'normal' })
+    cleanup()
+    stub({ items: () => uploads({ mayTrust: false }) })
+    render(<MycroftSources open="added" />)
+    const shown = await screen.findAllByTestId('sources-item')
+    expect(within(shown[0]!).queryByTestId('sources-item-trust')).toBeNull()
+    expect(within(shown[0]!).getByTestId('sources-item-trust-text').textContent).toBe('High (its source’s)')
+    expect(within(shown[1]!).getByTestId('sources-item-trust-text').textContent).toBe('Low')
+    // Another source's items have no trust column.
+    cleanup()
+    stub()
+    render(<MycroftSources open="vendor" />)
+    await screen.findAllByTestId('sources-item')
+    expect(screen.queryByText('Trust')).toBeNull()
+  })
+
   it('offers no Exclude or Include again to an Admin, and tells a Viewer who sees the items', async () => {
     stub({ items: () => page({ items: [site, excluded], mayExclude: false }) })
     render(<MycroftSources open="vendor" />)

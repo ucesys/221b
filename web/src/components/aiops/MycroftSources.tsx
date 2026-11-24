@@ -26,13 +26,18 @@
 // shown by its path relative to its source, the source's name leading
 // ("sandbox-knowledge › docs/a.csv", KN-49); Exclude everything under …
 // is never offered at the source's root, which is turned off in Administration › AI ›
-// Knowledge instead. Sources themselves are changed in
+// Knowledge instead. In a source of uploaded documents each document's
+// row has its trust (0.14.0, KN-61): its source's by default, set by a
+// SuperAdmin here (Source's, High, Normal, Low), audited; it ranks the
+// document in the search and says whether Mycroft writes pages from it by
+// itself. Sources themselves are changed in
 // Administration › AI › Knowledge. Admins and SuperAdmins see this page; a Viewer is
 // told so. #/aiops/mycroft/wiki/sources, the Wiki's old Sources view, leads
 // here (lib/router.ts).
 import { useEffect, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
 import {
+  documentTrustOptions,
   excludeItems,
   fetchItemDetail,
   writePage,
@@ -40,6 +45,8 @@ import {
   fetchSources,
   includeAgain,
   isWebUrl,
+  setDocumentTrust,
+  TRUST_LABEL,
   ITEM_STATE_LABEL,
   ITEM_TYPE_LABEL,
   SOURCE_KIND_LABEL,
@@ -52,6 +59,7 @@ import {
   type SourceItem,
   type SourceSummary,
   type SourcesView,
+  type TrustLevel,
 } from '../../api/knowledge'
 import { fmtTs, nWord } from '../../lib/format'
 import { aiHref } from '../../lib/router'
@@ -105,6 +113,36 @@ function StateCell({ it }: { it: SourceItem }) {
         )
       )}
     </span>
+  )
+}
+
+/** An uploaded document's trust on its row (KN-61): a SuperAdmin's choice, else in words; none for other items. */
+function TrustCell({ it, may, onSaved, onError }: { it: SourceItem; may: boolean; onSaved: (text: string) => void; onError: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  if (it.kind !== 'upload' || it.type !== 'document') return <span className="rk-fhint">—</span>
+  const source = TRUST_LABEL[it.sourceTrust ?? 'high']
+  if (!may) return <span data-testid="sources-item-trust-text">{it.trust ? TRUST_LABEL[it.trust] : `${source} (its source’s)`}</span>
+  return (
+    <Select
+      label={`Trust of ${it.title || it.id}`}
+      value={it.trust ?? ''}
+      options={documentTrustOptions(it.sourceTrust)}
+      disabled={busy}
+      testId="sources-item-trust"
+      onChange={(t) => {
+        setBusy(true)
+        setDocumentTrust(it.source, it.id, t as '' | TrustLevel).then(
+          (r) => {
+            setBusy(false)
+            onSaved(`The trust of “${it.title || it.id}” is ${TRUST_LABEL[r.level].toLowerCase()}${r.trust ? '' : ', its source’s'}.`)
+          },
+          (e: unknown) => {
+            setBusy(false)
+            onError(errorText(e))
+          },
+        )
+      }}
+    />
   )
 }
 
@@ -320,6 +358,9 @@ function SourceItems({ source, onToast }: { source: string; onToast?: (msg: stri
   const items = data?.items ?? []
   const named = data?.sources.find((x) => x.id === source)
   const name = named?.name ?? (data ? source : '')
+  // A source of uploaded documents shows each document's trust (KN-61).
+  const uploads = named?.kind === 'upload' || named?.kind === 'uploads'
+  const cols = uploads ? 6 : 5
   const lead = (
     <>
       <span style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
@@ -389,15 +430,16 @@ function SourceItems({ source, onToast }: { source: string; onToast?: (msg: stri
             <th>Type</th>
             <th>State</th>
             <th style={{ textAlign: 'right' }}>Pages</th>
+            {uploads && <th title="How a document's passages rank in the search, and whether Mycroft writes pages from it by itself (only from high trust)">Trust</th>}
             <th>
               <span className="rk-sr">Actions</span>
             </th>
           </tr>
         </thead>
         <tbody>
-          {data === null && !error && <EmptyRow cols={5}>Loading…</EmptyRow>}
+          {data === null && !error && <EmptyRow cols={cols}>Loading…</EmptyRow>}
           {data !== null && items.length === 0 && (
-            <EmptyRow cols={5} testId="sources-empty">
+            <EmptyRow cols={cols} testId="sources-empty">
               {type || state || q ? 'No item matches these filters.' : 'No items yet: Mycroft has read nothing of this source.'}
             </EmptyRow>
           )}
@@ -418,6 +460,20 @@ function SourceItems({ source, onToast }: { source: string; onToast?: (msg: stri
                 <StateCell it={it} />
               </td>
               <td style={{ textAlign: 'right' }}>{it.pages ?? 0}</td>
+              {uploads && (
+                <td>
+                  <TrustCell
+                    it={it}
+                    may={!!data?.mayTrust}
+                    onSaved={(text) => {
+                      setNotice(text)
+                      onToast?.(text)
+                      reload()
+                    }}
+                    onError={setError}
+                  />
+                </td>
+              )}
               <td style={{ whiteSpace: 'nowrap' }}>
                 {data?.mayExclude && it.excludable && it.state !== 'excluded' && it.state !== 'live' && (
                   <button className="rk-link" onClick={() => setExcluding(it)} data-testid="sources-item-exclude">

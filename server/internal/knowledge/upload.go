@@ -20,10 +20,21 @@ var docName = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._()-]{0,159}$`)
 // Upload reads a document into a source of uploaded documents and starts
 // a sync of that source, in the background.
 func (s *Service) Upload(ctx context.Context, c Caller, source, name string, body []byte) (string, error) {
+	return s.UploadWith(ctx, c, source, name, body, nil)
+}
+
+// UploadWith is Upload with the document's trust level (KN-61): nil
+// chooses none (a new document's is its source's, one uploaded again
+// keeps its own), "" its source's, or high, normal or low.
+func (s *Service) UploadWith(ctx context.Context, c Caller, source, name string, body []byte, trust *string) (string, error) {
 	if !c.SuperAdmin {
 		return "", wrapf(ErrDenied, "only a SuperAdmin uploads Mycroft's documents")
 	}
 	if err := s.leads(); err != nil {
+		return "", err
+	}
+	level, setTrust, err := chosenTrust(c, trust)
+	if err != nil {
 		return "", err
 	}
 	set, err := s.Settings(ctx)
@@ -46,17 +57,18 @@ func (s *Service) Upload(ctx context.Context, c Caller, source, name string, bod
 	}
 	text = scrub.Known(scrub.Text(text), s.secretValues(ctx))
 	h := hashOf(body)
-	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: source, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("document %s uploaded to %s (%d bytes)", name, source, len(body)), From: c.From})
+	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: source, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("document %s uploaded to %s (%d bytes)%s", name, source, len(body), trustWords(level, setTrust)), From: c.From})
 	// One document of a name (MY-12): one of the other source of uploaded
 	// documents is replaced by this one.
 	for _, o := range set.Sources {
 		if o.Kind == SourceUpload && o.ID != source && s.holds(o.ID, name) {
+			level, setTrust = s.keptTrust(o.ID, name, level, setTrust)
 			if err := s.removeDocument(ctx, c, o.ID, name); err != nil {
 				s.o.Logger.Warn("a document replaced by one of the same name stays in its source", "source", o.ID, "err", err)
 			}
 		}
 	}
-	s.readSoon(ctx, c, []pendingDoc{{source: source, name: name, text: text, hash: h, at: s.o.Now().UTC(), by: c.label(), kind: AddDocument}}, "upload of "+name)
+	s.readSoon(ctx, c, []pendingDoc{{source: source, name: name, text: text, hash: h, at: s.o.Now().UTC(), by: c.label(), kind: AddDocument, trust: level, setTrust: setTrust}}, "upload of "+name)
 	return h[:16], nil
 }
 
@@ -72,6 +84,11 @@ func (s *Service) readSoon(ctx context.Context, c Caller, docs []pendingDoc, wha
 	source := docs[0].source
 	s.pendingMu.Lock()
 	for _, d := range docs {
+		// Uploaded again without a trust chosen, it keeps the one chosen
+		// before it was read (KN-61).
+		if was, ok := s.pending[d.source+"/"+d.name]; ok && !d.setTrust && was.setTrust {
+			d.trust, d.setTrust = was.trust, true
+		}
 		s.pending[d.source+"/"+d.name] = d
 	}
 	s.pendingMu.Unlock()
@@ -160,7 +177,9 @@ func (s *Service) removeDocument(ctx context.Context, c Caller, source, name str
 	}
 	// Uploaded again, it is read again in whole: its excerpt is emptied
 	// now.
-	st.Gone, st.Hash, st.Version = true, "", ""
+	// Its own trust goes with it (KN-61): uploaded again, it takes the
+	// one chosen then.
+	st.Gone, st.Hash, st.Version, st.Trust = true, "", "", ""
 	empty := []byte(`{"key":"` + key + `","chunks":[]}`)
 	writes := []Change{{Path: excerptPath(key), Body: empty}}
 	// And its sections, a long document's (KN-52).

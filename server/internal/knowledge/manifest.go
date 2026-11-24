@@ -85,6 +85,13 @@ type ItemState struct {
 	Of       string `json:"of,omitempty"`
 	Heading  string `json:"heading,omitempty"`
 	Sections int    `json:"sections,omitempty"`
+	// --- A trust level per uploaded document (0.14.0, KN-61) ---
+	// Trust is an uploaded document's own trust level, TrustHigh,
+	// TrustNormal or TrustLow, as a SuperAdmin chose it at its upload or
+	// on its row; "" is its source's (Source.levelOf). Its sections take
+	// their document's. The manifest holds it, as it holds the
+	// retirements, so that it travels with the wiki.
+	Trust string `json:"trust,omitempty"`
 }
 
 // record says the entry is a record of an item never read (KN-47): one a

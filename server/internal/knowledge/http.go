@@ -66,6 +66,8 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("POST sources/test", h.postSourceTestTyped)
 	route("POST sources/{id}/documents", h.postDocument)
 	route("DELETE sources/{id}/documents/{name}", h.deleteDocument)
+	// An uploaded document's own trust (0.14.0, KN-61).
+	route("PUT sources/{id}/documents/{name}/trust", h.putDocumentTrust)
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)
 	route("POST store/move", h.postStoreMove)
@@ -362,8 +364,9 @@ func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c 
 
 func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller) {
 	var in struct {
-		Name string `json:"name"`
-		Data string `json:"data"`
+		Name  string  `json:"name"`
+		Data  string  `json:"data"`
+		Trust *string `json:"trust"`
 	}
 	if !decode(w, r, maxUpload, &in) {
 		return
@@ -373,12 +376,29 @@ func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller)
 		writeError(w, http.StatusBadRequest, "the document is not base64")
 		return
 	}
-	v, err := h.s.Upload(r.Context(), c, r.PathValue("id"), in.Name, body)
+	v, err := h.s.UploadWith(r.Context(), c, r.PathValue("id"), in.Name, body, in.Trust)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"version": v})
+}
+
+// putDocumentTrust sets an uploaded document's own trust (KN-61): trust
+// "" is its source's.
+func (h *handler) putDocumentTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Trust string `json:"trust"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	v, err := h.s.SetDocumentTrust(r.Context(), c, r.PathValue("id"), r.PathValue("name"), in.Trust)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *handler) deleteDocument(w http.ResponseWriter, r *http.Request, c Caller) {

@@ -50,6 +50,24 @@ func (x Source) trustLevel() string {
 	return TrustNormal
 }
 
+// levelOf is the trust level of one of a source's items (KN-61): an
+// uploaded document's own, chosen at its upload or on its row in AIOps ›
+// Mycroft › Sources, else its source's. doc is the document's manifest
+// entry (a section's is its document's), nil for none.
+func (x Source) levelOf(doc *ItemState) string {
+	if x.Kind == SourceUpload && doc != nil && doc.Trust != "" {
+		return doc.Trust
+	}
+	return x.trustLevel()
+}
+
+// docKeyOf is the manifest key of the document an item is, or is a
+// section of: "source:doc#anchor" is "source:doc".
+func docKeyOf(key string) string {
+	k, _, _ := strings.Cut(key, "#")
+	return k
+}
+
 // The weights of a passage's rank: an approved page's, and an excerpt's
 // by its source's trust level.
 const (

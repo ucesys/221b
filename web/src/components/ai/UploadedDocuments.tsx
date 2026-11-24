@@ -13,10 +13,11 @@
 // see it in Administration › AI › Knowledge after the Sources. These are not sources
 // to sync again, so they are not rows of the Sources table.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { addKnowledge, fetchUploads, fileBase64, removeUpload, setSourceOn, wikiHref, type PageBrief, type UploadItem, type UploadsView } from '../../api/knowledge'
+import { addKnowledge, documentTrustOptions, fetchUploads, fileBase64, removeUpload, setSourceOn, wikiHref, type PageBrief, type TrustLevel, type UploadItem, type UploadsView } from '../../api/knowledge'
 import { CallError } from '../../api/call'
 import { fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { Select } from '../Select'
 import { PageLinks, SourceImpact } from '../aiops/SourceImpact'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -410,11 +411,16 @@ function AddNote({ v, disabled, onAdded, onToast }: { v: UploadsView; disabled: 
   )
 }
 
-/** Upload: files of the kinds the console reads, each its own request; one of the same name replaces the one before. */
+/**
+ * Upload: files of the kinds the console reads, each its own request; one of the same name replaces the one before.
+ * A SuperAdmin chooses the documents' trust (KN-61): their source's by default; an Admin chooses none, and a
+ * document uploaded again keeps its own.
+ */
 function Upload({ v, disabled, onAdded, onToast }: { v: UploadsView; disabled: boolean; onAdded: () => void; onToast?: (msg: string) => void }) {
   const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [trust, setTrust] = useState<'' | TrustLevel>('')
   const l = v.limits
   const send = async (files: File[]) => {
     const bad = files.find((f) => !l.formats.includes(extOf(f.name)) || f.size > l.document)
@@ -428,7 +434,7 @@ function Upload({ v, disabled, onAdded, onToast }: { v: UploadsView; disabled: b
     try {
       // One at a time, each its own request; the first that fails stops.
       for (const f of files) {
-        await addKnowledge({ kind: 'document', name: f.name, data: await fileBase64(f) })
+        await addKnowledge({ kind: 'document', name: f.name, data: await fileBase64(f), ...(v.maySetup ? { trust } : {}) })
         done++
       }
       onToast?.(files.length === 1 ? `Mycroft is reading ${files[0]?.name}.` : `Mycroft is reading ${files.length} documents.`)
@@ -455,11 +461,18 @@ function Upload({ v, disabled, onAdded, onToast }: { v: UploadsView; disabled: b
             if (files.length) void send(files)
           }}
         />
+        {v.maySetup && (
+          <span style={{ display: 'flex', gap: 6, alignItems: 'center' }} title="How its passages rank in the search, and whether Mycroft writes pages from it by itself (only from high trust)">
+            <span style={{ fontSize: 12.5 }}>Trust</span>
+            <Select label="Trust of the documents uploaded" value={trust} options={documentTrustOptions(v.sourceTrust)} onChange={(t) => setTrust(t as '' | TrustLevel)} disabled={disabled || busy} testId="uploads-trust" />
+          </span>
+        )}
         <button className="rk-btn" disabled={disabled || busy} onClick={() => input.current?.click()} data-testid="uploads-upload">
           {busy ? 'Uploading…' : 'Upload…'}
         </button>
         <span className="tb-hint" style={{ fontSize: 12 }}>
           PDF, Word (.docx), Markdown, HTML, plain text or CSV, up to {kib(l.document)} each. A document of the same name replaces the one before. A PDF is read by the text its pages draw; a scanned one gives none.
+          {v.maySetup && ' A document’s trust ranks it in the search and says whether Mycroft writes pages from it by itself; change it later on its row in AIOps › Mycroft › Sources.'}
         </span>
       </div>
       {error && (

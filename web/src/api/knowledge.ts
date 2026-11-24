@@ -222,6 +222,16 @@ export interface IndexView {
 
 export type TrustLevel = 'high' | 'normal' | 'low'
 
+export const TRUST_LABEL: Record<TrustLevel, string> = { high: 'High', normal: 'Normal', low: 'Low' }
+
+/** The trust levels an uploaded document is given (KN-61): '' is its source's, named with the source's level. */
+export const documentTrustOptions = (sourceTrust: TrustLevel | undefined): [string, string][] => [
+  ['', `Source’s (${TRUST_LABEL[sourceTrust ?? 'high']})`],
+  ['high', 'High'],
+  ['normal', 'Normal'],
+  ['low', 'Low'],
+]
+
 export interface SourceSize {
   id: string
   documents: number
@@ -553,6 +563,8 @@ export interface AddInput {
   name?: string
   /** A document's bytes, base64. */
   data?: string
+  /** A document's own trust, a SuperAdmin's choice (KN-61): '' is its source's; absent chooses none. */
+  trust?: '' | TrustLevel
 }
 
 export interface AddResult {
@@ -691,6 +703,9 @@ export interface UploadItem {
   /** The page a correction (This is outdated…) is for. */
   corrects?: string
   reported?: string
+  /** A document's own trust (absent: its source's), and its source's (KN-61). */
+  trust?: TrustLevel
+  sourceTrust?: TrustLevel
 }
 
 export interface UploadsView {
@@ -702,9 +717,14 @@ export interface UploadsView {
   model: boolean
   /** The built-in sources of uploads switched off: nothing in them is read until a SuperAdmin turns them on. */
   off: { id: string; name: string }[]
+  /** The trust of Added in Mycroft, where an upload lands: a document's own is chosen against it (KN-61). */
+  sourceTrust?: TrustLevel
 }
 
 export const fetchUploads = (background = false) => call<UploadsView>(base + 'uploads', {}, background)
+/** An uploaded document's own trust, on its row in AIOps › Mycroft › Sources (KN-61): '' is its source's. */
+export const setDocumentTrust = (source: string, name: string, trust: '' | TrustLevel) =>
+  call<{ source: string; id: string; trust: '' | TrustLevel; sourceTrust: TrustLevel; level: TrustLevel }>(base + 'sources/' + enc(source) + '/documents/' + enc(name) + '/trust', { method: 'PUT', body: JSON.stringify({ trust }) })
 export const removeUpload = (source: string, name: string) => call<{ removed: boolean; pages?: PageBrief[] }>(base + 'uploads/' + enc(source) + '/' + enc(name), { method: 'DELETE' })
 
 /** The types of a source's item. */
@@ -762,6 +782,9 @@ export interface SourceItem {
   /** The full pattern of everything under it, and that in words relative to its source, for Exclude everything under …; none at the source's root. */
   under?: string
   underLabel?: string
+  /** An uploaded document's own trust (absent: its source's), and its source's (KN-61). */
+  trust?: TrustLevel
+  sourceTrust?: TrustLevel
 }
 
 /** A source as the Sources filter offers it; 'uploads' is both built-in sources of uploads. */
@@ -780,6 +803,8 @@ export interface ItemsPage {
   sources: ItemSource[]
   mayExclude: boolean
   mayRemove: boolean
+  /** A SuperAdmin sets an uploaded document's trust (KN-61). */
+  mayTrust?: boolean
 }
 
 export interface ItemsQuery {
