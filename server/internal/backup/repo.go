@@ -51,7 +51,11 @@ func (r *KVRepo) Settings(ctx context.Context) (S3Settings, bool, error) {
 }
 
 func decodeSettings(b []byte) (S3Settings, bool, error) {
+	// The defaults fill what was never saved, except the encryption: SSE
+	// is left out when empty, so saved settings without it chose the
+	// bucket's default; SSE-S3 is only the default of a page never saved.
 	set := DefaultSettings()
+	set.SSE = ""
 	if err := json.Unmarshal(b, &set); err != nil {
 		return DefaultSettings(), false, fmt.Errorf("the saved settings of the backups to S3 cannot be read: %w", err)
 	}
