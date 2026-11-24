@@ -86,9 +86,12 @@ export interface PermRole {
   rules: PermRule[]
 }
 
+/** A role the comparison covers: the four, and the nodes role everyone who signs in holds (RB-07, RB-36). */
+export type DriftId = RoleId | 'nodes'
+
 export interface Drift {
   state: 'match' | 'differs' | 'unknown' | 'missing'
-  roles: { id: RoleId; differences: string[] }[]
+  roles: { id: DriftId; differences: string[] }[]
 }
 
 export interface PermissionsResponse {

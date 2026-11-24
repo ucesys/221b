@@ -378,9 +378,11 @@ func BuildPermissions(templates Templates, deployed map[ID]Deployed, nodes Deplo
 }
 
 // Check compares every deployed role with the definition shipped for it
-// (RB-36). A role that is not there is "missing", and does not count as
-// allowing more.
-func Check(templates Templates, o Options, deployed map[ID]Deployed, at time.Time) Drift {
+// (RB-36), and the nodes role with Nodes(): everyone who signs in holds it
+// cluster-wide (RB-07), so widening it widens every person and counts as
+// allowing more like any other role. A role that is not there is
+// "missing", and does not count as allowing more.
+func Check(templates Templates, o Options, deployed map[ID]Deployed, nodes Deployed, at time.Time) Drift {
 	d := Drift{State: "match", Roles: []RoleDrift{}, CheckedAt: at}
 	missing := 0
 	for _, id := range All {
@@ -395,6 +397,14 @@ func Check(templates Templates, o Options, deployed map[ID]Deployed, at time.Tim
 			continue
 		}
 		d.Roles = append(d.Roles, RoleDrift{ID: id, Differences: diff.Lines()})
+		if diff.MoreThanShipped() {
+			d.More = true
+		}
+	}
+	if !nodes.Present {
+		d.Roles = append(d.Roles, RoleDrift{ID: NodesID, Differences: []string{"the ClusterRole " + NodesClusterRole + " does not exist on this cluster"}})
+	} else if diff := Compare(Nodes().Rules, nodes.Rules); !diff.Empty() {
+		d.Roles = append(d.Roles, RoleDrift{ID: NodesID, Differences: diff.Lines()})
 		if diff.MoreThanShipped() {
 			d.More = true
 		}

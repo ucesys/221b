@@ -146,7 +146,7 @@ func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles
 	if !ok {
 		return roles.Drift{}, nil, roles.Deployed{}, false
 	}
-	d := roles.Check(s.opts.Roles.Templates, s.rolesOptions(), dep, time.Now().UTC())
+	d := roles.Check(s.opts.Roles.Templates, s.rolesOptions(), dep, nodes, time.Now().UTC())
 	if s.monitor().Set(id, d) && s.opts.Audit != nil && (d.State != "match") {
 		detail := d.State
 		for _, r := range d.Roles {

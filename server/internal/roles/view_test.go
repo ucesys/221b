@@ -19,7 +19,7 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	tpl, o := Defaults(), Options{Secrets: true}
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	dep := shippedAll(tpl, o)
-	if d := Check(tpl, o, dep, at); d.State != "match" || len(d.Roles) != 0 || d.More {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" || len(d.Roles) != 0 || d.More {
 		t.Fatalf("shipped roles differ: %+v", d)
 	}
 	// Order inside a rule does not matter.
@@ -27,7 +27,7 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	rev.Rules = slices.Clone(rev.Rules)
 	slices.Reverse(rev.Rules)
 	dep[Admin] = rev
-	if d := Check(tpl, o, dep, at); d.State != "match" {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" {
 		t.Fatalf("a reordered role differs: %+v", d)
 	}
 	// Someone adds delete on nodes to 221b-admin.
@@ -35,22 +35,22 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	a := dep[Admin]
 	a.Rules = append(slices.Clone(a.Rules), Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
 	dep[Admin] = a
-	d := Check(tpl, o, dep, at)
+	d := Check(tpl, o, dep, shippedNodes, at)
 	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != Admin || !strings.Contains(d.Roles[0].Differences[0], "delete nodes") {
 		t.Fatalf("widened role: %+v", d)
 	}
 	// A role that is gone is missing, not wider.
 	dep = shippedAll(tpl, o)
 	dep[Viewer] = Deployed{}
-	if d := Check(tpl, o, dep, at); d.State != "differs" || d.More {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "differs" || d.More {
 		t.Fatalf("missing role: %+v", d)
 	}
-	if d := Check(tpl, o, map[ID]Deployed{}, at); d.State != "missing" {
+	if d := Check(tpl, o, map[ID]Deployed{}, shippedNodes, at); d.State != "missing" {
 		t.Fatalf("nothing deployed: %+v", d)
 	}
 	// A read-only deployment compared with the full definition is narrower, and still shown.
 	ro := Templates{Admin: ReadOnly, SuperAdmin: ReadOnly}
-	d = Check(tpl, o, shippedAll(ro, o), at)
+	d = Check(tpl, o, shippedAll(ro, o), shippedNodes, at)
 	if d.State != "differs" || d.More {
 		t.Fatalf("read-only against full: %+v", d)
 	}
@@ -63,7 +63,7 @@ func TestMonitorRefusesOnlyWhenStrictAndWider(t *testing.T) {
 	a := dep[Admin]
 	a.Rules = append(slices.Clone(a.Rules), Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
 	dep[Admin] = a
-	d := Check(tpl, o, dep, time.Now())
+	d := Check(tpl, o, dep, shippedNodes, time.Now())
 	if !m.Set("local", d) || m.Set("local", d) {
 		t.Fatal("Set must report a change once")
 	}
@@ -78,7 +78,7 @@ func TestMonitorRefusesOnlyWhenStrictAndWider(t *testing.T) {
 	if !strings.Contains(msg, "refused") || !strings.Contains(msg, "delete nodes") || !strings.Contains(msg, "Admin") {
 		t.Errorf("message: %s", msg)
 	}
-	m.Set("local", Check(tpl, o, shippedAll(tpl, o), time.Now()))
+	m.Set("local", Check(tpl, o, shippedAll(tpl, o), shippedNodes, time.Now()))
 	if m.Refusal("local", "strict") != "" {
 		t.Error("still refusing after the roles match")
 	}
@@ -212,5 +212,27 @@ func TestBuildPermissionsSplitsReadAndWriteAndScopes(t *testing.T) {
 	}
 	if out.Enforce != "off" {
 		t.Errorf("enforce = %q", out.Enforce)
+	}
+}
+
+var shippedNodes = Deployed{Present: true, Rules: Nodes().Rules}
+
+// Roles review, finding 3: the nodes role is compared too, and widening it
+// is allowing more.
+func TestCheckComparesTheNodesRole(t *testing.T) {
+	tpl, o := Defaults(), Options{}
+	at := time.Now()
+	wide := Deployed{Present: true, Rules: append(slices.Clone(Nodes().Rules), Rule{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}})}
+	d := Check(tpl, o, shippedAll(tpl, o), wide, at)
+	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != NodesID {
+		t.Fatalf("widened nodes role: %+v", d)
+	}
+	var m Monitor
+	m.Set("c", d)
+	if why := m.Refusal("c", "strict"); !strings.Contains(why, "221b-nodes allows") {
+		t.Errorf("refusal: %q", why)
+	}
+	if d := Check(tpl, o, shippedAll(tpl, o), Deployed{}, at); d.State != "differs" || d.More || d.Roles[0].ID != NodesID {
+		t.Errorf("no nodes role: %+v", d)
 	}
 }

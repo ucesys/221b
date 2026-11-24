@@ -163,3 +163,26 @@ func TestARoleCheckThatReadNothingComesBackSoon(t *testing.T) {
 		t.Fatal("the check kept nothing")
 	}
 }
+
+// Roles review, finding 3: the nodes role, which everyone who signs in
+// holds, was never compared, so widening it tripped neither the report nor
+// rbac.enforce strict.
+func TestWideningTheNodesRoleIsADrift(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog(), Roles: RolesOptions{Enforce: "strict"}})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	if d, _, _, ok := s.checkRoles(clusters.LocalID, local); !ok || d.State != "match" || s.RoleRefusal(clusters.LocalID) != "" {
+		t.Fatalf("shipped roles: %+v, refusal %q", d, s.RoleRefusal(clusters.LocalID))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, append(roles.Nodes().Rules, roles.Rule{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}})))
+	d, _, _, _ := s.checkRoles(clusters.LocalID, local)
+	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != roles.NodesID {
+		t.Fatalf("a widened nodes role: %+v", d)
+	}
+	if why := s.RoleRefusal(clusters.LocalID); !strings.Contains(why, "221b-nodes allows") {
+		t.Fatalf("strict with a widened nodes role: %q", why)
+	}
+}

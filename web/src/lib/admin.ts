@@ -2,7 +2,7 @@
 // roles and sources, the totals the Permissions page shows, and what a
 // person can do after joining a group.
 
-import type { Drift, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
+import type { Drift, DriftId, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
 
 export const ROLE_NAME: Record<RoleId, string> = {
   superAdmin: 'SuperAdmin',
@@ -100,13 +100,18 @@ export function groupText(g: string): string {
   return g === '' ? 'core' : g
 }
 
+/** A compared role's name: the role's, or the nodes role's ClusterRole (RB-36). */
+export function driftName(id: DriftId): string {
+  return id === 'nodes' ? '221b-nodes' : (ROLE_NAME[id] ?? id)
+}
+
 /** What the Permissions page says about the live roles against the shipped ones (RB-36, RB-44). */
 export function driftText(d: Drift): { tone: 'ok' | 'warn' | 'muted'; text: string } {
   switch (d.state) {
     case 'match':
       return { tone: 'ok', text: 'The roles on this cluster match the definitions shipped with 221B.' }
     case 'differs': {
-      const names = d.roles.filter((r) => r.differences.length).map((r) => ROLE_NAME[r.id])
+      const names = d.roles.filter((r) => r.differences.length).map((r) => driftName(r.id))
       return { tone: 'warn', text: `Differs from the shipped definitions: ${names.join(', ')}.` }
     }
     case 'missing':

@@ -58,6 +58,8 @@ func (id ID) Name() string {
 		return "Viewer"
 	case Reporter:
 		return "Reporter"
+	case NodesID:
+		return NodesClusterRole
 	}
 	return string(id)
 }
@@ -80,6 +82,11 @@ func (id ID) ClusterRole() string {
 // NodesClusterRole is the ClusterRole that lets everyone who signs in see
 // the nodes and nothing else cluster-scoped (RB-07).
 const NodesClusterRole = "221b-nodes"
+
+// NodesID names the nodes role where a role's id is wanted: in the
+// comparison with the shipped roles (Drift) and in files/roles.json. It is
+// not one of the four roles, and not in All.
+const NodesID ID = "nodes"
 
 // Template is the definition of Admin or SuperAdmin to install (RB-02).
 type Template string
@@ -387,7 +394,7 @@ func (t Templates) For(id ID, o Options) Role { return Definition(id, t.Of(id), 
 
 // Nodes is the nodes ClusterRole (RB-07): the nodes, and their metrics.
 func Nodes() Role {
-	return Role{ID: "nodes", ClusterRole: NodesClusterRole, Template: ReadOnly, Rules: []Rule{
+	return Role{ID: NodesID, ClusterRole: NodesClusterRole, Template: ReadOnly, Rules: []Rule{
 		{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: readVerbs},
 		{APIGroups: []string{"metrics.k8s.io"}, Resources: []string{"nodes"}, Verbs: []string{"get", "list"}},
 	}}

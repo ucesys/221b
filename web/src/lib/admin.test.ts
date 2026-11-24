@@ -60,6 +60,8 @@ describe('permissions', () => {
     expect(driftText(d('differs')).text).toContain('Admin')
     expect(driftText(d('missing')).tone).toBe('warn')
     expect(driftText(d('unknown')).tone).toBe('muted')
+    // The nodes role is compared too (roles review, finding 3).
+    expect(driftText({ state: 'differs', roles: [{ id: 'nodes', differences: ['allows * *'] }] }).text).toBe('Differs from the shipped definitions: 221b-nodes.')
   })
 })
 
