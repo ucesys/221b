@@ -3,6 +3,7 @@ package roles
 import (
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Source is where a person or group comes from (RB-15).
@@ -66,8 +67,15 @@ func SuperGroup(id ID) string {
 }
 
 // Reserved reports whether a name from any source may not be used (RB-17):
-// it starts with system: or 221b:, or already carries a prefix of 221B's.
+// it starts with system: or 221b:, or already carries a prefix of 221B's,
+// or it has white space at either end or a control character anywhere.
+// HTTP/1.1 trims a header's value, so " system:masters" sent in
+// Impersonate-Group on an exec or port-forward upgrade arrives as
+// system:masters (TestImpersonatedGroupIsTrimmed in internal/sessions).
 func (p Prefixes) Reserved(name string) bool {
+	if Unclean(name) {
+		return true
+	}
 	if strings.HasPrefix(name, "system:") || strings.HasPrefix(name, "221b:") {
 		return true
 	}
@@ -77,6 +85,15 @@ func (p Prefixes) Reserved(name string) bool {
 		}
 	}
 	return false
+}
+
+// Unclean reports whether a name has white space at either end or a
+// control character anywhere: what a header could change on the way.
+func Unclean(name string) bool {
+	if strings.TrimSpace(name) != name {
+		return true
+	}
+	return strings.IndexFunc(name, unicode.IsControl) >= 0
 }
 
 // ValidUsername reports whether a local user name is allowed (RB-16):

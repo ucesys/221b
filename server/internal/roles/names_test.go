@@ -96,3 +96,24 @@ func TestImpersonable(t *testing.T) {
 		t.Error("system:masters is impersonable")
 	}
 }
+
+// Finding 1 of the roles review: a name padded with white space reached the
+// API server as the reserved one, since HTTP/1.1 trims header values.
+func TestBuildDropsPaddedAndControlNames(t *testing.T) {
+	p := Prefixes{Local: "221b-local:", LDAP: "221b-ldap:"}
+	for _, n := range []string{" system:masters", "221b:superadmins ", "\tsystem:masters", "ops\n", "o\x00ps", " 221b:superviewers"} {
+		if !p.Reserved(n) {
+			t.Errorf("%q is not reserved", n)
+		}
+	}
+	if p.Reserved("Domain Users") {
+		t.Error("a space inside a name is refused")
+	}
+	got, dropped := GroupSet{Prefixes: p}.Build(Identity{Source: OIDC, Groups: []string{" system:masters", " 221b:superadmins", "ops"}})
+	if !slices.Equal(got, []string{"ops", GroupConsoleUsers}) {
+		t.Errorf("groups = %q", got)
+	}
+	if !slices.Equal(dropped, []string{" system:masters", " 221b:superadmins"}) {
+		t.Errorf("dropped = %q", dropped)
+	}
+}
