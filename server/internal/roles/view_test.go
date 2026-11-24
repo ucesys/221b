@@ -417,3 +417,22 @@ func TestRolesPageZeroCounts(t *testing.T) {
 		t.Errorf("a SuperAdmin's holders: %s", b)
 	}
 }
+
+// Roles review, cut list: a local and a directory group of one name tied
+// on kind and name, so their order followed the bindings' and changed
+// between polls.
+func TestSubjectsHaveOneOrder(t *testing.T) {
+	a := Binding{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-local:ops"}}}
+	b := Binding{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-ldap:ops"}}}
+	order := func(bs ...Binding) string {
+		in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Bindings: bs}
+		var out []string
+		for _, s := range in.subjects(Viewer) {
+			out = append(out, s.Source)
+		}
+		return strings.Join(out, ",")
+	}
+	if x, y := order(a, b), order(b, a); x != y {
+		t.Errorf("order follows the bindings: %s against %s", x, y)
+	}
+}

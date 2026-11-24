@@ -307,6 +307,11 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 		if out[i].Name != out[j].Name {
 			return out[i].Name < out[j].Name
 		}
+		// A local and a directory "ops" show as one name: their source
+		// orders them, so the page does not reorder between polls.
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
 		return out[i].AccountNamespace < out[j].AccountNamespace
 	})
 	return out
