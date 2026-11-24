@@ -1,6 +1,7 @@
 package roles
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"slices"
@@ -313,5 +314,19 @@ func TestAnOversizedRuleUnderAWildcardIsNotExtra(t *testing.T) {
 	d := Compare(Definition(Viewer, ReadOnly, Options{}).Rules, []Rule{big})
 	if len(d.Extra) != 1 || !strings.Contains(d.Lines()[0], "too large to compare") {
 		t.Errorf("against Viewer: %v", d.Extra)
+	}
+}
+
+// Roles review, finding 9: a super role with no rules marshalled
+// "rules": null, on which the Permissions page threw.
+func TestPermissionsNeverSendsNullRules(t *testing.T) {
+	dep := map[ID]Deployed{SuperViewer: {Present: true, Rules: []Rule{}}, SuperAdmin: {Present: true}}
+	p := BuildPermissions(Defaults(), dep, Deployed{}, "off", Drift{})
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"rules":null`) {
+		t.Errorf("null rules: %s", b)
 	}
 }

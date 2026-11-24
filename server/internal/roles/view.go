@@ -300,7 +300,8 @@ type PermissionsResponse struct {
 
 // permRules turns rules into rows with the scope they apply in.
 func permRules(id ID, rules []Rule) []PermRule {
-	var out []PermRule
+	// Never nil: a role with no rules is an empty list on the page, not null.
+	out := []PermRule{}
 	for _, r := range Normalized(rules) {
 		flags := r.Flags()
 		if flags == nil {
