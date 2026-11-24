@@ -105,27 +105,36 @@ func (s *Server) changeRules(r *http.Request, id string) watson.Cluster {
 	return c
 }
 
+// writeRefusal says why the console's own writes as the person are refused
+// on a cluster, "" when they are not, in Watson's words; readOnly says the
+// connection is read-only (or an anonymous Viewer makes no change), where
+// the page hides the controls that write rather than disable them (RB-36).
+func (s *Server) writeRefusal(r *http.Request, id string) (why string, readOnly bool) {
+	c := s.changeRules(r, id)
+	switch {
+	case c.Locked != "":
+		return c.Locked, c.ReadOnly
+	case c.ReadOnly:
+		how := c.ReadOnlyHow
+		if how == "" {
+			how = "An administrator can allow changes in the connection's settings."
+		}
+		return fmt.Sprintf("%s is connected read-only, so the console changes nothing there. %s", c.Name, how), true
+	}
+	return "", false
+}
+
 // writeRefused answers 409, and audits the refusal, when the request's
 // cluster takes no change from the console: its connection is read-only,
 // or rbac.enforce strict refuses its roles (RB-36). The console's own
 // writes as the person (a Secret's edit, a new Secret, a new namespace)
 // follow the rules Watson's changes do, in Watson's words.
 func (s *Server) writeRefused(w http.ResponseWriter, r *http.Request, action, target string) bool {
-	c := s.changeRules(r, clusterID(r))
-	msg := ""
-	switch {
-	case c.Locked != "":
-		msg = "Refused: " + c.Locked
-	case c.ReadOnly:
-		how := c.ReadOnlyHow
-		if how == "" {
-			how = "An administrator can allow changes in the connection's settings."
-		}
-		msg = fmt.Sprintf("Refused: %s is connected read-only, so the console changes nothing there. %s", c.Name, how)
-	}
-	if msg == "" {
+	why, _ := s.writeRefusal(r, clusterID(r))
+	if why == "" {
 		return false
 	}
+	msg := "Refused: " + why
 	s.recordOn(r, audit.OutcomeDenied, action, target, msg)
 	jsonError(w, http.StatusConflict, msg)
 	return true

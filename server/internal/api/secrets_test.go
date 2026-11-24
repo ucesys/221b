@@ -284,3 +284,42 @@ func TestDirectWritesFollowTheModeAndStrict(t *testing.T) {
 		t.Fatal("a Secret was written under strict")
 	}
 }
+
+// The page learns from the Secrets config whether the console's writes
+// are refused on the cluster and why, so it hides or disables what would
+// write (RB-36): a read-only connection, strict refusing the roles, and a
+// connection that takes changes.
+func TestTheSecretsConfigSaysWhyWritesAreRefused(t *testing.T) {
+	config := func(c *http.Client, url string) secretsConfig {
+		t.Helper()
+		r, body := send(t, c, http.MethodGet, url+"/api/v1/secrets/config", "")
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("config: %d %s", r.StatusCode, body)
+		}
+		var cfg secretsConfig
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	if c := config(ops, srv.URL); !c.Edit || !c.ReadOnly || !strings.Contains(c.Refused, "read-only") {
+		t.Errorf("a read-only connection: %+v", c)
+	}
+	srv, ops, _, _, _, _ = writeSetup(t, "ops@corp.example", nil)
+	if c := config(ops, srv.URL); !c.Edit || c.ReadOnly || c.Refused != "" {
+		t.Errorf("a connection that takes changes: %+v", c)
+	}
+	srv, ops, _, _, src, _ := writeSetup(t, "ops@corp.example", nil, func(o *Options) { o.Roles.Enforce = "strict" })
+	for _, id := range roles.All {
+		rules := (roles.Templates{}).For(id, roles.Options{}).Rules
+		if id == roles.Admin {
+			rules = append(rules, roles.Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
+		}
+		src.Put(clusterRoleOf(id.ClusterRole(), rules))
+	}
+	src.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	if c := config(ops, srv.URL); c.ReadOnly || !strings.Contains(c.Refused, "rbac.enforce is strict") || strings.HasPrefix(c.Refused, "Refused") {
+		t.Errorf("strict with a widened role: %+v", c)
+	}
+}

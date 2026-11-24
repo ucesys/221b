@@ -10,6 +10,23 @@ export interface SecretsConfig {
   read: boolean
   reveal: boolean
   edit: boolean
+  /** The cluster's connection is read-only: what writes a Secret or a namespace is hidden (RB-36). */
+  readOnly?: boolean
+  /** Why the console's writes are refused on the cluster (read-only, or rbac.enforce strict), as the server would answer them. */
+  refused?: string
+}
+
+/**
+ * How the page offers what writes a Secret or a namespace (RB-36): to an
+ * Admin or SuperAdmin, hidden on a read-only connection, off with the
+ * reason where rbac.enforce strict refuses the cluster, on otherwise. The
+ * server refuses those writes all the same; this spares the person a form
+ * that cannot be saved.
+ */
+export function secretWrites(cfg: SecretsConfig | null): { show: boolean; off?: string } {
+  if (!cfg?.edit) return { show: false }
+  if (cfg.readOnly) return { show: false, off: cfg.refused }
+  return { show: true, off: cfg.refused || undefined }
 }
 
 export interface SecretValue {

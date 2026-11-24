@@ -15,8 +15,13 @@ function place(anchor: HTMLElement | null, width = 300): CSSProperties {
   return below >= 160 ? { top: r.bottom + 4, left, maxHeight: below } : { bottom: window.innerHeight - r.top + 4, left, maxHeight: r.top - 8 }
 }
 
-/** The wrench beside a namespace's name: New namespace…, and Delete namespace… through Watson. */
-export function NamespaceTools({ namespace, canCreate, onPick }: { namespace: string; canCreate: boolean; onPick: (a: NamespaceAction) => void }) {
+/**
+ * The wrench beside a namespace's name: New namespace…, and Delete
+ * namespace… through Watson. New namespace… is hidden where the cluster's
+ * connection is read-only (createHidden) and off with createOff's reason
+ * where rbac.enforce strict refuses the cluster (RB-36).
+ */
+export function NamespaceTools({ namespace, canCreate, createOff, createHidden, onPick }: { namespace: string; canCreate: boolean; createOff?: string; createHidden?: boolean; onPick: (a: NamespaceAction) => void }) {
   const watson = useWatsonApi()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -67,8 +72,8 @@ export function NamespaceTools({ namespace, canCreate, onPick }: { namespace: st
   }
   const deleteOff = !watson.available ? (watson.readOnly ? 'this cluster is connected read-only' : 'Watson is off here') : undefined
   const items: { key: NamespaceAction; label: string; hint?: string; off?: string; danger?: boolean; sepBefore?: boolean }[] = [
-    { key: 'new', label: 'New namespace…', off: canCreate ? undefined : 'for Admins and SuperAdmins' },
-    { key: 'delete', label: 'Delete namespace…', hint: 'everything in it goes', danger: true, sepBefore: true, off: deleteOff },
+    ...(createHidden ? [] : [{ key: 'new' as const, label: 'New namespace…', off: canCreate ? createOff : 'for Admins and SuperAdmins' }]),
+    { key: 'delete', label: 'Delete namespace…', hint: 'everything in it goes', danger: true, sepBefore: !createHidden, off: deleteOff },
   ]
   return (
     <>

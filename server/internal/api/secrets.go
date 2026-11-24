@@ -100,6 +100,13 @@ type secretsConfig struct {
 	// Edit says the person holds Admin or SuperAdmin; Kubernetes still
 	// decides each write.
 	Edit bool `json:"edit"`
+	// ReadOnly says the cluster's connection is read-only, so the page
+	// hides what would write a Secret or a namespace, and Refused why the
+	// console's writes are refused there (read-only, or rbac.enforce
+	// strict), as putSecret, postSecret and postNamespace would answer
+	// (RB-36). They stay the guard.
+	ReadOnly bool   `json:"readOnly,omitempty"`
+	Refused  string `json:"refused,omitempty"`
 }
 
 // mayEditSecrets says whether the person holds a role that edits Secrets:
@@ -138,6 +145,9 @@ func (s *Server) getSecretsConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)}
+	if cfg.Edit {
+		cfg.Refused, cfg.ReadOnly = s.writeRefusal(r, clusterID(r))
+	}
 	// Given a namespace, Reveal says what holds there.
 	if ns := r.URL.Query().Get("namespace"); ns != "" && cfg.Reveal {
 		cfg.Reveal, _ = s.mayReveal(r, cl, ns)
