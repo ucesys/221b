@@ -80,6 +80,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **Testing an agent that is off answers 409** with "the Summarizer is off", not 500 (AI-54); a test of the instructions in force says *instructions in force* in each agent call's audit record, not *instructions draft*.
 - **Each request to a model is logged at Debug** with its agent, model, effort and betas as sent (AI-55): set `logLevel: debug` to see what effort and betas a request went with.
 - **The first administrator is no longer signed out by a second replica** (RB-46, P7-02): with two or more replicas, a request reaching a replica that had not yet read a newly created account (it reads them every 5 seconds) ended the person's session for every replica and could show the first-run page again; the same happened to every account created in the console on a replica that could not read the users' Secret at its start. A replica now reads the accounts again before it ends a session for a missing account, and refuses the request without ending anything when they cannot be read.
+- **An OIDC SuperAdmin through `auth.adminGroups` can act in the cluster again** (RB-37): with role lists set, such a person's Kubernetes groups included the admin group, which the chart does not let the console impersonate, so YAML, logs, edits, Watson's kubectl and Toolbox sessions all answered 403. Only the listed groups are asserted now; the person has the cluster's rights through `221b:superadmins`.
 
 ### Security
 

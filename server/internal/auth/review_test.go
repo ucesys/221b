@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -366,5 +367,21 @@ func TestAnEmailChangedAwayFromTheAdminListEndsTheRoleInOpenSessions(t *testing.
 	getJSON(t, alice, e.app.URL+"/api/v1/me", &me)
 	if me.User.Email != "alice@other.example" {
 		t.Fatalf("/api/v1/me says %q", me.User.Email)
+	}
+}
+
+// Finding 14: with OIDC and role lists, a SuperAdmin by auth.adminGroups
+// is asserted to the clusters as the listed groups and 221b:superadmins
+// only: the chart lets the console impersonate those, and Kubernetes
+// refuses a request that impersonates any other group.
+func TestAnOIDCAdminGroupIsNotAssertedToTheClusters(t *testing.T) {
+	cfg := auth.Config{Mode: auth.ModeOIDC, Lists: auth.RoleLists{roles.Viewer: {"devs"}}, AdminGroups: []string{"platform-admins"},
+		Prefixes: roles.Prefixes{OIDCUser: "oidc-user:", OIDCGroup: "oidc:"}}
+	g := auth.GrantFor(cfg, roles.OIDC, auth.User{Username: "pat@corp.example", Groups: []string{"platform-admins", "devs"}}, nil)
+	if !g.Admin() {
+		t.Fatalf("not a SuperAdmin: %+v", g)
+	}
+	if slices.Contains(g.KubeGroups, "oidc:platform-admins") || !slices.Contains(g.KubeGroups, "oidc:devs") || !slices.Contains(g.KubeGroups, "221b:superadmins") {
+		t.Fatalf("asserted to the clusters: %v", g.KubeGroups)
 	}
 }
