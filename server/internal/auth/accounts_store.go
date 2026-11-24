@@ -269,7 +269,10 @@ func (a *Accounts) change(ctx context.Context, fn func() error) error {
 			a.mu.Unlock()
 			continue
 		default:
-			a.stored, a.ended = before, endedBefore
+			// A read made while the save waited may have put a newer
+			// version in place: what is held now is the old accounts, so
+			// they are read again next time, as after a conflict.
+			a.stored, a.ended, a.version = before, endedBefore, ""
 			a.mu.Unlock()
 			return err
 		}
