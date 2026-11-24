@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,5 +331,50 @@ func TestAReplacedKeyEndsTheSignedSessionsAReplicaHolds(t *testing.T) {
 		if _, ok := s.Get(first.ID); ok {
 			t.Errorf("%s still takes a session the replaced key signed", name)
 		}
+	}
+}
+
+// refusingDirectory refuses every sign-in at once.
+type refusingDirectory struct{}
+
+func (refusingDirectory) Authenticate(context.Context, string, string) (Person, error) {
+	return Person{}, ErrBadCredentials
+}
+func (refusingDirectory) Groups(context.Context, string) ([]string, error)    { return nil, nil }
+func (refusingDirectory) Members(context.Context, []string) ([]Person, error) { return nil, nil }
+func (refusingDirectory) URL() string                                         { return "ldaps://ldap.example:636" }
+
+// Cut by the review's cap (auth.go:769-772): with LDAP, a name that is no
+// local account costs a password check too, as a local account's wrong
+// password does, so how long the answer takes does not tell local
+// account names from others.
+func TestALDAPSignInOfAnyNameCostsAPasswordCheck(t *testing.T) {
+	s, err := New(Config{Mode: ModeLDAP, Directory: refusingDirectory{}, Lists: RoleLists{"viewer": {"devs"}}}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range cap(hashSlots) {
+		hashSlots <- struct{}{}
+	}
+	done := make(chan int, 1)
+	go func() {
+		form := url.Values{"email": {"nobody-local"}, "password": {"a guess"}, "form": {"tok"}}
+		r := httptest.NewRequest(http.MethodPost, "/signin", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: cookieForm, Value: "tok"})
+		w := httptest.NewRecorder()
+		s.postSignIn(w, r)
+		done <- w.Code
+	}()
+	select {
+	case code := <-done:
+		t.Fatalf("the sign-in of a name with no local account was answered (%d) without a password check", code)
+	case <-time.After(200 * time.Millisecond):
+	}
+	for range cap(hashSlots) {
+		<-hashSlots
+	}
+	if code := <-done; code != http.StatusUnauthorized {
+		t.Fatalf("the sign-in: %d", code)
 	}
 }

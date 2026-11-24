@@ -848,6 +848,10 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	acct, local := s.accounts.Find(login)
 	if !local && s.dir != nil {
+		// A password check on the dummy hash first, as a local account's
+		// wrong password costs one before the directory is asked: how long
+		// the answer takes does not tell local account names from others.
+		CheckPassword(dummyHash, password)
 		s.signInDirectory(w, r, login, password, refuse, false)
 		return
 	}
