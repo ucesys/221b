@@ -436,3 +436,22 @@ func TestSubjectsHaveOneOrder(t *testing.T) {
 		t.Errorf("order follows the bindings: %s against %s", x, y)
 	}
 }
+
+// Roles review, cut list: nodes/status and other subresources of
+// cluster-scoped kinds were shown as "All namespaces".
+func TestSubresourcesOfClusterKindsAreClusterScoped(t *testing.T) {
+	scope := map[string]string{}
+	for _, r := range permRules(SuperAdmin, Definition(SuperAdmin, ReadOnly, Options{}).Rules) {
+		if r.Group == "" {
+			scope[r.Resource] = r.Scope
+		}
+	}
+	for _, res := range []string{"nodes/status", "namespaces/status", "persistentvolumes/status", "componentstatuses", "nodes"} {
+		if scope[res] != "cluster" {
+			t.Errorf("%s: scope %q", res, scope[res])
+		}
+	}
+	if scope["pods/log"] != "all" {
+		t.Errorf("pods/log: scope %q", scope["pods/log"])
+	}
+}

@@ -411,7 +411,17 @@ func permRules(id ID, rules []Rule) []PermRule {
 	return out
 }
 
+// clusterKinds are cluster-scoped kinds the console does not watch, which
+// roles name all the same.
+var clusterKinds = []string{"componentstatuses"}
+
+// isClusterScoped says whether a kind, or a subresource of one
+// (nodes/status), belongs to the cluster rather than to a namespace.
 func isClusterScoped(group, resource string) bool {
+	resource, _, _ = strings.Cut(resource, "/")
+	if group == "" && slices.Contains(clusterKinds, resource) {
+		return true
+	}
 	for _, w := range Watched {
 		if w.Group == group && w.Resource == resource {
 			return !w.Namespaced
