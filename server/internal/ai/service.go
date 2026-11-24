@@ -597,7 +597,7 @@ func replyBound(window int) int {
 func (s *Service) resolve(snap snapshot, id, cluster string, names []string, over *draftText, setup func(context.Context) string, cases bool) (sherlock.Agent, error) {
 	info, ok := InfoOf(id)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("there is no agent %q", id)
+		return sherlock.Agent{}, kindError{fmt.Sprintf("there is no agent %q", id), ErrNotFound}
 	}
 	if id != Sherlock && !s.on(snap, info, "") {
 		return sherlock.Agent{}, unavailable("the " + info.Name + " is off")
@@ -608,10 +608,10 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	set := s.settingsOf(snap, id)
 	p, ok := s.provider(snap, set.Provider)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider)
+		return sherlock.Agent{}, kindError{fmt.Sprintf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider), ErrUnusable}
 	}
 	if why := s.usable(p); why != "" {
-		return sherlock.Agent{}, errors.New(why)
+		return sherlock.Agent{}, kindError{why, ErrUnusable}
 	}
 	model := modelOfAuto(set, p)
 	baseline := s.Baseline(id)
@@ -1032,6 +1032,16 @@ func (e unavailableError) Is(target error) bool { return target == ErrUnavailabl
 
 func unavailable(why string) error { return unavailableError(why) }
 
+// kindError is an error of a kind (ErrNotFound, ErrUnusable) in its own
+// words.
+type kindError struct {
+	why  string
+	kind error
+}
+
+func (e kindError) Error() string        { return e.why }
+func (e kindError) Is(target error) bool { return target == e.kind }
+
 // ---------- changes ----------
 
 // ErrInvalid is a change that is not valid; ErrNotFound one about nothing.
@@ -1041,6 +1051,11 @@ var (
 	// ErrUnavailable is an agent asked for while it is off, or on a
 	// cluster it does not work on: the error says which (F4, AI-54).
 	ErrUnavailable = errors.New("the agent is not available")
+	// ErrUnusable is an agent asked for whose provider cannot answer now:
+	// gone, or without the credential it needs; the error says which.
+	// The agent is on, so it is not ErrUnavailable, which a job's run
+	// reads as the agent turned off (JB-25).
+	ErrUnusable = errors.New("the agent's provider cannot answer now")
 	// ErrSameProvider is the Script reviewer put on the Automation
 	// author's provider without the single-provider confirmation.
 	ErrSameProvider = errors.New("the Script reviewer is on the same provider as the Automation author: an independent second opinion needs another provider. Pick another, or confirm this console has only one")

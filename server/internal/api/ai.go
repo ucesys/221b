@@ -90,7 +90,7 @@ func (s *Server) aiFail(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case errors.Is(err, ai.ErrInvalid):
 		code = http.StatusBadRequest
-	case errors.Is(err, ai.ErrSameProvider), errors.Is(err, ai.ErrUnavailable):
+	case errors.Is(err, ai.ErrSameProvider), errors.Is(err, ai.ErrUnavailable), errors.Is(err, ai.ErrUnusable):
 		code = http.StatusConflict
 	case errors.As(err, &capErr):
 		code = http.StatusTooManyRequests
