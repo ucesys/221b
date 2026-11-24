@@ -55,11 +55,14 @@ func (s *Service) UserExists(username string) bool {
 
 // LocalSuperAdmin says whether a local account may still act as a
 // SuperAdmin: it exists, is enabled, and is one by its roles, its groups
-// or the admin list as they stand now.
+// or the admin list as they stand now. The account is found by its user
+// name exactly, the one its session gave (live), never by email or a
+// lowercased or trimmed name as a sign-in finds it: a run request asked
+// under a name that is only a SuperAdmin's email is not that SuperAdmin's.
 func (s *Service) LocalSuperAdmin(username string) bool {
 	if s == nil || s.accounts == nil {
 		return false
 	}
-	a, ok := s.accounts.Find(username)
+	a, ok := s.accounts.byName(username)
 	return ok && !a.Disabled && s.accountAdmin(a)
 }

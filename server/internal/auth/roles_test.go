@@ -1257,6 +1257,30 @@ func TestLocalSuperAdminIsReadAsItStandsNow(t *testing.T) {
 	}
 }
 
+// LocalSuperAdmin finds the asker of a run request by the user name its
+// session gave, exactly, as a session finds its account (live): the
+// sign-in lookup (the name lowercased and trimmed, then a unique email)
+// would let a request recorded under a name that is only some
+// SuperAdmin's email, or that name capitalised or padded, pass the check
+// again as that SuperAdmin.
+func TestLocalSuperAdminMatchesTheUserNameExactly(t *testing.T) {
+	cfg := auth.Config{
+		Mode: auth.ModeLocal,
+		Local: []auth.LocalUser{
+			{Username: "ann", Email: "ann@corp.example", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}},
+		},
+	}
+	e := newEnv(t, cfg)
+	if !e.svc.LocalSuperAdmin("ann") {
+		t.Fatal("ann, a local SuperAdmin, does not count")
+	}
+	for _, name := range []string{"ann@corp.example", "ANN@corp.example", " ann", "ANN"} {
+		if e.svc.LocalSuperAdmin(name) {
+			t.Errorf("LocalSuperAdmin(%q) is true: no account has that user name", name)
+		}
+	}
+}
+
 // Local accounts still sign in with LDAP on, also while the directory cannot
 // be reached; a local name the directory also knows signs in with either
 // password (owner, 2026-11-17).
