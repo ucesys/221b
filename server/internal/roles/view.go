@@ -38,17 +38,27 @@ type BoundSubject struct {
 	Namespace string
 }
 
-// Description is what a role is for, in a line.
-func Description(id ID) string {
+// Description is what a role is for, in a line, under its definition and
+// the options in use (rbac.roles.admin.exec, secrets.read).
+func Description(id ID, t Template, o Options) string {
 	switch id {
 	case SuperAdmin:
+		if t == ReadOnly {
+			return "Reads everything, Secrets included; connections, settings and users in 221B"
+		}
 		return "Everything, including connections, settings and users"
 	case SuperViewer:
 		return "Reads everything except Secrets"
 	case Admin:
+		if t == ReadOnly {
+			return "Viewer's reads in the bound namespaces, and no change"
+		}
 		return "Viewer plus the namespaced changes Watson supports"
 	}
-	return "Reads the namespaced kinds; Secrets as keys and sizes"
+	if o.Secrets {
+		return "Reads the namespaced kinds; Secrets as keys and sizes"
+	}
+	return "Reads the namespaced kinds; no Secrets"
 }
 
 // Scope is where a role applies.
@@ -59,8 +69,9 @@ func Scope(id ID) string {
 	return "Bound namespaces"
 }
 
-// Can lists what a role allows, in words, for its definition.
-func Can(id ID, t Template) []string {
+// Can lists what a role allows, in words, for its definition and the
+// options in use: the lines follow the rules Definition gives.
+func Can(id ID, t Template, o Options) []string {
 	switch id {
 	case SuperAdmin:
 		if t == ReadOnly {
@@ -73,13 +84,21 @@ func Can(id ID, t Template) []string {
 		if t == ReadOnly {
 			return []string{"Read every shown kind in the bound namespaces"}
 		}
-		return []string{"Read every shown kind in the bound namespaces", "Scale, restart, roll back", "Delete a pod", "Label and annotate", "Roll back a Helm release"}
+		out := []string{"Read every shown kind in the bound namespaces", "Scale, restart, roll back", "Delete a pod", "Label and annotate", "Forward a port"}
+		if o.Secrets {
+			out = append(out, "Roll back a Helm release", "Change and delete a Secret")
+		}
+		if o.Exec {
+			out = append(out, "Open a shell or run a command in a pod", "Start a debug pod")
+		}
+		return out
 	}
 	return []string{"Read every shown kind in the bound namespaces"}
 }
 
-// Cannot lists what a role does not allow, in words.
-func Cannot(id ID, t Template) []string {
+// Cannot lists what a role does not allow, in words, for its definition
+// and the options in use.
+func Cannot(id ID, t Template, o Options) []string {
 	switch id {
 	case SuperAdmin:
 		if t == ReadOnly {
@@ -92,7 +111,17 @@ func Cannot(id ID, t Template) []string {
 		if t == ReadOnly {
 			return []string{"Change anything"}
 		}
-		return []string{"Cordon or drain nodes", "Change roles or bindings", "Open a shell in a pod", "Act outside the bound namespaces"}
+		out := []string{"Cordon or drain nodes", "Change roles or bindings"}
+		if !o.Exec {
+			out = append(out, "Open a shell in a pod, or start a debug pod")
+		}
+		if !o.Secrets {
+			out = append(out, "Read Secrets, or roll back a Helm release")
+		}
+		return append(out, "Act outside the bound namespaces")
+	}
+	if !o.Secrets {
+		return []string{"Change anything", "Read Secrets"}
 	}
 	return []string{"Change anything"}
 }
@@ -153,9 +182,12 @@ type RolesResponse struct {
 // RolesInput is what the Roles page is built from.
 type RolesInput struct {
 	Templates Templates
-	Deployed  map[ID]Deployed
-	Bindings  []Binding
-	Prefixes  Prefixes
+	// Options are the ones in use (secrets.read, rbac.roles.admin.exec), for
+	// what each role's lines say.
+	Options  Options
+	Deployed map[ID]Deployed
+	Bindings []Binding
+	Prefixes Prefixes
 	// Visible is false when the person may not list RoleBindings.
 	Visible bool
 	// Members counts the users in a local group; Exists says whether a local
@@ -198,8 +230,8 @@ func BuildRoles(in RolesInput) RolesResponse {
 		if !dep.Present {
 			missing++
 		}
-		row := RoleRow{ID: id, Name: id.Name(), Description: Description(id), Scope: Scope(id), Definition: t, ClusterRole: id.ClusterRole(), Present: dep.Present,
-			Can: Can(id, t), Cannot: Cannot(id, t), Subjects: []SubjectRow{}, Holders: in.Holders[id]}
+		row := RoleRow{ID: id, Name: id.Name(), Description: Description(id, t, in.Options), Scope: Scope(id), Definition: t, ClusterRole: id.ClusterRole(), Present: dep.Present,
+			Can: Can(id, t, in.Options), Cannot: Cannot(id, t, in.Options), Subjects: []SubjectRow{}, Holders: in.Holders[id]}
 		if in.Visible {
 			row.Subjects = in.subjects(id)
 		}

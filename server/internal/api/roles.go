@@ -297,7 +297,7 @@ func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusServiceUnavailable, "The console has not read this cluster's roles yet. Try again in a moment.")
 		return
 	}
-	in := roles.RolesInput{Templates: s.opts.Roles.Templates, Deployed: dep, Bindings: bindingsOf(cl), Prefixes: s.opts.Roles.Prefixes, Visible: true}
+	in := roles.RolesInput{Templates: s.opts.Roles.Templates, Options: s.rolesOptions(), Deployed: dep, Bindings: bindingsOf(cl), Prefixes: s.opts.Roles.Prefixes, Visible: true}
 	if src, ok := s.opts.Auth.(RoleSource); ok {
 		in.Members, in.Exists = src.Members, src.UserExists
 		if s.isSuperAdmin(r) {

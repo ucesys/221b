@@ -245,3 +245,32 @@ func TestRolesPageShowsClusterWideBindingsAndEachServiceAccount(t *testing.T) {
 		t.Errorf("%d ServiceAccount rows for default in a and in b: %s", sas, rows)
 	}
 }
+
+// Roles review, finding 12: the Roles page's lines ignored the options,
+// so with rbac.roles.admin.exec it said Admin cannot open a shell, and
+// without secrets.read that it rolls back Helm releases.
+func TestRolesPageFollowsTheOptions(t *testing.T) {
+	srv, ops, _, _, local, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Exec: true, Secrets: false}
+	})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{Exec: true}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	var page roles.RolesResponse
+	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/roles", &page); code != http.StatusOK {
+		t.Fatalf("roles = %d", code)
+	}
+	for _, r := range page.Roles {
+		if r.ID != roles.Admin {
+			continue
+		}
+		can, cannot := strings.Join(r.Can, "; "), strings.Join(r.Cannot, "; ")
+		if strings.Contains(cannot, "shell") || !strings.Contains(can, "shell") {
+			t.Errorf("Admin with exec: can %q, cannot %q", can, cannot)
+		}
+		if strings.Contains(can, "Helm") {
+			t.Errorf("Admin without Secrets rolls back Helm releases: %q", can)
+		}
+	}
+}
