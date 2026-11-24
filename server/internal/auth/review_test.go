@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -307,5 +309,36 @@ func TestASessionOfTheOldSignInModeIsRefused(t *testing.T) {
 	b := o.replica(auth.Config{Mode: auth.ModeOIDC, OIDC: auth.OIDCConfig{Issuer: "https://idp.example", ClientID: "c"}}, nil)
 	if w, code := b.whoami(root); code != http.StatusUnauthorized {
 		t.Fatalf("root's local session on the OIDC console: %d %+v", code, w)
+	}
+}
+
+// Finding 12: a local-users file of the wrong shape is an error, not "no
+// accounts", which in local mode would open the first-run page to
+// whoever comes first.
+func TestAMalformedLocalUsersFileIsRefused(t *testing.T) {
+	hash := hashOf(t, goodPassword)
+	for _, tc := range []struct {
+		name, text string
+		users      int
+		ok         bool
+	}{
+		{"one account without the leading dash", "email: ops@corp.example\npasswordHash: " + hash + "\n", 0, false},
+		{"a list under another key", "accounts:\n- username: ops\n  passwordHash: " + hash + "\n", 0, false},
+		{"an empty file", "", 0, false},
+		{"a file of comments", "# nobody yet\n", 0, false},
+		{"an empty list", "[]\n", 0, true},
+		{"an empty users list", "users: []\n", 0, true},
+		{"no users, as the chart writes null", "null\n", 0, true},
+		{"a list", "- username: ops\n  passwordHash: " + hash + "\n", 1, true},
+		{"an object with users", "users:\n- username: ops\n  passwordHash: " + hash + "\n", 1, true},
+	} {
+		path := filepath.Join(t.TempDir(), "users.yaml")
+		if err := os.WriteFile(path, []byte(tc.text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		users, err := auth.ReadLocalUsers(path)
+		if (err == nil) != tc.ok || len(users) != tc.users {
+			t.Errorf("%s: %d users, %v", tc.name, len(users), err)
+		}
 	}
 }

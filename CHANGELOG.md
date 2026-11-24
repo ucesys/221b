@@ -18,6 +18,8 @@ The schema's step `0055` adds the knowledge index's tables (`knowledge_documents
 
 The schema's step `0053` adds the table `case_signals` (the alerts attached to a case) and columns (a case's `correlation_key`, the case it was merged into, what the case analysis says shares the cause); it runs at the first start and changes no row already there.
 
+A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of accounts or an object with a `users` list: any other shape, and an empty file, now stop the console's start (they were read as no accounts, which opened the first-run page). Write `[]` for no accounts.
+
 ### Added
 
 - **The database's image has `pg_trgm` and pgvector** (KN-51): `221b-postgres` adds Wolfi's `postgresql-18-contrib` and `pgvector-18` (0.8.7), for the knowledge index's fuzzy and semantic search, and creates both extensions in the console's database as its superuser, in a new database (`post-bootstrap.sh`) and at every start of a primary (`extensions.sh`, a Patroni callback). The lock takes Wolfi's packages of November 23 (PostgreSQL 18.7). The tests run against `pgvector/pgvector:0.8.7-pg18-trixie` in place of `postgres:18`.
@@ -91,6 +93,7 @@ The schema's step `0053` adds the table `case_signals` (the alerts attached to a
 - **A request before sign-in can no longer make the console buffer tens of megabytes** (P3-01): the 64 KiB limit of the sign-in forms was set only in their own handlers, but a POST without a session to any page is answered with the sign-in or first-run page, which parsed the whole body, as did the OIDC start; a few dozen slow 40 MB requests could exhaust the pod's memory. Those pages no longer read the body, and the OIDC start reads 64 KiB at most.
 - **Requests from someone not signed in can no longer fill the audit log** (P3-10): the OIDC callback had no rate limit and its state cookie is unsigned, so `GET /signin/callback?error=…` with a self-made cookie wrote a record per request, and each refused sign-in, password change or first-run attempt wrote "too many attempts" again; real events were pushed off the Audit page and out of the webhook's queue. The callback now counts against the per-address limit, and a refusal for too many attempts is recorded once a minute for what refused it.
 - **Sessions of the old sign-in mode end when the mode is changed** (P3-01): after an upgrade from `auth.mode=local` to `oidc`, say, a stored session of a local account kept working with the roles saved in it (a SuperAdmin's included) for up to 8 hours idle or 7 days, and nothing in the console could end it. Such a session is now refused.
+- **A malformed local-users file no longer opens the first-run page** (RB-26): a `users.yaml` of the wrong shape (one account written without the leading `- `, a list under another key, an empty file) was read as no accounts without a word, and in local mode the first visitor could create the SuperAdmin. Such a file now stops the start with an error saying what is wrong; write `[]` for no accounts. Each start logs how many accounts the file names.
 
 ## 0.13.0 (2026-11-22)
 

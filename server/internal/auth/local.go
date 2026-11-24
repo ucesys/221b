@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -163,26 +164,67 @@ func ValidateLocalUsers(users []LocalUser) error {
 }
 
 // ReadLocalUsers reads the accounts from a JSON or YAML file: a list of
-// users, or an object with a users list.
+// users, or an object with a users list and nothing else. A file of any
+// other shape is an error, not "no accounts": with local sign-in that
+// would open the first-run page to whoever comes first. No accounts is
+// written as an empty list ([], users: [] or null, as the chart writes
+// it); an empty file is an error too.
 func ReadLocalUsers(path string) ([]LocalUser, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var list []LocalUser
-	if err := yaml.Unmarshal(b, &list); err != nil {
-		var obj struct {
-			Users []LocalUser `json:"users"`
-		}
-		if err2 := yaml.Unmarshal(b, &obj); err2 != nil {
-			return nil, fmt.Errorf("reading %s: %w", path, err)
-		}
-		list = obj.Users
+	list, err := parseLocalUsers(b)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	if err := ValidateLocalUsers(list); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return list, nil
+}
+
+func parseLocalUsers(b []byte) ([]LocalUser, error) {
+	var doc any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	switch d := doc.(type) {
+	case nil:
+		if !hasContent(b) {
+			return nil, errors.New("the file is empty; write [] for no accounts")
+		}
+		return nil, nil
+	case []any:
+		var list []LocalUser
+		if err := yaml.Unmarshal(b, &list); err != nil {
+			return nil, err
+		}
+		return list, nil
+	case map[string]any:
+		if _, ok := d["users"]; !ok || len(d) != 1 {
+			return nil, errors.New("an object must hold a users list and nothing else; one account is a list of one, written with a leading \"- \"")
+		}
+		var obj struct {
+			Users []LocalUser `json:"users"`
+		}
+		if err := yaml.Unmarshal(b, &obj); err != nil {
+			return nil, err
+		}
+		return obj.Users, nil
+	}
+	return nil, errors.New("the file is not a list of accounts")
+}
+
+// hasContent says whether a YAML file holds anything but blank lines and
+// comments.
+func hasContent(b []byte) bool {
+	for _, line := range strings.Split(string(b), "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "#") {
+			return true
+		}
+	}
+	return false
 }
 
 // limiterKeys is how many keys a limiter remembers.

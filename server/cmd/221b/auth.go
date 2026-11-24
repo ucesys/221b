@@ -95,6 +95,12 @@ func (w *wiring) wireAuthConfig() error {
 		if err != nil {
 			return err
 		}
+		// Said at every start, so a file that names nobody is seen.
+		if len(users) == 0 {
+			log.Warn("the local accounts' file names no account", "file", cfg.LocalUsersFile)
+		} else {
+			log.Info("read the local accounts' file", "file", cfg.LocalUsersFile, "accounts", len(users))
+		}
 		authCfg.Local = users
 	}
 	// The roles, the groups and the directory (Phase 6.1) come in a file the
