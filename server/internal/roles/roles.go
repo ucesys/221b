@@ -11,6 +11,7 @@ package roles
 import (
 	"slices"
 	"sort"
+	"strings"
 )
 
 // ID names one of the four roles.
@@ -402,9 +403,24 @@ func Nodes() Role {
 	}}
 }
 
-// Wildcard reports whether a rule has a wildcard anywhere.
+// Wildcard reports whether a rule has a wildcard anywhere: "*" as a group,
+// resource or verb, a resource "*/sub" (that subresource of every kind),
+// or a URL ending in "*" ("/*", "/api/*").
 func (r Rule) Wildcard() bool {
-	return slices.Contains(r.APIGroups, "*") || slices.Contains(r.Resources, "*") || slices.Contains(r.Verbs, "*")
+	if slices.Contains(r.APIGroups, "*") || slices.Contains(r.Resources, "*") || slices.Contains(r.Verbs, "*") {
+		return true
+	}
+	for _, res := range r.Resources {
+		if strings.HasPrefix(res, "*/") {
+			return true
+		}
+	}
+	for _, u := range r.NonResourceURLs {
+		if strings.HasSuffix(u, "*") {
+			return true
+		}
+	}
+	return false
 }
 
 // Writes reports whether any verb of the rule changes something.
@@ -428,6 +444,9 @@ var sensitive = map[string]string{
 	"serviceaccounts/token":    "serviceaccounts/token",
 }
 
+// sensitiveOrder is sensitive's keys in a fixed order.
+var sensitiveOrder = []string{"secrets", "pods/exec", "pods/attach", "pods/portforward", "pods/ephemeralcontainers", "nodes/proxy", "serviceaccounts/token"}
+
 // runsPods are the kinds whose creation runs a pod, and with it any
 // ServiceAccount of the namespace: the right to create one is the right
 // to act as every account there (TB-47, TB-50).
@@ -439,12 +458,20 @@ var runsPods = []string{"pods", "jobs", "cronjobs", "deployments", "replicasets"
 // starts one (TB-47).
 func (r Rule) Flags() []string {
 	var out []string
-	if r.Wildcard() || slices.Contains(r.NonResourceURLs, "*") {
+	if r.Wildcard() {
 		out = append(out, "wildcard")
 	}
 	for _, res := range r.Resources {
 		if f := sensitive[res]; f != "" && !slices.Contains(out, f) {
 			out = append(out, f)
+		}
+		// "*/exec" is pods/exec among others: what it reaches is flagged.
+		if sub, ok := strings.CutPrefix(res, "*/"); ok {
+			for _, k := range sensitiveOrder {
+				if strings.HasSuffix(k, "/"+sub) && !slices.Contains(out, sensitive[k]) {
+					out = append(out, sensitive[k])
+				}
+			}
 		}
 	}
 	for _, v := range []string{"escalate", "bind", "impersonate"} {

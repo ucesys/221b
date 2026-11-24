@@ -319,3 +319,25 @@ func TestTheFullAdminDeletesHelmRecords(t *testing.T) {
 		}
 	}
 }
+
+// Roles review, cut list: Flags matched literally, so "*/exec", "*/proxy"
+// and a URL "/*" were neither sensitive nor a wildcard, and vanished under
+// "Sensitive only".
+func TestFlagsSeeSubresourceAndURLWildcards(t *testing.T) {
+	cases := []struct {
+		r    Rule
+		want []string
+	}{
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/exec"}, Verbs: []string{"create"}}, []string{"wildcard", "pods/exec"}},
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/proxy"}, Verbs: []string{"get"}}, []string{"wildcard", "nodes/proxy"}},
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/token"}, Verbs: []string{"create"}}, []string{"wildcard", "serviceaccounts/token"}},
+		{Rule{NonResourceURLs: []string{"/*"}, Verbs: []string{"get"}}, []string{"wildcard"}},
+		{Rule{NonResourceURLs: []string{"/healthz"}, Verbs: []string{"get"}}, nil},
+		{Rule{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale"}, Verbs: []string{"get"}}, nil},
+	}
+	for _, c := range cases {
+		if got := c.r.Flags(); !slices.Equal(got, c.want) {
+			t.Errorf("%+v: flags %v, want %v", c.r, got, c.want)
+		}
+	}
+}
