@@ -72,3 +72,27 @@ func TestAnAnnotateCardOfSecretsBySelectorShowsNoValue(t *testing.T) {
 		}
 	}
 }
+
+// Annotating a Secret by name that carries the last-applied annotation can
+// be approved: its guard compares the Secret as the card read it, values
+// hidden, not the hidden card against the live Secret (review of November
+// 24, 2026, cut by the cap: impact.go:589).
+func TestAnAnnotateCardOfASecretWithLastAppliedCanBeApproved(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	plantedSecret(t, cl)
+	got := card(t, svc, cl, alice(), "kubectl annotate secret db -n web kubectl.kubernetes.io/last-applied-configuration-")
+	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := wait(t, svc, got.ID, func(i Item) bool { return finished(i.Status) })
+	if done.Status != StatusDone {
+		t.Fatalf("%s: %s", done.Status, done.Reason)
+	}
+	sec, err := simClient(t, cl).CoreV1().Secrets("web").Get(context.Background(), "db", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sec.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+		t.Fatal("the annotation is still there")
+	}
+}

@@ -202,6 +202,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A one-time copy of Automation's changes tried again no longer drops those made since** (DB-17; the review of `server/internal/automation`, November 24, 2026, cut by its cap): when the copy from the ConfigMap failed at one start and was tried at the next, it wrote the ConfigMap's changes and run requests as the whole set, deleting every change and request made in between and writing over one with the same number. It now adds what the rows do not hold; a number the rows hold keeps their record.
 
 - **One `kubectl scale` can no longer crash the console** (P6-02; review of November 24, 2026, finding 2): `--replicas` was never checked, and the card of a StatefulSet scaled to a huge negative count named a pod for every step down, in a goroutine before any approval, until the process ran out of memory. `--replicas` must now be a whole number from 0 to 2147483647 (read as kubectl reads it, so `010` is 8 and `0x10` is 16), and the card names the first four pods it removes and how many more.
+- **Annotating a Secret that carries the last-applied annotation can be approved** (P6-04; review of November 24, 2026): the card's guard compared the Secret as the card read it, values hidden, with the live Secret, which has them, so every such card lapsed at its approval as changed. The guard now hides the values of the live Secret the same way and adds its version, so a change it hides still voids the card.
 
 ### Security
 

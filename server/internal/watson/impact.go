@@ -310,6 +310,7 @@ func selectorGuard(gvr schema.GroupVersionResource, ns, sel string, names []stri
 // objectGuard voids a card when the parts of an object a command depends
 // on change.
 func objectGuard(t target, parts func(o *unstructured.Unstructured) any) guard {
+	secret := t.gvr.Group == "" && t.gvr.Resource == "secrets"
 	read := func(ctx context.Context, cs *clients) (string, error) {
 		var ri dynamic.ResourceInterface = cs.dyn.Resource(t.gvr)
 		if t.ns != "" {
@@ -319,7 +320,17 @@ func objectGuard(t target, parts func(o *unstructured.Unstructured) any) guard {
 		if err != nil {
 			return "", err
 		}
+		if secret {
+			// Compared as the card read it, values hidden: the guard holds no
+			// value, and the parts must match what the card showed.
+			withoutValues(o)
+			return digest(o.GetUID(), o.GetResourceVersion(), parts(o)), nil
+		}
 		return digest(o.GetUID(), parts(o)), nil
+	}
+	if secret {
+		// What withoutValues hides changes the Secret's version.
+		return guard{what: t.String(), want: digest(t.obj.GetUID(), t.obj.GetResourceVersion(), parts(t.obj)), read: read}
 	}
 	return guard{what: t.String(), want: digest(t.obj.GetUID(), parts(t.obj)), read: read}
 }
