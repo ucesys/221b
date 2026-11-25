@@ -155,7 +155,9 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	read := true
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
-		spec.Tested = saved.Tested
+		// The version too: an edit of the local cluster is held to the
+		// one it read, as any other connection's (DB-92).
+		spec.Tested, spec.RowVersion = saved.Tested, saved.RowVersion
 	} else if !errors.Is(err, ErrNotFound) {
 		read = false
 		m.log.Warn("the local connection's saved name could not be read; using the installation's until it can, and refusing its edits", "err", err)
@@ -388,6 +390,7 @@ func (m *Manager) applyLocal(saved Spec) {
 	m.localRead = true
 	spec := inst.Spec
 	spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
+	spec.RowVersion = saved.RowVersion
 	inst.Spec = spec
 	if saved.Tested != nil {
 		inst.tested = saved.Tested
@@ -897,7 +900,9 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 		if err := m.store.Save(ctx, spec, nil); err != nil {
 			return Summary{}, err
 		}
-		saved()
+		// The version saved at, also the first time, when nothing was
+		// saved for the local cluster before (DB-92).
+		m.readVersion(ctx, &spec)
 		m.mu.Lock()
 		inst := m.instances[LocalID]
 		inst.Spec = spec

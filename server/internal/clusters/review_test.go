@@ -390,3 +390,54 @@ func TestAConnectionThatCouldNotBeReadIsReadAgain(t *testing.T) {
 		}
 	}
 }
+
+// Finding 8: edits of the local cluster were never held to the version
+// they read (DB-92): its summary carried no version, so a stale editor
+// saved over a newer save rather than being told.
+func TestALocalEditIsHeldToTheVersionItRead(t *testing.T) {
+	// The stores that keep versions: the Secrets alone keep none (0
+	// holds to nothing).
+	for name, store := range map[string]func() clusters.Store{
+		"memory":   func() clusters.Store { return clusters.NewMemoryStore() },
+		"database": func() clusters.Store { s, _, _ := clusterstest.PG(t, nil); return s },
+	} {
+		t.Run(name, func(t *testing.T) { testALocalEditIsHeld(t, store()) })
+	}
+}
+
+func testALocalEditIsHeld(t *testing.T, store clusters.Store) {
+	{
+		ctx := context.Background()
+		must(t, store.Save(ctx, clusters.Spec{ID: clusters.LocalID, Name: "here", Env: "staging", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster", Mode: "read", Local: true, Added: at}, nil))
+		m := clusters.New(store, quiet)
+		must(t, m.SetLocal(ctx, clusters.Spec{Name: "install", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster"}, nil, nil))
+		_ = m.Start(ctx)
+		defer m.Stop()
+		opened, _ := m.Summary(clusters.LocalID)
+		if opened.EditVersion == 0 {
+			t.Fatal("the local cluster's summary carries no version")
+		}
+		// Two tabs open the editor; the first renames it.
+		first := clusters.Draft{Spec: clusters.Spec{Name: "Lakehouse", Env: "staging", Mode: "read"}, EditVersion: opened.EditVersion}
+		sum, err := m.Update(ctx, clusters.LocalID, first)
+		must(t, err)
+		if sum.EditVersion == opened.EditVersion || sum.EditVersion == 0 {
+			t.Errorf("the version after the save: %d, was %d", sum.EditVersion, opened.EditVersion)
+		}
+		// The second saves a description from its stale form.
+		stale := clusters.Draft{Spec: clusters.Spec{Name: "here", Env: "staging", Description: "stale", Mode: "read"}, EditVersion: opened.EditVersion}
+		if err := m.Held(ctx, clusters.LocalID, stale.EditVersion); !errors.Is(err, clusters.ErrConflict) {
+			t.Errorf("Held of a stale local edit: %v", err)
+		}
+		if _, err := m.Update(ctx, clusters.LocalID, stale); !errors.Is(err, clusters.ErrConflict) {
+			t.Fatalf("a stale local edit: %v", err)
+		}
+		if got, _, _ := store.Get(ctx, clusters.LocalID); got.Name != "Lakehouse" {
+			t.Fatalf("the stale edit saved over the newer one: %q", got.Name)
+		}
+		// An edit of the version it read goes through.
+		now, _ := m.Summary(clusters.LocalID)
+		_, err = m.Update(ctx, clusters.LocalID, clusters.Draft{Spec: clusters.Spec{Name: "Lakehouse", Env: "staging", Description: "fresh", Mode: "read"}, EditVersion: now.EditVersion})
+		must(t, err)
+	}
+}
