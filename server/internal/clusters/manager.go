@@ -722,6 +722,11 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 	// changed; otherwise the saved one, which must exist.
 	given := !d.Credential.Empty()
 	methodChanged := orig == nil || orig.Auth != spec.Auth
+	// A context alone is no credential: the kubeconfig it is of is
+	// pasted with it, so the edit is never saved with the context dropped.
+	if name := strings.TrimSpace(d.Credential.Context); !given && !methodChanged && spec.Auth == AuthKubeconfig && name != "" && name != origCred.Context && name != orig.Cred.Context {
+		return Spec{}, nil, invalid("context", "Paste the kubeconfig again to sign in with another of its contexts.")
+	}
 	var cred *Credential
 	kept := false
 	switch {

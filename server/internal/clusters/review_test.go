@@ -874,3 +874,20 @@ func TestAConnectionMadeAgainIsNotStoppedByAnOlderList(t *testing.T) {
 		t.Fatal("the connection made again was stopped by a list taken before its save")
 	}
 }
+
+// Nit: an edit that sent only a kubeconfig's context was accepted and the
+// context ignored: the credential was "empty" without its kubeconfig.
+func TestAContextAloneIsNotTakenForAnEdit(t *testing.T) {
+	m, ctx := started(t, clusters.NewMemoryStore())
+	spec := clusters.Spec{Name: "kc", Env: "development", Server: "https://10.9.0.1:6443", CA: "system", Auth: "kubeconfig", Mode: "read"}
+	_, err := m.Add(ctx, clusters.Draft{Spec: spec, Credential: clusters.Credential{Kubeconfig: kubeconfigFor(spec.Server, saToken("kc"))}})
+	must(t, err)
+	var v *clusters.ValidationError
+	if _, err := m.Update(ctx, "kc", clusters.Draft{Spec: spec, Credential: clusters.Credential{Context: "elsewhere"}}); !errors.As(err, &v) || v.Field != "context" {
+		t.Fatalf("an edit of the context alone: %v", err)
+	}
+	// The context it has already is no change.
+	if _, err := m.Update(ctx, "kc", clusters.Draft{Spec: spec, Credential: clusters.Credential{Context: "here"}}); err != nil {
+		t.Fatalf("the same context: %v", err)
+	}
+}
