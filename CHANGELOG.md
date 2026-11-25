@@ -225,6 +225,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A lapsed card says how long it was good for** (TB-38; review of November 24, 2026): a card that waited for a second person, good for 30 minutes, lapsed saying cards are good for 10.
 - **Watson's refusal of `-f` says what it refuses** (review of November 24, 2026): on every command it said Watson prints logs once, though `-f` is a file there (`helm upgrade -f values.yaml`, `kubectl delete -f`); it now says Watson does not read files, and keeps the logs sentence for `kubectl logs -f`.
 - **`helm history --max` below 1 is refused in words** (review of November 24, 2026): `--max -1` panicked in Watson (recovered, so the person saw *runtime error: slice bounds out of range*); it now says `--max` must be 1 or more.
+- **`kubectl auth can-i VERB TYPE NAME` works** (P6-02; review of November 24, 2026): Watson's usage offers that form, but kubectl takes a name only as `TYPE/NAME` and refused it every time; Watson now passes it to kubectl that way.
 
 ### Security
 

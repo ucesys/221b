@@ -406,7 +406,13 @@ func (r *refusalSniffer) Write(p []byte) (int, error) {
 // ends the process for a "no".
 func canI(c *Command, f cmdutil.Factory, streams genericiooptions.IOStreams, args []string) int {
 	o := &auth.CanIOptions{IOStreams: streams, AllNamespaces: c.Has("all-namespaces"), Quiet: c.Has("quiet"), NoHeaders: c.Has("no-headers"), List: c.Has("list"), Subresource: c.Flag("subresource")}
-	cmdutil.CheckErr(o.Complete(f, c.Positionals))
+	pos := c.Positionals
+	if len(pos) == 3 {
+		// VERB TYPE NAME, as Watson's usage writes it: kubectl takes the
+		// name as TYPE/NAME and refuses a third argument.
+		pos = []string{pos[0], pos[1] + "/" + pos[2]}
+	}
+	cmdutil.CheckErr(o.Complete(f, pos))
 	cmdutil.CheckErr(o.Validate())
 	if o.List {
 		cmdutil.CheckErr(o.RunAccessList())
