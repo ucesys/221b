@@ -102,7 +102,7 @@ Phase 1 proves the whole path on one screen. Code becomes an image, the image ru
 | P1-08 | Connects with the in-cluster ServiceAccount when deployed, or with a kubeconfig context when run on a laptop for development. | Both modes show the same nodes. |
 | P1-09 | Reads only what the tab needs: get, list and watch on nodes and pods; get and list on node and pod metrics. | `kubectl auth can-i --list` for the ServiceAccount shows nothing more, and reading a Secret is refused. |
 | P1-10 | Keeps watched caches of nodes and pods that recover by themselves after a dropped watch or an API server restart. | A node cordoned with kubectl shows as cordoned within 5 seconds. After an API server restart the tab is current within 30 seconds, without a reload. |
-| P1-11 | The top bar shows the cluster name (a chart value), the Kubernetes version read from the API server, and the connection status. | Status turns red within 30 seconds of losing the API server and green when it returns. |
+| P1-11 | The top bar shows the cluster name (a chart value), the Kubernetes version read from the API server, and the connection status. Whatever the API server answers, the check never stops the console: an error with no text reads *It answered with an error (HTTP 415) and no reason.*, and a round that fails is logged and runs again (0.13.3, kube#6). | Status turns red within 30 seconds of losing the API server and green when it returns. Go `TestUnreachableWithoutText`, `TestAPollerThatPanicsRunsAgain`. |
 | P1-12 | CPU and memory in use come from metrics-server when it is installed. | Without metrics-server the tab still works and marks usage as unavailable. |
 
 ### Nodes tab

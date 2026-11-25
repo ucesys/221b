@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -475,7 +477,7 @@ func (c *Cluster) Poll(ctx context.Context) {
 func (c *Cluster) WantPodUsage(want bool) { c.wantPodUsage.Store(want) }
 
 func (c *Cluster) loop(ctx context.Context, every time.Duration, f func(context.Context)) {
-	f(ctx)
+	c.safely(ctx, f)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -483,9 +485,21 @@ func (c *Cluster) loop(ctx context.Context, every time.Duration, f func(context.
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			f(ctx)
+			c.safely(ctx, f)
 		}
 	}
+}
+
+// safely runs one round of a poller: whatever a cluster answers, a round
+// that panics is logged and the next one runs, and the console goes on
+// (kube#6).
+func (c *Cluster) safely(ctx context.Context, f func(context.Context)) {
+	defer func() {
+		if p := recover(); p != nil {
+			c.log.Error("a check of the cluster failed; it runs again at the next round", "panic", fmt.Sprint(p))
+		}
+	}()
+	f(ctx)
 }
 
 // Info returns the cluster and connection details.
@@ -1240,8 +1254,18 @@ func unreachable(err error) string {
 	case errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err):
 		return "It did not answer within 5 seconds."
 	}
-	msg := shortError(err)
-	return strings.ToUpper(msg[:1]) + msg[1:] + "."
+	msg := strings.TrimSpace(shortError(err))
+	if msg == "" {
+		// An error with no text, as client-go makes of a status with an
+		// empty body (kube#6).
+		var status apierrors.APIStatus
+		if errors.As(err, &status) && status.Status().Code != 0 {
+			return fmt.Sprintf("It answered with an error (HTTP %d) and no reason.", status.Status().Code)
+		}
+		return "It answered with an error and no reason."
+	}
+	r, size := utf8.DecodeRuneInString(msg)
+	return string(unicode.ToUpper(r)) + msg[size:] + "."
 }
 
 // shortError trims long client errors to their last, most useful part.

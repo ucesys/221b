@@ -149,6 +149,7 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 ### Fixed
 
 - **One crafted Secret no longer puts the console into a crash loop** (kube#1). A Helm release record whose manifest holds a short Secret value that is not text (`data: {a: /w==}`) made the masking of its notes panic in the Secret cache, which ended the process at every start. Such values are now looked for without a pattern, and a record that cannot be read for any other reason loses its release on the Helm tab, logged by the Secret's name, instead of stopping the console.
+- **An API server that answers `/version` with an error and no text no longer stops the console** (kube#6). The health check took the first letter of the error's text, which a 415 with an empty body leaves empty, and the leader, and each replica that took the lead after it, exited at its first check. The top bar now says *It answered with an error (HTTP 415) and no reason.*, and a check that fails for any reason is logged and runs again at the next round.
 
 ## 0.13.2 (2026-11-25)
 
