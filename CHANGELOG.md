@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- A connection restored from a backup without its secret was tested as if the backup's placeholder were its credential, and the placeholder was sent to the API server (clusters review, sweep). Its test now says the credential is not in the backup, and sends nothing in its place.
+
 - The warning *the saved connections could not be read* was said again at every sync while several connections could not be read, because their errors came in another order each time (clusters review, nit). They are now in the order of their ids, and the warning is said once.
 
 - An edit of a kubeconfig connection that sent another context without its kubeconfig was saved with the context ignored (clusters review, nit). It is now refused, asking for the kubeconfig to be pasted again.

@@ -917,3 +917,22 @@ func TestASyncSaysTheSameErrorTheSameWay(t *testing.T) {
 		}
 	}
 }
+
+// Sweep: a connection restored from a backup without its secret was tested
+// as if the placeholder were its token, and the placeholder sent.
+func TestARestoredPlaceholderIsNotSentAsACredential(t *testing.T) {
+	l := listen(t)
+	m, ctx := started(t, clusters.NewMemoryStore())
+	spec := clusters.Spec{ID: "restored", Name: "restored", Env: "development", Server: l.srv.URL, CA: "system", Auth: "token", Mode: "read", Added: at}
+	if _, err := m.Restore(ctx, spec, clusters.Credential{Token: clusters.Placeholder}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.TestSaved(ctx, "restored", "ann")
+	must(t, err)
+	if r.Tone != "err" || !strings.Contains(r.Error, "backup") {
+		t.Errorf("the test of a restored placeholder: %s %q", steps(r), r.Error)
+	}
+	if got := l.sent(); len(got) > 0 {
+		t.Fatalf("the placeholder was sent as a credential: %d requests", len(got))
+	}
+}

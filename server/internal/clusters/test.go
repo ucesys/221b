@@ -183,6 +183,15 @@ func (t *tester) skip(key string) {
 
 // Test runs the five steps against the API server and reports each.
 func Test(ctx context.Context, s Spec, c Credential, opts TestOptions) TestResult {
+	// Neither a backup's placeholder nor a credential that does not go
+	// with the saved server (Spec.Unsettled) is ever sent: the sign-in
+	// step says why, and the steps before it are checked as ever.
+	switch {
+	case s.Unsettled != "":
+		return run(ctx, s, nil, errors.New(strings.TrimSuffix(s.Unsettled, ".")), c.CAPEM, opts)
+	case c.HasPlaceholder():
+		return run(ctx, s, nil, errors.New("its credential is not in the backup it was restored from: edit the connection and paste it again"), c.CAPEM, opts)
+	}
 	cfg, err := RestConfig(s, c)
 	return run(ctx, s, cfg, err, c.CAPEM, opts)
 }
