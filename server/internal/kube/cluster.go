@@ -1288,7 +1288,9 @@ func sameUsage(a, b map[string]nodes.Usage) bool {
 		return false
 	}
 	for k, v := range a {
-		if b[k] != v {
+		// A key missing on one side differs, zero usage or not
+		// (kube-cut-7).
+		if w, ok := b[k]; !ok || w != v {
 			return false
 		}
 	}
