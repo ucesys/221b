@@ -255,6 +255,27 @@ func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing)
 		if err != nil {
 			return err
 		}
+		node, err := isNode(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !node {
+			// A host outside Kubernetes: its port, its login, its pinned
+			// key and who paired it are the host's own columns, which its
+			// record writes (the key once a SuperAdmin trusted it, who
+			// paired it once its first login worked). A pairing writes its
+			// authority and its principal alone, so a pairing set before a
+			// login and taken back, or one a backup brings, changes none
+			// of them.
+			if _, err := tx.Exec(ctx, "UPDATE host_logins SET principal = $3 WHERE host_id = $1 AND login_user = $2", id, p.LoginUser, p.Principal); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, ca_fingerprint) VALUES ($1, $2)
+				ON CONFLICT (host_id) DO UPDATE SET ca_fingerprint = excluded.ca_fingerprint`, id, p.CAFinger); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := tx.Exec(ctx, "UPDATE hosts SET port = $2 WHERE host_id = $1", id, p.Port); err != nil {
 			return err
 		}
@@ -274,21 +295,6 @@ func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing)
 		if !p.PairedAt.IsZero() {
 			t := p.PairedAt.UTC()
 			paired = &t
-		}
-		node, err := isNode(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if !node {
-			// A host outside Kubernetes: who paired it and when are the
-			// host's own columns, which its record writes once its first
-			// login worked; a pairing set before that login, and taken
-			// back when it failed, leaves them as they were.
-			if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, host_keys, ca_fingerprint) VALUES ($1, $2, $3)
-				ON CONFLICT (host_id) DO UPDATE SET host_keys = excluded.host_keys, ca_fingerprint = excluded.ca_fingerprint`, id, keys, p.CAFinger); err != nil {
-				return err
-			}
-			continue
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, host_keys, ca_fingerprint, paired_by, paired_at) VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (host_id) DO UPDATE SET host_keys = excluded.host_keys, ca_fingerprint = excluded.ca_fingerprint,

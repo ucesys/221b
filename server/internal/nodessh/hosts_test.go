@@ -799,3 +799,21 @@ func TestAFailedFirstCheckLeavesNoPairedBy(t *testing.T) {
 		t.Fatalf("after a failed check the host reads %+v (%v)", h, err)
 	}
 }
+
+// A pairing written for a host, such as one a backup brings, changes none
+// of the host's own: its port, its login user, its pinned key (finding 14
+// of the review of November 24, 2026: with the database it re-pinned the
+// key and changed the port and the login, with no trust event).
+func TestAPairingChangesNoneOfAHostsOwn(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	was, _, _ := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err := e.svc.opts.Pairings.Set(ctx, Pairing{Cluster: "local", Node: "backup-1", LoginUser: "someone", Port: 2222, HostKeys: []string{testCA}, CAFinger: "SHA256:old", Principal: "221b-superadmins-old"}); err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err != nil || h.Port != was.Port || h.LoginUser != was.LoginUser || h.HostKey != was.HostKey || h.Fingerprint != was.Fingerprint {
+		t.Fatalf("the host was %+v\nand reads %+v (%v)", was, h, err)
+	}
+}
