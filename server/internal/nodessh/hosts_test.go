@@ -1118,3 +1118,48 @@ func TestAnOlderReadDoesNotOverwriteTheListAtHand(t *testing.T) {
 		t.Fatal("the older read put back a list without the host just added")
 	}
 }
+
+// removedMeanwhile is a store where another writer removes a host just
+// before the first save, which then meets a conflict.
+type removedMeanwhile struct {
+	kv.Backend
+	once sync.Once
+	gone func()
+}
+
+func (r *removedMeanwhile) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	conflict := false
+	r.once.Do(func() { r.gone(); conflict = true })
+	if conflict {
+		return "", kv.ErrConflict
+	}
+	return r.Backend.SaveKey(ctx, key, b, version)
+}
+
+// A host added again whose first try met another writer is added from
+// what the second try reads (the review of November 24, 2026: the trusted
+// key taken from a pending host on the first try stayed, though that host
+// had been removed meanwhile).
+func TestAnAddTriedAgainKeepsNothingOfTheFirstTry(t *testing.T) {
+	ctx := context.Background()
+	inner := &kv.Memory{}
+	direct := NewHosts(inner)
+	if _, err := direct.Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	if _, err := direct.update(ctx, "local", "backup-1", func(x *Host) error {
+		x.HostKey, x.Fingerprint, x.TrustedBy, x.TrustedAt = testCA, fingerprintOf(testCA), "Pat", &at
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &removedMeanwhile{Backend: inner, gone: func() { _ = direct.Delete(ctx, "local", "backup-1") }}
+	h, err := NewHosts(store).Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil)
+	if err != nil || h.HostKey != "" || h.TrustedBy != "" || h.TrustedAt != nil {
+		t.Fatalf("added on the second try: %+v %v", h, err)
+	}
+	if got, _, _ := direct.Get(ctx, "local", "backup-1"); got.HostKey != "" {
+		t.Fatalf("saved with the removed host's key: %+v", got)
+	}
+}

@@ -288,7 +288,12 @@ func (h *Hosts) Add(ctx context.Context, x Host, isNode func(cluster, name strin
 	x.State = HostPending
 	x.AutoName = x.Name == strings.ToLower(x.Address)
 	x.HostKey, x.Fingerprint, x.Offered, x.Mismatch, x.TrustedBy, x.TrustedAt, x.PairedBy, x.PairedAt = "", "", "", "", "", nil, "", nil
+	given := x
 	err := h.change(ctx, func(m map[string]Host) error {
+		// Each try starts from what was given: one tried again after a
+		// conflict keeps nothing the earlier try took from a host since
+		// gone.
+		x = given
 		if old, ok := m[key(x.Cluster, x.Name)]; ok {
 			switch {
 			case old.State == HostPending && old.Address == x.Address:
