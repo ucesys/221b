@@ -1077,3 +1077,44 @@ func TestALateKeyChangedMarkIsDropped(t *testing.T) {
 	}
 	t.Fatal("a mark against the key pinned now did not land")
 }
+
+// slowRead is a store whose first read is held, with what it read, until
+// it is let go.
+type slowRead struct {
+	kv.Backend
+	once    sync.Once
+	reading chan struct{}
+	release chan struct{}
+}
+
+func (s *slowRead) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	b, v, err := s.Backend.LoadKey(ctx, key)
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.reading)
+		<-s.release
+	}
+	return b, v, err
+}
+
+// A read that ends after a newer one, or after a write, leaves the list
+// at hand as the newer one has it (the review of November 24, 2026: the
+// older list was kept, and a host just added was unknown until the next
+// refresh).
+func TestAnOlderReadDoesNotOverwriteTheListAtHand(t *testing.T) {
+	ctx := context.Background()
+	store := &slowRead{Backend: &kv.Memory{}, reading: make(chan struct{}), release: make(chan struct{})}
+	hosts := NewHosts(store)
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = hosts.Load(ctx) }()
+	<-store.reading
+	if _, err := hosts.Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	close(store.release)
+	<-done
+	if _, ok, read := hosts.Known("local", "backup-1"); !ok || !read {
+		t.Fatal("the older read put back a list without the host just added")
+	}
+}
