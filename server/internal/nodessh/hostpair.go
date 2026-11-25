@@ -437,7 +437,9 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 			return Host{}, nil, err
 		case ctx.Err() != nil:
 			return Host{}, nil, ctx.Err()
-		case cred.Password != "" && !*asked:
+		case cred.Password != "" && !*asked && strings.Contains(err.Error(), "unable to authenticate"):
+			// The sign-in was refused and no password was asked for: only
+			// then does the host take none.
 			return Host{}, nil, fmt.Errorf("%s takes no password to sign in (PasswordAuthentication no): give a private key instead, or run the setup command yourself", hostPort)
 		case strings.Contains(err.Error(), "unable to authenticate"):
 			what := "password"

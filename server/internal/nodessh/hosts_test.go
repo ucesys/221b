@@ -968,3 +968,40 @@ func TestAPassphraseForAKeyWithNoneIsLeftAside(t *testing.T) {
 		t.Fatalf("a key with no passphrase, given one: %v", err)
 	}
 }
+
+// A sign-in that fails before the host could ask for a password says what
+// failed, not that the host takes no password (the review of November 24,
+// 2026: every failure before the prompt read "PasswordAuthentication no").
+func TestASignInThatFailsBeforeThePasswordSaysWhy(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// An sshd that greets and then drops the connection.
+			io.WriteString(c, "SSH-2.0-OpenSSH_9.7\r\n")
+			c.Close()
+		}
+	}()
+	if _, err := e.svc.opts.Hosts.update(ctx, "local", "backup-1", func(x *Host) error {
+		x.Port = ln.Addr().(*net.TCPAddr).Port
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cred := Credential{User: bootUser, Password: bootPassword}
+	_, _, err = e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err == nil || strings.Contains(err.Error(), "takes no password") || !strings.Contains(err.Error(), "SSH to ") {
+		t.Fatalf("a dropped connection: %v", err)
+	}
+	e.leaks(t, "a dropped connection", err.Error())
+}
