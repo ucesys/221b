@@ -145,13 +145,13 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
 			level = PodSecurity(ns)
 		}
-		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
+		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
 		}
 		ec.Name = strings.TrimSuffix(ec.Name, "plan") + "…"
-		p.Impact = []string{fmt.Sprintf("Adds debug container %s (%s) to pod %s; it sees the processes of %s.", ec.Name, ec.Image, r.Pod, ec.TargetContainerName), "It stays until the pod restarts and shares the pod's memory limit.", "Then opens a terminal in it. " + terms}
+		p.Impact = []string{fmt.Sprintf("Adds debug container %s (%s) to pod %s; it sees the processes of %s.", ec.Name, ec.Image, r.Pod, ec.TargetContainerName), "It stops when the session ends and stays in the pod, stopped, until the pod is replaced; it shares the pod's memory limit.", "Then opens a terminal in it. " + terms}
 		if len(ec.VolumeMounts) > 0 {
 			var names []string
 			for _, v := range ec.VolumeMounts {
@@ -160,7 +160,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			p.Impact = append(p.Impact, "Mounts "+strings.Join(names, ", ")+".")
 		}
 		p.Object = toYAML(ec)
-		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
+		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level, m.deadline(limit, ""))
 		err = b.AddEphemeral(ctx, pod, probe, true)
 		p.dry(err, "pod/"+r.Pod+" ephemeral container added (server dry run)")
 	case toolbox.ToolDebugPod:

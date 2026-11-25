@@ -956,16 +956,16 @@ func TestGeneralDebugContainerIsAsCapableAsTheNamespaceAllows(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
 	r := Request{Tool: toolbox.ToolDebugContainer, Image: "network", Profile: toolbox.ProfileGeneral}
 	c := toolbox.Default()
-	ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged)
+	ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged, time.Hour)
 	if err != nil || ec.SecurityContext.Capabilities == nil || len(ec.SecurityContext.Capabilities.Add) != len(c.Images["network"].Caps) || ec.SecurityContext.RunAsUser != nil {
 		t.Fatalf("privileged: %+v %v", ec.SecurityContext, err)
 	}
 	// NET_RAW and NET_ADMIN are not baseline capabilities.
-	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelBaseline); ec.SecurityContext.Capabilities != nil {
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelBaseline, time.Hour); ec.SecurityContext.Capabilities != nil {
 		t.Fatalf("baseline: %+v", ec.SecurityContext.Capabilities)
 	}
 	r.Profile = toolbox.ProfileRestricted
-	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted); *ec.SecurityContext.RunAsUser != 65532 || *ec.SecurityContext.AllowPrivilegeEscalation {
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted, time.Hour); *ec.SecurityContext.RunAsUser != 65532 || *ec.SecurityContext.AllowPrivilegeEscalation {
 		t.Fatalf("restricted: %+v", ec.SecurityContext)
 	}
 }
@@ -1662,11 +1662,11 @@ func TestDebugContainersTakeOnlyGeneralAndRestricted(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "web"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
 	r := Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: toolbox.ProfileGeneral}
-	if _, err := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted); err == nil || !strings.Contains(err.Error(), "restricted") {
+	if _, err := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted, time.Hour); err == nil || !strings.Contains(err.Error(), "restricted") {
 		t.Errorf("general in a restricted namespace: %v", err)
 	}
 	r.Profile = toolbox.ProfileSysAdmin
-	if ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged); err == nil || (ec.SecurityContext != nil && ec.SecurityContext.Privileged != nil) {
+	if ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged, time.Hour); err == nil || (ec.SecurityContext != nil && ec.SecurityContext.Privileged != nil) {
 		t.Errorf("sysadmin: %v", err)
 	}
 	// The start refuses it as the plan does: nothing is attached.
@@ -1682,4 +1682,40 @@ func TestDebugContainersTakeOnlyGeneralAndRestricted(t *testing.T) {
 	if got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "restricted") || attached != 0 {
 		t.Fatalf("%s %q %d attached", got.EndedBy, got.EndNote, attached)
 	}
+}
+
+// A debug container stops when its session ends: it waits for the end's
+// mark, or its deadline, instead of sleeping forever, and the end leaves
+// the mark. Its capabilities and the pod's volumes stayed open to anyone
+// with pods/exec in the namespace before; a Shell into another person's
+// debug container is refused (the toolbox review, finding 13).
+func TestADebugContainerStopsWhenItsSessionEnds(t *testing.T) {
+	m, f, _, _ := setup(t)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "network", Profile: toolbox.ProfileGeneral}, alice(), "", "")
+	live := waitState(t, m, s.ID, StateLive)
+	f.mu.Lock()
+	ec := f.pods["web/api-1"].Spec.EphemeralContainers[0]
+	f.mu.Unlock()
+	cmd := strings.Join(ec.Command, " ")
+	if strings.Contains(cmd, "infinity") || !strings.Contains(cmd, ".221b-end-"+s.ID) {
+		t.Fatalf("command %q", cmd)
+	}
+	// Another person's Shell into it is refused; the owner's is not.
+	other, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Container: live.Container}, bob(), "", "")
+	if got := waitState(t, m, other.ID, StateEnded); got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "debug container") {
+		t.Fatalf("bob's shell: %s %q", got.EndedBy, got.EndNote)
+	}
+	mine, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Container: live.Container}, alice(), "", "")
+	waitState(t, m, mine.ID, StateLive)
+	m.End(mine.ID, alice(), "")
+	m.End(s.ID, alice(), "")
+	waitState(t, m, s.ID, StateEnded)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.execs {
+		if e[0] == "web/api-1/"+live.Container && strings.Contains(strings.Join(e[1:], " "), "touch") && strings.Contains(strings.Join(e[1:], " "), ".221b-end-"+s.ID) {
+			return
+		}
+	}
+	t.Fatalf("the end left no mark: %v", f.execs)
 }

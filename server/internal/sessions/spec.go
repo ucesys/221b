@@ -483,10 +483,14 @@ func restrictedContext() *corev1.SecurityContext {
 }
 
 // EphemeralContainer is the debug container of TB-24: an allowlisted
-// image that sleeps until a shell is opened into it, sees the target's
-// processes, and mounts the pod's volumes at the target's paths (without
-// subPath, which ephemeral containers may not use).
-func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod, level string) (corev1.EphemeralContainer, error) {
+// image that waits while its session lasts, sees the target's processes,
+// and mounts the pod's volumes at the target's paths (without subPath,
+// which ephemeral containers may not use). An ephemeral container cannot
+// be removed, so it stops instead: its main process waits for the mark the
+// session's end leaves, or for its deadline should the console not, and
+// the container stops with it, its shells too (the toolbox review,
+// finding 13).
+func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod, level string, deadline time.Duration) (corev1.EphemeralContainer, error) {
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return corev1.EphemeralContainer{}, fmt.Errorf("no image named %q", r.Image)
@@ -499,7 +503,7 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 	ec := corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 		Name:            "221b-" + r.Image + "-" + id[:4],
 		Image:           img.Image,
-		Command:         []string{"sleep", "infinity"},
+		Command:         debugWait(id, deadline),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		SecurityContext: securityFor(r.Profile, img, level),
 		Stdin:           true,
@@ -538,6 +542,19 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 	}
 	return ec, nil
 }
+
+// endMark is the file whose making stops a session's debug container.
+func endMark(id string) string { return "/tmp/.221b-end-" + id }
+
+// debugWait is a debug container's main process: it waits, a second at a
+// time, until the session's end leaves its mark or the deadline passes.
+func debugWait(id string, deadline time.Duration) []string {
+	return []string{"sh", "-c", fmt.Sprintf(`i=0; while [ ! -e %s ] && [ "$i" -lt %d ]; do sleep 1; i=$((i+1)); done`, endMark(id), seconds(deadline, 1))}
+}
+
+// StopDebug is what a session's end runs in its debug container: the mark
+// its main process waits for.
+func StopDebug(id string) []string { return []string{"sh", "-c", "touch " + endMark(id)} }
 
 // DebugJob is the debug pod of TB-28: a Job with one pod, a deadline and
 // a time to live, labels copied from a pod or typed, a readiness gate that

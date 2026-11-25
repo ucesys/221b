@@ -172,6 +172,9 @@ type Session struct {
 	fwd     Forwarder
 	cast    *transcript
 	lastRev time.Time
+	// debug is the debug container the session attached, which its end
+	// stops (the toolbox review, finding 13).
+	debug string
 }
 
 // Manager keeps the sessions. They live in memory on the replica that
@@ -381,6 +384,10 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 				fail(errors.New(why))
 				return
 			}
+			if why := m.othersDebug(s, pod, container); why != "" {
+				fail(errors.New(why))
+				return
+			}
 		}
 		m.located(s, pod, container)
 		switch r.Tool {
@@ -401,7 +408,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
 			level = PodSecurity(ns)
 		}
-		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod, level)
+		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod, level, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
@@ -410,7 +417,10 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
-		m.note(s, fmt.Sprintf("Debug container %s attached to pod %s: it stays until the pod restarts.", ec.Name, r.Pod))
+		m.mu.Lock()
+		s.debug = ec.Name
+		m.mu.Unlock()
+		m.note(s, fmt.Sprintf("Debug container %s attached to pod %s: it stops when the session ends, and stays in the pod, stopped, until the pod is replaced.", ec.Name, r.Pod))
 		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, r.Namespace, r.Pod) }, ec.Name, m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -520,6 +530,32 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 	default:
 		fail(fmt.Errorf("unknown tool %q", r.Tool))
 	}
+}
+
+// othersDebug says why a shell or a command may not open in a container,
+// or "": a debug container the console attached (221b-…, ephemeral) is
+// used through its own session, by its owner, never by another person
+// with pods/exec, nor once its session has ended (the toolbox review,
+// finding 13; one left running by an older console is refused too).
+func (m *Manager) othersDebug(s *Session, pod *corev1.Pod, container string) string {
+	if !strings.HasPrefix(container, "221b-") {
+		return ""
+	}
+	ephemeral := false
+	for _, c := range pod.Spec.EphemeralContainers {
+		ephemeral = ephemeral || c.Name == container
+	}
+	if !ephemeral {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, o := range m.all {
+		if o != s && o.State != StateEnded && o.Req.Tool == toolbox.ToolDebugContainer && o.debug == container && o.Req.Namespace == pod.Namespace && o.Req.Pod == pod.Name && o.Owner.same(s.Owner) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("container %s is a debug container of another person's session, or of one that has ended: it is used through its own session", container)
 }
 
 func (m *Manager) located(s *Session, pod *corev1.Pod, container string) {
@@ -844,6 +880,7 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	objects := append([]Created(nil), s.Objects...)
 	cast := s.cast
 	s.cast = nil
+	debug := s.debug
 	m.changedLocked(s)
 	m.mu.Unlock()
 	if fwd != nil {
@@ -854,6 +891,13 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
 	defer cancel()
+	if debug != "" {
+		// An ephemeral container cannot be removed: its main process
+		// stops at this mark, and the container with it.
+		if err := s.backend.Exec(ctx, s.Req.Namespace, s.Req.Pod, debug, StopDebug(s.ID), false, nil, io.Discard, io.Discard, nil); err != nil {
+			m.opts.Logger.Warn("could not stop the debug container; its deadline will", "session", s.ID, "container", s.Req.Namespace+"/"+s.Req.Pod+"/"+debug, "err", err)
+		}
+	}
 	for _, o := range objects {
 		m.remove(ctx, s, o)
 	}

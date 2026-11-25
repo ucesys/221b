@@ -479,7 +479,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           )}
           <div className="rk-callout" data-tone="warn">
             <ShieldSmallIcon />
-            <span>A debug container cannot be removed: it stays in the pod, stopped, until the pod is replaced, and shares the pod’s memory limit.</span>
+            <span>A debug container cannot be removed: it stops when the session ends and stays in the pod, stopped, until the pod is replaced. It shares the pod’s memory limit.</span>
           </div>
         </>
       )
