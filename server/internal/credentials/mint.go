@@ -65,8 +65,9 @@ func (s *Service) mint(ctx context.Context, c Credential, sec Secret) (string, e
 }
 
 // GitHubAPI is the API of the GitHub an endpoint is on: api.github.com
-// for github.com, https://HOST/api/v3 for GitHub Enterprise Server.
-// Tests set APIOverride.
+// for github.com, api.SUBDOMAIN.ghe.com for GitHub Enterprise Cloud with
+// data residency (GHE.com, credentials-unver-4), https://HOST/api/v3 for
+// GitHub Enterprise Server, on its port. Tests set APIOverride.
 func GitHubAPI(endpoint string) string {
 	if APIOverride != "" {
 		return APIOverride
@@ -75,8 +76,13 @@ func GitHubAPI(endpoint string) string {
 	if err != nil {
 		return "https://api.github.com"
 	}
-	if ep.Host == "github.com" || ep.Host == "api.github.com" {
+	switch {
+	case ep.Host == "github.com" || ep.Host == "www.github.com" || ep.Host == "api.github.com":
 		return "https://api.github.com"
+	case strings.HasSuffix(ep.Host, ".ghe.com") && !strings.HasPrefix(ep.Host, "api."):
+		return "https://api." + ep.Host
+	case strings.HasSuffix(ep.Host, ".ghe.com"):
+		return "https://" + ep.Host
 	}
 	return "https://" + ep.Host + "/api/v3"
 }

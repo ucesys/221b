@@ -1003,3 +1003,20 @@ func TestAOneLineSecretHasNoControlCharacter(t *testing.T) {
 		}
 	}
 }
+
+// credentials-unver-4: a GitHub App's API is api.SUBDOMAIN.ghe.com on
+// GHE.com, and keeps a GitHub Enterprise Server's port.
+func TestTheGitHubAPIOfEachGitHub(t *testing.T) {
+	for ep, want := range map[string]string{
+		"https://github.com/org":       "https://api.github.com",
+		"github.com/org":               "https://api.github.com",
+		"https://www.github.com/org":   "https://api.github.com",
+		"https://octocorp.ghe.com/org": "https://api.octocorp.ghe.com",
+		"https://ghes.corp/org":        "https://ghes.corp/api/v3",
+		"https://ghes.corp:8443/org":   "https://ghes.corp:8443/api/v3",
+	} {
+		if got := GitHubAPI(ep); got != want {
+			t.Errorf("%s: %s, not %s", ep, got, want)
+		}
+	}
+}
