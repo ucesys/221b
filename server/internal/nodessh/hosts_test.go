@@ -1012,7 +1012,16 @@ func TestASignInThatFailsBeforeThePasswordSaysWhy(t *testing.T) {
 func TestACheckOutOfTimeIsADeadline(t *testing.T) {
 	e := newHostEnv(t)
 	e.trust(t)
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	// The host now takes the connection and says nothing: the deadline
+	// ends the login's handshake.
+	silent := silentNode(t)
+	if _, err := e.svc.opts.Hosts.update(context.Background(), "local", "backup-1", func(x *Host) error {
+		x.Port = silent.Port
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := e.svc.CheckHost(ctx, "local", "backup-1", "Pat")
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.HasPrefix(err.Error(), "the console could not log in to backup-1 with its certificate: ") || strings.Contains(err.Error(), "unreachable: ") {

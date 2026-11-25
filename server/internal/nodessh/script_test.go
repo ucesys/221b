@@ -665,14 +665,14 @@ func TestAPairingRefusesALoginUserSshdKeepsOut(t *testing.T) {
 	group := strings.Fields(string(groups))[0]
 	set := func(lines ...string) string { return "SSHD_SET=" + strings.Join(lines, "\n") }
 	refused := map[string][]string{
-		"public keys off":             {set("pubkeyauthentication no")},
+		"public keys off":              {set("pubkeyauthentication no")},
 		"public keys off for the user": {"SSHD_MATCH_USER=" + login, "SSHD_MATCH=pubkeyauthentication no"},
-		"a second method":             {set("authenticationmethods publickey,password")},
-		"a forced command":            {set("forcecommand internal-sftp")},
-		"AllowUsers without the user": {set("allowusers ops", "allowusers admin@10.0.0.1")},
-		"DenyUsers by a pattern":      {set("denyusers " + login[:1] + "*")},
-		"DenyGroups":                  {set("denygroups " + group)},
-		"AllowGroups without a group": {set("allowgroups no-such-group")},
+		"a second method":              {set("authenticationmethods publickey,password")},
+		"a forced command":             {set("forcecommand internal-sftp")},
+		"AllowUsers without the user":  {set("allowusers ops", "allowusers admin@10.0.0.1")},
+		"DenyUsers by a pattern":       {set("denyusers " + login[:1] + "*")},
+		"DenyGroups":                   {set("denygroups " + group)},
+		"AllowGroups without a group":  {set("allowgroups no-such-group")},
 	}
 	if login == "root" {
 		refused["PermitRootLogin no"] = []string{set("permitrootlogin no")}
@@ -693,7 +693,7 @@ func TestAPairingRefusesALoginUserSshdKeepsOut(t *testing.T) {
 	}
 	for name, env := range map[string][]string{
 		"a key or a key and a password": {set("authenticationmethods publickey,password publickey")},
-		"AllowUsers naming the user":    {set("allowusers ops", "allowusers " + login + "@10.0.0.1")},
+		"AllowUsers naming the user":    {set("allowusers ops", "allowusers "+login+"@10.0.0.1")},
 		"DenyUsers at another host":     {set("denyusers " + login + "@10.0.0.9")},
 		"AllowGroups naming a group":    {set("allowgroups " + group)},
 		"no forced command":             {set("forcecommand none", "permitrootlogin prohibit-password")},
