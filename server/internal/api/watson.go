@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/rest"
-
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/cards"
@@ -56,19 +54,15 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 	}
 	id := clusterID(r)
 	c := s.changeRules(r, id)
-	var cfg *rest.Config
-	if s.opts.Clusters != nil {
-		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
-			cfg = client.RestConfig()
-		}
-	} else if rc, ok := s.opts.Cluster.(interface{ RestConfig() *rest.Config }); ok {
-		cfg = rc.RestConfig()
-	}
-	if cfg == nil {
+	// The configuration the change runs with, and the role verdict of
+	// that same connection (RB-36): read once, so a re-point between the
+	// two never pairs one cluster's verdict with another's API server.
+	run := s.running(id)
+	if run.cfg == nil {
 		jsonError(w, http.StatusServiceUnavailable, "the connection to "+id+" is not running; see its cluster page")
 		return c, false
 	}
-	c.Config = cfg
+	c.Config, c.Locked = run.cfg, s.refusalOf(id, run)
 	return c, true
 }
 
@@ -99,8 +93,8 @@ func (s *Server) watsonRules(id string) (watson.Cluster, bool) {
 		if _, ok := s.opts.Clusters.Summary(id); !ok {
 			return c, false
 		}
-		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
-			c.Config = client.RestConfig()
+		if run := s.running(id); run.cfg != nil {
+			c.Config, c.Locked = run.cfg, s.refusalOf(id, run)
 		}
 	}
 	return c, true

@@ -9,10 +9,12 @@ import (
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
 )
@@ -146,13 +148,16 @@ func (s *Server) monitor() *roles.Monitor { return s.opts.Roles.Monitor }
 
 // checkRoles compares a cluster's roles with the shipped ones, keeps the
 // result, and audits a change. ok is false when the roles have not been read.
-func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles.ID]roles.Deployed, roles.Deployed, bool) {
+// The verdict is kept with of, the fingerprint of the connection src
+// belongs to, read with it (running): src may be a connection re-pointed
+// since, whose verdict must not pass for the new one (RB-36).
+func (s *Server) checkRoles(id, of string, src views.Source) (roles.Drift, map[roles.ID]roles.Deployed, roles.Deployed, bool) {
 	dep, nodes, ok := deployedRoles(src)
 	if !ok {
 		return roles.Drift{}, nil, roles.Deployed{}, false
 	}
 	d := roles.Check(s.opts.Roles.Templates, s.rolesOptions(), dep, nodes, time.Now().UTC())
-	d.Of = s.connOf(id)
+	d.Of = of
 	d.Stamp = roles.Stamp(dep, nodes)
 	if s.monitor().Set(id, d) && s.opts.Audit != nil && (d.State != "match") {
 		detail := d.State
@@ -164,31 +169,49 @@ func (s *Server) checkRoles(id string, src views.Source) (roles.Drift, map[roles
 	return d, dep, nodes, true
 }
 
-// connOf fingerprints the connection a cluster runs now, what it connects
-// to and with (*clusters.Manager's Fingerprint); "" without one. A
-// comparison made through another connection of the same id is not used
-// (RB-36).
-func (s *Server) connOf(id string) string {
-	if f, ok := s.opts.Clusters.(interface{ Fingerprint(string) string }); ok {
-		return f.Fingerprint(id)
+// conn is a cluster's running connection as one read: its client, the
+// configuration it connects with, and its fingerprint (what it connects
+// to and with, *clusters.Manager's Conn). A role verdict is kept with the
+// fingerprint of the client it was read through, and a change is decided
+// by the fingerprint of the configuration it runs with, so a connection
+// re-pointed between two reads never pairs one cluster's verdict with
+// another's API server (RB-36). The fingerprint is "" without one.
+type conn struct {
+	cl  Cluster
+	cfg *rest.Config
+	of  string
+}
+
+func (s *Server) running(id string) conn {
+	var c conn
+	if s.opts.Clusters == nil {
+		if id == clusters.LocalID && s.opts.Cluster != nil {
+			c.cl = s.opts.Cluster
+			if rc, ok := s.opts.Cluster.(interface{ RestConfig() *rest.Config }); ok {
+				c.cfg = rc.RestConfig()
+			}
+		}
+		return c
 	}
-	return ""
+	var client clusters.Client
+	var ok bool
+	if cn, has := s.opts.Clusters.(interface {
+		Conn(string) (*live.Store, clusters.Client, string, bool)
+	}); has {
+		_, client, c.of, ok = cn.Conn(id)
+	} else {
+		_, client, ok = s.opts.Clusters.Lookup(id)
+	}
+	if !ok || client == nil {
+		return conn{}
+	}
+	c.cl, _ = client.(Cluster)
+	c.cfg = client.RestConfig()
+	return c
 }
 
 // clusterOf is the running connection of a cluster, or nil.
-func (s *Server) clusterOf(id string) Cluster {
-	if s.opts.Clusters == nil {
-		if id == clusters.LocalID && s.opts.Cluster != nil {
-			return s.opts.Cluster
-		}
-		return nil
-	}
-	if _, client, ok := s.opts.Clusters.Lookup(id); ok {
-		cl, _ := client.(Cluster)
-		return cl
-	}
-	return nil
-}
+func (s *Server) clusterOf(id string) Cluster { return s.running(id).cl }
 
 // RoleRefusal is why every change on a cluster is refused for its roles
 // (rbac.enforce strict), or "" (RB-36). A cluster with no current
@@ -196,16 +219,19 @@ func (s *Server) clusterOf(id string) Cluster {
 // or an old one) is compared now, from the cache, on any replica; one
 // whose roles cannot be read stays refused.
 func (s *Server) RoleRefusal(cluster string) string {
+	return s.refusalOf(cluster, s.running(cluster))
+}
+
+// refusalOf is RoleRefusal for the connection c, read once: what a change
+// that runs with c's configuration is decided by.
+func (s *Server) refusalOf(cluster string, c conn) string {
 	if s.opts.Roles.Enforce != "strict" {
 		return ""
 	}
-	of := s.connOf(cluster)
-	if _, ok := s.monitor().Current(cluster, of); !ok {
-		if cl := s.clusterOf(cluster); cl != nil {
-			s.checkRoles(cluster, cl)
-		}
+	if _, ok := s.monitor().Current(cluster, c.of); !ok && c.cl != nil {
+		s.checkRoles(cluster, c.of, c.cl)
 	}
-	return s.monitor().Refusal(cluster, of, s.opts.Roles.Enforce)
+	return s.monitor().Refusal(cluster, c.of, s.opts.Roles.Enforce)
 }
 
 // RunRoleChecks compares the roles of every cluster with the shipped ones,
@@ -262,44 +288,42 @@ func (s *Server) CheckRolesSoon() {
 // are not the ones last compared: an edit to a 221B ClusterRole is seen
 // within rolesWatch rather than at the next five-minute round (RB-36).
 func (s *Server) checkChangedRoles() {
-	check := func(id string, cl Cluster) {
-		dep, nodes, ok := deployedRoles(cl)
+	check := func(id string, c conn) {
+		if c.cl == nil {
+			return
+		}
+		dep, nodes, ok := deployedRoles(c.cl)
 		if !ok {
 			return
 		}
-		if d, had := s.monitor().Get(id); had && d.Stamp == roles.Stamp(dep, nodes) && d.Of == s.connOf(id) {
+		if d, had := s.monitor().Get(id); had && d.Stamp == roles.Stamp(dep, nodes) && d.Of == c.of {
 			return
 		}
-		s.checkRoles(id, cl)
+		s.checkRoles(id, c.of, c.cl)
 	}
 	if s.opts.Clusters == nil {
-		if s.opts.Cluster != nil {
-			check(clusters.LocalID, s.opts.Cluster)
-		}
+		check(clusters.LocalID, s.running(clusters.LocalID))
 		return
 	}
 	for _, sum := range s.opts.Clusters.List() {
-		if cl := s.clusterOf(sum.ID); cl != nil {
-			check(sum.ID, cl)
-		}
+		check(sum.ID, s.running(sum.ID))
 	}
 }
 
 // checkAllRoles compares every cluster's roles and says whether it read any.
 func (s *Server) checkAllRoles() bool {
 	read := false
-	if s.opts.Clusters == nil {
-		if s.opts.Cluster != nil {
-			_, _, _, read = s.checkRoles(clusters.LocalID, s.opts.Cluster)
+	ids := []string{clusters.LocalID}
+	if s.opts.Clusters != nil {
+		ids = ids[:0]
+		for _, sum := range s.opts.Clusters.List() {
+			ids = append(ids, sum.ID)
 		}
-		return read
 	}
-	for _, sum := range s.opts.Clusters.List() {
-		if _, client, ok := s.opts.Clusters.Lookup(sum.ID); ok {
-			if cl, _ := client.(Cluster); cl != nil {
-				if _, _, _, ok := s.checkRoles(sum.ID, cl); ok {
-					read = true
-				}
+	for _, id := range ids {
+		if c := s.running(id); c.cl != nil {
+			if _, _, _, ok := s.checkRoles(id, c.of, c.cl); ok {
+				read = true
 			}
 		}
 	}
@@ -328,11 +352,17 @@ func (s *Server) isSuperAdmin(r *http.Request) bool {
 // Kubernetes, so the bindings are shown only to a person who may list them,
 // and the super-role holders only to a SuperAdmin (RB-41, RB-42).
 func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
-	_, cl, ok := s.lookup(w, r)
-	if !ok {
+	if _, _, ok := s.lookup(w, r); !ok {
 		return
 	}
-	_, dep, _, read := s.checkRoles(clusterID(r), cl)
+	// The roles, and the bindings below, of one connection read once.
+	c := s.running(clusterID(r))
+	if c.cl == nil {
+		jsonError(w, http.StatusServiceUnavailable, "The connection to this cluster is not running; see its cluster page.")
+		return
+	}
+	cl := c.cl
+	_, dep, _, read := s.checkRoles(clusterID(r), c.of, cl)
 	if !read {
 		jsonError(w, http.StatusServiceUnavailable, "The console has not read this cluster's roles yet. Try again in a moment.")
 		return
@@ -372,11 +402,15 @@ func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 // getPermissions is the Permissions page, read-only for everyone who signs
 // in (RB-44).
 func (s *Server) getPermissions(w http.ResponseWriter, r *http.Request) {
-	_, cl, ok := s.lookup(w, r)
-	if !ok {
+	if _, _, ok := s.lookup(w, r); !ok {
 		return
 	}
-	d, dep, nodes, read := s.checkRoles(clusterID(r), cl)
+	c := s.running(clusterID(r))
+	if c.cl == nil {
+		jsonError(w, http.StatusServiceUnavailable, "The connection to this cluster is not running; see its cluster page.")
+		return
+	}
+	d, dep, nodes, read := s.checkRoles(clusterID(r), c.of, c.cl)
 	if !read {
 		jsonError(w, http.StatusServiceUnavailable, "The console has not read this cluster's roles yet. Try again in a moment.")
 		return

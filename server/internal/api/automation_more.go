@@ -800,14 +800,18 @@ func (k automationKube) RunLine(ctx context.Context, cluster string, p automatio
 		if sum, ok := s.opts.Clusters.Summary(cluster); ok {
 			c.Name, c.Env, c.ReadOnly = sum.Name, sum.Env, sum.Mode != clusters.ModeWrite
 		}
-		if _, client, ok := s.opts.Clusters.Lookup(cluster); ok && client != nil {
-			c.Config = client.RestConfig()
-		}
 	}
+	// The configuration the line runs with and the role verdict of that
+	// same connection, read once (RB-36).
+	run := s.running(cluster)
+	if s.opts.Clusters == nil {
+		run = conn{}
+	}
+	c.Config = run.cfg
 	if c.Config == nil {
 		return 1, fmt.Errorf("the connection to %s is not running", cluster)
 	}
-	c.Locked = s.RoleRefusal(cluster)
+	c.Locked = s.refusalOf(cluster, run)
 	person := kube.Person{User: p.User, Groups: p.Groups}
 	if identity != "" {
 		ns, name, _ := strings.Cut(identity, "/")

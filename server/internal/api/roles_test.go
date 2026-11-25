@@ -175,11 +175,11 @@ func TestWideningTheNodesRoleIsADrift(t *testing.T) {
 		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
 	}
 	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
-	if d, _, _, ok := s.checkRoles(clusters.LocalID, local); !ok || d.State != "match" || s.RoleRefusal(clusters.LocalID) != "" {
+	if d, _, _, ok := s.checkRoles(clusters.LocalID, "", local); !ok || d.State != "match" || s.RoleRefusal(clusters.LocalID) != "" {
 		t.Fatalf("shipped roles: %+v, refusal %q", d, s.RoleRefusal(clusters.LocalID))
 	}
 	local.Put(clusterRoleOf(roles.NodesClusterRole, append(roles.Nodes().Rules, roles.Rule{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}})))
-	d, _, _, _ := s.checkRoles(clusters.LocalID, local)
+	d, _, _, _ := s.checkRoles(clusters.LocalID, "", local)
 	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != roles.NodesID {
 		t.Fatalf("a widened nodes role: %+v", d)
 	}

@@ -1019,6 +1019,22 @@ func (m *Manager) Fingerprint(id string) string {
 	return ""
 }
 
+// Conn returns a connection's store and cluster with the fingerprint of
+// the connection they belong to (Fingerprint), all three from one
+// instance under one lock: a verdict read through the cluster is kept
+// with that fingerprint, and a change is decided by it, so neither pairs
+// with a connection re-pointed in between (RB-36). nil ones when the
+// connection could not start.
+func (m *Manager) Conn(id string) (*live.Store, Client, string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, nil, "", false
+	}
+	return inst.Store, inst.Cluster, inst.conn, true
+}
+
 // Lookup returns a connection's store and cluster for the API; nil ones
 // when the connection could not start.
 func (m *Manager) Lookup(id string) (*live.Store, Client, bool) {

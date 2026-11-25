@@ -111,10 +111,10 @@ func (s *Server) watsonClusters() []watson.Cluster {
 	}
 	var out []watson.Cluster
 	for _, sum := range s.opts.Clusters.List() {
-		c := watson.Cluster{ID: sum.ID, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Locked: s.RoleRefusal(sum.ID)}
-		if _, client, ok := s.opts.Clusters.Lookup(sum.ID); ok && client != nil {
-			c.Config = client.RestConfig()
-		}
+		// The configuration and the role verdict of one connection, read
+		// once (RB-36).
+		run := s.running(sum.ID)
+		c := watson.Cluster{ID: sum.ID, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Locked: s.refusalOf(sum.ID, run), Config: run.cfg}
 		out = append(out, c)
 	}
 	return out

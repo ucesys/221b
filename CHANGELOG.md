@@ -83,6 +83,12 @@ Four notes on the credentials; [docs/upgrading.md](docs/upgrading.md) says more:
 - **An SSH credential's endpoint keeps its user** (credentials-unver-9): `ssh://deploy@host/org` was kept as `ssh://host/org`, and its Test signed in as `git`. A credential saved so before is tested as `git` until its endpoint is given again.
 - **A scheme-less endpoint with a port covers the addresses on that port** (credentials-unver-11): `git.internal:443/org` covered nothing, since `https://git.internal` names no port; it now covers the addresses whose scheme reaches that port.
 
+### Fixed
+
+### Security
+
+- **With `rbac.enforce: strict`, a connection re-pointed at another cluster could run changes on the old cluster's role verdict** (clusters review, finding 1). A role check that had looked the connection up before the re-point kept the old cluster's "match" under the new connection's fingerprint, so Watson, Automation and approvals ran changes on the new cluster for up to 15 minutes without its roles ever being read. The verdict is now kept with the fingerprint of the connection it was read through, and a change is decided by the fingerprint of the configuration it runs with, both read with it at once.
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".
