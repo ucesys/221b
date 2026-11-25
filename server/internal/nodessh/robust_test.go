@@ -213,3 +213,41 @@ func TestTheAuthorityComesBackFromABackup(t *testing.T) {
 		t.Fatal("an authority in memory gives its key too")
 	}
 }
+
+// A session or a run makes no authority: with pairings and no key (a
+// restore that skipped it), it says so, and the backup's key can still be
+// put back (finding 9 of the review of November 24, 2026: the first
+// session made a key, and the real one could not be restored after).
+func TestASessionMakesNoAuthority(t *testing.T) {
+	ctx := context.Background()
+	orig := NewCA(kube.NewSecretKeyFor(fake.NewClientset(), "221b", "x-ssh-ca", nil))
+	if err := orig.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pem, err := orig.PrivateKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := kube.NewSecretKeyFor(fake.NewClientset(), "221b", "x-ssh-ca", nil)
+	pairings := NewPairings(&kv.Memory{})
+	if err := pairings.Set(ctx, Pairing{Cluster: "local", Node: "worker-1", LoginUser: "root", Port: 22, HostKeys: []string{testCA}, CAFinger: orig.Fingerprint(), Principal: PrincipalOf(testConsole)}); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(Options{CA: NewCA(store), Pairings: pairings, Console: testConsole, NodeAddr: func(string, string) (string, error) { return "127.0.0.1", nil }})
+	_, err = svc.Exec(ctx, "local", "worker-1", "k", "true", false, strings.NewReader(""), nil)
+	if err == nil || !strings.Contains(err.Error(), "no SSH authority") {
+		t.Fatalf("a run with no authority: %v", err)
+	}
+	if _, _, err := svc.Dial(ctx, "local", "worker-1", sessions.Who{Name: "Pat"}, "s1"); err == nil || !strings.Contains(err.Error(), "no SSH authority") {
+		t.Fatalf("a session with no authority: %v", err)
+	}
+	if _, _, found, _ := store.LoadKey(ctx, keyPrivate); found {
+		t.Fatal("a session made a key")
+	}
+	if err := svc.RestoreAuthority(ctx, pem); err != nil {
+		t.Fatalf("the backup's key could not be put back: %v", err)
+	}
+	if svc.Fingerprint() != orig.Fingerprint() {
+		t.Fatal("another authority")
+	}
+}

@@ -192,8 +192,14 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 	if isHost && host.Mismatch != "" {
 		return nil, p, "", hostKeyChanged(node)
 	}
-	if err := s.opts.CA.Load(ctx); err != nil {
+	// Reading the key, never making one: a new authority cannot make a
+	// pairing work, and once made it keeps the backup's key from being put
+	// back (RestoreAuthority). Pairing makes the authority.
+	if err := s.opts.CA.Peek(ctx); err != nil {
 		return nil, p, "", err
+	}
+	if s.opts.CA.Fingerprint() == "" {
+		return nil, p, "", fmt.Errorf("this console has no SSH authority yet, so node %s cannot be reached with the authority it was paired with: restore the authority's key from a backup (Administration › Backup) or put the Secret <release>-ssh-ca back, else pair the node again", node)
 	}
 	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
 		return nil, p, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
