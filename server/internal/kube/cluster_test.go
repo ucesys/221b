@@ -28,7 +28,7 @@ func start(t *testing.T, o sim.Options) (*kube.Cluster, *httptest.Server, chan k
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
 	cl, err := kube.New(&rest.Config{Host: srv.URL}, kube.Options{
-		Name: "sim", Mode: kube.ModeURL, HealthInterval: 200 * time.Millisecond, KubeletStats: true,
+		Name: "sim", Mode: kube.ModeURL, HealthInterval: 200 * time.Millisecond, KubeletStats: true, SecretsRead: true,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -147,15 +147,28 @@ func TestTransformsKeepTheCacheSmall(t *testing.T) {
 			}
 		}
 	}
-	// Secrets are cached as summaries: keys and sizes, never values.
+	// Secrets are cached as summaries: keys and sizes, never values. The
+	// planted Secret must be among them, or this checks nothing
+	// (kube-cut-8).
+	waitFor(t, "the Secrets", func() bool { return cl.Count("secrets", "default") > 0 })
+	planted := false
 	for _, o := range cl.Objects("secrets", "default") {
 		sum, ok := o.(*kube.SecretSummary)
 		if !ok {
 			t.Fatalf("secret cached as %T", o)
 		}
-		if sum.Name == "planted-secret" && (len(sum.Keys) != 1 || sum.Keys[0].Key != "token" || sum.Keys[0].Bytes != len(sim.PlantedSecretValue)) {
-			t.Fatalf("planted secret summary %+v", sum.Keys)
+		if b, _ := json.Marshal(sum); strings.Contains(string(b), sim.PlantedSecretValue) {
+			t.Fatalf("the cache holds a Secret's value: %s", sum.Name)
 		}
+		if sum.Name == "planted-secret" {
+			planted = true
+			if len(sum.Keys) != 1 || sum.Keys[0].Key != "token" || sum.Keys[0].Bytes != len(sim.PlantedSecretValue) {
+				t.Fatalf("planted secret summary %+v", sum.Keys)
+			}
+		}
+	}
+	if !planted {
+		t.Fatal("the planted Secret is not in the cache")
 	}
 	// The long tail is metadata only; what the analysis tabs read is kept
 	// whole, without managed fields.

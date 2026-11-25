@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,12 +39,40 @@ func TestVolumeStatsComeFromTheKubelets(t *testing.T) {
 	}
 }
 
-// With kubeletStats off nothing is read.
+// With kubeletStats off nothing is read: the console's own setting, not
+// only a refused proxy (kube-cut-8: the test read through a console with
+// it on, against kubelets that refuse).
 func TestNoVolumeStatsWithoutKubeletStats(t *testing.T) {
 	cl, _, _ := start(t, sim.Options{Nodes: 10, Pods: 60, KubeletStats: false})
 	cl.ReadVolumesNow(context.Background())
 	if _, ok := cl.VolumeStats("monitoring", "prometheus-db-prometheus-0"); ok {
 		t.Error("stats without permission to read the kubelets")
+	}
+
+	// The kubelets answer, and the console's kubeletStats is off.
+	s := sim.New(sim.Options{Nodes: 10, Pods: 60, KubeletStats: true})
+	var asked atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/proxy/") {
+			asked.Add(1)
+		}
+		s.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	off, err := kube.New(&rest.Config{Host: srv.URL}, kube.Options{Name: "sim", Mode: kube.ModeURL, KubeletStats: false, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go off.Run(ctx)
+	waitFor(t, "the claims", func() bool { return off.Ready() && off.Count("persistentvolumeclaims", "") > 0 })
+	for range 3 {
+		off.Poll(ctx)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, ok := off.VolumeStats("monitoring", "prometheus-db-prometheus-0"); ok || asked.Load() != 0 {
+		t.Errorf("with kubeletStats off the kubelets were asked %d times", asked.Load())
 	}
 }
 

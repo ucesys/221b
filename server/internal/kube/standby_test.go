@@ -79,7 +79,8 @@ func TestAStandbyWatchesWithoutPolling(t *testing.T) {
 		t.Fatalf("the health check went on after its context ended: state %q", st)
 	}
 	post(t, srv.URL+"/sim/down?on=false")
-	if !warm.Ready() {
-		t.Fatal("stopping the pollers stopped the watches")
-	}
+	// The watches go on: a change after the outage still arrives
+	// (kube-cut-8: Ready never turns false, so it proved nothing).
+	post(t, srv.URL+"/sim/nodes/worker-002/cordon")
+	waitFor(t, "a change after the pollers stopped", func() bool { n := warm.Node("worker-002"); return n != nil && n.Spec.Unschedulable })
 }
