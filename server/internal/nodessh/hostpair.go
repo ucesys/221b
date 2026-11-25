@@ -316,6 +316,10 @@ func HostSetupScript(caPublicKey, console, loginUser string, port int) string {
 		"u=" + shellQuote(loginUser),
 		`if ! id -u "$u" >/dev/null 2>&1; then`,
 		`  if command -v useradd >/dev/null 2>&1; then useradd -m -s /bin/sh "$u"; else adduser -D -s /bin/sh "$u"; fi`,
+		// Both leave the account locked (a password of !), and an sshd
+		// without PAM (Alpine's, or UsePAM no) refuses a locked account
+		// every login, certificates too: * is no password and no lock.
+		`  if command -v usermod >/dev/null 2>&1; then usermod -p '*' "$u"; else echo "$u:*" | chpasswd -e 2>/dev/null; fi || { echo "221B: the login user $u was made, but its account could not be unlocked"; exit 3; }`,
 		`  echo "221B: created the login user $u"`,
 		`fi`,
 		PairScript(caPublicKey, console, loginUser, port),

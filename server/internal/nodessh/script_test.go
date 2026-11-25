@@ -587,3 +587,48 @@ func TestTheConsolesDirectoryIsReadableUnderAnyUmask(t *testing.T) {
 		t.Fatalf("paired again, the directory is %o", m)
 	}
 }
+
+// madeUser stands for the tools that make and change a user: id knows a
+// user once useradd or adduser made it, and every call is kept.
+const madeUser = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$ROOT/calls"
+case "$(basename "$0")" in
+id) [ "$1" = -u ] && { [ -f "$ROOT/made-$2" ] && echo 1000 || exit 1; }; [ "$1" = -Gn ] && echo "$2"; exit 0 ;;
+useradd) for a; do u=$a; done; touch "$ROOT/made-$u" ;;
+adduser) for a; do u=$a; done; touch "$ROOT/made-$u" ;;
+chpasswd) cat >> "$ROOT/calls" ;;
+esac
+`
+
+// A login user the setup makes is not left locked (finding 4 of the
+// review of November 24, 2026): useradd and busybox adduser leave a
+// password of !, which an sshd without PAM refuses for every login,
+// certificates too; it is given *, no password and no lock.
+func TestALoginUserTheSetupMakesIsNotLocked(t *testing.T) {
+	for _, c := range []struct {
+		name, tools, path, want string
+	}{
+		{"useradd", "id useradd usermod", "", "usermod -p * ops"},
+		{"busybox adduser", "id adduser chpasswd", "/usr/bin:/bin", "chpasswd -e\nops:*"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHost(t)
+			for _, tool := range strings.Fields(c.tools) {
+				if err := os.WriteFile(filepath.Join(h.bin, tool), []byte(madeUser), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var env []string
+			if c.path != "" {
+				env = append(env, "PATH="+h.bin+":"+c.path)
+			}
+			out, ok := h.run(strings.ReplaceAll(HostSetupScript(testCA, testConsole, "ops", 22), "/usr/sbin/sshd", h.bin+"/sshd"), env...)
+			if !ok || !strings.Contains(out, "created the login user ops") {
+				t.Fatalf("the setup:\n%s", out)
+			}
+			if calls := h.read("calls"); !strings.Contains(calls, c.want) {
+				t.Fatalf("the account was left locked; the calls were:\n%s", calls)
+			}
+		})
+	}
+}
