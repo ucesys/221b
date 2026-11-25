@@ -913,3 +913,55 @@ func TestNoNodeStartsOnceTheFailureLimitIsReached(t *testing.T) {
 		t.Fatalf("%v: %+v", c, done.Nodes)
 	}
 }
+
+// The one-time copy of the changes, tried again at a later start after one
+// that failed, adds to what the rows hold (cut by the review's cap): the
+// changes and the run requests made since stay, and one of the ConfigMap's
+// whose number the rows already have is not copied over it.
+func TestARetriedCopyKeepsTheChangesMadeSince(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	ann := Who{Name: "Ann", User: "ann"}
+	mine, err := st.NewChange(ctx, VariableChange{Cluster: "local", Fleet: AllNodes, By: ann, State: ChangeApplied, Changed: []string{"A"}, Reason: "made since",
+		Before: FleetVariables{Values: map[string]string{"A": "1"}}, After: FleetVariables{Values: map[string]string{"A": "2"}}, Impact: []ImpactItem{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, err := st.NewWaitingRun(ctx, WaitingRun{Cluster: "local", Script: "s", Version: 1, Fleet: AllNodes, Targets: []string{"n1"}, By: ann, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := &kv.Memory{}
+	if _, err := cm.SaveKey(ctx, ChangesKey, []byte(`{"next":5,"changes":[`+
+		`{"id":1,"cluster":"local","fleet":"_all","by":{"name":"Bob"},"at":"2026-11-01T09:00:00Z","reason":"from the configmap, number 1","changed":["B"],"before":{"values":{"B":"1"}},"after":{"values":{"B":"2"}},"impact":[],"state":"applied"},`+
+		`{"id":5,"cluster":"local","fleet":"_all","by":{"name":"Bob"},"at":"2026-11-01T10:00:00Z","reason":"from the configmap, number 5","changed":["C"],"before":{"values":{"C":"1"}},"after":{"values":{"C":"2"}},"impact":[],"state":"applied"}],`+
+		`"nextRun":7,"runs":[{"id":7,"cluster":"local","script":"s","version":1,"fleet":"_all","targets":["n2"],"params":{},"rollout":{"mode":"all"},"hooks":{},"by":{"name":"Bob"},"person":{"user":""},"at":"2026-11-01T09:00:00Z","changed":[],"impact":[],"state":"waiting"}]}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewChangesPG(d).Import(ctx, cm, "configmap"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := st.AllChanges(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[int]string{}
+	for _, c := range all {
+		reasons[c.ID] = c.Reason
+	}
+	if reasons[mine.ID] != "made since" || reasons[5] != "from the configmap, number 5" || len(reasons) != 2 {
+		t.Fatalf("the changes after the copy: %v", reasons)
+	}
+	runs, err := st.WaitingRuns(ctx, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[int]bool{}
+	for _, w := range runs {
+		ids[w.ID] = true
+	}
+	if !ids[asked.ID] || !ids[7] || len(ids) != 2 {
+		t.Fatalf("the requests after the copy: %v", ids)
+	}
+}

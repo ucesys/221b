@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ucesys/221b/server/internal/db"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // Automation's variable changes in the database (Phase 13, DB-34): a
@@ -38,14 +40,75 @@ type changesRest struct {
 }
 
 // NewChangesPG keeps the variable changes in d.
-func NewChangesPG(d *db.DB) *db.Doc[changesRecord] {
-	return &db.Doc[changesRecord]{DB: d, Key: ChangesKey,
+func NewChangesPG(d *db.DB) *ChangesDoc {
+	return &ChangesDoc{Doc: &db.Doc[changesRecord]{DB: d, Key: ChangesKey,
 		Read: func(ctx context.Context, q db.Querier) (changesRecord, bool, error) {
 			return readChanges(ctx, q, false)
 		},
 		Write: func(ctx context.Context, tx pgx.Tx, old, next changesRecord) error {
 			return writeChanges(ctx, tx, sensitiveFor(d), old, next)
-		}}
+		}}}
+}
+
+// ChangesDoc is the changes' document in the database, whose one-time
+// copy adds to what the rows hold rather than write over it.
+type ChangesDoc struct {
+	*db.Doc[changesRecord]
+}
+
+// Import copies the changes and the run requests a ConfigMap kept, once
+// (DB-17), beside what the rows already hold: a copy tried again after
+// one that failed, at a later start, must not drop the changes and the
+// requests made since (the review of November 24, 2026). A record whose
+// number the rows already have is theirs, newer than the ConfigMap's, and
+// that one is not copied.
+func (c *ChangesDoc) Import(ctx context.Context, from kv.Backend, source string) (bool, error) {
+	copied := false
+	_, err := c.DB.ImportOnce(ctx, c.ImportID(), source, func(ctx context.Context, tx pgx.Tx) (int, error) {
+		b, _, err := from.LoadKey(ctx, c.Key)
+		if errors.Is(err, kv.ErrNotFound) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		var doc changesRecord
+		if err := json.Unmarshal(b, &doc); err != nil {
+			// What cannot be read was not readable before either.
+			return 0, nil
+		}
+		if err := db.LockDoc(ctx, tx, ChangesKey); err != nil {
+			return 0, err
+		}
+		held, _, err := c.Read(ctx, tx)
+		if err != nil {
+			return 0, err
+		}
+		next := clone(held)
+		changes, requests := map[int]bool{}, map[int]bool{}
+		for _, x := range held.Changes {
+			changes[x.ID] = true
+		}
+		for _, x := range held.Runs {
+			requests[x.ID] = true
+		}
+		for _, x := range doc.Changes {
+			if !changes[x.ID] {
+				next.Changes = append(next.Changes, x)
+			}
+		}
+		for _, x := range doc.Runs {
+			if !requests[x.ID] {
+				next.Runs = append(next.Runs, x)
+			}
+		}
+		sort.SliceStable(next.Changes, func(i, j int) bool { return next.Changes[i].ID < next.Changes[j].ID })
+		sort.SliceStable(next.Runs, func(i, j int) bool { return next.Runs[i].ID < next.Runs[j].ID })
+		next.Next, next.NextRun = max(next.Next, doc.Next), max(next.NextRun, doc.NextRun)
+		copied = true
+		return 1, c.Write(ctx, tx, held, next)
+	})
+	return copied, err
 }
 
 // UnmovedNew stands, in a change read from the tables, for a sensitive
