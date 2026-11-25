@@ -133,3 +133,16 @@ func TestUpgradeInstallAfterAnUninstallThatKeptItsHistoryInstalls(t *testing.T) 
 		t.Fatalf("%s: %s", done.Status, outputOf(svc, got.ID))
 	}
 }
+
+// A rollback to a negative revision is said to be refused, as Helm
+// refuses it, not described as a rollback to the previous one (review of
+// November 24, 2026, sweep).
+func TestARollbackToANegativeRevisionIsRefusedOnItsCard(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	helmRecord(t, cl, "web", "rb", 1, `{"name":"rb","namespace":"web","version":1,"info":{"status":"superseded"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"manifest":""}`)
+	helmRecord(t, cl, "web", "rb", 2, `{"name":"rb","namespace":"web","version":2,"info":{"status":"deployed"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"manifest":""}`)
+	got := card(t, svc, cl, alice(), "helm rollback rb -1 -n web")
+	if text := strings.Join(got.Plan.Impact, " "); !strings.Contains(text, "helm will refuse") || strings.Contains(text, "Rolls release") {
+		t.Fatalf("impact %v", got.Plan.Impact)
+	}
+}

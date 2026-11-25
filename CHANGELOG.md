@@ -220,6 +220,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A chat's proposed change whose Watson command was stopped before it started waits on in the Inbox** (review of November 24, 2026): the proposed change was closed as Failed, though nothing ran; so was one whose command was refused when it was to start. It now waits on, as for a lapsed Watson card.
 - **One request makes at most 20 Watson commands** (P6-04; review of November 24, 2026): a block of commands was split into as many cards as it had lines, each planned against the cluster with a dry run and kept in memory, so one request could start thousands. Past 20, the rest are refused in one item that says how many were not run.
 - **The taint card says kubectl refuses a taint the node already has** (review of November 24, 2026): without `--overwrite`, kubectl refuses any taint whose key and effect the node has, even with the same value, but the card said it was already there and nothing changed.
+- **A `helm rollback` to a negative or non-numeric revision is said to be refused** (review of November 24, 2026): its card described a rollback to the previous revision, which Helm refuses.
 
 ### Security
 

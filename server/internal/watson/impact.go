@@ -1350,7 +1350,13 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 	cur := rels[0]
 	want := cur.Version - 1
 	if len(c.Positionals) > 1 {
-		if v, err := strconv.Atoi(c.Positionals[1]); err == nil && v > 0 {
+		v, err := strconv.Atoi(c.Positionals[1])
+		switch {
+		case err != nil:
+			return targets, nil, []string{fmt.Sprintf("%q is not a revision number: helm will refuse.", c.Positionals[1])}
+		case v < 0:
+			return targets, nil, []string{fmt.Sprintf("Revision %d is not one: helm will refuse (0, or none, is the previous revision).", v)}
+		case v > 0:
 			want = v
 		}
 	}
