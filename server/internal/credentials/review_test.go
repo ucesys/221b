@@ -708,3 +708,47 @@ func TestAGitHubAppOnASelfSignedHostIsOfferedTrust(t *testing.T) {
 		t.Fatalf("trusted: %+v %v", res, err)
 	}
 }
+
+// credentials#15: a credential of an oci:// endpoint is tested against
+// the registry's API, answering its challenge as Helm does.
+func TestAnOCIEndpointIsTestedAtTheRegistry(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/":
+			if r.Header.Get("Authorization") == "Bearer fake-reg" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+srv.URL+`/token",service="registry.test"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/token":
+			u, p, _ := r.BasicAuth()
+			if r.URL.Query().Get("service") != "registry.test" || !(u == "token" && p == "fake-tok" || u == "reader" && p == "fake-pw") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"fake-reg"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	s, _ := newService(t, srv.Client())
+	ep := "oci://" + strings.TrimPrefix(srv.URL, "https://") + "/org"
+	tok := token(t, s, "registry token", ep, SendAs{}, "fake-tok")
+	up, err := s.Create(ctx, Credential{Name: "registry user", Kind: KindUserPass, Endpoint: ep, Username: "reader"}, Secret{Password: "fake-pw"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := token(t, s, "registry bad", ep, SendAs{}, "fake-wrong")
+	for _, c := range []Credential{tok, up} {
+		res, err := s.RunTest(ctx, c.ID, "", "ann")
+		if err != nil || !res.OK || res.Status != http.StatusOK || strings.Contains(res.Text, "fake-") {
+			t.Errorf("%s: %+v %v", c.Name, res, err)
+		}
+	}
+	if res, _ := s.RunTest(ctx, bad.ID, "", "ann"); res.OK || !strings.Contains(res.Text, "token service") {
+		t.Errorf("a wrong token: %+v", res)
+	}
+}

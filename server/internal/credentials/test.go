@@ -2,8 +2,11 @@ package credentials
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -109,7 +112,11 @@ func (s *Service) test(ctx context.Context, c Credential, sec Secret, target str
 	case KindSSH:
 		s.testSSH(ctx, use, target, &t)
 	default:
-		s.testHTTP(ctx, c, use, target, &t)
+		if strings.HasPrefix(target, "oci://") {
+			s.testRegistry(ctx, use, target, &t)
+		} else {
+			s.testHTTP(ctx, c, use, target, &t)
+		}
 	}
 	if c.Kind != KindSSH {
 		s.noteCertificate(ctx, use, target, &t)
@@ -197,6 +204,146 @@ func (s *Service) testHTTP(ctx context.Context, c Credential, use *Use, target s
 			t.Text += " " + why
 		}
 	}
+}
+
+// testRegistry asks an OCI registry's API (https://HOST/v2/) with the
+// credential, as Helm does (credentials#15): a token as Bearer, then the
+// registry's challenge answered, Basic with the user and password (or
+// the token, as the user "token"), or the token service its Bearer
+// challenge names, which the registry's credential goes to (CR-04).
+func (s *Service) testRegistry(ctx context.Context, use *Use, target string, t *Test) {
+	u, err := url.Parse(target)
+	if err != nil || u.Host == "" {
+		t.Text = "Name the registry to test, as oci://HOST/ORG."
+		return
+	}
+	api := "https://" + u.Host + "/v2/"
+	user, secret := "", ""
+	switch use.Method {
+	case SendBasic:
+		user, secret = use.Username, use.Token
+	case SendBearer:
+		user, secret = "token", use.Token
+	case MethodNone:
+	default:
+		t.Text = "An OCI registry takes a user and password, or a token sent as Basic or Bearer."
+		return
+	}
+	get := func(raw, auth string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "221b-credential-test")
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		return s.useClient(use, raw).Do(req)
+	}
+	first := ""
+	if use.Method == SendBearer {
+		first = "Bearer " + secret
+	}
+	res, err := get(api, first)
+	if err != nil {
+		t.Text = "Sent " + t.Method + " to " + u.Host + "'s registry API, which could not be reached: " + reachText(err)
+		return
+	}
+	res.Body.Close()
+	via := ""
+	if res.StatusCode == http.StatusUnauthorized && secret != "" {
+		scheme, params := parseChallenge(res.Header.Get("WWW-Authenticate"))
+		auth := ""
+		switch scheme {
+		case "basic":
+			auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+secret))
+		case "bearer":
+			realm, err := url.Parse(params["realm"])
+			if err != nil || realm.Scheme != "https" || realm.Host == "" {
+				t.Status = res.StatusCode
+				t.Text = "Sent " + t.Method + " to " + u.Host + "'s registry API; its token service is not an https:// address."
+				return
+			}
+			q := realm.Query()
+			for _, k := range []string{"service", "scope"} {
+				if v := params[k]; v != "" {
+					q.Set(k, v)
+				}
+			}
+			realm.RawQuery = q.Encode()
+			tres, err := get(realm.String(), "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+secret)))
+			if err != nil {
+				t.Text = "Sent the credential to " + realm.Host + ", the registry's token service, which could not be reached: " + reachText(err)
+				return
+			}
+			b, _ := io.ReadAll(io.LimitReader(tres.Body, 64<<10))
+			tres.Body.Close()
+			var out struct {
+				Token       string `json:"token"`
+				AccessToken string `json:"access_token"`
+			}
+			if tres.StatusCode/100 != 2 || json.Unmarshal(b, &out) != nil || out.Token+out.AccessToken == "" {
+				t.Status = tres.StatusCode
+				t.Text = fmt.Sprintf("Sent the credential as Basic to %s, the registry's token service; it answered %s.", realm.Host, tres.Status)
+				return
+			}
+			tok := out.Token
+			if tok == "" {
+				tok = out.AccessToken
+			}
+			auth, via = "Bearer "+tok, " through its token service at "+realm.Host
+		}
+		if auth != "" {
+			if res, err = get(api, auth); err != nil {
+				t.Text = "Sent " + t.Method + " to " + u.Host + "'s registry API, which could not be reached: " + reachText(err)
+				return
+			}
+			res.Body.Close()
+		}
+	}
+	t.Status = res.StatusCode
+	t.OK = res.StatusCode/100 == 2
+	t.Text = fmt.Sprintf("Sent %s to %s's registry API%s; it answered %s.", t.Method, u.Host, via, res.Status)
+}
+
+// useClient is the service's client for an address with the use's TLS:
+// all of it on the endpoint's host, the private CA alone elsewhere (a
+// registry's token service), since the pin is the endpoint's
+// (credentials#10).
+func (s *Service) useClient(use *Use, target string) *http.Client {
+	if use.ep.sameHost(target) {
+		return withTLS(s.o.HTTP, use.TLS())
+	}
+	return withTLS(s.o.HTTP, (&Use{CAPEM: use.CAPEM}).TLS())
+}
+
+// parseChallenge reads a WWW-Authenticate challenge: its scheme, in lower
+// case, and its parameters (realm, service, scope).
+func parseChallenge(h string) (string, map[string]string) {
+	scheme, rest, _ := strings.Cut(strings.TrimSpace(h), " ")
+	params := map[string]string{}
+	for rest = strings.TrimSpace(rest); rest != ""; {
+		k, v, ok := strings.Cut(rest, "=")
+		if !ok {
+			break
+		}
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		if strings.HasPrefix(v, `"`) {
+			end := strings.Index(v[1:], `"`)
+			if end < 0 {
+				params[k] = v[1:]
+				break
+			}
+			params[k], rest = v[1:1+end], v[2+end:]
+		} else {
+			val, after, _ := strings.Cut(v, ",")
+			params[k], rest = strings.TrimSpace(val), after
+		}
+		rest = strings.TrimLeft(strings.TrimSpace(rest), ",")
+		rest = strings.TrimSpace(rest)
+	}
+	return strings.ToLower(scheme), params
 }
 
 // suggest reads a 401's WWW-Authenticate: the way of sending it asks for
