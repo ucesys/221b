@@ -624,3 +624,27 @@ func TestThePermissionsStepSaysEverythingItFound(t *testing.T) {
 		t.Fatalf("the permissions step: %+v", p)
 	}
 }
+
+// Cut list: getSpec and testLocal read an instance's spec without the
+// lock Update writes it under (a data race, which -race reports).
+func TestReadingTheLocalSpecWhileItIsEditedIsNoRace(t *testing.T) {
+	ctx := context.Background()
+	m := clusters.New(clusters.NewMemoryStore(), quiet)
+	must(t, m.SetLocal(ctx, clusters.Spec{Name: "here", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster"}, nil, nil))
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			_, _ = m.Update(ctx, clusters.LocalID, clusters.Draft{Spec: clusters.Spec{Name: "here", Env: "other", Description: fmt.Sprint(i), Mode: "read"}})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			_ = m.Held(ctx, clusters.LocalID, 1)
+			_, _ = m.TestSaved(ctx, clusters.LocalID, "ann")
+		}
+	}()
+	wg.Wait()
+}

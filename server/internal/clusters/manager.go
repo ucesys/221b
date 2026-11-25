@@ -949,18 +949,23 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 
 // getSpec reads a connection from the store, or the local one from memory.
 func (m *Manager) getSpec(ctx context.Context, id string) (Spec, Credential, error) {
+	// The spec is read under the lock Update and Sync write it under.
 	m.mu.RLock()
 	inst, ok := m.instances[id]
+	var running Spec
+	if ok {
+		running = inst.Spec
+	}
 	m.mu.RUnlock()
 	if !ok {
 		return Spec{}, Credential{}, ErrNotFound
 	}
-	if inst.Spec.Local {
-		return inst.Spec, Credential{}, nil
+	if running.Local {
+		return running, Credential{}, nil
 	}
 	spec, cred, err := m.store.Get(ctx, id)
 	if errors.Is(err, ErrNotFound) {
-		return inst.Spec, Credential{}, nil
+		return running, Credential{}, nil
 	}
 	return spec, cred, err
 }
@@ -1069,15 +1074,19 @@ func (m *Manager) TestSaved(ctx context.Context, id, by string) (TestResult, err
 func (m *Manager) testLocal(ctx context.Context, id string) (TestResult, error) {
 	m.mu.RLock()
 	inst := m.instances[id]
+	var spec Spec
+	var cluster Client
+	if inst != nil {
+		spec, cluster = inst.Spec, inst.Cluster
+	}
 	m.mu.RUnlock()
-	if inst == nil || inst.Cluster == nil {
+	if cluster == nil {
 		return TestResult{}, ErrNotFound
 	}
-	cfg := inst.Cluster.RestConfig()
+	cfg := cluster.RestConfig()
 	if cfg == nil {
 		return TestResult{}, errors.New("the local connection has no configuration to test")
 	}
-	spec := inst.Spec
 	spec.Server = cfg.Host
 	spec.Auth = AuthNone
 	spec.CA = CASkip
