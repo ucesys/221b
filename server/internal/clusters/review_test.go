@@ -733,3 +733,58 @@ func TestARestartedConnectionKeepsItsHosts(t *testing.T) {
 	must(t, err)
 	has("after a restart")
 }
+
+// Cut list: a connection's last test was read in two statements (its
+// row's columns, then its steps) outside one snapshot, so a read made
+// while another replica kept a test could show one test's summary over
+// the other's steps.
+func TestALastTestIsReadWhole(t *testing.T) {
+	store, _, _ := clusterstest.PG(t, nil)
+	ctx := context.Background()
+	spec, cred := fullSpec("staging"), fullCred("x")
+	must(t, store.Save(ctx, spec, &cred))
+	test := func(name string, n int) clusters.LastTest {
+		r := clusters.TestResult{Tone: "ok", Summary: name}
+		for i := 0; i < n; i++ {
+			r.Steps = append(r.Steps, clusters.Step{Key: "Address", Tone: "ok", Text: name})
+		}
+		return clusters.LastTest{Result: r, At: at, By: "ann"}
+	}
+	a, b := test("a", 5), test("b", 2)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			next := a
+			if i%2 == 1 {
+				next = b
+			}
+			_ = store.SaveTest(ctx, "staging", next)
+		}
+	}()
+	defer func() { close(stop); wg.Wait() }()
+	deadline := time.Now().Add(3 * time.Second)
+	for reads := 0; time.Now().Before(deadline); reads++ {
+		got, _, err := store.Get(ctx, "staging")
+		if err != nil || got.Tested == nil {
+			continue
+		}
+		r := got.Tested.Result
+		want := map[string]int{"a": 5, "b": 2}[r.Summary]
+		if len(r.Steps) != want {
+			t.Fatalf("read %d: the summary of test %q over %d steps", reads, r.Summary, len(r.Steps))
+		}
+		for _, st := range r.Steps {
+			if st.Text != r.Summary {
+				t.Fatalf("read %d: the summary of test %q over a step of test %q", reads, r.Summary, st.Text)
+			}
+		}
+	}
+}

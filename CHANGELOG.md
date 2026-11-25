@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- A connection's last test was read in two statements outside one snapshot, so a read while another replica kept a test could show one test's summary over the other's steps (clusters review, cut list). A connection is now read with its test on one snapshot.
+
 - A connection started again (re-pointed, given a new credential, or changed on another replica) showed no hosts outside Kubernetes on its Nodes tab for up to 30 seconds (clusters review, cut list). The manager now keeps each cluster's hosts and gives them to a connection as it starts.
 
 - The connection test's sign-in step said *Signed in as system:anonymous* for credentials the API server did not take, and named a kubeconfig's user entry as the account when the server would not say who it was (clusters review, cut list). An anonymous sign-in is now a warning, and a kubeconfig's entry name is not given as an account.

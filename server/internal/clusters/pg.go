@@ -266,7 +266,10 @@ func (s *PGStore) SaveTest(ctx context.Context, id string, t LastTest) error {
 	return nil
 }
 
-// readTests puts each connection's last test into its spec.
+// readTests puts each connection's last test into its spec. Its two
+// statements, and the read of the rows before them, run on one snapshot
+// (db.Snapshot): a test kept meanwhile never shows its summary over
+// another test's steps.
 func readTests(ctx context.Context, q db.Querier, specs []Spec) error {
 	if len(specs) == 0 {
 		return nil
@@ -334,7 +337,7 @@ func read(ctx context.Context, q db.Querier, where string, args ...any) ([]Spec,
 // not a connection.
 func (s *PGStore) List(ctx context.Context) ([]Spec, error) {
 	var specs []Spec
-	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
+	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
 		if specs, _, err = read(ctx, q, ""); err != nil {
 			return err
 		}
@@ -353,7 +356,7 @@ func (s *PGStore) List(ctx context.Context) ([]Spec, error) {
 // be asked for is an error, so nothing takes "not asked" for "empty".
 func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) {
 	var specs []Spec
-	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
+	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
 		if specs, _, err = read(ctx, q, "AND cluster_id = $1", id); err != nil {
 			return err
 		}
@@ -568,7 +571,7 @@ func (s *PGStore) putBack(ctx context.Context, sec *corev1.Secret) {
 func (s *PGStore) Revisions(ctx context.Context) (map[string]string, error) {
 	var specs []Spec
 	var versions []int
-	if err := s.db.Do(ctx, func(q db.Querier) (err error) {
+	if err := s.db.Snapshot(ctx, func(q db.Querier) (err error) {
 		if specs, versions, err = read(ctx, q, ""); err != nil {
 			return err
 		}
