@@ -1041,7 +1041,7 @@ func (s *Service) plan(cl Cluster, id string) {
 		extra = append(extra, "--timeout=12s")
 		p.DryRunNote = "The dry run gives up after 12 seconds; the drain itself waits as long as --timeout says."
 	}
-	p.DryRunExit = s.opts.Run(ctx, it.cmd, asker, &buf.out, &buf.err, extra...)
+	p.DryRunExit = s.opts.Run(ctx, it.cmd, asker, buf.writer(&buf.out), buf.writer(&buf.err), extra...)
 	p.DryRun = buf.lines()
 	p.Ready = true
 	s.mu.Lock()
@@ -1650,10 +1650,35 @@ func (w *itemWriter) push(lines []Line) {
 	w.s.changedLocked(w.it)
 }
 
-// lineBuffer collects output for a card's dry run.
+// lineBuffer collects output for a card's dry run, max bytes of it.
 type lineBuffer struct {
+	mu       sync.Mutex
 	out, err bytes.Buffer
 	max      int
+	cut      bool
+}
+
+// writer writes to one of the buffers, up to the bound both share.
+func (b *lineBuffer) writer(to *bytes.Buffer) io.Writer { return boundWriter{b: b, to: to} }
+
+type boundWriter struct {
+	b  *lineBuffer
+	to *bytes.Buffer
+}
+
+func (w boundWriter) Write(p []byte) (int, error) {
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	room := w.b.max - w.b.out.Len() - w.b.err.Len()
+	if w.b.max > 0 && len(p) > room {
+		w.b.cut = true
+		if room > 0 {
+			w.to.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	w.to.Write(p)
+	return len(p), nil
 }
 
 func (b *lineBuffer) lines() []Line {
@@ -1667,6 +1692,9 @@ func (b *lineBuffer) lines() []Line {
 	}
 	add("out", &b.out)
 	add("err", &b.err)
+	if b.cut {
+		out = append(out, Line{K: "info", T: fmt.Sprintf("# watson: the dry run's output was cut at %d KB", b.max>>10)})
+	}
 	if len(out) > 200 {
 		n := len(out)
 		out = append(out[:200], Line{K: "info", T: fmt.Sprintf("# … and %d more lines", n-200)})

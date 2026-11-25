@@ -163,3 +163,21 @@ func TestRefusedAndUnrunItemsAreTrimmed(t *testing.T) {
 		t.Fatal("kept past their time")
 	}
 }
+
+// A card's dry run keeps at most 64 KB of output (review of November 24,
+// 2026, cut by the cap: service.go:883).
+func TestACardsDryRunOutputIsBounded(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{Run: func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+		out.Write([]byte(strings.Repeat("x", 4<<20) + "\n"))
+		errOut.Write([]byte(strings.Repeat("y", 1<<20) + "\n"))
+		return 0
+	}})
+	got := card(t, svc, cl, alice(), "kubectl cordon worker-001")
+	size := 0
+	for _, l := range got.Plan.DryRun {
+		size += len(l.T)
+	}
+	if size > 65<<10 {
+		t.Fatalf("%d bytes kept", size)
+	}
+}
