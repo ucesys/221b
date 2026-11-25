@@ -73,6 +73,8 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 **A connection made again after a rollback to 0.12 shows as failed until it is edited.** A console of 0.12 keeps its connections in their Secrets. If you rolled back to it, added a connection again under the name of one the database kept, for another API server, and then upgraded again, the Secret holds that connection's record and credential while the database keeps the old server. 0.13.2 dropped the record and connected to the old server with the new credential; 0.13.3 leaves the record in the Secret, logs *connection Secrets that hold a record for another API server than the database's are left as they are*, and shows the connection as failed: edit it, give its server and credential, and save. Connections whose Secret's record names the database's server are not affected.
 
+**A kubeconfig connection whose user acts as another user no longer starts.** A kubeconfig whose user sets `as:`, `as-groups:`, `as-uid:` or `as-user-extra:` made the console's own reads, and its checks of each person's access, run as whoever it named. It is refused when pasted, and a saved one shows as failed with *the kubeconfig acts as another user*: paste a kubeconfig whose user signs in as itself.
+
 ## 0.13.2 (2026-11-25)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.

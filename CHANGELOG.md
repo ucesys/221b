@@ -85,6 +85,8 @@ Four notes on the credentials; [docs/upgrading.md](docs/upgrading.md) says more:
 
 A connection made again in 0.12, after a rollback, for another API server than the database keeps for it shows as failed until it is edited and given its credential (clusters review, finding 4; see [docs/upgrading.md](docs/upgrading.md)).
 
+A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid:`, `as-user-extra:`) is now refused: a saved one shows as failed until a kubeconfig whose user signs in as itself is pasted (clusters review, sweep).
+
 ### Fixed
 
 - A connection restored from a backup without its secret was tested as if the backup's placeholder were its credential, and the placeholder was sent to the API server (clusters review, sweep). Its test now says the credential is not in the backup, and sends nothing in its place.
@@ -128,6 +130,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 - **A kubeconfig pasted again kept the old saved CA** (clusters review, finding 6). On a connection that checks the API server against a CA, pasting a fresh kubeconfig (after the cluster's CA was rotated, or to re-point it) saved the old CA, and the connection then failed with "certificate signed by unknown authority". The new kubeconfig's own CA is now taken; the saved one stays only when the kubeconfig has none and no CA is pasted.
 
 ### Security
+
+- **A kubeconfig whose user acts as another user was taken** (clusters review, sweep). With `as:` or `as-groups:` the connection's own reads, and its checks of what each person may do, ran as whoever the kubeconfig named. Such a kubeconfig is now refused when it is pasted, and a saved one does not start.
 
 - **With `rbac.enforce: strict`, a connection re-pointed at another cluster could run changes on the old cluster's role verdict** (clusters review, finding 1). A role check that had looked the connection up before the re-point kept the old cluster's "match" under the new connection's fingerprint, so Watson, Automation and approvals ran changes on the new cluster for up to 15 minutes without its roles ever being read. The verdict is now kept with the fingerprint of the connection it was read through, and a change is decided by the fingerprint of the configuration it runs with, both read with it at once.
 - **With `rbac.enforce: strict`, roles the console could no longer read kept passing** (clusters review, cut list). A console that lost read access to ClusterRoles compared the copy its cache kept at every check and stamped the old verdict as fresh, so the 15-minute age limit never tripped. While the watch of ClusterRoles fails, the roles are no longer compared, and the last verdict ages out.

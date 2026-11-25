@@ -936,3 +936,18 @@ func TestARestoredPlaceholderIsNotSentAsACredential(t *testing.T) {
 		t.Fatalf("the placeholder was sent as a credential: %d requests", len(got))
 	}
 }
+
+// Sweep: a kubeconfig whose user acts as another (as:, as-groups) was
+// taken, though the console reads as each person by impersonating them
+// itself, and its own reads then went as whoever the kubeconfig named.
+func TestAKubeconfigThatActsAsAnotherIsRefused(t *testing.T) {
+	for name, as := range map[string]string{"as": "as: someone-else", "as-groups": "as-groups: [system:masters]", "as-uid": "as-uid: \"42\""} {
+		kc := strings.Replace(kubeconfigFor("https://10.9.0.1:6443", saToken("kc")), "    token: ", "    "+as+"\n    token: ", 1)
+		if _, _, err := clusters.CheckCredential("kubeconfig", clusters.Credential{Kubeconfig: kc}, "", time.Now()); err == nil {
+			t.Errorf("%s: the kubeconfig was taken", name)
+		}
+		if _, err := clusters.RestConfig(clusters.Spec{Server: "https://10.9.0.1:6443", CA: "system", Auth: "kubeconfig"}, clusters.Credential{Kubeconfig: kc}); err == nil {
+			t.Errorf("%s: the rest config was built", name)
+		}
+	}
+}

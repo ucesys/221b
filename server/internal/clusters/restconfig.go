@@ -46,6 +46,9 @@ func RestConfig(s Spec, c Credential) (*rest.Config, error) {
 		if cfg.ExecProvider != nil || cfg.AuthProvider != nil {
 			return nil, errors.New("the kubeconfig signs in through a plugin, which the console cannot run")
 		}
+		if im := cfg.Impersonate; im.UserName != "" || len(im.Groups) > 0 || im.UID != "" || len(im.Extra) > 0 {
+			return nil, errors.New("the kubeconfig acts as another user (as:), which the console cannot do beside reading as each person")
+		}
 		// Files would be read on the console's machine: its own token, sent
 		// to whatever server the kubeconfig names.
 		if cfg.BearerTokenFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {

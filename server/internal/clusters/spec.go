@@ -394,6 +394,12 @@ func CheckCredential(auth string, c Credential, server string, now time.Time) (C
 		if user != nil && user.AuthProvider != nil {
 			return CredentialCheck{}, server, invalid("kubeconfig", fmt.Sprintf("Context %s signs in through the %s auth provider, which the console can’t run. Use a token or a client certificate for it instead.", name, user.AuthProvider.Name))
 		}
+		// The console reads as each person by impersonating them itself
+		// (P3-02): a user that acts as another would put whoever it names
+		// under the console's own reads, and beside every person's.
+		if user != nil && (user.Impersonate != "" || len(user.ImpersonateGroups) > 0 || user.ImpersonateUID != "" || len(user.ImpersonateUserExtra) > 0) {
+			return CredentialCheck{}, server, invalid("kubeconfig", fmt.Sprintf("Context %s acts as another user (as:, as-groups:), which the console cannot do beside reading as each person. Use a kubeconfig whose user signs in as itself.", name))
+		}
 		// A file reference is refused even beside an inline token or
 		// certificate: client-go prefers the file, and on the console's
 		// machine a path such as its ServiceAccount token would be sent to
