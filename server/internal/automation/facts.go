@@ -144,6 +144,7 @@ func (st *Store) Facts(ctx context.Context, cluster string) ([]NodeFacts, error)
 
 // saveFacts keeps what nodes said; when the record is full, the oldest go.
 func (st *Store) saveFacts(ctx context.Context, list []NodeFacts) error {
+	rows := st.inRows(FactsKey)
 	return change(ctx, st, FactsKey, maxFactsBytes, func(rec *map[string]NodeFacts) error {
 		if *rec == nil {
 			*rec = map[string]NodeFacts{}
@@ -151,7 +152,8 @@ func (st *Store) saveFacts(ctx context.Context, list []NodeFacts) error {
 		for _, f := range list {
 			(*rec)[factKey(f.Cluster, f.Node)] = f
 		}
-		for size := approximate(*rec); size > maxFactsBytes*9/10 && len(*rec) > 1; size = approximate(*rec) {
+		// A ConfigMap's limit: rows of host_facts are kept, one a node.
+		for size := approximate(*rec); !rows && size > maxFactsBytes*9/10 && len(*rec) > 1; size = approximate(*rec) {
 			oldest := ""
 			for k, f := range *rec {
 				if oldest == "" || f.At.Before((*rec)[oldest].At) {

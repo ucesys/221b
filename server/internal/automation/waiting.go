@@ -2,6 +2,7 @@ package automation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,9 @@ import (
 
 // keptWaitingRuns is how many decided run requests stay listed.
 const keptWaitingRuns = 50
+
+// maxRequestBytes bounds one run request as it is kept.
+const maxRequestBytes = 64 << 10
 
 // WaitingRun is a run on a production cluster whose own values need
 // approval: they are weighed as a change of the fleet's values for this
@@ -90,6 +94,10 @@ func (st *Store) NewWaitingRun(ctx context.Context, w WaitingRun) (WaitingRun, e
 	}
 	if w.Impact == nil {
 		w.Impact = []ImpactItem{}
+	}
+	// Each request is bounded, as the record of every request was.
+	if b, _ := json.Marshal(w); len(b) > maxRequestBytes {
+		return w, fmt.Errorf("%w: a run request is at most %d KiB, and this one is %d KiB: ask for fewer nodes, or fewer values of its own", ErrInvalid, maxRequestBytes>>10, (len(b)+1023)>>10)
 	}
 	if st.runs != nil {
 		return st.runs.NewRequest(ctx, w)

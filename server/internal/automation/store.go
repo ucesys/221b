@@ -411,7 +411,9 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 			}
 		}
 		b, _ := json.Marshal(v)
-		if limit > 0 && len(b) > limit {
+		// The byte limits are a ConfigMap's: a document kept as rows of the
+		// database has none, only the limits on how many records it keeps.
+		if limit > 0 && len(b) > limit && !st.inRows(key) {
 			return fmt.Errorf("%w: %s would be %d KiB, over its %d KiB", ErrFull, key, len(b)>>10, limit>>10)
 		}
 		if _, err = st.backend.SaveKey(ctx, key, b, version); errors.Is(err, kv.ErrConflict) {
@@ -436,6 +438,32 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		return err
 	}
 	return err
+}
+
+// inRows says whether the document under key is kept as rows of the
+// database's tables (db.Doc) rather than in a ConfigMap or in memory.
+func (st *Store) inRows(key string) bool {
+	b := st.backend
+	for {
+		switch x := b.(type) {
+		case *kv.Routed:
+			if r, ok := x.Routes[key]; ok && r != nil {
+				b = r
+			} else {
+				b = x.Default
+			}
+			continue
+		case *kv.Keyed:
+			if r, ok := x.Keys[key]; ok && r != nil {
+				b = r
+			} else {
+				b = x.Rest
+			}
+			continue
+		}
+		_, rows := b.(interface{ ImportID() string })
+		return rows
+	}
 }
 
 // liveIn are the digests a document names whose values are still to be
@@ -704,6 +732,19 @@ func (st *Store) Revoke(ctx context.Context, name string, n int, who Who) (Scrip
 }
 
 func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *Version) error) (Script, error) {
+	// A ConfigMap's limit: what the edit adds (an approval, a revocation)
+	// drops old versions as a save does, never the one edited.
+	var used map[string]map[int]bool
+	if !st.inRows(ScriptsKey) {
+		var err error
+		if used, err = st.usedVersions(ctx); err != nil {
+			return Script{}, err
+		}
+		if used[name] == nil {
+			used[name] = map[int]bool{}
+		}
+		used[name][n] = true
+	}
 	var saved Script
 	err := change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
 		s, ok := rec.Scripts[name]
@@ -726,7 +767,10 @@ func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *
 		s.Versions[at] = v
 		s.Updated = st.now().UTC()
 		rec.Scripts[name] = s
-		saved = s
+		if used != nil {
+			prune(rec, maxScriptsBytes, used)
+		}
+		saved = rec.Scripts[name]
 		return nil
 	})
 	return saved, err

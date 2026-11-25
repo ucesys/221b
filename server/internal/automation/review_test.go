@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -275,5 +276,79 @@ func TestAKubernetesLineIsCheckedOnEveryResourceItNames(t *testing.T) {
 	}
 	if done := waitRun(t, e, r.ID); done.Nodes[0].State != NodeFailed || len(k.lines) != 0 {
 		t.Fatalf("the engine ran it: %+v %v", done.Nodes, k.lines)
+	}
+}
+
+// In the database a document has no ConfigMap's byte limit (finding 8):
+// many run requests that wait do not stop a change from being asked for
+// and decided, and a cluster's variables may pass 64 KiB. In a store of
+// documents, a revocation of a nearly full scripts.json drops old
+// versions as a save does, rather than fail.
+func TestTheByteLimitsAreTheConfigMapsAlone(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	targets := make([]string, 500)
+	for i := range targets {
+		targets[i] = fmt.Sprintf("node-%03d-%s", i, strings.Repeat("x", 40))
+	}
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	for i := 0; i < 12; i++ {
+		if _, err := st.NewWaitingRun(ctx, WaitingRun{Cluster: "local", Script: "s", Version: 1, Fleet: AllNodes, Targets: targets, By: ann, Rollout: Rollout{Mode: RolloutAll}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values := map[string]string{}
+	for i := 0; i < 100; i++ {
+		values[fmt.Sprintf("V%03d", i)] = strings.Repeat("v", 900)
+	}
+	if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: values}); err != nil {
+		t.Fatalf("variables of %d KiB: %v", 100*900>>10, err)
+	}
+	c, err := st.NewChange(ctx, VariableChange{Cluster: "local", Fleet: AllNodes, By: ann, State: ChangeWaiting, Changed: []string{"V000"},
+		Before: FleetVariables{Values: map[string]string{"V000": values["V000"]}}, After: FleetVariables{Values: map[string]string{"V000": "new"}},
+		Impact: []ImpactItem{{Script: "s", Version: 1, Decision: ImpactApproval, Why: "x", By: "rule"}}})
+	if err != nil {
+		t.Fatalf("a change beside 12 run requests of 500 nodes: %v", err)
+	}
+	if got, err := st.DecideChange(ctx, "local", c.ID, true, "", sam); err != nil || got.State != ChangeApproved {
+		t.Fatalf("approving it: %+v %v", got, err)
+	}
+	// A request is bounded on its own.
+	huge := make([]string, 3000)
+	for i := range huge {
+		huge[i] = fmt.Sprintf("node-%04d-%s", i, strings.Repeat("y", 40))
+	}
+	if _, err := st.NewWaitingRun(ctx, WaitingRun{Cluster: "local", Script: "s", Version: 1, Fleet: AllNodes, Targets: huge, By: ann}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a request of %d nodes: %v", len(huge), err)
+	}
+
+	// A store of documents, its scripts.json nearly full.
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	mem := newStore(&now)
+	if _, err := mem.Save(ctx, "keep", "", goodScript, ann, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Submit(ctx, "keep", 1, ann); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Approve(ctx, "keep", 1, sam); err != nil {
+		t.Fatal(err)
+	}
+	var rec scriptsRecord
+	if _, err := mem.load(ctx, ScriptsKey, &rec); err != nil {
+		t.Fatal(err)
+	}
+	old := Script{Name: "old", Created: now, Updated: now, Versions: []Version{{N: 1, Text: "x", State: StateSuperseded, Created: now.Add(-time.Hour)}, {N: 2, Text: "y", State: StateDraft, Created: now}}}
+	rec.Scripts["old"] = old
+	b, _ := json.Marshal(rec)
+	old.Versions[0].Text = strings.Repeat("x", maxScriptsBytes-len(b)-20)
+	rec.Scripts["old"] = old
+	b, _ = json.Marshal(rec)
+	if _, err := mem.backend.SaveKey(ctx, ScriptsKey, b, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Revoke(ctx, "keep", 1, sam); err != nil {
+		t.Fatalf("revoking with scripts.json at %d of %d bytes: %v", len(b), maxScriptsBytes, err)
 	}
 }
