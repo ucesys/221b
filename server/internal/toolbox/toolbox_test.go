@@ -12,7 +12,7 @@ func TestParseKeepsDefaultsAndReplacesLists(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.IdleTimeout.D() != 5*time.Minute || c.MaxDuration.D() != time.Hour || c.Retention.D() != 30*24*time.Hour {
-		t.Fatalf("durations %v %v", c.IdleTimeout.D(), c.MaxDuration.D())
+		t.Fatalf("durations %v %v %v", c.IdleTimeout.D(), c.MaxDuration.D(), c.Retention.D())
 	}
 	if len(c.DebugContainer.Images) != 1 || !c.DebugContainer.Enabled || c.NodeShell.Approval != ApprovalAlways {
 		t.Fatalf("%+v", c)
@@ -154,5 +154,28 @@ func TestOnNeedsTheProfilesARequestNeeds(t *testing.T) {
 	c.NodeShell.Profiles = []string{ProfileGeneral}
 	if !c.On(ToolNodeShell) || !c.On(ToolNodeCommand) || !c.On(ToolSSHPair) {
 		t.Error("general alone")
+	}
+}
+
+// With transcripts kept, the retention is a day at least and the longest
+// session at least: a bare number is seconds, and retention: 400 pruned
+// every transcript within the hour (the toolbox review, finding 5).
+func TestParseRefusesARetentionThatPrunesLiveTranscripts(t *testing.T) {
+	pvc := `"transcripts":"pvc","transcriptDir":"/t",`
+	for in, want := range map[string]string{
+		`{` + pvc + `"retention":400}`:                      "toolbox.retention",
+		`{` + pvc + `"retention":"0"}`:                      "toolbox.retention",
+		`{` + pvc + `"retention":"-24h"}`:                   "toolbox.retention",
+		`{` + pvc + `"retention":"12h"}`:                    "toolbox.retention",
+		`{` + pvc + `"retention":"1d","maxDuration":"48h"}`: "toolbox.maxDuration",
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+	for _, in := range []string{`{` + pvc + `"retention":"1d"}`, `{` + pvc + `"retention":"400d"}`, `{"retention":400}`} {
+		if _, err := Parse([]byte(in)); err != nil {
+			t.Errorf("%s: %v", in, err)
+		}
 	}
 }

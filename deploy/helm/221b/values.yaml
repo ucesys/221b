@@ -849,6 +849,9 @@ toolbox:
     storageClass: ""
     # ReadWriteMany with more than one replica.
     accessMode: ReadWriteOnce
+  # How long a transcript is kept after its last write: days as 400d, or a
+  # Go duration (72h). A bare number is seconds. With transcripts pvc it is
+  # at least 1d and at least maxDuration, or the console does not start.
   retention: 400d
   history:
     # Ended sessions kept for Administration › Sessions.

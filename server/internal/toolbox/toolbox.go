@@ -347,6 +347,16 @@ func (c Config) Check() error {
 		if c.TranscriptDir == "" {
 			errs = append(errs, "toolbox.transcripts pvc needs the directory it is mounted at")
 		}
+		// The prune runs hourly and takes every transcript not written
+		// for the retention, a live session's too: a bare number is
+		// seconds, and retention: 400 (meant as days) pruned them all
+		// within the hour.
+		switch {
+		case c.Retention.D() < 24*time.Hour:
+			errs = append(errs, fmt.Sprintf("toolbox.retention must be at least 1d with transcripts kept, not %s (a bare number is seconds: write days as 400d)", c.Retention.D()))
+		case c.Retention.D() < c.MaxDuration.D():
+			errs = append(errs, "toolbox.retention must be at least toolbox.maxDuration, or a live session's transcript is pruned")
+		}
 	default:
 		errs = append(errs, fmt.Sprintf("toolbox.transcripts is none or pvc, not %q", c.Transcripts))
 	}
