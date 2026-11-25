@@ -645,3 +645,39 @@ func TestAnUnmarkWithANewValueCanBeApproved(t *testing.T) {
 		t.Fatalf("TOKEN's digest under PW: %v", err)
 	}
 }
+
+// flakyEnd is a backend whose saves of a run's end fail the first times.
+type flakyEnd struct {
+	kv.Backend
+	fails atomic.Int32
+}
+
+func (f *flakyEnd) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if key == RunsKey && strings.Contains(string(b), `"state":"succeeded"`) && f.fails.Add(-1) >= 0 {
+		return "", errors.New("the database is away")
+	}
+	return f.Backend.SaveKey(ctx, key, b, version)
+}
+
+// The save of a run's end is tried again (cut by the review's cap): no
+// later beat writes it, and a run whose end is not kept reads as
+// interrupted.
+func TestTheEndOfARunIsSavedAgainWhenTheSaveFails(t *testing.T) {
+	b := &flakyEnd{Backend: &kv.Memory{}}
+	b.fails.Store(2)
+	st := NewStore(b, nil)
+	e := NewEngine(Options{Store: st, Exec: &stubExec{}})
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a"}, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); e.Running(r.ID); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run did not end")
+		}
+	}
+	kept, found, err := st.Run(context.Background(), r.ID)
+	if err != nil || !found || kept.State != RunSucceeded {
+		t.Fatalf("kept as %s (%v %v)", kept.State, found, err)
+	}
+}

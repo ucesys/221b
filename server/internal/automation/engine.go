@@ -52,7 +52,8 @@ type Options struct {
 	// MaxParallel bounds the nodes a batch runs at once.
 	MaxParallel int
 	// RecheckRetry is how long a production run waits before it reads the
-	// scripts again, when they could not be read at a batch's check.
+	// scripts again, when they could not be read at a batch's check, and
+	// the first wait before the save of a run's end is tried again.
 	RecheckRetry time.Duration
 }
 
@@ -398,7 +399,7 @@ func (e *Engine) masked(ctx context.Context, r Run, out map[string]string, used 
 
 // save writes the run's state; a failure is logged, the run goes on. A
 // cancel asked for through the record cancels the run.
-func (e *Engine) save(a *activeRun) {
+func (e *Engine) save(a *activeRun) error {
 	a.mu.Lock()
 	r := a.run.Copy()
 	a.saved = e.opts.Now()
@@ -412,7 +413,12 @@ func (e *Engine) save(a *activeRun) {
 	if asked && r.State == RunRunning {
 		a.cancel()
 	}
+	return err
 }
+
+// endTries is how often the save of a run's end is tried: no later beat
+// writes it, and a run whose end is not kept reads as interrupted.
+const endTries = 5
 
 // saveEvery is the most often a node's progress is written: the page
 // reads a running run from memory, and the beat writes the rest.
@@ -428,7 +434,7 @@ func (e *Engine) setNode(a *activeRun, node string, f func(*NodeResult)) {
 	due := e.opts.Now().Sub(a.saved) >= saveEvery
 	a.mu.Unlock()
 	if due {
-		e.save(a)
+		_ = e.save(a)
 	}
 }
 
@@ -521,7 +527,7 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 				a.mu.Lock()
 				a.run.Beat = e.opts.Now().UTC()
 				a.mu.Unlock()
-				e.save(a)
+				_ = e.save(a)
 			case <-stopBeat:
 				return
 			}
@@ -617,7 +623,9 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 		outs[n] = t.String()
 	}
 	a.mu.Unlock()
-	e.save(a)
+	for try := 1; e.save(a) != nil && try < endTries; try++ {
+		time.Sleep(time.Duration(try) * e.opts.RecheckRetry)
+	}
 	e.mu.Lock()
 	delete(e.active, r.ID)
 	e.outputs[r.ID] = outs
