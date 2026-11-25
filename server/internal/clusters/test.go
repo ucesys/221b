@@ -1,12 +1,16 @@
 package clusters
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -80,6 +84,90 @@ type tester struct {
 	opts  TestOptions
 	steps []Step
 	dead  bool
+	// proxy is the proxy the connection reaches the API server through
+	// (a kubeconfig's proxy-url, else HTTPS_PROXY and its kin), nil for
+	// none: the checks go the same way.
+	proxy *url.URL
+}
+
+// dial reaches the API server's addr as the connection does: directly,
+// or through an HTTP(S) proxy's CONNECT tunnel.
+func (t *tester) dial(ctx context.Context, addr string) (net.Conn, error) {
+	if t.proxy == nil {
+		return t.opts.Dialer(ctx, "tcp", addr)
+	}
+	return tunnel(ctx, t.opts.Dialer, t.proxy, addr)
+}
+
+// proxyOf is the proxy a connection with cfg reaches u through: cfg's
+// own (a kubeconfig's proxy-url), else the environment's, as client-go
+// takes them; nil for none.
+func proxyOf(cfg *rest.Config, u *url.URL) *url.URL {
+	proxy := http.ProxyFromEnvironment
+	if cfg != nil && cfg.Proxy != nil {
+		proxy = cfg.Proxy
+	}
+	p, err := proxy(&http.Request{URL: u})
+	if err != nil || p == nil || p.Host == "" {
+		return nil
+	}
+	return p
+}
+
+// proxyAddr is a proxy's host:port, its scheme's port filled in.
+func proxyAddr(p *url.URL) string {
+	if p.Port() != "" {
+		return p.Host
+	}
+	port := map[string]string{"https": "443", "socks5": "1080", "socks5h": "1080"}[p.Scheme]
+	if port == "" {
+		port = "80"
+	}
+	return net.JoinHostPort(p.Hostname(), port)
+}
+
+// tunnel asks an HTTP or HTTPS proxy for a tunnel to addr (CONNECT), as
+// client-go's transport does for an https:// server.
+func tunnel(ctx context.Context, dial func(ctx context.Context, network, addr string) (net.Conn, error), p *url.URL, addr string) (net.Conn, error) {
+	if p.Scheme != "http" && p.Scheme != "https" {
+		return nil, fmt.Errorf("a %s proxy is not tunnelled by the test", p.Scheme)
+	}
+	conn, err := dial(ctx, "tcp", proxyAddr(p))
+	if err != nil {
+		return nil, err
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+	if p.Scheme == "https" {
+		tc := tls.Client(conn, &tls.Config{ServerName: p.Hostname(), MinVersion: tls.VersionTLS12})
+		if err := tc.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("the TLS handshake with the proxy failed: %w", err)
+		}
+		conn = tc
+	}
+	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: addr}, Host: addr, Header: http.Header{}}
+	if u := p.User; u != nil {
+		pw, _ := u.Password()
+		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)))
+	}
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("the proxy answered %s", resp.Status)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
 
 func (t *tester) add(key, tone, text string) {
@@ -140,7 +228,13 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 		}
 		addr := net.JoinHostPort(host, port)
 		where := host + " answers"
-		if net.ParseIP(host) == nil {
+		t.proxy = proxyOf(cfg, u)
+		switch {
+		case t.proxy != nil:
+			// The connection goes through the proxy, which resolves and
+			// reaches the server: so does the check, as far as it can.
+			t.proxyAddress(ctx, u, addr, port)
+		case net.ParseIP(host) == nil:
 			rctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 			ips, err := opts.Resolver(rctx, host)
 			cancel()
@@ -150,7 +244,7 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 				where = fmt.Sprintf("%s resolves to %s, which answers", host, ips[0])
 			}
 		}
-		if !t.dead {
+		if !t.dead && t.proxy == nil {
 			dctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 			conn, err := opts.Dialer(dctx, "tcp", addr)
 			cancel()
@@ -171,6 +265,8 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 		t.add("TLS", "warn", "Plain HTTP: nothing between the console and the API server is encrypted. Use https:// for anything but a simulator.")
 	case s.CA == CASkip:
 		t.add("TLS", "warn", "Not verified: anything between the console and the API server could read the console’s credentials. Use the cluster’s CA certificate instead.")
+	case t.proxy != nil && t.proxy.Scheme != "http" && t.proxy.Scheme != "https":
+		t.add("TLS", "ok", fmt.Sprintf("Checked when signing in: the console reaches the API server through the %s proxy %s.", t.proxy.Scheme, t.proxy.Host))
 	default:
 		// The name the certificate is checked against is the connection's:
 		// a kubeconfig's tls-server-name, else the address's host.
@@ -293,6 +389,33 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 	return r
 }
 
+// proxyAddress is the address step through a proxy: an https:// server
+// is reached through the proxy's tunnel, as the connection reaches it;
+// for any other (a plain-HTTP simulator, a SOCKS proxy) the proxy itself
+// is reached, and the server is when signing in.
+func (t *tester) proxyAddress(ctx context.Context, u *url.URL, addr, port string) {
+	via := t.proxy.Host
+	dctx, cancel := context.WithTimeout(ctx, t.opts.Timeout)
+	defer cancel()
+	if u.Scheme == "https" && (t.proxy.Scheme == "http" || t.proxy.Scheme == "https") {
+		conn, err := t.dial(dctx, addr)
+		if err != nil {
+			t.add("Address", "err", fmt.Sprintf("Through the proxy %s, %s is not reached: %s.", via, addr, describeNetErr(err)))
+			return
+		}
+		_ = conn.Close()
+		t.add("Address", "ok", fmt.Sprintf("%s answers on port %s, through the proxy %s.", u.Hostname(), port, via))
+		return
+	}
+	conn, err := t.opts.Dialer(dctx, "tcp", proxyAddr(t.proxy))
+	if err != nil {
+		t.add("Address", "err", fmt.Sprintf("Nothing answers at the proxy %s: %s.", via, describeNetErr(err)))
+		return
+	}
+	_ = conn.Close()
+	t.add("Address", "ok", fmt.Sprintf("The proxy %s answers; the console reaches %s through it.", via, u.Hostname()))
+}
+
 // tlsStep shakes hands with the server at host:port and checks its
 // certificate the way the connection will: against name.
 func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port, name string) {
@@ -316,7 +439,7 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port, 
 	}
 	dctx, cancel := context.WithTimeout(ctx, t.opts.Timeout)
 	defer cancel()
-	raw, err := t.opts.Dialer(dctx, "tcp", net.JoinHostPort(host, port))
+	raw, err := t.dial(dctx, net.JoinHostPort(host, port))
 	if err != nil {
 		t.add("TLS", "err", "Nothing answers: "+describeNetErr(err)+".")
 		return
@@ -326,7 +449,7 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port, 
 	_ = conn.SetDeadline(time.Now().Add(t.opts.Timeout))
 	if err := conn.HandshakeContext(dctx); err != nil {
 		// Say who signed it, which is what the person needs to fix it.
-		issuer := serverIssuer(ctx, t.opts, host, port, name)
+		issuer := t.serverIssuer(ctx, host, port, name)
 		var unknown x509.UnknownAuthorityError
 		var invalid x509.CertificateInvalidError
 		var hostErr x509.HostnameError
@@ -358,10 +481,11 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port, 
 }
 
 // serverIssuer names who signed the server's certificate, without verifying it.
-func serverIssuer(ctx context.Context, opts TestOptions, host, port, name string) string {
+func (t *tester) serverIssuer(ctx context.Context, host, port, name string) string {
+	opts := t.opts
 	dctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	raw, err := opts.Dialer(dctx, "tcp", net.JoinHostPort(host, port))
+	raw, err := t.dial(dctx, net.JoinHostPort(host, port))
 	if err != nil {
 		return "an unknown CA"
 	}

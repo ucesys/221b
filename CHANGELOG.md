@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **The connection test said "Can't connect" for a cluster reached through a proxy** (clusters review, finding 9). Its address and TLS steps resolved and dialled the API server directly, while the connection goes through a kubeconfig's `proxy-url` or `HTTPS_PROXY`, so Sign-in, Kubernetes and Permissions were never checked. The test now goes through the same proxy: an https:// server through the proxy's tunnel (CONNECT), anything else by reaching the proxy and checking the server when signing in.
+
 - **The connection test failed for a kubeconfig that sets `tls-server-name`** (clusters review, finding 10). Its TLS step checked the certificate against the address's host, while the connection checks it against the kubeconfig's `tls-server-name`, so a working connection tested as "Can't connect: the tls step failed". The step now checks the name the connection checks.
 
 - **Edits of the local cluster were never held to the version they read** (clusters review, finding 8; DB-92). Its summary carried no version, so of two tabs editing it the second saved over the first rather than being told *This connection was changed by someone else*. It now carries its row's version, as every other connection does.

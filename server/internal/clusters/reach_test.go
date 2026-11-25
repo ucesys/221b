@@ -8,9 +8,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,6 +48,43 @@ func tlsSim(t *testing.T, names ...string) (srv *httptest.Server, caPEM string) 
 	return srv, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
 }
 
+// connectProxy is an HTTP proxy that tunnels CONNECT to the address its
+// hosts map names for a host:port (anything else it refuses), and counts
+// the tunnels it made.
+func connectProxy(t *testing.T, hosts map[string]string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var tunnels atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		to, ok := hosts[r.Host]
+		if r.Method != http.MethodConnect || !ok {
+			http.Error(w, "not through this proxy", http.StatusForbidden)
+			return
+		}
+		up, err := net.Dial("tcp", to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			up.Close()
+			return
+		}
+		tunnels.Add(1)
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() {
+			defer up.Close()
+			_, _ = io.Copy(up, buf)
+		}()
+		go func() {
+			defer conn.Close()
+			_, _ = io.Copy(conn, up)
+		}()
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &tunnels
+}
+
 // steps is a test's steps as "Key:tone", in order.
 func steps(r clusters.TestResult) string {
 	var out []string
@@ -51,6 +92,45 @@ func steps(r clusters.TestResult) string {
 		out = append(out, s.Key+":"+s.Tone)
 	}
 	return strings.Join(out, " ")
+}
+
+// Finding 9: the test resolved and dialled the API server directly while
+// the connection went through its proxy (a kubeconfig's proxy-url, or
+// HTTPS_PROXY), so a cluster reachable only through the proxy worked and
+// tested as "Can't connect".
+func TestTheConnectionTestGoesThroughTheProxy(t *testing.T) {
+	srv, ca := tlsSim(t, "prod.cluster.invalid")
+	addr := strings.TrimPrefix(srv.URL, "https://")
+	_, port, _ := net.SplitHostPort(addr)
+	// prod.cluster.invalid resolves nowhere: only the proxy reaches it.
+	proxy, tunnels := connectProxy(t, map[string]string{"prod.cluster.invalid:" + port: addr})
+	server := "https://prod.cluster.invalid:" + port
+	m, ctx := started(t, clusters.NewMemoryStore())
+	kc := kubeconfigFor(server, saToken("prod"), caData(ca), "proxy-url: "+proxy.URL)
+	if _, err := m.Add(ctx, clusters.Draft{Spec: clusters.Spec{Name: "prod", Env: "production", Server: server, CA: "pem", Auth: "kubeconfig", Mode: "read"}, Credential: clusters.Credential{Kubeconfig: kc}}); err != nil {
+		t.Fatal(err)
+	}
+	// The connection works through the proxy, as it does in use.
+	connected(t, m, "prod")
+	r, err := m.TestSaved(ctx, "prod", "ann")
+	must(t, err)
+	if r.Tone == "err" || !strings.HasPrefix(steps(r), "Address:ok TLS:ok Sign-in:ok Kubernetes:ok") {
+		t.Fatalf("the test of a connection through its proxy: %s, %q", steps(r), r.Error)
+	}
+	if !strings.Contains(r.Steps[0].Text, "proxy") {
+		t.Errorf("the address step does not say it went through the proxy: %q", r.Steps[0].Text)
+	}
+	if tunnels.Load() == 0 {
+		t.Error("nothing went through the proxy")
+	}
+	// A proxy that does not reach the server: the address step says so.
+	other, _ := connectProxy(t, map[string]string{})
+	r, err = m.TestDraft(ctx, "", clusters.Draft{Spec: clusters.Spec{Name: "elsewhere", Env: "development", Server: server, CA: "pem", Auth: "kubeconfig", Mode: "read"},
+		Credential: clusters.Credential{Kubeconfig: kubeconfigFor(server, saToken("prod"), caData(ca), "proxy-url: "+other.URL)}})
+	must(t, err)
+	if r.Steps[0].Tone != "err" || !strings.Contains(r.Steps[0].Text, "proxy") {
+		t.Errorf("a proxy that refuses the tunnel: %+v", r.Steps[0])
+	}
 }
 
 // Finding 10: the test checked the server's certificate against the
