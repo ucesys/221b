@@ -954,3 +954,17 @@ func TestAHostsNameIsReadFromItsOutputAlone(t *testing.T) {
 		t.Fatalf("after the check: %+v %v", h, err)
 	}
 }
+
+// A passphrase given with a key that has none is no reason to refuse the
+// key (the review of November 24, 2026: it was "not readable").
+func TestAPassphraseForAKeyWithNoneIsLeftAside(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, err := ssh.MarshalPrivateKey(priv, "boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := Credential{User: bootUser, PrivateKey: string(pem.EncodeToMemory(block)), Passphrase: passphrase}
+	if methods, _, err := cred.auth(); err != nil || len(methods) != 1 {
+		t.Fatalf("a key with no passphrase, given one: %v", err)
+	}
+}

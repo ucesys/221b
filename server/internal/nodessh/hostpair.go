@@ -300,6 +300,12 @@ func (c Credential) auth() ([]ssh.AuthMethod, *bool, error) {
 		var err error
 		if c.Passphrase != "" {
 			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(c.Passphrase))
+			if err != nil && !errors.Is(err, x509.IncorrectPasswordError) {
+				// A key with no passphrase, given one: it opens without.
+				if plain, perr := ssh.ParsePrivateKey(key); perr == nil {
+					signer, err = plain, nil
+				}
+			}
 		} else {
 			signer, err = ssh.ParsePrivateKey(key)
 		}
