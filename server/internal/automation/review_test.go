@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -748,5 +751,38 @@ func TestAHookThatHangsTimesOut(t *testing.T) {
 	done := waitRun(t, e, r.ID)
 	if done.Nodes[0].State != NodeFailed || !strings.Contains(done.Nodes[0].Error, "timed out") || len(x.calls) != 0 {
 		t.Fatalf("%+v %v", done.Nodes[0], x.calls)
+	}
+}
+
+// Automation's runs take a turn of their own (cut by the review's cap): a
+// save of the jobs' runs.json, which holds the turn of that name, does not
+// hold up a run's save.
+func TestARunsSaveDoesNotWaitForTheJobsRuns(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	now := time.Now().UTC()
+	r, err := st.NewRun(ctx, Run{Script: "s", Version: 1, Cluster: "local", Fleet: AllNodes, State: RunRunning, Started: now, Beat: now, Nodes: []NodeResult{{Node: "a", Batch: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = d.Tx(ctx, func(tx pgx.Tx) error {
+			if err := db.LockDoc(ctx, tx, "runs.json"); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	defer close(release)
+	sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	r.Beat = time.Now().UTC()
+	if _, err := st.PutRun(sctx, r); err != nil {
+		t.Fatalf("a run's save while the jobs' runs.json is being saved: %v", err)
 	}
 }

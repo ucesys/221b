@@ -161,7 +161,7 @@ func pastPlain(changes *changesRecord, runs *runsRecord, names func(cluster stri
 // caller holds the turn of the variables' writers; this takes the
 // changes' and the runs'.
 func sealPastTables(ctx context.Context, tx pgx.Tx, r *ring, s *sealing, only string) (int, error) {
-	if err := lockDocs(ctx, tx, ChangesKey, RunsKey); err != nil {
+	if err := lockDocs(ctx, tx, ChangesKey, runsTurn); err != nil {
 		return 0, err
 	}
 	all, err := namesIn(ctx, tx)

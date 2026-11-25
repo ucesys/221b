@@ -26,12 +26,18 @@ import (
 // the liveness of the values a waiting request keeps there (DB-71). An
 // operation takes the turn of that document's writers (db.LockDoc), so
 // a whole read and an operation never write over each other: the runs'
-// document for a run, the changes' document for a request.
+// turn (runsTurn) for a run, the changes' document for a request.
 //
 // A sensitive value is hidden as the documents hid it: a run's own value,
 // what each node got and what each fleet had are their digests, and what
 // a waiting request would use waits in the Secret, written before the
 // commit (row, then Secret, then commit).
+
+// runsTurn is the name of the turn Automation's writers of runs take
+// (db.LockDoc). The jobs keep a document called runs.json too, and its
+// writers take the turn of that name: Automation's runs take their own, so
+// neither waits for the other (the review of November 24, 2026).
+const runsTurn = "automation/" + RunsKey
 
 // RunRepo keeps the runs and the requests for a run (DB-87).
 type RunRepo interface {
@@ -83,7 +89,7 @@ func sameAs(name, user string, n int) string {
 func (p *pgRuns) NewRun(ctx context.Context, r Run, now time.Time) (Run, error) {
 	var same Run
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		if r.Request != "" {
@@ -179,7 +185,7 @@ func (p *pgRuns) PutRun(ctx context.Context, r Run) (bool, error) {
 	cancel := false
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
 		cancel = false
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		was, err := readRunsWhere(ctx, tx, false, "run_number = $1", r.ID)
@@ -239,7 +245,7 @@ func pgText(s string) string {
 func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output string) error {
 	text, cut := keptOutput(output)
 	return p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		var host, cluster string
@@ -284,7 +290,7 @@ func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output strin
 func (p *pgRuns) AskCancel(ctx context.Context, id int, now time.Time) (bool, error) {
 	found := false
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, "UPDATE script_runs SET is_cancel_asked = true WHERE run_number = $1 AND state = $2 AND heartbeat_at > $3", id, RunRunning, now.Add(-staleAfter))
