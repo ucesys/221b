@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- The connection test's sign-in step said *Signed in as system:anonymous* for credentials the API server did not take, and named a kubeconfig's user entry as the account when the server would not say who it was (clusters review, cut list). An anonymous sign-in is now a warning, and a kubeconfig's entry name is not given as an account.
+
 - A connection's spec was read without the lock its edits write it under, by the test of the local cluster and by every read of a connection (a data race; clusters review, cut list).
 
 - **An edit taking a cluster off production that failed still filed its two-person request** (clusters review, cut list). The request was filed before the edit was checked and never withdrawn, and the environment asked for was not checked at all. It is now filed only once the rest of the edit is saved, and an environment that is none is refused with 400.

@@ -302,14 +302,21 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 		case err == nil:
 			version = info.GitVersion
 			who := whoAmI(ctx, cs, opts.Timeout)
-			if who == "" {
+			// When the server does not say, the credential's own word for
+			// its account stands in: a token's or a certificate's. A
+			// kubeconfig's is the name of its user entry, which names no
+			// account.
+			if who == "" && s.Auth != AuthKubeconfig {
 				who = s.Cred.Who
 			}
 			r.Who = who
-			if who != "" {
-				t.add("Sign-in", "ok", "Signed in as "+who+".")
-			} else {
+			switch who {
+			case "system:anonymous":
+				t.add("Sign-in", "warn", "The API server took the console for nobody (system:anonymous): the connection sends no credentials it accepts. Give a token, a client certificate or a kubeconfig with one.")
+			case "":
 				t.add("Sign-in", "ok", "Signed in.")
+			default:
+				t.add("Sign-in", "ok", "Signed in as "+who+".")
 			}
 		case apierrors.IsUnauthorized(err):
 			t.add("Sign-in", "err", "401 Unauthorized: the API server does not accept the credentials."+expiryNote(s, opts.Now()))

@@ -648,3 +648,58 @@ func TestReadingTheLocalSpecWhileItIsEditedIsNoRace(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// whoSim is a simulator whose answer to "who am I" is given: a user name,
+// or "" for a refusal (403).
+func whoSim(t *testing.T, who string) *httptest.Server {
+	t.Helper()
+	sm := sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "selfsubjectreviews") {
+			sm.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if who == "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"kind":"SelfSubjectReview","apiVersion":"authentication.k8s.io/v1","status":{"userInfo":{"username":"` + who + `"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Cut list: the sign-in step said "Signed in as <user>" for a kubeconfig
+// that signs in as nobody: the API server's anonymous user, or, when it
+// would not say, the name of the kubeconfig's user entry.
+func TestTheSignInStepDoesNotNameWhoNobodyIs(t *testing.T) {
+	signIn := func(srv *httptest.Server) clusters.Step {
+		t.Helper()
+		kc := `apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "` + srv.URL + `"}}]
+users: [{name: admin, user: {}}]
+contexts: [{name: c, context: {cluster: c, user: admin}}]
+current-context: c
+`
+		check, server, err := clusters.CheckCredential("kubeconfig", clusters.Credential{Kubeconfig: kc}, "", time.Now())
+		must(t, err)
+		spec := clusters.Spec{Name: "c", Env: "development", Server: server, CA: "system", Auth: "kubeconfig", Mode: "read", Cred: check.Info}
+		r := clusters.Test(context.Background(), spec, clusters.Credential{Kubeconfig: kc}, clusters.TestOptions{Timeout: 5 * time.Second})
+		for _, st := range r.Steps {
+			if st.Key == "Sign-in" {
+				return st
+			}
+		}
+		t.Fatalf("no sign-in step: %s", steps(r))
+		return clusters.Step{}
+	}
+	if st := signIn(whoSim(t, "system:anonymous")); st.Tone != "warn" || !strings.Contains(st.Text, "anonymous") || strings.Contains(st.Text, "Signed in as") {
+		t.Errorf("an anonymous sign-in: %+v", st)
+	}
+	if st := signIn(whoSim(t, "")); strings.Contains(st.Text, "admin") {
+		t.Errorf("a sign-in the server would not name: %+v", st)
+	}
+}
