@@ -230,3 +230,26 @@ func TestParseRefusesImagesKubernetesCannotRun(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A duration too long for Go's is refused, not wrapped: 213504d was 25
+// minutes, and a number of seconds past 2^63 ns is left to the platform
+// (the toolbox review, finding 10). A bad duration names its key, and null
+// keeps the default (a nit of the same review).
+func TestDurationsAreRefusedRatherThanWrapped(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"retention":"213504d"}`:                  "toolbox.retention: 213504d is longer than",
+		`{"maxDuration":"106752d"}`:                "toolbox.maxDuration: 106752d is longer than",
+		`{"maxDuration":10000000000}`:              "toolbox.maxDuration: 10000000000 seconds is longer than",
+		`{"idleTimeout":-1e300}`:                   "toolbox.idleTimeout: -1e+300 seconds is longer than",
+		`{"debugPod":{"ttlAfterFinished":"soon"}}`: "toolbox.debugPod.ttlAfterFinished: \"soon\" is not a duration",
+		`{"maxDuration":true}`:                     "toolbox.maxDuration: a duration is",
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+	c, err := Parse([]byte(`{"maxDuration":null,"retention":"106751d"}`))
+	if err != nil || c.MaxDuration.D() != time.Hour || c.Retention.D() != 106751*24*time.Hour {
+		t.Fatalf("%v %v %v", err, c.MaxDuration.D(), c.Retention.D())
+	}
+}

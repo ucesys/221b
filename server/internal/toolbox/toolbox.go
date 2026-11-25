@@ -59,13 +59,25 @@ type Image struct {
 // Duration is a time.Duration that reads "10m" in JSON.
 type Duration time.Duration
 
-// UnmarshalJSON reads "10m", "400d", or a number of seconds.
+// maxDays is the most days a time.Duration holds.
+const maxDays = math.MaxInt64 / int64(24*time.Hour)
+
+// UnmarshalJSON reads "10m", "400d", or a number of seconds; null keeps
+// what is there, as encoding/json does for its own types. A duration too
+// long for a time.Duration is refused, never wrapped (the toolbox review,
+// finding 10).
 func (d *Duration) UnmarshalJSON(b []byte) error {
+	if string(bytes.TrimSpace(b)) == "null" {
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
 		if n, ok := strings.CutSuffix(s, "d"); ok {
 			// Days, which Go's durations lack: retention: 400d.
-			if days, err := strconv.Atoi(n); err == nil && days >= 0 {
+			if days, err := strconv.ParseInt(n, 10, 64); err == nil && days >= 0 {
+				if days > maxDays {
+					return fmt.Errorf("%s is longer than a duration may be (%dd at most)", s, maxDays)
+				}
 				*d = Duration(time.Duration(days) * 24 * time.Hour)
 				return nil
 			}
@@ -79,9 +91,15 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	}
 	var n float64
 	if err := json.Unmarshal(b, &n); err != nil {
-		return errors.New("a duration is a string such as 10m")
+		return errors.New("a duration is a string such as 10m, or a number of seconds")
 	}
-	*d = Duration(time.Duration(n * float64(time.Second)))
+	// Converting a float out of int64's range is left to the platform
+	// (amd64 and arm64 differ), so it is refused before.
+	ns := n * float64(time.Second)
+	if math.IsNaN(ns) || ns >= math.MaxInt64 || ns <= math.MinInt64 {
+		return fmt.Errorf("%s seconds is longer than a duration may be (%dd at most)", bytes.TrimSpace(b), maxDays)
+	}
+	*d = Duration(time.Duration(ns))
 	return nil
 }
 
@@ -308,11 +326,23 @@ func unknownKeys(v any, t reflect.Type, path string) []string {
 				bad = append(bad, fmt.Sprintf("%s.%s is not a toolbox value (%s takes %s)", path, k, path, strings.Join(names, ", ")))
 				continue
 			}
+			// A duration is read here first, so its error names its key.
+			if ft == durationType {
+				if b, err := json.Marshal(x); err == nil {
+					var d Duration
+					if err := d.UnmarshalJSON(b); err != nil {
+						bad = append(bad, fmt.Sprintf("%s.%s: %v", path, k, err))
+					}
+				}
+				continue
+			}
 			bad = append(bad, unknownKeys(x, ft, path+"."+k)...)
 		}
 	}
 	return bad
 }
+
+var durationType = reflect.TypeOf(Duration(0))
 
 // given says whether the values name a key, null included: path is the
 // keys from the top.
