@@ -216,3 +216,17 @@ func TestOnProductionAChangeSherlockDidNotWeighWaits(t *testing.T) {
 		t.Fatalf("off production: %d %s", code, body)
 	}
 }
+
+// A waiting change of the values a Kubernetes script reads holds that
+// script on production (cut by the review's cap), as it holds a script on
+// nodes: the cluster's values are All nodes'.
+func TestAWaitingChangeHoldsAKubernetesScript(t *testing.T) {
+	e := valuesSetup(t)
+	if code, body := e.do(t, "PUT", "/api/v1/automation/fleets/_all/variables", `{"values":{"MODE":"wipe","ZONE":"eu","OTHER":"us"},"sensitive":["MODE"]}`); code != http.StatusAccepted {
+		t.Fatalf("%d %s", code, body)
+	}
+	code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{}`))
+	if code != http.StatusConflict || !strings.Contains(body, "suspended") {
+		t.Fatalf("%d %s", code, body)
+	}
+}
