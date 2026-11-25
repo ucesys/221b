@@ -786,3 +786,28 @@ func TestARunsSaveDoesNotWaitForTheJobsRuns(t *testing.T) {
 		t.Fatalf("a run's save while the jobs' runs.json is being saved: %v", err)
 	}
 }
+
+// Collecting facts for a request that is cancelled keeps what was known
+// of the nodes (cut by the review's cap): the cancel says nothing of them.
+func TestCancelledFactsKeepWhatWasKnown(t *testing.T) {
+	ctx := context.Background()
+	answer := "os.family=debian\n"
+	x := &stubExec{run: func(_, _, _ string, out io.Writer) (int, error) {
+		io.WriteString(out, answer)
+		return 0, nil
+	}}
+	e, st := stubEngine(x, nil, nil)
+	if _, err := e.CollectFacts(ctx, "local", []string{"a"}, Who{Name: "Ann"}); err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	x.run = func(_, _, _ string, _ io.Writer) (int, error) {
+		cancel()
+		return -1, context.Canceled
+	}
+	_, _ = e.CollectFacts(cctx, "local", []string{"a"}, Who{Name: "Ann"})
+	facts, err := st.Facts(ctx, "local")
+	if err != nil || len(facts) != 1 || facts[0].Facts["os.family"] != "debian" || facts[0].Error != "" {
+		t.Fatalf("after a cancelled collection: %+v %v", facts, err)
+	}
+}

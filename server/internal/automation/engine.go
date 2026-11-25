@@ -924,7 +924,9 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 		asNobody := r.DryRun || r.Privilege == PrivilegeNobody
 		if len(header.Facts) > 0 {
 			f := e.askFacts(ctx, r.Cluster, node, KeyID(r))
-			_ = e.opts.Store.saveFacts(context.WithoutCancel(ctx), []NodeFacts{f})
+			if ctx.Err() == nil || f.Error == "" {
+				_ = e.opts.Store.saveFacts(context.WithoutCancel(ctx), []NodeFacts{f})
+			}
 			e.command(r, node, "facts", outcomeOf(f.Error != ""))
 			for _, k := range header.Facts {
 				if v, ok := f.Facts[k]; ok {

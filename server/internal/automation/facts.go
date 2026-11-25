@@ -231,7 +231,21 @@ func (e *Engine) CollectFacts(ctx context.Context, cluster string, nodes []strin
 		}(i, node)
 	}
 	wg.Wait()
-	if err := e.opts.Store.saveFacts(context.WithoutCancel(ctx), out); err != nil {
+	// A request cancelled (the page closed, the console stopping) says
+	// nothing of the nodes: what was kept of them stays.
+	keep := out
+	if ctx.Err() != nil {
+		keep = nil
+		for _, f := range out {
+			if f.Error == "" {
+				keep = append(keep, f)
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return out, ctx.Err()
+	}
+	if err := e.opts.Store.saveFacts(context.WithoutCancel(ctx), keep); err != nil {
 		return out, errors.Join(errors.New("the facts could not be kept"), err)
 	}
 	return out, nil
