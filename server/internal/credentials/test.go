@@ -122,10 +122,13 @@ func (s *Service) noteTestOf(ctx context.Context, c Credential, t Test) error {
 	return err
 }
 
-func (s *Service) test(ctx context.Context, c Credential, sec Secret, target string) Test {
+func (s *Service) test(ctx context.Context, c Credential, sec Secret, target string) (t Test) {
 	ctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
-	t := Test{At: s.o.Now().UTC(), Target: target}
+	t = Test{At: s.o.Now().UTC(), Target: target}
+	// The address is kept and shown as asked, but for a secret typed in
+	// it (credentials-unver-10).
+	defer func() { t.Target = redact(t.Target, sec.values()) }()
 	if !c.Covers(target) {
 		t.Text = fmt.Sprintf("%s is not under the endpoint %s: the credential is never sent there.", target, c.Endpoint)
 		return t

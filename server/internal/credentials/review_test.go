@@ -1186,3 +1186,27 @@ func TestAnSSHEndpointKeepsItsUser(t *testing.T) {
 		t.Errorf("a user in an https:// endpoint: %v", err)
 	}
 }
+
+// credentials-unver-10: the address a test asked is kept without the
+// secret, when it was typed with it.
+func TestATestsAddressIsKeptWithoutTheSecret(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer srv.Close()
+	s, _ := newService(t, srv.Client())
+	const tok = "fake+tok/en="
+	c := token(t, s, "q", srv.URL, SendAs{Method: SendQuery, Param: "access_token"}, tok)
+	for _, typed := range []string{srv.URL + "/x?access_token=" + url.QueryEscape(tok), srv.URL + "/x?access_token=" + tok, srv.URL + "/" + url.PathEscape(tok)} {
+		res, err := s.RunTest(ctx, c.ID, typed, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept, _ := s.Get(ctx, c.ID)
+		for _, target := range []string{res.Target, kept.LastTest.Target} {
+			for _, f := range secretForms(tok) {
+				if strings.Contains(target, f) {
+					t.Errorf("the address kept holds the secret: %s", target)
+				}
+			}
+		}
+	}
+}
