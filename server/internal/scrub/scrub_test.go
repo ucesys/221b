@@ -239,6 +239,10 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#7 an encrypted RSA key":    {"-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123ABCD\n\nMIIEowFakeKeyMaterial\n-----END RSA PRIVATE KEY-----", true},
 		"#7 a key on one line":       {"-----BEGIN PRIVATE KEY----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC -----END PRIVATE KEY-----", true},
 		"#7 a word on the next line": {"-----BEGIN PRIVATE KEY-----\nREDACTED\n-----END PRIVATE KEY-----", false},
+		// scrub#8: a scheme and its token stand on one line.
+		"#8 bearer at a line's end": {"kubelet | Bearer\nkube-state-metrics-6f8b7c9d4-x2v7q | none", false},
+		"#8 basic at a line's end":  {"proxy | Basic\nY2k6cHcxMjM0NQ== | none", false},
+		"#8 bearer and a tab":       {"Authorization: Bearer\t9f8e7d6c5b4a39281706f5e4d3c2b1a0", true},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

@@ -54,8 +54,8 @@ var (
 		regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
 		regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}\b`),
 	}
-	// A bearer token written out.
-	reBearer = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9\-._~+/]{20,}=*)`)
+	// A bearer token written out, on the scheme's line.
+	reBearer = regexp.MustCompile(`(?i)\bbearer[ \t]+([A-Za-z0-9\-._~+/]{20,}=*)`)
 	// An HTTP Basic value: user:password in base64.
 	reBasic = regexp.MustCompile(`(?i)\bbasic[ \t]+([A-Za-z0-9+/]{4,}={0,2})`)
 	// A password in an address: scheme://user:password@host. The password
