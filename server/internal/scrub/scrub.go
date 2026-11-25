@@ -335,6 +335,9 @@ var scrubbers = []struct {
 	re    *regexp.Regexp
 	keep  int               // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
 	check func(string) bool // for keep 0: whether a match is a credential, nil for always
+	// exempt: a JSON pair of notSecretFields whose value is of the kind
+	// that field holds stays (exemptPair), as JSON left it.
+	exempt bool
 }{
 	// PEM and PGP private keys in base64 (Text removes the PEM blocks
 	// themselves first).
@@ -363,7 +366,7 @@ var scrubbers = []struct {
 	// no key of its own: under a secret-named parent (auth: in a chart's
 	// values, {"auth": {"password": …}}) the child pairs are matched on
 	// their own. A list of plain values is taken whole.
-	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), keep: 1},
+	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), keep: 1, exempt: true},
 	// A YAML plain value on the line below its key.
 	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), keep: 1},
 	// Well-known token shapes.
@@ -436,10 +439,11 @@ func Text(s string) string {
 				// scrubbing again changes nothing; one that holds a
 				// redaction and more (a DSN whose URL password went first)
 				// is redacted whole.
-				if onlyRedacted(m[len(sub[sc.keep]):]) {
+				key, v := sub[sc.keep], m[len(sub[sc.keep]):]
+				if onlyRedacted(v) || sc.exempt && exemptPair(key, v) {
 					return m
 				}
-				return sub[sc.keep] + Redacted
+				return key + redactValue(key, v)
 			})
 		}
 	}
@@ -450,6 +454,59 @@ func Text(s string) string {
 // quoted or not, also cut at its "]" by a value that ends there.
 func onlyRedacted(v string) bool {
 	return strings.TrimRight(strings.Trim(v, `\"' `), "]") == Redacted[:len(Redacted)-1]
+}
+
+// redactValue is what a value becomes: a quoted one keeps its quotes (and
+// what a JSON string's match took after them), and one after a JSON key
+// is quoted, so JSON stays JSON.
+func redactValue(key, v string) string {
+	open := len(v) - len(strings.TrimLeft(v, `\`))
+	if open < len(v) && (v[open] == '"' || v[open] == '\'') {
+		if i := strings.LastIndexByte(v, v[open]); i > open {
+			j := i
+			for j > open+1 && v[j-1] == '\\' {
+				j--
+			}
+			return v[:open+1] + Redacted + v[j:]
+		}
+	}
+	if q := jsonQuote(key); q != "" {
+		return q + Redacted + q
+	}
+	return Redacted
+}
+
+// jsonQuote is the quote a JSON key ends in, with the backslashes before
+// it inside a JSON string, or "" for a key that is not quoted.
+func jsonQuote(key string) string {
+	k := strings.TrimRight(key, " \t:=,")
+	if !strings.HasSuffix(k, `"`) {
+		return ""
+	}
+	return k[len(strings.TrimRight(k[:len(k)-1], `\`)):]
+}
+
+var reJSONScalar = regexp.MustCompile(`^(?:-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|true|false|null)$`)
+
+// exemptPair says whether a JSON pair is one of notSecretFields with a
+// value of the kind it holds: a count or a flag for any of them, a
+// string for the names secretName and authMethod, a list for secretRefs.
+// A string under secret or secretsRead is still redacted.
+func exemptPair(key, v string) bool {
+	name := strings.Trim(strings.TrimRight(key, " \t:="), `\"'`)
+	if jsonQuote(key) == "" || !notSecretFields[name] {
+		return false
+	}
+	v = strings.TrimSpace(v)
+	switch {
+	case reJSONScalar.MatchString(v):
+		return true
+	case strings.HasPrefix(strings.TrimLeft(v, `\`), `"`):
+		return name == "secretName" || name == "authMethod"
+	case strings.HasPrefix(v, "["):
+		return name == "secretRefs"
+	}
+	return false
 }
 
 // Known also removes values known to be secret, wherever they appear:

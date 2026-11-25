@@ -1,6 +1,7 @@
 package scrub
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -390,6 +391,35 @@ func TestScrubJSONTakesAnObjectUnderASecretName(t *testing.T) {
 	for _, keep := range []string{`"name":"regcred"`, `"name":"app-env"`, `"secretName":"tls"`, `"key":"tls.crt"`, `"path":"tls.crt"`, `"mode":"prod"`} {
 		if !strings.Contains(out, keep) {
 			t.Errorf("lost %s: %s", keep, out)
+		}
+	}
+}
+
+// Text keeps JSON valid, and the fields JSON leaves as they are stay so
+// through the Text pass a tool result takes after it (scrub-cut-4).
+func TestScrubTextKeepsJSONValid(t *testing.T) {
+	row := `{"secretsRead":3,"secretName":"tls","authMethod":"oidc","secret":true,"secretRefs":["db","tls"],"tokens":[{"name":"t"}],"password":"hunter2secret"}`
+	out := Known(string(JSON([]byte(row))), nil)
+	if !json.Valid([]byte(out)) || strings.Contains(out, "hunter2secret") {
+		t.Errorf("%s became %s", row, out)
+	}
+	for _, keep := range []string{`"secretsRead":3`, `"secretName":"tls"`, `"authMethod":"oidc"`, `"secret":true`, `"secretRefs":["db","tls"]`, `"tokens":[{"name":"t"}]`} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("lost %s: %s", keep, out)
+		}
+	}
+	for _, in := range []string{
+		`{"password":"hunter2secret","n":1}`, `{"password": 12345678, "n": 1}`, `{"passwords":["hunter2secret","x"],"n":1}`,
+		`["--db-password","hunter2secret","--port","80"]`, `{"msg":"{\"password\":\"hunter2secret\"}","level":"info"}`,
+		`{"secret":"hunter2secret","secretsRead":"hunter2secret"}`, `{"Cookie":"sid=hunter2secret"}`,
+	} {
+		out := Text(in)
+		if !json.Valid([]byte(out)) || strings.Contains(out, "hunter2secret") {
+			t.Errorf("%s became %s", in, out)
+		}
+		var msg struct{ Msg string }
+		if json.Unmarshal([]byte(out), &msg) == nil && msg.Msg != "" && !json.Valid([]byte(msg.Msg)) {
+			t.Errorf("%s: the JSON string %s is no JSON", in, msg.Msg)
 		}
 	}
 }
