@@ -857,7 +857,7 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) Tick(ctx context.Context) {
 	if !s.leads() {
 		s.mu.Lock()
-		s.seen = nil
+		s.seen, s.armed = nil, nil
 		s.mu.Unlock()
 		return
 	}
@@ -1175,15 +1175,36 @@ func (s *Service) watchAlerts(ctx context.Context, rec jobsRecord, read func() [
 	}
 	if !wanted {
 		s.mu.Lock()
-		s.seen = nil
+		s.seen, s.armed = nil, nil
 		s.mu.Unlock()
 		return
+	}
+	// A cluster's alerts fire only once a look noted them all (kube#13):
+	// a cluster not listed yet, at a start or a failover, reads as having
+	// none, and arming with that would fire every standing alert at the
+	// next look. Its readiness is asked before the read: a cluster ready
+	// then has every alert in it. One that is not (its connection
+	// restarted, say) is armed again once it is.
+	ready := map[string]bool{}
+	if s.o.AlertsReady != nil {
+		for _, c := range s.clusters() {
+			ready[c.ID] = s.o.AlertsReady(c.ID)
+		}
 	}
 	alerts := read()
 	cur := map[string]string{}
 	var fire []Alert
 	s.mu.Lock()
 	first := s.seen == nil
+	if first || s.armed == nil {
+		s.armed = map[string]bool{}
+	}
+	armed := func(cluster string) bool {
+		if s.o.AlertsReady == nil {
+			return !first
+		}
+		return s.armed[cluster]
+	}
 	for _, a := range alerts {
 		if a.JobAck {
 			continue
@@ -1197,12 +1218,15 @@ func (s *Service) watchAlerts(ctx context.Context, rec jobsRecord, read func() [
 			continue
 		}
 		cur[k] = sev
-		if prev, ok := s.seen[k]; !first && (!ok || severityRank[sev] > severityRank[prev]) {
+		if prev, ok := s.seen[k]; armed(a.Cluster) && (!ok || severityRank[sev] > severityRank[prev]) {
 			a.Severity = sev
 			fire = append(fire, a)
 		}
 	}
 	s.seen = cur
+	for c, ok := range ready {
+		s.armed[c] = ok
+	}
 	s.mu.Unlock()
 	loc, err := time.LoadLocation(s.o.TimeZone)
 	if err != nil {

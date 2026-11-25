@@ -87,7 +87,13 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 			}
 			return out
 		},
-		Alerts:    alertsOf(manager),
+		Alerts: alertsOf(manager),
+		// A cluster's alerts fire once it has listed every kind they are
+		// made of (kube#13).
+		AlertsReady: func(id string) bool {
+			st, _, ok := manager.Lookup(id)
+			return ok && st != nil && st.Complete(live.ViewAlerts)
+		},
 		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Leads:     leads,
 		Audit:     auditLog,

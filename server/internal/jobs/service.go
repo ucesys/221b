@@ -204,6 +204,10 @@ type Options struct {
 	// Alerts lists every cluster's alerts now, for the alert jobs; nil
 	// watches none.
 	Alerts func(ctx context.Context) []Alert
+	// AlertsReady says whether a cluster has listed every kind its
+	// alerts are made of (kube#13): until then its alerts are noted, and
+	// none fires. Nil takes every cluster as ready.
+	AlertsReady func(cluster string) bool
 	// CommandOK says whether Watson runs a command line a proposal holds.
 	CommandOK func(line string) error
 	// Acker keeps the acknowledgements of the alerts the alert runs
@@ -263,7 +267,10 @@ type Service struct {
 	active map[string]*activeRun
 	// seen are the alerts the watcher knew at its last look, with their
 	// severity.
-	seen  map[string]string
+	seen map[string]string
+	// armed are the clusters a look noted every alert of, so a new one
+	// there fires (kube#13).
+	armed map[string]bool
 	swept time.Time
 	// rerouted is when the runs not routed were last tried again (W-8).
 	rerouted time.Time

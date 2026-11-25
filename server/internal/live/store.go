@@ -726,13 +726,13 @@ type built struct {
 
 // rebuilt is the result of rebuilding one view.
 type rebuilt struct {
-	name    string
-	all     bool
+	name string
+	all  bool
 	// complete says the cluster had listed every kind when the build began.
 	complete bool
-	rows    []built
-	present map[string]struct{}
-	usage   map[string][]byte
+	rows     []built
+	present  map[string]struct{}
+	usage    map[string][]byte
 }
 
 // process publishes what is pending: the cluster details always, the rows
@@ -1259,6 +1259,17 @@ func (s *Store) CompleteSnapshot(names []string, f Filter) ([]byte, bool) {
 		}
 	}
 	return s.snapshotLocked(names, f), complete
+}
+
+// Complete is what CompleteSnapshot says of one view, without the rows.
+func (s *Store) Complete(view string) bool {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureViewsLocked([]string{view})
+	v := s.views[view]
+	return v != nil && v.complete
 }
 
 // ensureViewsLocked builds the named views that do not exist yet. buildMu
