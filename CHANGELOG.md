@@ -85,6 +85,8 @@ Four notes on the credentials; [docs/upgrading.md](docs/upgrading.md) says more:
 
 ### Fixed
 
+- **A kubeconfig pasted again kept the old saved CA** (clusters review, finding 6). On a connection that checks the API server against a CA, pasting a fresh kubeconfig (after the cluster's CA was rotated, or to re-point it) saved the old CA, and the connection then failed with "certificate signed by unknown authority". The new kubeconfig's own CA is now taken; the saved one stays only when the kubeconfig has none and no CA is pasted.
+
 ### Security
 
 - **With `rbac.enforce: strict`, a connection re-pointed at another cluster could run changes on the old cluster's role verdict** (clusters review, finding 1). A role check that had looked the connection up before the re-point kept the old cluster's "match" under the new connection's fingerprint, so Watson, Automation and approvals ran changes on the new cluster for up to 15 minutes without its roles ever being read. The verdict is now kept with the fingerprint of the connection it was read through, and a change is decided by the fingerprint of the configuration it runs with, both read with it at once.

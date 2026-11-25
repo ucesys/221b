@@ -648,13 +648,15 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		if spec.Auth == AuthKubeconfig && strings.TrimSpace(c.Context) == "" {
 			c.Context = check.Info.Context
 		}
-		// The CA travels with the credential in the Secret.
+		// The CA travels with the credential in the Secret: the one pasted,
+		// else a kubeconfig's own (one pasted again after the cluster's CA
+		// was rotated brings the new CA), else the saved one.
 		c.CAPEM = strings.TrimSpace(d.Credential.CAPEM)
-		if c.CAPEM == "" && orig != nil && orig.CA == CAPEM && spec.CA == CAPEM {
-			c.CAPEM = origCred.CAPEM
-		}
 		if c.CAPEM == "" && spec.Auth == AuthKubeconfig && spec.CA == CAPEM {
 			c.CAPEM = kubeconfigCA(c.Kubeconfig, c.Context)
+		}
+		if c.CAPEM == "" && orig != nil && orig.CA == CAPEM && spec.CA == CAPEM {
+			c.CAPEM = origCred.CAPEM
 		}
 		cred = &c
 	default:

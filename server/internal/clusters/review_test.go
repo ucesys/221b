@@ -5,7 +5,9 @@ package clusters_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
+	"github.com/ucesys/221b/server/internal/kube/kubetest"
 )
 
 // started is a manager over store, started, with what it needs stopped
@@ -93,5 +97,76 @@ func TestASavedCredentialIsNeverSentToAnotherServer(t *testing.T) {
 	}
 	if _, err := m.TestDraft(ctx, "prod", clusters.Draft{Spec: moved, Credential: clusters.Credential{Token: saToken("other")}}); err != nil {
 		t.Errorf("a new credential for another server: %v", err)
+	}
+}
+
+// kubeconfigFor is a kubeconfig of one context, "here", that signs in to
+// server with tok; extra is more of the cluster entry (its CA, a proxy,
+// a TLS server name), each line indented as the entry's fields are.
+func kubeconfigFor(server, tok string, extra ...string) string {
+	more := ""
+	for _, e := range extra {
+		more += "\n    " + e
+	}
+	return fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: here
+  cluster:
+    server: %s%s
+users:
+- name: console
+  user:
+    token: %s
+contexts:
+- name: here
+  context:
+    cluster: here
+    user: console
+current-context: here
+`, server, more, tok)
+}
+
+// caData is a kubeconfig's certificate-authority-data line for a PEM.
+func caData(pemText string) string {
+	return "certificate-authority-data: " + base64.StdEncoding.EncodeToString([]byte(pemText))
+}
+
+// Finding 6: a kubeconfig pasted again on a connection that checks the
+// server against a CA kept the old saved CA rather than the new
+// kubeconfig's, so the connection then failed TLS.
+func TestAKubeconfigPastedAgainBringsItsOwnCA(t *testing.T) {
+	for _, tc := range []struct{ name string }{{"memory"}, {"secrets"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := clusters.Store(clusters.NewMemoryStore())
+			if tc.name == "secrets" {
+				store = clusterstest.Secrets(kubetest.Cluster())
+			}
+			m, ctx := started(t, store)
+			oldCA, _ := selfSigned(t, "old-ca", time.Now().Add(24*time.Hour))
+			newCA, _ := selfSigned(t, "new-ca", time.Now().Add(24*time.Hour))
+			spec := clusters.Spec{Name: "kc", Env: "development", Server: "https://10.9.0.1:6443", CA: "pem", Auth: "kubeconfig", Mode: "read"}
+			if _, err := m.Add(ctx, clusters.Draft{Spec: spec, Credential: clusters.Credential{Kubeconfig: kubeconfigFor(spec.Server, saToken("kc"), caData(oldCA))}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, cred, _ := store.Get(ctx, "kc"); cred.CAPEM != oldCA {
+				t.Fatal("the first kubeconfig's CA was not taken")
+			}
+			// The cluster's CA is rotated: the fresh kubeconfig is pasted, no CA.
+			if _, err := m.Update(ctx, "kc", clusters.Draft{Spec: spec, Credential: clusters.Credential{Kubeconfig: kubeconfigFor(spec.Server, saToken("kc"), caData(newCA))}}); err != nil {
+				t.Fatal(err)
+			}
+			_, cred, _ := store.Get(ctx, "kc")
+			if cred.CAPEM != newCA {
+				t.Fatalf("the old CA was kept over the new kubeconfig's: old %v", cred.CAPEM == oldCA)
+			}
+			// A kubeconfig with no CA of its own keeps the saved one.
+			if _, err := m.Update(ctx, "kc", clusters.Draft{Spec: spec, Credential: clusters.Credential{Kubeconfig: kubeconfigFor(spec.Server, saToken("kc"))}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, cred, _ := store.Get(ctx, "kc"); cred.CAPEM != newCA {
+				t.Fatal("a kubeconfig without a CA lost the saved one")
+			}
+		})
 	}
 }
