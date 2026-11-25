@@ -370,6 +370,9 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 			return v, nil
 		})
 		var check, back, fresh []string
+		// unmarked are the digests given under a name this save unmarks.
+		type named struct{ name, digest string }
+		var unmarked []named
 		err := eachValue(fleets, func(p place, v string) (string, error) {
 			switch {
 			case v == Unmoved:
@@ -392,10 +395,19 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 					}
 				}
 			case IsHidden(v):
-				if o, had := p.of(was); !had || o != v {
-					return "", fmt.Errorf("%w: %s holds a hidden value, which stays under a sensitive name: type a value, or mark %s sensitive", ErrInvalid, p, p.name)
+				if o, had := p.of(was); had && o == v {
+					back = append(back, v)
+					break
 				}
-				back = append(back, v)
+				// A new value of a name whose mark this save takes off (an
+				// approved change that unmarks it and sets it): shown, as
+				// the mark's taking off shows the name's values, once the
+				// Secret's value is the name's own.
+				if before[p.name] {
+					unmarked = append(unmarked, named{name: p.name, digest: v})
+					break
+				}
+				return "", fmt.Errorf("%w: %s holds a hidden value, which stays under a sensitive name: type a value, or mark %s sensitive", ErrInvalid, p, p.name)
 			}
 			return v, nil
 		})
@@ -416,6 +428,27 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 			// been in clear before too (in a run of another name's).
 			for _, d := range fresh {
 				out.saw(cluster, kept[d])
+			}
+		}
+		if len(unmarked) > 0 {
+			digests := make([]string, 0, len(unmarked))
+			for _, u := range unmarked {
+				digests = append(digests, u.digest)
+			}
+			kept, err := r.get(cluster, digests)
+			if err != nil {
+				return nil, err
+			}
+			for _, u := range unmarked {
+				plain, ok := kept[u.digest]
+				d, err := r.digest(cluster, u.name, plain)
+				if err != nil {
+					return nil, err
+				}
+				if !ok || d != u.digest {
+					return nil, fmt.Errorf("%w: %s holds a hidden value that is not its own: type a value", ErrInvalid, u.name)
+				}
+				back = append(back, u.digest)
 			}
 		}
 		if len(back) > 0 {

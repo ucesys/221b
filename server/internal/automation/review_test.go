@@ -609,3 +609,39 @@ func TestPruningKeepsTheNewestRejectedVersion(t *testing.T) {
 		t.Fatalf("the newest version is v%d", v.N)
 	}
 }
+
+// A waiting change that takes a sensitive mark off and also changes the
+// value can be approved (cut by the review's cap): the value it sets, kept
+// as its digest while it waited, is shown under the name as the mark's
+// taking off shows the name's values.
+func TestAnUnmarkWithANewValueCanBeApproved(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, nil)
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: map[string]string{"PW": "old-secret"}, Sensitive: []string{"PW"}}); err != nil {
+		t.Fatal(err)
+	}
+	vars, _ := st.Variables(ctx, "local")
+	c, err := st.NewChange(ctx, VariableChange{Cluster: "local", Fleet: AllNodes, By: ann, State: ChangeWaiting, Changed: []string{"PW"},
+		Before: FleetVariables{Values: map[string]string{"PW": vars[AllNodes].Values["PW"]}, Sensitive: []string{"PW"}},
+		After:  FleetVariables{Values: map[string]string{"PW": "new-plain"}},
+		Impact: []ImpactItem{{Script: "PW", Decision: ImpactApproval, Why: "it stops being sensitive", By: "rule"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.DecideChange(ctx, "local", c.ID, true, "", sam); err != nil || got.State != ChangeApproved {
+		t.Fatalf("approving it: %+v %v", got, err)
+	}
+	vars, _ = st.Variables(ctx, "local")
+	if all := vars[AllNodes]; all.Values["PW"] != "new-plain" || len(all.Sensitive) != 0 {
+		t.Fatalf("after the approval: %+v", all)
+	}
+	// A digest of another name's value is still refused under it.
+	if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: map[string]string{"TOKEN": "tok-value", "PW": "new-plain"}, Sensitive: []string{"TOKEN"}}); err != nil {
+		t.Fatal(err)
+	}
+	vars, _ = st.Variables(ctx, "local")
+	if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: map[string]string{"TOKEN": vars[AllNodes].Values["TOKEN"], "PW": vars[AllNodes].Values["TOKEN"]}, Sensitive: []string{"TOKEN"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("TOKEN's digest under PW: %v", err)
+	}
+}
