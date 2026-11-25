@@ -831,3 +831,46 @@ func TestASyncThatCannotReadDoesNotHoldEditsUp(t *testing.T) {
 		t.Fatal("an edit waited for a sync whose read never answered")
 	}
 }
+
+// late is a store whose list of revisions can be one taken a moment ago.
+type late struct {
+	clusters.Store
+	mu   sync.Mutex
+	revs map[string]string
+}
+
+func (l *late) Revisions(ctx context.Context) (map[string]string, error) {
+	l.mu.Lock()
+	revs := l.revs
+	l.mu.Unlock()
+	if revs != nil {
+		return revs, nil
+	}
+	return l.Store.Revisions(ctx)
+}
+
+// Cut list: a removal left the connection marked as seen, so a sync whose
+// list was taken before the connection was made again stopped it as
+// removed elsewhere.
+func TestAConnectionMadeAgainIsNotStoppedByAnOlderList(t *testing.T) {
+	_, srv := simServer(t)
+	l := &late{Store: clusters.NewMemoryStore()}
+	m, ctx := started(t, l)
+	draft := clusters.Draft{Spec: clusters.Spec{Name: "quick", Env: "development", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}, Credential: clusters.Credential{Token: saToken("quick")}}
+	_, err := m.Add(ctx, draft)
+	must(t, err)
+	must(t, m.Sync(ctx))
+	must(t, m.Remove(ctx, "quick"))
+	// A list taken now, before it is made again.
+	before, err := l.Store.Revisions(ctx)
+	must(t, err)
+	_, err = m.Add(ctx, draft)
+	must(t, err)
+	l.mu.Lock()
+	l.revs = before
+	l.mu.Unlock()
+	must(t, m.Sync(ctx))
+	if _, ok := m.Get("quick"); !ok {
+		t.Fatal("the connection made again was stopped by a list taken before its save")
+	}
+}

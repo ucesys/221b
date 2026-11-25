@@ -1034,6 +1034,10 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 		delete(m.instances, id)
 	}
 	m.mu.Unlock()
+	// Not seen any more: made again soon, the connection is one this
+	// replica has just added, which a list taken before its save misses
+	// and Sync leaves running.
+	delete(m.seen, id)
 	if inst.cancel != nil {
 		inst.cancel()
 	}
