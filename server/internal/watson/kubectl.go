@@ -3,6 +3,8 @@ package watson
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -106,17 +108,22 @@ type Discovery struct {
 type cachedDisc struct {
 	disc discovery.CachedDiscoveryInterface
 	at   time.Time
+	// conn is a digest of what the client connects to and with.
+	conn string
 }
 
-// For returns the cached discovery of a cluster, by its connection ID.
+// For returns the cached discovery of a cluster, by its connection ID. A
+// connection whose server, credential or certificates changed (an
+// administrator pasted a new token, a CA rotated) gets a new client: the
+// old one would ask with what the cluster no longer takes until a restart.
 func (d *Discovery) For(cluster string, cfg *rest.Config) (discovery.CachedDiscoveryInterface, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.byKey == nil {
 		d.byKey = map[string]*cachedDisc{}
 	}
-	key := cluster + "\x00" + cfg.Host
-	if c := d.byKey[key]; c != nil {
+	conn := connDigest(cfg)
+	if c := d.byKey[cluster]; c != nil && c.conn == conn {
 		if time.Since(c.at) > 5*time.Minute {
 			c.disc.Invalidate()
 			c.at = time.Now()
@@ -127,9 +134,30 @@ func (d *Discovery) For(cluster string, cfg *rest.Config) (discovery.CachedDisco
 	if err != nil {
 		return nil, err
 	}
-	c := &cachedDisc{disc: memory.NewMemCacheClient(dc), at: time.Now()}
-	d.byKey[key] = c
+	c := &cachedDisc{disc: memory.NewMemCacheClient(dc), at: time.Now(), conn: conn}
+	d.byKey[cluster] = c
 	return c.disc, nil
+}
+
+// connDigest sums up what a REST config connects to and with: the server,
+// the credential and the TLS settings. Only the digest is kept.
+func connDigest(cfg *rest.Config) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%q %q %q %q %q %q %q\x00", cfg.Host, cfg.APIPath, cfg.BearerToken, cfg.BearerTokenFile, cfg.Username, cfg.Password, cfg.Impersonate.UserName)
+	tls := cfg.TLSClientConfig
+	fmt.Fprintf(h, "%v %q %q %q %q\x00", tls.Insecure, tls.ServerName, tls.CertFile, tls.KeyFile, tls.CAFile)
+	h.Write(tls.CertData)
+	h.Write([]byte{0})
+	h.Write(tls.KeyData)
+	h.Write([]byte{0})
+	h.Write(tls.CAData)
+	if cfg.ExecProvider != nil {
+		fmt.Fprintf(h, "\x00exec %q %q", cfg.ExecProvider.Command, cfg.ExecProvider.Args)
+	}
+	if cfg.AuthProvider != nil {
+		fmt.Fprintf(h, "\x00auth %q %q", cfg.AuthProvider.Name, fmt.Sprint(cfg.AuthProvider.Config))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // getter is the RESTClientGetter kubectl's factory and Helm read their
