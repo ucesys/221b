@@ -18,3 +18,13 @@ func TestAWatsonCommandStoppedBeforeItRanLeavesItsCardWaiting(t *testing.T) {
 		t.Fatalf("stopped while it ran: %s", got)
 	}
 }
+
+// A standing approval's runner manages applications, as the SuperAdmin
+// who set it does, so a helm install or upgrade it approves can run
+// (review of November 24, 2026, pre_existing: api/cards.go:587).
+func TestAStandingApprovalsRunnerManagesApplications(t *testing.T) {
+	who, _ := watsonAction{}.runner(cards.Approver{Person: cards.Person{Name: "Standing"}, As: cards.Standing{By: cards.Person{Key: "root"}, RunAs: cards.RunAs{User: "root"}}})
+	if !who.ManageApps {
+		t.Fatalf("%+v", who)
+	}
+}

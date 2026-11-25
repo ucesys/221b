@@ -221,6 +221,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **One request makes at most 20 Watson commands** (P6-04; review of November 24, 2026): a block of commands was split into as many cards as it had lines, each planned against the cluster with a dry run and kept in memory, so one request could start thousands. Past 20, the rest are refused in one item that says how many were not run.
 - **The taint card says kubectl refuses a taint the node already has** (review of November 24, 2026): without `--overwrite`, kubectl refuses any taint whose key and effect the node has, even with the same value, but the card said it was already there and nothing changed.
 - **A `helm rollback` to a negative or non-numeric revision is said to be refused** (review of November 24, 2026): its card described a rollback to the previous revision, which Helm refuses.
+- **A helm install or upgrade a card standing approval approves can run** (HA-02; review of November 24, 2026): the runner of a standing approval (AIOps › Standing approvals, a SuperAdmin's) was given no right to manage applications, so every `helm install`/`upgrade` from git or a repository it approved failed with *Only Admins and SuperAdmins install or upgrade a chart*. It now manages applications as the SuperAdmin who set it, and Kubernetes is still asked, as the identity it runs as, about the namespace.
 
 ### Security
 

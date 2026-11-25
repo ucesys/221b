@@ -584,7 +584,10 @@ func (a watsonAction) runner(by cards.Approver) (watson.Who, context.Context) {
 		}
 		return x.who, ctx
 	case cards.Standing:
-		who := watson.Who{Name: by.Name, User: x.By.Key, Person: kube.Person{User: x.RunAs.User, Groups: x.RunAs.Groups}, Audit: audit.Who{Subject: x.By.Key, Name: by.Name}}
+		// A standing approval is a SuperAdmin's to set: its runner manages
+		// applications as they do, and Kubernetes is asked, as the identity
+		// it runs as, whether that holds in the namespace.
+		who := watson.Who{Name: by.Name, User: x.By.Key, Person: kube.Person{User: x.RunAs.User, Groups: x.RunAs.Groups}, Audit: audit.Who{Subject: x.By.Key, Name: by.Name}, ManageApps: true}
 		return who, ctx
 	}
 	return watson.Who{Name: by.Name, User: by.Key}, ctx
