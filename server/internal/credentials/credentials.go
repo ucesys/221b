@@ -546,8 +546,11 @@ type Endpoint struct {
 	Path   string
 }
 
+// String is the endpoint as it is kept and read again: its path escaped,
+// so a space, a # or a ? in it (typed %20, %23, %3F) reads back as the
+// same path, not a fragment or a query (credentials#6).
 func (e Endpoint) String() string {
-	s := e.Host + e.Path
+	s := e.Host + (&url.URL{Path: e.Path}).EscapedPath()
 	if e.Scheme != "" {
 		s = e.Scheme + "://" + s
 	}

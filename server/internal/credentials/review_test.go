@@ -325,3 +325,31 @@ func TestTheCopyGoesPastARecordPostgresRefuses(t *testing.T) {
 		t.Fatalf("a NUL saved: %v", err)
 	}
 }
+
+// credentials#6: an endpoint typed with a percent-escape is kept escaped,
+// so it reads back as the same endpoint: it covers its own addresses, not
+// a sibling's, and saves again.
+func TestAPercentEscapedEndpointReadsBackTheSame(t *testing.T) {
+	s, _ := newService(t, nil)
+	for _, tc := range []struct{ ep, under, sibling string }{
+		{"https://dev.azure.com/org/My%20Project", "https://dev.azure.com/org/My%20Project/_git/repo", "https://dev.azure.com/org/My"},
+		{"https://git.example.com/org/C%23", "https://git.example.com/org/C%23/repo.git", "https://git.example.com/org/C/repo.git"},
+		{"https://git.example.com/org/a%3Fb", "https://git.example.com/org/a%3Fb/x", "https://git.example.com/org/a/x"},
+		{"https://git.example.com/org/100%25", "https://git.example.com/org/100%25/x", "https://git.example.com/org/100/x"},
+		{"https://git.example.com/org/C%23/team", "https://git.example.com/org/C%23/team/x", "https://git.example.com/org/C/team/x"},
+	} {
+		c := token(t, s, "t "+tc.ep, tc.ep, SendAs{}, "fake-tok")
+		if c.Endpoint != tc.ep {
+			t.Errorf("%s is kept as %s", tc.ep, c.Endpoint)
+		}
+		if !c.Covers(tc.under) || c.Covers(tc.sibling) {
+			t.Errorf("%s (kept %s): covers %s %v, %s %v", tc.ep, c.Endpoint, tc.under, c.Covers(tc.under), tc.sibling, c.Covers(tc.sibling))
+		}
+		if m, err := s.Matching(ctx, UseGit, tc.under); err != nil || !slices.ContainsFunc(m, func(o Credential) bool { return o.ID == c.ID }) {
+			t.Errorf("%s is not offered for %s: %v", tc.ep, tc.under, err)
+		}
+		if _, err := s.Update(ctx, c.ID, c, nil, "bob"); err != nil {
+			t.Errorf("%s does not save again: %v", tc.ep, err)
+		}
+	}
+}
