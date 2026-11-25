@@ -638,6 +638,8 @@ func (s *Service) SetReread(f func(Who) (Who, bool)) {
 type Grant struct {
 	Who   Who
 	Until time.Time
+	// Given is when it was given: the settings' limit counts from then.
+	Given time.Time
 }
 
 func grantKey(cluster, session string) string { return cluster + "\x00" + session }
@@ -662,7 +664,8 @@ func (s *Service) ApproveAll(cl Cluster, who Who, d time.Duration) (Grant, error
 	case d < time.Minute || d > max:
 		return Grant{}, fmt.Errorf("%w: between 1 and %s", ErrGrant, minutes(max))
 	}
-	g := Grant{Who: who, Until: s.opts.Now().Add(d)}
+	now := s.opts.Now()
+	g := Grant{Who: who, Until: now.Add(d), Given: now}
 	s.mu.Lock()
 	if s.grants == nil {
 		s.grants = map[string]Grant{}
@@ -693,12 +696,51 @@ func (s *Service) Revoke(cl Cluster, who Who) {
 // Standing returns a person's standing approval on a cluster, if it holds.
 func (s *Service) Standing(cl Cluster, who Who) (Grant, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	g, ok := s.grants[grantKey(cl.ID, who.Session)]
-	if !ok || !g.Until.After(s.opts.Now()) {
+	var ended []Grant
+	if ok {
+		g, ok = s.holdsLocked(cl, grantKey(cl.ID, who.Session), g, s.opts.Now(), &ended)
+	}
+	s.mu.Unlock()
+	s.recordEnded(cl, ended)
+	if !ok {
 		return Grant{}, false
 	}
 	return g, true
+}
+
+// holdsLocked says whether a grant holds now under the settings as they
+// are now (R2-04): standing approvals turned off end it, and a lower limit
+// shortens it to that long from when it was given. A grant the settings
+// end is removed and added to ended, for the audit log.
+func (s *Service) holdsLocked(cl Cluster, key string, g Grant, now time.Time, ended *[]Grant) (Grant, bool) {
+	max := time.Duration(0)
+	if s.opts.ApproveAllMax != nil {
+		max = s.opts.ApproveAllMax(cl)
+	}
+	if max <= 0 {
+		delete(s.grants, key)
+		*ended = append(*ended, g)
+		return g, false
+	}
+	if g.Given.IsZero() {
+		g.Given = now
+	}
+	if limit := g.Given.Add(max); limit.Before(g.Until) {
+		g.Until = limit
+		s.grants[key] = g
+	}
+	return g, g.Until.After(now)
+}
+
+// recordEnded audits the grants the settings ended.
+func (s *Service) recordEnded(cl Cluster, ended []Grant) {
+	if s.opts.Audit == nil {
+		return
+	}
+	for _, g := range ended {
+		s.opts.Audit.Record(audit.Event{Time: s.opts.Now(), Action: ActionApproveAll, Who: g.Who.Audit, From: g.Who.From, Cluster: cl.ID, Outcome: audit.OutcomeOK, Detail: "ended reason=\"standing approvals are off in Settings\""})
+	}
 }
 
 // readyLocked lists the cluster's pending cards whose plan is ready.
@@ -728,19 +770,26 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 	}
 	now := s.opts.Now()
 	var holders []Who
-	if g, ok := s.grants[grantKey(cl.ID, it.Requester.Session)]; ok && g.Until.After(now) {
-		holders = append(holders, g.Who)
+	var ended []Grant
+	if g, ok := s.grants[grantKey(cl.ID, it.Requester.Session)]; ok {
+		if g, ok = s.holdsLocked(cl, grantKey(cl.ID, it.Requester.Session), g, now, &ended); ok {
+			holders = append(holders, g.Who)
+		}
 	}
 	if s.needsTwo(cl, it) {
 		holders = holders[:0]
 		for k, g := range s.grants {
-			if strings.HasPrefix(k, cl.ID+"\x00") && g.Until.After(now) && g.Who.User != "" && g.Who.User != it.Requester.User {
+			if !strings.HasPrefix(k, cl.ID+"\x00") {
+				continue
+			}
+			if g, ok := s.holdsLocked(cl, k, g, now, &ended); ok && g.Who.User != "" && g.Who.User != it.Requester.User {
 				holders = append(holders, g.Who)
 			}
 		}
 	}
 	reread := s.opts.Reread
 	s.mu.Unlock()
+	s.recordEnded(cl, ended)
 	if len(holders) == 0 {
 		return
 	}

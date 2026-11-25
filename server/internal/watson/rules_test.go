@@ -2,6 +2,7 @@ package watson
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,5 +64,49 @@ func TestChangesStopWhenTheConnectionTurnsReadOnly(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if got, _, _ := svc.Snapshot(third.ID, 0); got.Status != StatusPending {
 		t.Fatalf("approved on a read-only connection: %s", got.Status)
+	}
+}
+
+// Turning standing approvals off ends the grants people hold, and lowering
+// the limit shortens them (review of November 24, 2026, finding 15).
+func TestTurningStandingApprovalsOffEndsTheGrants(t *testing.T) {
+	var max atomic.Int64
+	max.Store(int64(4 * time.Hour))
+	svc, cl, _, _, buf := setup(t, Options{TwoPerson: twoPeople, ApproveAllMax: func(Cluster) time.Duration { return time.Duration(max.Load()) }})
+	if _, err := svc.ApproveAll(cl, alice(), 4*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	max.Store(int64(10 * time.Minute))
+	g, ok := svc.Standing(cl, alice())
+	if !ok || g.Until.After(time.Now().Add(11*time.Minute)) {
+		t.Fatalf("a lower limit: %+v %v", g, ok)
+	}
+	max.Store(0)
+	if _, ok := svc.Standing(cl, alice()); ok {
+		t.Fatal("the grant outlived the setting")
+	}
+	if _, err := svc.ApproveAll(cl, alice(), 0); err == nil {
+		t.Fatal("granted with the setting off")
+	}
+	// Alice's grant no longer approves Bob's card.
+	max.Store(int64(time.Hour))
+	if _, err := svc.ApproveAll(cl, alice(), 30*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	max.Store(0)
+	it := svc.Submit(context.Background(), cl, bob(), "kubectl cordon worker-004", "typed", "", false)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	time.Sleep(300 * time.Millisecond)
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusPending {
+		t.Fatalf("approved under an ended grant: %s", got.Status)
+	}
+	ends := 0
+	for _, e := range buf.events() {
+		if e.Action == ActionApproveAll && strings.HasPrefix(e.Detail, "ended reason=") {
+			ends++
+		}
+	}
+	if ends != 2 {
+		t.Fatalf("%d ends audited", ends)
 	}
 }
