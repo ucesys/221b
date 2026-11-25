@@ -22,8 +22,12 @@ func TestAnObjectMadeAfterItsCardVoidsTheCard(t *testing.T) {
 	if _, err := simClient(t, cl).CoreV1().Pods("web").Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err == nil || !strings.Contains(err.Error(), "changed after this card appeared") {
-		t.Fatalf("approved: %v", err)
+	// Watson's own check may lapse it first; either way it is not approved.
+	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err == nil {
+		t.Fatal("approved")
+	}
+	if done, _, _ := svc.Snapshot(got.ID, 0); done.Status != StatusLapsed || !strings.Contains(done.Reason, "pod web/later-0 changed after this card appeared") {
+		t.Fatalf("%s %q", done.Status, done.Reason)
 	}
 }
 
@@ -59,8 +63,11 @@ func TestANamespaceDeleteCardLapsesWhenItsContentsChange(t *testing.T) {
 	if _, err := simClient(t, cl).CoreV1().ConfigMaps("web").Create(context.Background(), cm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err == nil || !strings.Contains(err.Error(), "what is in namespace web") {
-		t.Fatalf("approved: %v", err)
+	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err == nil {
+		t.Fatal("approved")
+	}
+	if done, _, _ := svc.Snapshot(got.ID, 0); done.Status != StatusLapsed || !strings.Contains(done.Reason, "what is in namespace web") {
+		t.Fatalf("%s %q", done.Status, done.Reason)
 	}
 }
 

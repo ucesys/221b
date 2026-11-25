@@ -1,10 +1,10 @@
 package api
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -688,9 +688,9 @@ func (s *Server) proposeFromChat(r *http.Request, c watson.Cluster, who watson.W
 			continue
 		}
 		p := cards.Proposal{
-			Agent:     "sherlock",
-			Source:    cards.Source{Kind: cards.SourceChat, Label: "Asked by " + who.Name + " in a chat on " + c.Name, SetBy: who.Name},
-			Cluster:   c.ID,
+			Agent:   "sherlock",
+			Source:  cards.Source{Kind: cards.SourceChat, Label: "Asked by " + who.Name + " in a chat on " + c.Name, SetBy: who.Name},
+			Cluster: c.ID,
 			// The title is recorded and sent to the notification channels:
 			// the line's parameters are hidden there (DB-74). The action keeps
 			// the line whole, to run; the key that tells the same line again

@@ -93,7 +93,7 @@ type Who struct {
 	// they hold no standing approval (R2-04).
 	ViewOnly bool
 	Audit    audit.Who
-	From       string
+	From     string
 }
 
 // Line is one line of output.
