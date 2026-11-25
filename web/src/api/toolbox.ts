@@ -431,3 +431,13 @@ export function clock(seconds: number): string {
   const ss = String(s % 60).padStart(2, '0')
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
+
+/** The debug container profiles a namespace's Pod Security level admits (TB-24, TB-52): general and restricted, restricted alone at restricted. */
+export function debugContainerProfiles(level: string): string[] {
+  return level === 'restricted' ? ['restricted'] : ['restricted', 'general']
+}
+
+/** The profile a debug container's dialog sends: the one asked for (a Sherlock prefill included) when the level admits it, restricted otherwise, so what is sent is what the select shows. */
+export function debugContainerProfile(level: string, asked: string): string {
+  return debugContainerProfiles(level).includes(asked) ? asked : 'restricted'
+}

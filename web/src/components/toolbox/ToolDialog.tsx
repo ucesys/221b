@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fmtTs } from '../../lib/format'
-import { COMMAND_TOOLS, fetchToolbox, HOST_TOOLS, requestSession, ToolboxError, type ToolboxInfo, type ToolName, type ToolRequest } from '../../api/toolbox'
+import { COMMAND_TOOLS, debugContainerProfile, debugContainerProfiles, fetchToolbox, HOST_TOOLS, requestSession, ToolboxError, type ToolboxInfo, type ToolName, type ToolRequest } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
 import { BoltIcon, BoxIcon, CloseIcon, ForwardIcon, ShieldSmallIcon, TerminalIcon } from '../Icons'
@@ -21,8 +21,6 @@ const DURATIONS = [15, 30, 60]
 const PROFILE_WORDS: Record<string, string> = {
   general: 'Runs as the image’s own user, as capable as the namespace allows',
   restricted: 'Runs as non-root (user 65532) and can’t escalate',
-  netadmin: 'NET_ADMIN and NET_RAW, for tcpdump and iptables',
-  sysadmin: 'Privileged',
 }
 
 const NODE_PROFILES: Record<string, { title: string; words: string }> = {
@@ -117,7 +115,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const containerV = container || containers[0]?.name || ''
   const targetV = target || containers[0]?.name || ''
   const imageV = image || (tool === 'debug-container' ? pick(info?.debugContainerImages) : tool === 'debug-pod' ? pick(info?.debugPodProfiles) : '')
-  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles?.[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
+  const profileV = tool === 'debug-container' ? debugContainerProfile(level, profile) : profile || (tool === 'node-shell' ? (info?.nodeProfiles?.[0] ?? 'general') : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
   const onNode = HOST_TOOLS.includes(tool)
@@ -422,7 +420,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       break
     }
     case 'debug-container': {
-      const allowed = level === 'restricted' ? ['restricted'] : ['restricted', 'general']
+      const allowed = debugContainerProfiles(level)
       body = (
         <>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>

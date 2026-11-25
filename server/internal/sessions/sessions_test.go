@@ -1643,3 +1643,43 @@ func TestDeadlinesAndTTLsFitKubernetes(t *testing.T) {
 		t.Errorf("node pod deadline %d", d)
 	}
 }
+
+// Debug containers have two profiles since the October 26, 2026 review,
+// general and restricted: netadmin and sysadmin (a privileged container)
+// are refused, and a profile the namespace's Pod Security level forbids
+// is refused by the server, the card's plan and the start alike (the
+// toolbox review, finding 12).
+func TestDebugContainersTakeOnlyGeneralAndRestricted(t *testing.T) {
+	c := toolbox.Default()
+	for _, p := range []string{toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin, "baseline"} {
+		r := Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: p}
+		if err := r.Validate(c, false); err == nil {
+			t.Errorf("%s passed", p)
+		}
+	}
+	if got := ProfilesAllowed(LevelPrivileged); len(got) != 2 {
+		t.Errorf("privileged: %v", got)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "web"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
+	r := Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: toolbox.ProfileGeneral}
+	if _, err := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted); err == nil || !strings.Contains(err.Error(), "restricted") {
+		t.Errorf("general in a restricted namespace: %v", err)
+	}
+	r.Profile = toolbox.ProfileSysAdmin
+	if ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged); err == nil || (ec.SecurityContext != nil && ec.SecurityContext.Privileged != nil) {
+		t.Errorf("sysadmin: %v", err)
+	}
+	// The start refuses it as the plan does: nothing is attached.
+	m, f, _, _ := setup(t)
+	f.mu.Lock()
+	f.ns["web"] = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "web", Labels: map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}}}
+	f.mu.Unlock()
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: toolbox.ProfileGeneral}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateEnded)
+	f.mu.Lock()
+	attached := len(f.pods["web/api-1"].Spec.EphemeralContainers)
+	f.mu.Unlock()
+	if got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "restricted") || attached != 0 {
+		t.Fatalf("%s %q %d attached", got.EndedBy, got.EndNote, attached)
+	}
+}

@@ -174,8 +174,10 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		if r.Profile == "" {
 			r.Profile = toolbox.ProfileRestricted
 		}
-		if !contains([]string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}, r.Profile) {
-			errs = append(errs, fmt.Errorf("%q is not a capability profile", r.Profile))
+		// Two profiles since the October 26, 2026 review: netadmin and
+		// sysadmin (a privileged container) are node shells' alone.
+		if !contains(ProfilesAllowed(LevelPrivileged), r.Profile) {
+			errs = append(errs, fmt.Errorf("a debug container's profile is general or restricted, not %q", r.Profile))
 		}
 		if r.MountVolumes && !c.DebugContainer.MountVolumes {
 			errs = append(errs, errors.New("mounting the pod's volumes is turned off on this console"))
@@ -437,22 +439,22 @@ func PodSecurity(ns *corev1.Namespace) string {
 var baselineCaps = map[string]bool{"AUDIT_WRITE": true, "CHOWN": true, "DAC_OVERRIDE": true, "FOWNER": true, "FSETID": true, "KILL": true, "MKNOD": true, "NET_BIND_SERVICE": true, "SETFCAP": true, "SETGID": true, "SETPCAP": true, "SETUID": true, "SYS_CHROOT": true}
 
 // ProfilesAllowed lists the debug container capability profiles a
-// namespace's level admits (TB-24, TB-52).
+// namespace's level admits (TB-24, TB-52): general and restricted, the
+// two since the October 26, 2026 review, and restricted alone where the
+// level is restricted, which admits no container as the image's user.
 func ProfilesAllowed(level string) []string {
-	switch level {
-	case LevelRestricted:
+	if level == LevelRestricted {
 		return []string{toolbox.ProfileRestricted}
-	case LevelBaseline:
-		return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted}
 	}
-	return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}
+	return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted}
 }
 
 func ptr[T any](v T) *T { return &v }
 
 // securityFor is the security context of a capability profile. General
 // runs as the image's own user with the capabilities its image asks for,
-// as many as the namespace's Pod Security level allows.
+// as many as the namespace's Pod Security level allows; anything else is
+// restricted (EphemeralContainer admits general and restricted alone).
 func securityFor(profile string, img toolbox.Image, level string) *corev1.SecurityContext {
 	switch profile {
 	case toolbox.ProfileGeneral:
@@ -466,14 +468,8 @@ func securityFor(profile string, img toolbox.Image, level string) *corev1.Securi
 			}
 		}
 		return sc
-	case toolbox.ProfileNetAdmin:
-		return &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN", "NET_RAW"}}}
-	case toolbox.ProfileSysAdmin:
-		return &corev1.SecurityContext{Privileged: ptr(true)}
-	case toolbox.ProfileRestricted:
-		return restrictedContext()
 	}
-	return &corev1.SecurityContext{AllowPrivilegeEscalation: ptr(false)}
+	return restrictedContext()
 }
 
 func restrictedContext() *corev1.SecurityContext {
@@ -494,6 +490,11 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return corev1.EphemeralContainer{}, fmt.Errorf("no image named %q", r.Image)
+	}
+	// The server refuses what the namespace's Pod Security level forbids,
+	// as the dialog does (TB-52): the plan and the start both come here.
+	if allowed := ProfilesAllowed(level); !contains(allowed, r.Profile) {
+		return corev1.EphemeralContainer{}, fmt.Errorf("namespace %s enforces the %s Pod Security level, which admits the %s profile alone, not %s", r.Namespace, level, strings.Join(allowed, " and "), r.Profile)
 	}
 	ec := corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 		Name:            "221b-" + r.Image + "-" + id[:4],
