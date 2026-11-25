@@ -151,6 +151,7 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 - **A few small Secrets can no longer keep the console out of memory** (kube#3). The Secret cache read any `helm.sh/release.v1` Secret, inflated its record up to 64 MiB and kept its notes, values and lists whole, and masking short values could make the notes grow tenfold: sixteen Secrets of 80 KB each passed the chart's 1 GiB limit, at every start. A record that inflates past 32 MiB is now not read (the Helm tab does not show that revision); notes over 64 KiB, values over 256 KiB, and notes that print over 1,000 distinct credentials are replaced by a sentence; the lists of masked paths, objects and images are bounded. Real releases are far below these limits.
 ### Fixed
 
+- **A refusal of the console's ConfigMaps reads as a sentence** (kube-cut-5): *not allowed to read the settings ConfigMap …*, not *not allowed to reading*.
 - **A long event message or connection error is cut at a character** (kube-cut-4), not inside one, which left invalid UTF-8 in the events and warnings shown.
 - **A read of the claims' usage that runs out of time hands out no more nodes** (kube-cut-3): a node handed out after the deadline counted as read, and the next read skipped it.
 - **A node that rebooted no longer shows its old uptime for a while** (kube-cut-1), and the boot times of nodes that left are let go. A boot read stopped by a lost Lease is read again at once by the next leader's pass, not five minutes later (kube-cut-2).

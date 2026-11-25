@@ -213,7 +213,7 @@ func tooLarge(err error) bool {
 func describeConfigMapError(doing, ref string, err error) error {
 	switch {
 	case apierrors.IsForbidden(err):
-		return fmt.Errorf("not allowed to %s the settings ConfigMap %s; check the Role the chart installs", strings.TrimSuffix(doing, " to"), ref)
+		return fmt.Errorf("not allowed to %s the settings ConfigMap %s; check the Role the chart installs", verbOf(doing), ref)
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("the settings ConfigMap %s does not exist; the chart creates it", ref)
 	}
@@ -222,4 +222,14 @@ func describeConfigMapError(doing, ref string, err error) error {
 		return fmt.Errorf("%s the settings ConfigMap %s: %s", doing, ref, status.Status().Message)
 	}
 	return fmt.Errorf("%s the settings ConfigMap %s: %s", doing, ref, unreachable(err))
+}
+
+// verbOf is what the console was doing as a verb: "reading" is "read",
+// "saving to" "save to" (kube-cut-5).
+func verbOf(doing string) string {
+	word, rest, _ := strings.Cut(doing, " ")
+	if v, ok := map[string]string{"reading": "read", "saving": "save", "deleting": "delete", "listing": "list"}[word]; ok {
+		word = v
+	}
+	return strings.TrimSpace(word + " " + rest)
 }
