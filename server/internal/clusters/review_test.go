@@ -610,3 +610,17 @@ func TestASecretsFailureIsNotADatabaseOutage(t *testing.T) {
 		t.Errorf("the database is taken for away: %+v", h)
 	}
 }
+
+// Finding 15: on a read-and-change connection whose account could not
+// make Watson's changes, the permissions step said only that, and hid
+// the warning that nobody would see anything until it may impersonate.
+func TestThePermissionsStepSaysEverythingItFound(t *testing.T) {
+	_, srv := simServer(t)
+	admin(t, srv, "/sim/deny", `{"verbs":["impersonate","patch"]}`)
+	spec := clusters.Spec{Name: "prod", Env: "production", Server: srv.URL, CA: "system", Auth: "token", Mode: "write"}
+	r := clusters.Test(context.Background(), spec, clusters.Credential{Token: saToken("prod")}, clusters.TestOptions{SecretsRead: true, Timeout: 5 * time.Second})
+	p := r.Steps[len(r.Steps)-1]
+	if p.Key != "Permissions" || p.Tone != "warn" || !strings.Contains(p.Text, "cannot impersonate") || !strings.Contains(p.Text, "Watson") {
+		t.Fatalf("the permissions step: %+v", p)
+	}
+}

@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **The connection test hid that nobody would see anything on a read-and-change connection** (clusters review, finding 15). When the account could not make Watson's changes, the permissions step said only that, and dropped the warnings about impersonation, access reviews, logs and metrics. One warning now carries them all.
+
 - **A Kubernetes failure while saving or removing a connection was reported as a database outage** (clusters review, finding 14). An API server that reset the Secret's write gave 503 *the database is unavailable* with `X-221b-Database: unavailable`, the audit said the same, and a database probe started, although PostgreSQL was fine. The Secrets API's own error is now what the answer and the audit say, for a save, a removal and the one-time copy.
 
 - **Every rename, description, mode or environment edit of a connection wrote its Secret again** (clusters review, finding 13), from the credential read at the edit's start: a key the console does not know went, a token replaced by hand while the edit was open came back, and a connection with no Secret was given an empty one, which silenced the start's warning. An edit that gives no credential now leaves the Secret alone.

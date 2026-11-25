@@ -599,8 +599,9 @@ func (t *tester) permissionsStep(ctx context.Context, cs *kubernetes.Clientset, 
 			}
 		}
 		if len(cannot) > 0 {
-			t.add("Permissions", "warn", fmt.Sprintf("The account can read, but cannot %s, so the API server will refuse Watson’s changes. Bind it to the read-and-change role below, or choose Read only.", strings.Join(cannot, ", ")))
-			return
+			// Said first, with every other note after it: one warning that
+			// carries all the step found.
+			notes = append([]string{fmt.Sprintf("the account can read, but cannot %s, so the API server will refuse Watson’s changes: bind it to the read-and-change role below, or choose Read only", strings.Join(cannot, ", "))}, notes...)
 		}
 	}
 	text := "Can read every resource the console shows"
