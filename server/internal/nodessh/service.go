@@ -207,6 +207,11 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 	if p.Principal == "" {
 		return nil, p, "", fmt.Errorf("the pairing of node %s names no principal: pair it again", node)
 	}
+	if isHost {
+		// A host's key is the one a SuperAdmin pinned on the host, trusted
+		// again when it changed; the pairing's copy may lag behind.
+		p.HostKeys = []string{host.HostKey}
+	}
 	pinned, algos, err := pinnedKeys(p)
 	if err != nil {
 		return nil, p, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)

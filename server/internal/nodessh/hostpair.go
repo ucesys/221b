@@ -238,12 +238,16 @@ func (s *Service) TrustHost(ctx context.Context, cluster, name, fingerprint, by 
 	if err != nil {
 		return Host{}, false, err
 	}
+	// The pin is saved: from here the host is trusted, and the answer says
+	// so, for the audit record. The pairing's copy of the key follows as
+	// it can; a host is reached with the key pinned on the host itself
+	// (connect), so a copy left behind changes nothing.
 	if p, ok, err := s.opts.Pairings.Get(ctx, cluster, name); err != nil {
-		return h, again, err
+		s.opts.Logger.Warn("the pairing of a host trusted again was not updated", "host", name, "err", err)
 	} else if ok {
 		p.HostKeys = []string{h.HostKey}
 		if err := s.opts.Pairings.Set(ctx, p); err != nil {
-			return h, again, err
+			s.opts.Logger.Warn("the pairing of a host trusted again was not updated", "host", name, "err", err)
 		}
 	}
 	return h, again, nil

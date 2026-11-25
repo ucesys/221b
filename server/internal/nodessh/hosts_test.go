@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -838,5 +839,49 @@ func TestAHostMayNotTakeAPairedNodesName(t *testing.T) {
 	p, ok, err := e.svc.opts.Pairings.Get(ctx, "local", "worker-3")
 	if err != nil || !ok || p.LoginUser != "core" || len(p.HostKeys) != 1 || p.HostKeys[0] != testCA {
 		t.Fatalf("the node's pairing reads %+v (%v, %v)", p, ok, err)
+	}
+}
+
+// blinking is a store that fails every read while it is told to.
+type blinking struct {
+	kv.Backend
+	down atomic.Bool
+}
+
+func (b *blinking) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if b.down.Load() {
+		return nil, "", errors.New("the database blinked")
+	}
+	return b.Backend.LoadKey(ctx, key)
+}
+
+// A changed key trusted again takes effect and says so even when the
+// pairing cannot be read just then, and the host is reached with the key
+// now pinned (finding 13 of the review of November 24, 2026: the new pin
+// was saved, the answer was an error, so no audit record was written, and
+// trusting again said "read the host's key first").
+func TestTrustingAgainHoldsWhenThePairingCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	pairings := &blinking{Backend: &kv.Memory{}}
+	e := newHostEnvIn(t, &kv.Memory{}, pairings)
+	e.trust(t)
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
+	if _, _, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	e.host.setKey()
+	offer, err := e.svc.ScanHost(ctx, "local", "backup-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairings.down.Store(true)
+	h, again, err := e.svc.TrustHost(ctx, "local", "backup-1", offer.Fingerprint, "Sam")
+	pairings.down.Store(false)
+	if err != nil || !again || h.Fingerprint != e.host.fingerprint() {
+		t.Fatalf("trusted again with the pairing out of reach: %+v %v %v", h, again, err)
+	}
+	if code, err := e.svc.Exec(ctx, "local", "backup-1", "k", "true", false, strings.NewReader(""), io.Discard); err != nil || code != 0 {
+		t.Fatalf("after trusting again: %d %v", code, err)
 	}
 }
