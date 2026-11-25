@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -560,9 +561,48 @@ func MaskValues(v any, path string, masked *[]string) any {
 type masker struct {
 	paths  []string
 	values []string
-	// refs are names that look like credentials but only name one, kept.
-	refs map[string]bool
+	// refs says whether a field whose name looks like a credential only
+	// refers to one; such a field is masked by the ordinary rules. Nil for
+	// Helm values.
+	refs func(key string, value any) bool
 }
+
+// isRef says whether a field of a Kubernetes object refers to a Secret or
+// a token rather than holding one (kube#4): secretName, or a reference
+// object or list of them under secret, secretRef, *SecretRef and the
+// like. A plain value under those names is still masked.
+func isRef(key string, value any) bool {
+	if refNames[key] {
+		return true
+	}
+	if !refObjects[key] && !strings.HasSuffix(key, "SecretRef") {
+		return false
+	}
+	switch x := value.(type) {
+	case map[string]any:
+		return true
+	case []any:
+		for _, e := range x {
+			if _, ok := e.(map[string]any); !ok {
+				return false
+			}
+		}
+		return len(x) > 0
+	}
+	return false
+}
+
+// refNames are fields that name a Secret, or say whether a token is
+// mounted, by their value.
+var refNames = map[string]bool{"secretName": true, "automountServiceAccountToken": true}
+
+// refObjects are fields that hold a reference to a Secret or a token: a
+// Pod volume's or a projected source's secret, an environment variable's
+// secretKeyRef, envFrom's secretRef, a CSI volume's nodePublishSecretRef,
+// a ServiceAccount's secrets and imagePullSecrets, a projected
+// serviceAccountToken.
+var refObjects = map[string]bool{"secret": true, "secretKeyRef": true, "secretRef": true, "imagePullSecrets": true,
+	"secrets": true, "serviceAccountToken": true}
 
 func (m *masker) hide(path string, value any) string {
 	m.paths = append(m.paths, path)
@@ -585,7 +625,7 @@ func (m *masker) mask(v any, path string) any {
 				p = path + "." + k
 			}
 			switch {
-			case credentialKey(k) && !m.refs[k]:
+			case credentialKey(k) && (m.refs == nil || !m.refs(k, val)):
 				out[k] = m.maskAll(val, p)
 			case k == "value" && credentialKey(name):
 				out[k] = m.maskAll(val, strings.TrimPrefix(path+"."+name, "."))
@@ -618,6 +658,12 @@ func (m *masker) maskAll(v any, path string) any {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, val := range x {
+			if m.refs != nil && m.refs(k, val) {
+				// A reference under a credential-looking name: a
+				// credentials block's secretRef (kube#4).
+				out[k] = m.mask(val, path+"."+k)
+				continue
+			}
 			out[k] = m.maskAll(val, path+"."+k)
 		}
 		return out
@@ -702,26 +748,25 @@ func distinct(values []string) []string {
 	return out
 }
 
-// objectRefs are the fields of Kubernetes objects whose names look like
-// credentials but which only refer to a Secret or a token by name.
-var objectRefs = map[string]bool{"secretName": true, "secretKeyRef": true, "secretRef": true, "imagePullSecrets": true,
-	"secrets": true, "serviceAccountToken": true, "automountServiceAccountToken": true}
-
 // MaskObjects masks the objects of a rendered manifest, Secrets left out
 // (they are hidden whole elsewhere), as a release's values and notes are
 // masked: every value under a credential-looking name, the value of a
 // {name, value} pair named like one, a string that looks like a credential
 // by itself, and wherever it occurs, also in base64, any value masked so
-// or held by one of the manifest's Secrets (X-01). The objects are
-// returned as copies.
+// or held by one of the manifest's Secrets (X-01). A field that only
+// refers to a Secret is kept (kube#4). The objects are returned as copies.
 func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
-	m := &masker{refs: objectRefs}
+	m := &masker{refs: isRef}
 	out := make([]map[string]any, len(objs))
 	for i, o := range objs {
 		out[i], _ = m.mask(o, "").(map[string]any)
 	}
-	known := append(m.values, manifestSecrets(manifest)...)
-	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	var known []string
+	for _, k := range distinct(slices.Concat(m.values, manifestSecrets(manifest))) {
+		if replaceable(k) {
+			known = append(known, k)
+		}
+	}
 	var hide func(v any) any
 	hide = func(v any) any {
 		switch x := v.(type) {
@@ -735,9 +780,6 @@ func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
 			}
 		case string:
 			for _, k := range known {
-				if len(k) < shortCredential {
-					continue
-				}
 				x = strings.ReplaceAll(x, k, MaskedValue)
 				x = strings.ReplaceAll(x, base64.StdEncoding.EncodeToString([]byte(k)), MaskedValue)
 			}
@@ -749,6 +791,18 @@ func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
 		hide(o)
 	}
 	return out
+}
+
+// replaceable says whether a credential is masked wherever it occurs in a
+// manifest's objects: not a short one, nor a short number such as a mode
+// (420), a port or a key size (2048), which would mask unrelated text
+// (kube#4). It is still masked where it stands.
+func replaceable(v string) bool {
+	if len(v) < 4 {
+		return false
+	}
+	digits := strings.TrimLeft(v, "0123456789") == ""
+	return !digits || len(v) >= 6
 }
 
 // wholeWord says whether s holds word with no letter or digit against it.

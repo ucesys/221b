@@ -24,7 +24,8 @@ type Diff struct {
 	Same bool   `json:"same"`
 }
 
-// Compare diffs from against to, each a rendered manifest.
+// Compare diffs from against to, each a rendered manifest. An object
+// changed when its rendered text did, masked or not (kube#4).
 func Compare(from, to, fromLabel, toLabel string) Diff {
 	a, b := objects(from), objects(to)
 	d := Diff{Changed: []string{}, Added: []string{}, Removed: []string{}}
@@ -42,15 +43,21 @@ func Compare(from, to, fromLabel, toLabel string) Diff {
 	sort.Strings(keys)
 	var left, right strings.Builder
 	for _, k := range keys {
-		x, inA := a[k]
-		y, inB := b[k]
+		xo, inA := a[k]
+		yo, inB := b[k]
+		x, y := xo.shown, yo.shown
 		switch {
 		case inA && !inB:
 			d.Removed = append(d.Removed, k)
 		case inB && !inA:
 			d.Added = append(d.Added, k)
-		case x != y:
+		case xo.raw != yo.raw:
 			d.Changed = append(d.Changed, k)
+			if x == y {
+				// Only what is hidden changed: the diff says so, and not
+				// what (kube#4).
+				y += "\n# a value hidden by 221B changed"
+			}
 		}
 		if inA {
 			left.WriteString("---\n# " + k + "\n" + x + "\n")
@@ -69,13 +76,17 @@ func Compare(from, to, fromLabel, toLabel string) Diff {
 	return d
 }
 
+// rendered is one object of a manifest: its text as shown, masked, and as
+// rendered, which says whether it changed and is never shown.
+type rendered struct{ shown, raw string }
+
 // objects splits a manifest into its objects, keyed "Kind name" (with the
 // namespace when one is set), each trimmed of trailing space. A Secret's
 // values are hidden, and every other object is masked as release values
 // are (kube.MaskObjects), so a diff shows no credential whatever kind
 // holds it.
-func objects(manifest string) map[string]string {
-	out := map[string]string{}
+func objects(manifest string) map[string]rendered {
+	out := map[string]rendered{}
 	var keys, docs []string
 	var objs []map[string]any
 	for _, doc := range splitDocs(manifest) {
@@ -95,23 +106,24 @@ func objects(manifest string) map[string]string {
 			k = kind + " " + namespace + "/" + name
 		}
 		if kind == "Secret" {
-			out[k] = tidy(hideSecretValues(doc))
+			out[k] = rendered{shown: tidy(hideSecretValues(doc)), raw: tidy(doc)}
 			continue
 		}
 		keys, docs, objs = append(keys, k), append(docs, doc), append(objs, o)
 	}
 	for i, o := range kube.MaskObjects(objs, manifest) {
+		raw := tidy(docs[i])
 		// An object with nothing to mask keeps its text as rendered.
 		if reflect.DeepEqual(o, objs[i]) {
-			out[keys[i]] = tidy(docs[i])
+			out[keys[i]] = rendered{shown: raw, raw: raw}
 			continue
 		}
 		b, err := yaml.Marshal(o)
 		if err != nil {
-			out[keys[i]] = "# values hidden by 221B"
+			out[keys[i]] = rendered{shown: "# values hidden by 221B", raw: raw}
 			continue
 		}
-		out[keys[i]] = tidy(string(b))
+		out[keys[i]] = rendered{shown: tidy(string(b)), raw: raw}
 	}
 	return out
 }
