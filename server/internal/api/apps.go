@@ -809,7 +809,7 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 		}
 		manifest = rendered.Manifest
 	}
-	if d := apps.Compare(rel.Manifest, manifest, "deployed", "source"); !d.Same {
+	if d := apps.Compare(rel.Manifest, manifest, "deployed", "source", append(releaseValues(rel), vals, ch.Values)...); !d.Same {
 		n := len(d.Changed) + len(d.Added) + len(d.Removed)
 		rec.SourceDiff = fmt.Sprintf("%d of its objects render differently at %s", n, apps.ShortDigest(co.Commit))
 		if ch.Metadata != nil && ch.Metadata.Version != rel.Chart.Metadata.Version {
@@ -1353,6 +1353,10 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	// unnamed), or the source at its saved branch or tag, or at the branch
 	// or tag named for that side (asked October 30, 2026: either side may
 	// be a branch or tag, so two of the source's refs compare too).
+	// Each side also gives the values it was rendered with, whose
+	// credentials the diff masks wherever either manifest prints them
+	// (kube#5).
+	var values []map[string]any
 	side := func(which, refQ, kindQ string) (manifest, label string, ok bool) {
 		if q.Get(which) != "source" {
 			rev, err := s.revision(pc, ns, name, q.Get(which))
@@ -1360,6 +1364,7 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, http.StatusNotFound, err.Error())
 				return "", "", false
 			}
+			values = append(values, releaseValues(rev)...)
 			return rev.Manifest, fmt.Sprintf("revision %d", rev.Version), true
 		}
 		if rec == nil {
@@ -1398,6 +1403,7 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return "", "", false
 		}
+		values = append(values, vals, ch.Values)
 		if src.FromRepository() {
 			src.Ref = co.Version
 		}
@@ -1430,7 +1436,7 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d := apps.Compare(fromManifest, toManifest, fromLabel, toLabel)
+	d := apps.Compare(fromManifest, toManifest, fromLabel, toLabel, values...)
 	b, _ := json.Marshal(struct {
 		apps.Diff
 		From string `json:"from"`
@@ -1450,6 +1456,16 @@ func quoteDetail(s string) string { return strconv.Quote(s) }
 
 // releaseV1 is a release in the SDK's v1 format.
 type releaseV1 = release.Release
+
+// releaseValues are the values a revision was rendered with: what it was
+// installed with and its chart's defaults (kube#5).
+func releaseValues(rel *releaseV1) []map[string]any {
+	out := []map[string]any{rel.Config}
+	if rel.Chart != nil {
+		out = append(out, rel.Chart.Values)
+	}
+	return out
+}
 
 // --- Credentials (0.12.1, CR-11) ---
 

@@ -24,10 +24,13 @@ type Diff struct {
 	Same bool   `json:"same"`
 }
 
-// Compare diffs from against to, each a rendered manifest. An object
-// changed when its rendered text did, masked or not (kube#4).
-func Compare(from, to, fromLabel, toLabel string) Diff {
-	a, b := objects(from), objects(to)
+// Compare diffs from against to, each a rendered manifest. values are the
+// release values each side was rendered with (the record's config and the
+// chart's defaults, or the values composed from the source): a credential
+// they hold is masked wherever either manifest prints it (kube#5). An
+// object changed when its rendered text did, masked or not (kube#4).
+func Compare(from, to, fromLabel, toLabel string, values ...map[string]any) Diff {
+	a, b := objects(from, values), objects(to, values)
 	d := Diff{Changed: []string{}, Added: []string{}, Removed: []string{}}
 	var keys []string
 	seen := map[string]bool{}
@@ -83,9 +86,9 @@ type rendered struct{ shown, raw string }
 // objects splits a manifest into its objects, keyed "Kind name" (with the
 // namespace when one is set), each trimmed of trailing space. A Secret's
 // values are hidden, and every other object is masked as release values
-// are (kube.MaskObjects), so a diff shows no credential whatever kind
-// holds it.
-func objects(manifest string) map[string]rendered {
+// are (kube.MaskObjects, with the release's values), so a diff shows no
+// credential whatever kind holds it.
+func objects(manifest string, values []map[string]any) map[string]rendered {
 	out := map[string]rendered{}
 	var keys, docs []string
 	var objs []map[string]any
@@ -111,7 +114,7 @@ func objects(manifest string) map[string]rendered {
 		}
 		keys, docs, objs = append(keys, k), append(docs, doc), append(objs, o)
 	}
-	for i, o := range kube.MaskObjects(objs, manifest) {
+	for i, o := range kube.MaskObjects(objs, manifest, values...) {
 		raw := tidy(docs[i])
 		// An object with nothing to mask keeps its text as rendered.
 		if reflect.DeepEqual(o, objs[i]) {

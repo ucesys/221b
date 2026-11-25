@@ -84,3 +84,35 @@ func TestADiffSeesAChangeOfAHiddenValue(t *testing.T) {
 		t.Errorf("diff:\n%s", d.Text)
 	}
 }
+
+// A release's own values are masked wherever the manifest prints them,
+// and the argument after a credential-looking flag is masked (kube#5).
+func TestADiffMasksTheReleasesValues(t *testing.T) {
+	obj := func(image string) string {
+		return `---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        image: ` + image + `
+        args: ["--listen", ":8080", "--db-password", "fake-flag-pw-1", "--user", "fake-pw-from-values"]
+`
+	}
+	values := map[string]any{"auth": map[string]any{"password": "fake-pw-from-values"}}
+	d := apps.Compare(obj("api:1"), obj("api:2"), "deployed", "source", values)
+	for _, hidden := range []string{"fake-pw-from-values", "fake-flag-pw-1"} {
+		if strings.Contains(d.Text, hidden) {
+			t.Errorf("the diff shows %q:\n%s", hidden, d.Text)
+		}
+	}
+	for _, shown := range []string{"api:2", "--user"} {
+		if !strings.Contains(d.Text, shown) {
+			t.Errorf("the diff lacks %q:\n%s", shown, d.Text)
+		}
+	}
+}

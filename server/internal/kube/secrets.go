@@ -637,6 +637,12 @@ func (m *masker) mask(v any, path string) any {
 	case []any:
 		out := make([]any, len(x))
 		for i, val := range x {
+			// The argument after a flag that names a credential is one
+			// (kube#5): args: ["--password", "…"].
+			if s, ok := val.(string); ok && s != "" && i > 0 && secretFlag(x[i-1]) {
+				out[i] = m.hide(path, s)
+				continue
+			}
 			out[i] = m.mask(val, path)
 		}
 		return out
@@ -681,6 +687,18 @@ func (m *masker) maskAll(v any, path string) any {
 		return v
 	}
 	return m.hide(path, v)
+}
+
+// secretFlag says whether a command-line argument is a flag that names a
+// credential and leaves its value to the next argument: --password,
+// -db-token.
+func secretFlag(v any) bool {
+	s, ok := v.(string)
+	if !ok || !strings.HasPrefix(s, "-") || strings.ContainsAny(s, "= ") {
+		return false
+	}
+	name := strings.TrimLeft(s, "-")
+	return name != "" && credentialKey(name)
 }
 
 // shortCredential is the length below which a credential is not replaced
@@ -751,18 +769,26 @@ func distinct(values []string) []string {
 // MaskObjects masks the objects of a rendered manifest, Secrets left out
 // (they are hidden whole elsewhere), as a release's values and notes are
 // masked: every value under a credential-looking name, the value of a
-// {name, value} pair named like one, a string that looks like a credential
-// by itself, and wherever it occurs, also in base64, any value masked so
-// or held by one of the manifest's Secrets (X-01). A field that only
-// refers to a Secret is kept (kube#4). The objects are returned as copies.
-func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
+// {name, value} pair named like one, the argument after a flag named like
+// one, a string that looks like a credential by itself, and wherever it
+// occurs, also in base64, any value masked so, held by one of the
+// manifest's Secrets or masked in the release's values given (X-01,
+// kube#5). A field that only refers to a Secret is kept (kube#4). The
+// objects are returned as copies.
+func MaskObjects(objs []map[string]any, manifest string, values ...map[string]any) []map[string]any {
 	m := &masker{refs: isRef}
 	out := make([]map[string]any, len(objs))
 	for i, o := range objs {
 		out[i], _ = m.mask(o, "").(map[string]any)
 	}
+	fromValues := &masker{}
+	for _, v := range values {
+		if v != nil {
+			fromValues.mask(v, "")
+		}
+	}
 	var known []string
-	for _, k := range distinct(slices.Concat(m.values, manifestSecrets(manifest))) {
+	for _, k := range distinct(slices.Concat(m.values, fromValues.values, manifestSecrets(manifest))) {
 		if replaceable(k) {
 			known = append(known, k)
 		}
