@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **Every rename, description, mode or environment edit of a connection wrote its Secret again** (clusters review, finding 13), from the credential read at the edit's start: a key the console does not know went, a token replaced by hand while the edit was open came back, and a connection with no Secret was given an empty one, which silenced the start's warning. An edit that gives no credential now leaves the Secret alone.
+
 - **A connection's Secret made again by hand without its labels stopped later rotations reaching the connection** (clusters review, finding 12). Its revision was read from the Secrets listed by label, so after `kubectl delete secret` and `kubectl create secret generic …` it stopped changing, the connection kept the old token while tests and backups used the new one, and the start said the connection had no Secret. A connection whose Secret is not listed by its label is now read by its name for both.
 
 - **A connection test still running when its connection was removed and made again, or re-pointed, was kept as the new connection's last test** (clusters review, finding 11), timed after the change, where a connection made again starts untested. A test is now kept only while the connection is the one it went to: made at the same time, with the same server, certificate check, sign-in method and credential.

@@ -546,3 +546,38 @@ func TestASecretMadeAgainByHandWithoutItsLabelsIsFollowed(t *testing.T) {
 		t.Errorf("a connection whose Secret is there, without its labels, is said to have none: %v %v", noSecret, err)
 	}
 }
+
+// Finding 13: every rename, description, mode or environment edit wrote
+// the Secret again from the credential read at its start: a key this
+// console does not know went, and a kept row with no Secret was given an
+// empty one, which silenced the start's warning.
+func TestAnEditWithoutACredentialLeavesTheSecretAlone(t *testing.T) {
+	_, srv := simServer(t)
+	store, _, cs := clusterstest.PG(t, nil)
+	m, ctx := started(t, store)
+	spec := clusters.Spec{Name: "prod", Env: "production", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}
+	_, err := m.Add(ctx, clusters.Draft{Spec: spec, Credential: clusters.Credential{Token: saToken("prod")}})
+	must(t, err)
+	secrets := cs.CoreV1().Secrets(clusterstest.Namespace)
+	sec, err := secrets.Get(ctx, clusterstest.SecretName("prod"), metav1.GetOptions{})
+	must(t, err)
+	sec.Data["added-by-hand"] = []byte("kept")
+	_, err = secrets.Update(ctx, sec, metav1.UpdateOptions{})
+	must(t, err)
+	before, _ := secrets.Get(ctx, clusterstest.SecretName("prod"), metav1.GetOptions{})
+	renamed := spec
+	renamed.Description, renamed.Mode = "renamed", "write"
+	_, err = m.Update(ctx, "prod", clusters.Draft{Spec: renamed})
+	must(t, err)
+	after, _ := secrets.Get(ctx, clusterstest.SecretName("prod"), metav1.GetOptions{})
+	if string(after.Data["added-by-hand"]) != "kept" || after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("an edit without a credential wrote the Secret: keys %v", keysOf(held(t, cs)[clusterstest.SecretName("prod")]))
+	}
+	// A kept row whose Secret is gone is not given an empty one.
+	must(t, secrets.Delete(ctx, clusterstest.SecretName("prod"), metav1.DeleteOptions{}))
+	renamed.Description = "again"
+	_, _ = m.Update(ctx, "prod", clusters.Draft{Spec: renamed})
+	if _, err := secrets.Get(ctx, clusterstest.SecretName("prod"), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("an edit without a credential made a Secret: %v", err)
+	}
+}

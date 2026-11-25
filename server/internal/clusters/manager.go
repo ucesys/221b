@@ -632,7 +632,10 @@ func (m *Manager) nameTaken(name, except string) bool {
 }
 
 // prepare validates a draft and inspects its credential, returning the
-// spec to save and the credential (nil when the saved one is kept).
+// spec to save and the credential: nil when the saved one is kept as it
+// is, so a save leaves the Secret alone (every key in it, and a token
+// replaced by hand meanwhile); the credential to connect with is then
+// origCred (connectsWith).
 func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Credential, error) {
 	spec := d.Spec
 	spec.RowVersion = d.EditVersion
@@ -681,6 +684,7 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 	given := !d.Credential.Empty()
 	methodChanged := orig == nil || orig.Auth != spec.Auth
 	var cred *Credential
+	kept := false
 	switch {
 	case given || methodChanged:
 		if !given {
@@ -728,7 +732,7 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		if pem := strings.TrimSpace(d.Credential.CAPEM); pem != "" {
 			c.CAPEM = pem
 		}
-		cred = &c
+		cred, kept = &c, true
 		spec.Cred = orig.Cred
 	}
 	// The CA certificate, when pasted anew or lifted from a kubeconfig.
@@ -747,7 +751,20 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 			cred.CAPEM = ""
 		}
 	}
+	// The saved credential, unchanged by the edit, is not written again.
+	if kept && *cred == origCred {
+		cred = nil
+	}
 	return spec, cred, nil
+}
+
+// connectsWith is the credential a prepared edit connects with: the one it
+// gives, else the saved one.
+func connectsWith(cred *Credential, saved Credential) Credential {
+	if cred != nil {
+		return *cred
+	}
+	return saved
 }
 
 // kubeconfigCA lifts the CA certificate of a kubeconfig's context.
@@ -913,9 +930,10 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 		return Summary{}, err
 	}
 	saved()
-	changed := orig.Server != spec.Server || orig.CA != spec.CA || orig.Auth != spec.Auth || !d.Credential.Empty() || d.Credential.CAPEM != ""
+	use := connectsWith(cred, origCred)
+	changed := orig.Server != spec.Server || orig.CA != spec.CA || orig.Auth != spec.Auth || cred != nil
 	if changed {
-		return m.summaryOf(m.start(spec, *cred)), nil
+		return m.summaryOf(m.start(spec, use)), nil
 	}
 	m.mu.Lock()
 	inst := m.instances[id]
@@ -924,7 +942,7 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	}
 	m.mu.Unlock()
 	if inst == nil {
-		return m.summaryOf(m.start(spec, *cred)), nil
+		return m.summaryOf(m.start(spec, use)), nil
 	}
 	return m.summaryOf(inst), nil
 }
@@ -998,7 +1016,7 @@ func (m *Manager) TestDraft(ctx context.Context, id string, d Draft) (TestResult
 	if err != nil {
 		return TestResult{}, err
 	}
-	return Test(ctx, spec, *cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now}), nil
+	return Test(ctx, spec, connectsWith(cred, origCred), TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now}), nil
 }
 
 // TestSaved tests a saved connection and keeps the result for its page,
