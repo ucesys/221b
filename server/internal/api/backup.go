@@ -403,15 +403,22 @@ func (s *Server) registerBackupParts() {
 		How: "is set here when this console has no SSH authority yet, so the pairings work again; an authority here stays",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			ca, ok := s.opts.SSH.(sshAuthorityBackup)
-			if !ok || s.opts.SSH.Fingerprint() == "" {
+			if !ok {
+				return nil, nil
+			}
+			// The key itself says whether there is an authority: a read
+			// that fails fails the backup, where an empty fingerprint
+			// could not tell it from none, and the key was left out.
+			pem, err := ca.AuthorityKey(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading the SSH authority's key: %w", err)
+			}
+			defer clear(pem)
+			if len(pem) == 0 {
 				return nil, nil
 			}
 			if !env.Sealing() {
 				return backup.Placeholder, nil
-			}
-			pem, err := ca.AuthorityKey(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("reading the SSH authority's key: %w", err)
 			}
 			return env.Seal(string(pem)), nil
 		},

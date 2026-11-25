@@ -3,11 +3,19 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
 )
 
@@ -70,5 +78,22 @@ func TestARestoreOfPairingsKeepsThoseHereAndTheHostsAsTheyAre(t *testing.T) {
 	}
 	if got["n1"].LoginUser != "root" || got["n1"].HostKeys[0] != old || got["db2"].HostKeys[0] != here {
 		t.Fatalf("the pairings: %+v", got)
+	}
+}
+
+// A backup whose read of the SSH authority's key fails fails, saying so,
+// rather than leave the key out as if there were none (finding 11 of the
+// review of November 24, 2026: the nightly backup was written and recorded
+// as OK without it, and a restore from it could make no pairing work).
+func TestABackupFailsWhenTheAuthoritysKeyCannotBeRead(t *testing.T) {
+	cs := k8sfake.NewClientset()
+	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("the API server did not answer")
+	})
+	svc := nodessh.New(nodessh.Options{CA: nodessh.NewCA(kube.NewSecretKeyFor(cs, "221b", "x-ssh-ca", nil)), Pairings: nodessh.NewPairings(&kv.Memory{}), Logger: slog.New(slog.DiscardHandler)})
+	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { o.SSH = svc })
+	resp, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
+	if resp.StatusCode == http.StatusOK || !strings.Contains(body, "SSH authority") {
+		t.Fatalf("the backup: %s %.200s", resp.Status, body)
 	}
 }
