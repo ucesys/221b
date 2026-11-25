@@ -132,7 +132,9 @@ func (s *Service) fits(ctx context.Context, key string, n int) error {
 		return nil
 	}
 	if total-cur+n > SecretBudget {
-		return invalid("the credentials would take over %d KiB, more than their Secret can hold: remove the credentials no longer used, or shorten long private CAs and descriptions", SecretBudget>>10)
+		// The Secret holds the secrets alone since 0.13: their CAs and
+		// descriptions are in the database (credentials-cut-7).
+		return invalid("the credentials' secrets would take over %d KiB, more than their Secret can hold: remove the credentials no longer used, whose secrets leave it", SecretBudget>>10)
 	}
 	return nil
 }

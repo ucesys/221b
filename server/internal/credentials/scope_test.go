@@ -267,6 +267,12 @@ func TestTheCredentialsSecretStaysUnderItsBound(t *testing.T) {
 	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "more than their Secret can hold") || len(made) < 50 || len(made) > 56 {
 		t.Fatalf("%d made: %v", len(made), err)
 	}
+	// What it says to do frees room in the Secret, which holds the
+	// secrets alone: not CAs or descriptions, which are in the list
+	// (credentials-cut-7).
+	if strings.Contains(err.Error(), "CA") || strings.Contains(err.Error(), "description") {
+		t.Fatalf("the refusal says to shorten what is not in the Secret: %v", err)
+	}
 	if total, _, _ := mem.Sizes(ctx, ""); total > SecretBudget {
 		t.Fatalf("%d bytes kept", total)
 	}
