@@ -62,6 +62,10 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
   - **An AI test case's result can change at its next run** (AI-49): an answer that writes a literal secret into a script or manifest (`--password '…'`, `--from-literal=…=…`, `DB_PASSWORD=…`, a Basic header) fails *carries no text that looks like a credential* again, as it did before 0.13.2, and answers with ordinary placeholders (`YOUR_DB_PASSWORD`, `sk-your-api-key-goes-here`) or a port and an `@` in an address now pass. Re-run an agent's tests to see where it stands.
   - **Tool results read a little differently**: a scrubbed value that was quoted keeps its quotes (`"password":"[REDACTED]"`), so JSON stays JSON, and values that only looked secret (`--authorization-mode=Node,RBAC`, a pod named `payments-sk-worker-…`, the console's `"secretsRead":3`) are no longer redacted.
 
+## 0.13.3 (unreleased)
+
+- **A private key kept beside a credential's certificate leaves the list at the first start** (credentials#2): a client certificate's *Certificate* or a private CA saved with a `PRIVATE KEY` block in it (a combined `client.pem`) keeps its certificates alone; the log names the credentials changed. The key itself stays in the credential's secret, where it was given too. A backup made before keeps the key in clear in that credential's `certPEM` or `caPEM`: delete such backups, or restore them only into 0.13.3 or later, which drops the key. Saving such a field is now refused with why.
+
 ## 0.13.2 (2026-11-25)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.

@@ -551,6 +551,39 @@ func (s *Service) SecretValues(ctx context.Context, id string) []string {
 	return out
 }
 
+// CleanCertificates takes out of every credential's certificate and
+// private CA what is not a certificate: a private key pasted with its
+// certificate before 0.13.3, which was kept, shown and backed up in clear
+// (credentials#2). It says which credentials it changed, by id; the
+// secrets and everything else stay as they are. It runs at each start.
+func CleanCertificates(ctx context.Context, list Repo) ([]string, error) {
+	creds, err := list.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var changed []string
+	for _, c := range creds {
+		_, a := certificatesOnly(c.CertPEM)
+		_, b := certificatesOnly(c.CAPEM)
+		if len(a)+len(b) == 0 {
+			continue
+		}
+		_, err := list.Update(ctx, c.ID, func(cur *Credential) error {
+			cur.CertPEM, _ = certificatesOnly(cur.CertPEM)
+			cur.CAPEM, _ = certificatesOnly(cur.CAPEM)
+			return nil
+		})
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+		changed = append(changed, c.ID)
+	}
+	return changed, nil
+}
+
 // UnnamedSecrets are the ids of the secrets the Secret keeps that no
 // credential of the list names (a database restored to an earlier time,
 // a write cut short, a credential an older console made after the move):

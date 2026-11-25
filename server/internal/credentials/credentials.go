@@ -287,6 +287,11 @@ func (c *Credential) Check(sec Secret) error {
 		if !x509.NewCertPool().AppendCertsFromPEM([]byte(c.CAPEM)) {
 			return invalid("the private CA holds no certificate that can be read")
 		}
+		// The private CA is shown and backed up as it is: a private key
+		// pasted with it would be too (credentials#2).
+		if _, other := certificatesOnly(c.CAPEM); len(other) > 0 {
+			return invalid("the private CA holds %s besides its certificates: give the certificates alone", strings.Join(other, ", "))
+		}
 	} else {
 		c.CAPEM = ""
 	}
@@ -380,6 +385,9 @@ func (c *Credential) Check(sec Secret) error {
 		c.CertPEM = strings.TrimSpace(c.CertPEM)
 		if err := need(c.CertPEM, "certificate"); err != nil {
 			return err
+		}
+		if _, other := certificatesOnly(c.CertPEM); len(other) > 0 {
+			return invalid("the certificate holds %s besides the certificate: give the key in its own field, and the certificate alone here", strings.Join(other, ", "))
 		}
 		if err := need(sec.KeyPEM, "certificate's private key"); err != nil {
 			return err
@@ -711,6 +719,38 @@ func sshSigner(sec Secret) (ssh.Signer, error) {
 		return nil, invalid("the private key cannot be read (OpenSSH or PEM)")
 	}
 	return sg, nil
+}
+
+// certificatesOnly is a PEM text with its CERTIFICATE blocks alone, and
+// what else it held (a PRIVATE KEY pasted with its certificate, as
+// openssl pkcs12 -nodes writes it), by the blocks' types: the text as it
+// is when it holds nothing else. A certificate and a private CA are kept,
+// shown and backed up as they are, so nothing else may stay in them
+// (credentials#2).
+func certificatesOnly(text string) (string, []string) {
+	var certs []byte
+	var other []string
+	n := 0
+	for rest := []byte(text); ; {
+		var b *pem.Block
+		if b, rest = pem.Decode(rest); b == nil {
+			break
+		}
+		if b.Type == "CERTIFICATE" {
+			certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: b.Type, Bytes: b.Bytes})...)
+			n++
+		} else {
+			other = append(other, "a "+b.Type+" block")
+		}
+	}
+	// A block that does not decode is not a certificate either.
+	if strings.Count(text, "-----BEGIN ") > n+len(other) {
+		other = append(other, "a block that is not a certificate")
+	}
+	if len(other) == 0 {
+		return text, nil
+	}
+	return strings.TrimSpace(string(certs)), other
 }
 
 // pemBlock is the first PEM block of a text.

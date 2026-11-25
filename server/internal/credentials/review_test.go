@@ -4,11 +4,17 @@ package credentials
 // the review's item it holds to.
 
 import (
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/ucesys/221b/server/internal/certpin/certpintest"
 )
 
 // secretForms are the ways a value can be written in an address: as it
@@ -66,5 +72,74 @@ func TestATestKeepsNoFormOfTheSecret(t *testing.T) {
 		if got := redact("at "+f+" now", []string{tok}); strings.Contains(got, f) {
 			t.Errorf("redact kept %q: %s", f, got)
 		}
+	}
+}
+
+// keyPEM is a test certificate's private key, as PEM.
+func keyPEM(t *testing.T, c certpintest.Cert) string {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(c.TLS.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}
+
+// credentials#2: a private key pasted with a certificate, as the
+// certificate of a client certificate or as a private CA, is refused; one
+// kept so already is taken out at the start, out of every backup, and out
+// of a backup restored.
+func TestAPrivateKeyIsNeverKeptWithItsCertificate(t *testing.T) {
+	cert := certpintest.SelfSigned(t, "client.example")
+	key := keyPEM(t, cert)
+	combined := cert.PEM + key
+	s, _ := newService(t, nil)
+	hasKey := func(v any) bool {
+		b, _ := json.Marshal(v)
+		return strings.Contains(string(b), "PRIVATE KEY") || strings.Contains(string(b), strings.Split(key, "\n")[1])
+	}
+	_, err := s.Create(ctx, Credential{Name: "mtls", Kind: KindClientCert, Endpoint: "https://api.example.com", CertPEM: combined}, Secret{KeyPEM: key}, "ann")
+	body := strings.Split(key, "\n")[1]
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), body) {
+		t.Fatalf("a certificate with its key: %v", err)
+	}
+	_, err = s.Create(ctx, Credential{Name: "ca", Kind: KindToken, Endpoint: "https://api.example.com", CAPEM: combined}, Secret{Token: "tok-1"}, "ann")
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), body) {
+		t.Fatalf("a private CA with its key: %v", err)
+	}
+	good, err := s.Create(ctx, Credential{Name: "mtls", Kind: KindClientCert, Endpoint: "https://api.example.com", CertPEM: cert.PEM, CAPEM: cert.PEM}, Secret{KeyPEM: key}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One kept with its key by an earlier release.
+	if _, err := s.o.Repo.Update(ctx, good.ID, func(c *Credential) error { c.CertPEM, c.CAPEM = combined, combined; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Export(ctx, func(v string) string { return "sealed" })
+	if err != nil || len(out) != 1 || hasKey(out[0].Credential) {
+		t.Fatalf("the backup holds the key: %v", err)
+	}
+	if ids, err := CleanCertificates(ctx, s.o.Repo); err != nil || len(ids) != 1 || ids[0] != good.ID {
+		t.Fatalf("cleaned %v: %v", ids, err)
+	}
+	kept, _ := s.Get(ctx, good.ID)
+	if hasKey(kept) || !strings.Contains(kept.CertPEM, "BEGIN CERTIFICATE") || !strings.Contains(kept.CAPEM, "BEGIN CERTIFICATE") {
+		t.Fatalf("kept: %+v", kept)
+	}
+	if u, err := s.Resolve(ctx, good.ID, UseHTTP, "https://api.example.com/x"); err != nil || u.Certificate() == nil {
+		t.Fatalf("the cleaned certificate no longer works: %v", err)
+	}
+	if ids, err := CleanCertificates(ctx, s.o.Repo); err != nil || len(ids) != 0 {
+		t.Fatalf("cleaned again %v: %v", ids, err)
+	}
+	// A backup of an earlier release, with the key beside the certificate.
+	other, _ := newService(t, nil)
+	e := out[0]
+	e.CertPEM, e.CAPEM, e.Secret = combined, combined, ""
+	if n, err := other.Import(ctx, []BackupEntry{e}, func(string) error { return nil }, func(string, string, string) (string, error) { return "", nil }, func(string, ...any) {}); err != nil || n != 1 {
+		t.Fatalf("restored %d: %v", n, err)
+	}
+	if list, _ := other.List(ctx); len(list) != 1 || hasKey(list) {
+		t.Fatalf("restored with its key: %+v", list)
 	}
 }

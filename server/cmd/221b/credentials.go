@@ -69,6 +69,13 @@ func (w *wiring) credentialsList(ctx context.Context, secrets credentials.Secret
 		w.dbLog().Warn("the credentials' list in the database and the secrets in their Secret do not match: a secret without a credential is kept and never used (a SuperAdmin removes it with DELETE /api/v1/credential-secrets/{id}), and a credential without its secret cannot be used until it is given again in Administration › Credentials",
 			"secrets_without_credential", noRow, "credentials_without_secret", noSecret)
 	}
+	// A private key pasted with a certificate before 0.13.3 leaves the
+	// list (credentials#2).
+	if ids, err := credentials.CleanCertificates(cctx, list); err != nil {
+		w.dbLog().Warn("the credentials' certificates could not be cleaned of private keys; the next start tries again", "err", err)
+	} else if len(ids) > 0 {
+		w.dbLog().Warn("a private key pasted with a credential's certificate or private CA was taken out of the list (it was shown and backed up in clear); the key itself stays in the credential's secret", "credentials", ids)
+	}
 	return list
 }
 

@@ -36,9 +36,12 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **A private key's body not indented under its YAML key no longer reaches the Claude API** (P5-03, scrub-cut-1): the block key's scrub stopped at the first line indented less than the key and removed the `BEGIN` line with it, so the PEM rule no longer saw the key. PEM blocks are now removed first.
 - **An object under a secret-named field no longer keeps its values** (P5-03, scrub-cut-3): in a JSON or YAML tool result, `credentials: {user: …, value: …}` kept both, because only the field's own name was judged. Every string under such a field is now redacted, but for those that name what it refers to (`imagePullSecrets`' and `secretRef`'s `name`).
 
+A private key kept beside a credential's certificate or private CA leaves the list at the first start; the log names the credentials. Backups made before keep it in clear: see [docs/upgrading.md](docs/upgrading.md).
+
 ### Security
 
 - **A credential's Test no longer keeps a query-parameter token in its text** (credentials#1). A redirect is named by its host alone (before, the whole `Location`, which a login redirect's `next=` fills with the request and its token), and the token is taken out in every form an address carries it (escaped for a query or a path, and escaped twice). The text was kept as the last test, returned by `GET /api/v1/credentials`, written into backups and the audit log.
+- **A private key pasted with a certificate is no longer kept, shown or backed up in clear** (credentials#2). A client certificate's certificate and a private CA take certificates alone: a `PRIVATE KEY` (or any other) block in them is refused with why. One kept so by an earlier release is taken out at the first start (the log names the credentials), out of every backup made, and out of a backup restored.
 
 ### Fixed
 

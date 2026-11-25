@@ -35,6 +35,10 @@ func (s *Service) Export(ctx context.Context, seal func(string) string) ([]Backu
 		if err != nil {
 			return nil, err
 		}
+		// Never a private key kept by an earlier release beside a
+		// certificate (credentials#2).
+		c.CertPEM, _ = certificatesOnly(c.CertPEM)
+		c.CAPEM, _ = certificatesOnly(c.CAPEM)
 		e := BackupEntry{Credential: c}
 		if !sec.empty() {
 			b, _ := json.Marshal(sec)
@@ -64,6 +68,8 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 			continue
 		}
 		c := e.Credential
+		c.CertPEM, _ = certificatesOnly(c.CertPEM)
+		c.CAPEM, _ = certificatesOnly(c.CAPEM)
 		if taken(have, c.Name) {
 			// Restored under its own id, which what the backup restores
 			// with it names, and a name of its own.
