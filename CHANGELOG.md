@@ -69,6 +69,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **A token, password, access key, client secret or passphrase with a control character in it is refused when saved** (credentials-unver-3), such as a token pasted wrapped over two lines: a header could not carry it, and a query or Basic sent it changed. A credential saved so before says *give its secret again* where it is used.
 - **A GitHub App on GHE.com mints its token at `api.SUBDOMAIN.ghe.com`** (credentials-unver-4); it asked `SUBDOMAIN.ghe.com/api/v3`, GitHub Enterprise Server's address, and failed.
 - **A password or a passphrase is kept as typed, with its spaces** (credentials-unver-5): leading and trailing spaces were cut, so a password that has them never signed in (a Helm repository's moved by the 0.12.1 upgrade too). Only a pasted line end is taken off. Tokens and keys are trimmed as before.
+- **One credential's secret that cannot be read no longer fails every backup** (credentials-unver-6): the credential is backed up without it (logged), and a restore says to give it again. A Secret that cannot be read at all still fails the backup.
 
 ## 0.13.2 (2026-11-25)
 

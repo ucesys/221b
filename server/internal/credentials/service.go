@@ -293,10 +293,14 @@ func (s *Service) secret(ctx context.Context, id string) (Secret, error) {
 		return sec, err
 	}
 	if err := json.Unmarshal(b, &sec); err != nil {
-		return Secret{}, fmt.Errorf("the secret of the credential %s cannot be read", id)
+		return Secret{}, fmt.Errorf("the secret of the credential %s %w", id, errUnreadable)
 	}
 	return sec, nil
 }
+
+// errUnreadable is a secret kept that does not read: the text of the
+// error, which may quote it, is not passed on.
+var errUnreadable = errors.New("cannot be read")
 
 // List is every credential, by name.
 func (s *Service) List(ctx context.Context) ([]Credential, error) {

@@ -1038,3 +1038,46 @@ func TestAPasswordKeepsItsSpaces(t *testing.T) {
 		t.Errorf("trimmed: %+v", got)
 	}
 }
+
+// credentials-unver-6: a secret that cannot be read does not fail the
+// backup: its credential is backed up without it, to give again, and the
+// others with theirs. A Secret that cannot be read at all still fails it.
+func TestABackupGoesPastASecretThatCannotBeRead(t *testing.T) {
+	mem := &MemorySecret{}
+	s := open(t, Options{Secrets: mem})
+	good := token(t, s, "good", "https://a.example", SendAs{}, "fake-tok-1")
+	bad := token(t, s, "bad", "https://b.example", SendAs{}, "fake-tok-2")
+	_, v, _, _ := mem.LoadKey(ctx, secretKey(bad.ID))
+	if err := mem.SaveKeyIf(ctx, secretKey(bad.ID), []byte(`{"token":`), v); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Export(ctx, func(v string) string { return "sealed:" + fmt.Sprint(len(v)) })
+	if err != nil || len(out) != 2 {
+		t.Fatalf("%d exported: %v", len(out), err)
+	}
+	for _, e := range out {
+		switch e.ID {
+		case good.ID:
+			if e.Secret == "" {
+				t.Error("the readable secret is not backed up")
+			}
+		case bad.ID:
+			if e.Secret != "" || len(e.Set) == 0 {
+				t.Errorf("the unreadable one: %+v", e)
+			}
+		}
+	}
+	// A restore says it is to be given again.
+	var notes []string
+	other, _ := newService(t, nil)
+	if n, err := other.Import(ctx, out, func(string) error { return nil }, func(string, string, string) (string, error) { return "fake-unsealed", nil }, func(f string, a ...any) { notes = append(notes, fmt.Sprintf(f, a...)) }); err != nil || n != 2 {
+		t.Fatalf("restored %d: %v", n, err)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "\n"), "bad: its secret is not in the backup") {
+		t.Fatalf("notes: %q", notes)
+	}
+	away := open(t, Options{Secrets: failingSecret{mem}, Repo: s.o.Repo})
+	if _, err := away.Export(ctx, func(v string) string { return v }); err == nil {
+		t.Fatal("a Secret that cannot be read was backed up as having no secrets")
+	}
+}

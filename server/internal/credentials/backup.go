@@ -3,6 +3,7 @@ package credentials
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -32,7 +33,14 @@ func (s *Service) Export(ctx context.Context, seal func(string) string) ([]Backu
 	out := make([]BackupEntry, 0, len(list))
 	for _, c := range list {
 		sec, err := s.secret(ctx, c.ID)
-		if err != nil {
+		if errors.Is(err, errUnreadable) {
+			// One secret that does not read does not fail the backup: its
+			// credential goes without it, and a restore lists it to give
+			// again (credentials-unver-6). A Secret that cannot be read at
+			// all still fails it.
+			s.o.Logger.Warn("a credential's secret cannot be read: the backup holds the credential without it", "credential", c.Name)
+			sec = Secret{}
+		} else if err != nil {
 			return nil, err
 		}
 		// Never a private key kept by an earlier release beside a
@@ -77,6 +85,11 @@ func (s *Service) Import(ctx context.Context, list []BackupEntry, check func(str
 			note("credential %s: one of that name is here already; the backup's is restored as %s", e.Name, c.Name)
 		}
 		var sec Secret
+		if len(e.Set) > 0 && e.Secret == "" {
+			// Backed up without the secret it had: one that could not be
+			// read then (credentials-unver-6).
+			note("credential %s: its secret is not in the backup; give it again in Administration › Credentials", e.Name)
+		}
 		if len(e.Set) > 0 || e.Secret != "" {
 			v, err := open(e.Secret, "the secret of the credential "+e.Name, "Administration › Credentials › "+c.Name)
 			if err == nil && v != "" {
