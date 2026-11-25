@@ -63,12 +63,16 @@ var (
 	reDigit    = regexp.MustCompile(`[0-9]`)
 	reLetter   = regexp.MustCompile(`[A-Za-z]`)
 	// What stands in for a password: $VAR, ${VAR}, $(command), <password>,
-	// {{ .x }}, [REDACTED], a format verb (%s, %(password)s) or %VAR%, ***
-	// or xxx, or a word for what goes there (password, your_password,
-	// password_here, changeme). A word with more after it (Passw0rd,
-	// password2024) is a password, and so is a value that only starts with
-	// $ or % (a percent-encoded character).
-	rePlaceholder = regexp.MustCompile(`(?i)^(?:\$\{[^}]*\}|\$\(.*|\$[A-Za-z_][A-Za-z0-9_]*|<.*>|\{.*\}|\[.*\]|%(?:\[[0-9]+\])?[-+# 0]*[0-9]*(?:\.[0-9]+)?[a-z]|%\([A-Za-z_][A-Za-z0-9_]*\)[a-z]|%[A-Za-z_][A-Za-z0-9_]*%|\*+|x+|\.+|(?:your|my|the)?[_-]?(?:pass(?:word|wd)?|pwd|secret|token|changeme|example|redacted)(?:[_-]?here)?)$`)
+	// {{ .x }}, [REDACTED], a format verb (%s, %(password)s) or %VAR%, ***,
+	// xxx or …, a variable's name in capitals (YOUR_DB_PASSWORD,
+	// GITHUB_TOKEN, PAT), or a word for what goes there (password,
+	// your_password, password_here, changeme, REPLACE_ME). A word with more
+	// after it (Passw0rd, password2024, ADMIN_PASS_2024) is a password, and
+	// so is a value that only starts with $ or % (a percent-encoded
+	// character). placeholder removes backslashes first.
+	rePlaceholder = regexp.MustCompile(`(?i)^(?:\$\{[^}]*\}|\$\(.*|\$[A-Za-z_][A-Za-z0-9_]*|<.*>|\{.*\}|\[.*\]|%(?:\[[0-9]+\])?[-+# 0]*[0-9]*(?:\.[0-9]+)?[a-z]|%\([A-Za-z_][A-Za-z0-9_]*\)[a-z]|%[A-Za-z_][A-Za-z0-9_]*%|\*+|x+|\.+|…+|` +
+		`(?-i:(?:[A-Z][A-Z0-9]*_)*(?:PASSWORD|PASSWD|PASS|PWD|TOKEN|SECRET|KEY|PAT)(?:_[A-Z][A-Z0-9]*)*)|` +
+		`(?:your|my|the)?[_-]?(?:pass(?:word|wd)?|pwd|secret|token|change[_-]?me|replace[_-]?me|example|redacted)(?:[_-]?here)?)$`)
 )
 
 // Credential says whether text carries a real credential's shape: a
@@ -113,11 +117,17 @@ func urlPassword(s string) bool {
 			}
 			continue
 		}
-		if !rePlaceholder.MatchString(m[1]) {
+		if !placeholder(m[1]) {
 			return true
 		}
 	}
 	return false
+}
+
+// placeholder says whether a value stands in for a password, escaped or
+// not: a heredoc's \${DB_PASSWORD} and Markdown's \*\*\* are placeholders.
+func placeholder(v string) bool {
+	return rePlaceholder.MatchString(strings.ReplaceAll(v, `\`, ""))
 }
 
 // basicPassword says whether an HTTP Basic value decodes to user:password
@@ -133,7 +143,7 @@ func basicPassword(v string) bool {
 		return false
 	}
 	_, pw, ok := strings.Cut(string(b), ":")
-	return ok && pw != "" && !rePlaceholder.MatchString(pw)
+	return ok && pw != "" && !placeholder(pw)
 }
 
 // scrubbers find what looks like a credential in text that leaves for the

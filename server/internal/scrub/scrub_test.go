@@ -213,6 +213,20 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#5 a password with slash":  {"https://ci:pa/Fake9secret@registry.example.com/v2/", true},
 		"#5 digits, then a path":    {"https://ci:Fake9/secret@registry.example.com/v2/", true},
 		"#5 an address in the path": {"http://gw:8080/login?next=https://ci:Fake9secret@registry.example.com/v2/", true},
+		// scrub#6: what people write for a password that is not there.
+		"#6 a variable's name":      {"Set DATABASE_URL=postgres://app:YOUR_DB_PASSWORD@db:5432/app", false},
+		"#6 a token's name":         {"https://x-access-token:GITHUB_TOKEN@github.com/org/repo.git", false},
+		"#6 PAT":                    {"https://ci:PAT@dev.azure.com/org/_git/repo", false},
+		"#6 API_KEY":                {"https://api:API_KEY@api.example.com/", false},
+		"#6 CHANGE_ME":              {"postgres://app:CHANGE_ME@db/app", false},
+		"#6 replace-me":             {"postgres://app:replace-me@db/app", false},
+		"#6 an ellipsis":            {"postgres://app:…@db/app", false},
+		"#6 an escaped variable":    {`DATABASE_URL=postgres://app:\${DB_PASSWORD}@db/app`, false},
+		"#6 escaped stars":          {`postgres://app:\*\*\*@db/app`, false},
+		"#6 a name with a number":   {"postgres://app:ADMIN_PASS_2024@db/app", true},
+		"#6 capitals, run together": {"postgres://app:SUPERPASS99@db/app", true},
+		"#6 an escaped real one":    {`postgres://app:\Fake9pass@db/app`, true},
+		"#6 changeme with more":     {"postgres://app:changeme-41x@db/app", true},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
