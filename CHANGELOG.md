@@ -61,6 +61,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **A client certificate's server can be trusted when it aborts on an empty client certificate** (credentials-cut-1). The Test's and Trust's look at the server's certificate never sent the credential's client certificate, so a server capped at TLS 1.2 that requires one (Apache's `SSLVerifyClient require`, HAProxy, Java's `clientAuth`) showed nothing to trust. They now send it.
 - **An edit of a credential's user, region, host key, certificate, GitHub App ids or OAuth2 token URL, client id or scope drops its last test** (credentials-cut-2), which kept showing an old passing test.
 - **A credential's Test is no longer kept over an edit, a Trust or a Forget made while it ran** (credentials-cut-3): its result was of the credential as it was before.
+- **An SSH credential keeps every host key pasted** (credentials-cut-4): `ssh-keyscan HOST` prints a line for each key, and only the first was kept, so a host that no longer had that key's type could not be tested. Every line is kept and any of the keys is accepted; an `@revoked` or `@cert-authority` line, which was read as a key to trust, is refused.
 
 ## 0.13.2 (2026-11-25)
 

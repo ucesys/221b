@@ -369,7 +369,7 @@ func (c *Credential) Check(sec Secret) error {
 		if c.HostKey == "" {
 			return invalid("an SSH key needs the server's host key (a known_hosts line or the key itself): the console never trusts a host on first use")
 		}
-		if _, err := ParseHostKey(c.HostKey); err != nil {
+		if _, err := ParseHostKeys(c.HostKey); err != nil {
 			return err
 		}
 		if err := need(sec.PrivateKey, "private key"); err != nil {
@@ -739,29 +739,61 @@ func (c Credential) HostKeyInfo() *HostKeyInfo {
 	if c.Kind != KindSSH || strings.TrimSpace(c.HostKey) == "" {
 		return nil
 	}
-	k, err := ParseHostKey(c.HostKey)
+	keys, err := ParseHostKeys(c.HostKey)
 	if err != nil {
 		return nil
 	}
+	k := keys[0]
 	b := base64.StdEncoding.EncodeToString(k.Marshal())
 	short := b
 	if len(b) > 24 {
 		short = b[:12] + "…" + b[len(b)-8:]
 	}
-	return &HostKeyInfo{Type: k.Type(), Fingerprint: ssh.FingerprintSHA256(k), Short: k.Type() + " " + short}
+	short = k.Type() + " " + short
+	if len(keys) > 1 {
+		short += fmt.Sprintf(" and %d more", len(keys)-1)
+	}
+	return &HostKeyInfo{Type: k.Type(), Fingerprint: ssh.FingerprintSHA256(k), Short: short}
 }
 
 // ParseHostKey reads a host key as a known_hosts line or an
-// authorized_keys line (ssh-ed25519 AAAA…).
+// authorized_keys line (ssh-ed25519 AAAA…): the first of ParseHostKeys.
 func ParseHostKey(s string) (ssh.PublicKey, error) {
-	s = strings.TrimSpace(s)
-	if _, _, k, _, _, err := ssh.ParseKnownHosts([]byte(s)); err == nil {
-		return k, nil
+	keys, err := ParseHostKeys(s)
+	if err != nil {
+		return nil, err
 	}
-	if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(s)); err == nil {
-		return k, nil
+	return keys[0], nil
+}
+
+// ParseHostKeys reads every host key of a text, one a line, each a
+// known_hosts line or a public key, as ssh-keyscan HOST prints them
+// (credentials-cut-4); blank lines and # comments are skipped. A line
+// with a marker is refused: an @cert-authority line trusts a CA, not a
+// key, and an @revoked one says a key is not to be trusted.
+func ParseHostKeys(s string) ([]ssh.PublicKey, error) {
+	var keys []ssh.PublicKey
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "@") {
+			marker, _, _ := strings.Cut(line, " ")
+			return nil, invalid("the host key has a %s line: the console trusts the host's own keys, so give those alone (ssh-keyscan HOST prints them)", marker)
+		}
+		if _, _, k, _, _, err := ssh.ParseKnownHosts([]byte(line)); err == nil {
+			keys = append(keys, k)
+		} else if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line)); err == nil {
+			keys = append(keys, k)
+		} else {
+			return nil, invalid("the host key is not a known_hosts line or a public key (ssh-ed25519 AAAA…); ssh-keyscan HOST prints it")
+		}
 	}
-	return nil, invalid("the host key is not a known_hosts line or a public key (ssh-ed25519 AAAA…); ssh-keyscan HOST prints it")
+	if len(keys) == 0 {
+		return nil, invalid("the host key is not a known_hosts line or a public key (ssh-ed25519 AAAA…); ssh-keyscan HOST prints it")
+	}
+	return keys, nil
 }
 
 func sshSigner(sec Secret) (ssh.Signer, error) {

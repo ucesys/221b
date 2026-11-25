@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -456,15 +457,32 @@ func (s *Service) testSSH(ctx context.Context, use *Use, target string, t *Test)
 		t.Text = err.Error()
 		return
 	}
-	hk, err := ParseHostKey(use.HostKey)
+	saved, err := ParseHostKeys(use.HostKey)
 	if err != nil {
 		t.Text = err.Error()
 		return
 	}
-	// The server is asked for the type of key saved: one with several
-	// host keys shows another first otherwise, which FixedHostKey takes
-	// for a mismatch (credentials#13).
-	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hk), HostKeyAlgorithms: algorithmsOf(hk.Type()), Timeout: 15 * time.Second}
+	// The server is asked for the types of key saved: one with several
+	// host keys shows another first otherwise, which would be taken for a
+	// mismatch (credentials#13); any key saved is accepted
+	// (credentials-cut-4).
+	var algos []string
+	for _, k := range saved {
+		for _, a := range algorithmsOf(k.Type()) {
+			if !slices.Contains(algos, a) {
+				algos = append(algos, a)
+			}
+		}
+	}
+	accept := func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		for _, k := range saved {
+			if bytes.Equal(k.Marshal(), key.Marshal()) {
+				return nil
+			}
+		}
+		return errors.New("ssh: host key mismatch")
+	}
+	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: accept, HostKeyAlgorithms: algos, Timeout: 15 * time.Second}
 	// The service's dialer: the guarded one, or a test's.
 	conn, err := s.o.Dial(ctx, "tcp", host)
 	if err != nil {

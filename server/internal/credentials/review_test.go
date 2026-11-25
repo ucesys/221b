@@ -600,8 +600,9 @@ func TestAnEditOfASchemelessEndpointKeepsThePin(t *testing.T) {
 }
 
 // sshServer is an SSH server with an RSA, an ECDSA and an Ed25519 host
-// key, as most are, that lets the client key in; closed with the test.
-func sshServer(t *testing.T, client ssh.PublicKey) (addr string, keys map[string]ssh.PublicKey) {
+// key, as most are (those of only when given), that lets the client key
+// in; closed with the test.
+func sshServer(t *testing.T, client ssh.PublicKey, only ...string) (addr string, keys map[string]ssh.PublicKey) {
 	t.Helper()
 	cfg := &ssh.ServerConfig{PublicKeyCallback: func(_ ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
 		if bytes.Equal(k.Marshal(), client.Marshal()) {
@@ -618,8 +619,10 @@ func sshServer(t *testing.T, client ssh.PublicKey) (addr string, keys map[string
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfg.AddHostKey(sg)
 		keys[sg.PublicKey().Type()] = sg.PublicKey()
+		if len(only) == 0 || slices.Contains(only, sg.PublicKey().Type()) {
+			cfg.AddHostKey(sg)
+		}
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -880,5 +883,39 @@ func TestATestIsNotKeptOverAChangeMadeWhileItRan(t *testing.T) {
 	}
 	if kept, _ := s.Get(ctx, id); kept.LastTest == nil {
 		t.Fatal("a test of nothing changed is not kept")
+	}
+}
+
+// credentials-cut-4: a host key pasted as several known_hosts lines (as
+// ssh-keyscan prints them) keeps every key, and the test accepts any of
+// them; a line with a marker (@revoked, @cert-authority) is refused, not
+// read as a key to trust.
+func TestEveryHostKeyPastedIsKept(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(priv, "")
+	clientKey, _ := ssh.NewSignerFromKey(priv)
+	// A server without its Ed25519 key any more, whose keys were pasted
+	// with it first.
+	addr, keys := sshServer(t, clientKey.PublicKey(), ssh.KeyAlgoRSA)
+	line := func(k ssh.PublicKey) string {
+		return "[127.0.0.1]:" + addr[strings.LastIndex(addr, ":")+1:] + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k)))
+	}
+	s := pinService(t)
+	pasted := "# ssh-keyscan\n" + line(keys[ssh.KeyAlgoED25519]) + "\n" + line(keys[ssh.KeyAlgoRSA]) + "\n"
+	c, err := s.Create(ctx, Credential{Name: "deploy", Kind: KindSSH, Endpoint: "ssh://git@" + addr + "/org", HostKey: pasted}, Secret{PrivateKey: string(pem.EncodeToMemory(block))}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.RunTest(ctx, c.ID, "", "ann"); err != nil || !res.OK {
+		t.Fatalf("the second key pasted: %+v %v", res, err)
+	}
+	if info := c.HostKeyInfo(); info == nil || !strings.HasSuffix(info.Short, " and 1 more") {
+		t.Errorf("shown as %+v", info)
+	}
+	for _, marker := range []string{"@revoked", "@cert-authority"} {
+		bad := marker + " " + line(keys[ssh.KeyAlgoED25519])
+		if _, err := s.Create(ctx, Credential{Name: "m " + marker, Kind: KindSSH, Endpoint: "ssh://git@" + addr + "/org", HostKey: bad}, Secret{PrivateKey: string(pem.EncodeToMemory(block))}, "ann"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", marker, err)
+		}
 	}
 }
