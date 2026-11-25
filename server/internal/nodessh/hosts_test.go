@@ -1019,3 +1019,25 @@ func TestACheckOutOfTimeIsADeadline(t *testing.T) {
 		t.Fatalf("a check out of time: %v", err)
 	}
 }
+
+// A sudo password that happens to be part of a host key's text still
+// pairs: the keys are read from what the setup printed, and only the
+// lines shown are masked (the review of November 24, 2026: masking ran
+// first and broke the key lines).
+func TestAPasswordInsideAHostKeyStillPairs(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	pw := strings.Fields(e.host.read("etc/ssh/ssh_host_ed25519_key.pub"))[1][24:34]
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + pw} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: pw}
+	h, steps, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err != nil || h.State != HostPaired {
+		t.Fatalf("pairing: %+v %v %v", h, steps, err)
+	}
+	for _, s := range steps {
+		if strings.Contains(s, pw) {
+			t.Fatalf("a step shows the password: %s", s)
+		}
+	}
+}

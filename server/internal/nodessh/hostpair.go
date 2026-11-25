@@ -479,14 +479,18 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 			stdin = sudoPW + "\n"
 		}
 	}
-	var buf syncBuffer
+	// buf is what the page may see, masked; raw is what the setup
+	// printed, read for its host keys alone: a short secret masked inside
+	// a key's text would make the key unreadable.
+	var buf, raw syncBuffer
 	secrets := cred.Secrets()
 	var out io.Writer = &buf
 	if s.opts.Mask != nil {
 		out = s.opts.Mask(&buf, secrets)
 	}
 	sess.Stdin = strings.NewReader(stdin)
-	sess.Stdout, sess.Stderr = Streams(out)
+	stdout, stderr := Streams(out)
+	sess.Stdout, sess.Stderr = io.MultiWriter(&raw, stdout), io.MultiWriter(&raw, stderr)
 	exit := 0
 	done := make(chan error, 1)
 	if err := sess.Start(command); err != nil {
@@ -520,9 +524,9 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 	if exit != 0 {
 		return Host{}, steps(output), setupFailed(output, exit, cred.User)
 	}
-	keys, _, err := ParsePairOutput(output)
+	keys, _, err := ParsePairOutput(raw.String())
 	if err != nil {
-		return Host{}, steps(output), err
+		return Host{}, steps(output), errors.New(masked(err.Error(), secrets))
 	}
 	found := false
 	for _, k := range keys {
