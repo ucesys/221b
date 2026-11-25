@@ -2,6 +2,10 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## 0.13.3 (unreleased)
+
+Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".
