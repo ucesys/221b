@@ -726,3 +726,27 @@ func TestKeepingTheNewestRunsDropsNoLiveRunAndNoKeptRequest(t *testing.T) {
 		t.Errorf("the approved request: %+v %v", list, err)
 	}
 }
+
+// hangingKube is a kubectl that never answers until its context ends.
+type hangingKube struct{}
+
+func (hangingKube) RunLine(ctx context.Context, _ string, _ Person, _, _ string, _ bool, _ io.Writer) (int, error) {
+	<-ctx.Done()
+	return -1, ctx.Err()
+}
+
+// A hook that hangs ends with the run's time a node (cut by the review's
+// cap): the node fails, and the run ends, rather than wait for good.
+func TestAHookThatHangsTimesOut(t *testing.T) {
+	x := &stubExec{}
+	e := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: x, Kube: hangingKube{}, HookTimeout: 50 * time.Millisecond})
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a"},
+		Rollout: Rollout{Mode: RolloutAll}, Before: []Hook{DrainHook()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRun(t, e, r.ID)
+	if done.Nodes[0].State != NodeFailed || !strings.Contains(done.Nodes[0].Error, "timed out") || len(x.calls) != 0 {
+		t.Fatalf("%+v %v", done.Nodes[0], x.calls)
+	}
+}

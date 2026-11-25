@@ -55,6 +55,9 @@ type Options struct {
 	// scripts again, when they could not be read at a batch's check, and
 	// the first wait before the save of a run's end is tried again.
 	RecheckRetry time.Duration
+	// HookTimeout bounds the hooks on each side of a node's script; 0
+	// takes the run's timeout a node.
+	HookTimeout time.Duration
 }
 
 // recheckTries is how often a batch's check reads the scripts before the
@@ -816,6 +819,26 @@ func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, li
 	return nil
 }
 
+// timedHooks runs hooks within the run's time a node (HookTimeout when
+// set): a hook that hangs (a kubectl that never answers) ends, and the
+// node with it, rather than hold the run for good.
+func (e *Engine) timedHooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer, cordoned *bool, ro Rollout) error {
+	if len(list) == 0 {
+		return nil
+	}
+	limit := e.opts.HookTimeout
+	if limit <= 0 {
+		limit = time.Duration(max(ro.TimeoutMinutes, 1)) * time.Minute
+	}
+	hctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	err := e.hooks(hctx, r, a, node, list, env, out, cordoned)
+	if err != nil && ctx.Err() == nil && errors.Is(hctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("the hooks timed out after %s: %w", limit, err)
+	}
+	return err
+}
+
 // node runs the script on one node (AU-08, AU-09), or a Kubernetes script
 // on the cluster, with the run's hooks around it (AT33).
 func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout) {
@@ -872,7 +895,7 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	// a hook's uncordon works: whatever fails in between, the record says
 	// so (LeftCordoned).
 	cordoned := false
-	hookErr := e.hooks(ctx, r, a, node, before, env, out, &cordoned)
+	hookErr := e.timedHooks(ctx, r, a, node, before, env, out, &cordoned, ro)
 	var result Result
 	hasResult := false
 	if hookErr != nil {
@@ -961,7 +984,7 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	healthy := res.State == NodeChanged || res.State == NodeNoChange
 	switch {
 	case healthy:
-		if err := e.hooks(ctx, r, a, node, after, env, out, &cordoned); err != nil {
+		if err := e.timedHooks(ctx, r, a, node, after, env, out, &cordoned, ro); err != nil {
 			res.State, res.Error = NodeFailed, "after the script: "+err.Error()
 		}
 	case cordoned:
