@@ -157,19 +157,21 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Taking a cluster off production waits for another SuperAdmin, when
-	// there is one; the rest of the change is made now.
-	var held string
+	// there is one; the rest of the change is made now, and the request
+	// is filed once it is: an edit that fails files none.
+	var held, to string
 	var alone bool
-	if cur, ok := s.opts.Clusters.Summary(id); ok {
+	cur, found := s.opts.Clusters.Summary(id)
+	if found {
 		var hold bool
 		if hold, alone = s.holdEnvironment(r, cur, d.Env); hold {
-			req, err := s.requestEnvironment(r, cur, d.Env)
-			if err != nil {
-				held = "The rest of the change is made, but the environment stays " + cur.Env + ": " + err.Error()
-			} else {
-				held = fmt.Sprintf("The environment stays %s until another SuperAdmin approves the change to %s on Administration › Approvals (request %d); the rest of the change is made.", cur.Env, d.Env, req.ID)
+			if !clusters.ValidEnv(d.Env) {
+				err := &clusters.ValidationError{Field: "env", Msg: "Choose an environment: production, staging, development or other."}
+				s.recordCluster(r, audit.ActionClusterUpdate, id, audit.OutcomeFailed, err.Error())
+				clusterError(w, err)
+				return
 			}
-			d.Env = cur.Env
+			to, d.Env = d.Env, cur.Env
 		}
 	}
 	sum, err := s.opts.Clusters.Update(r.Context(), id, d)
@@ -177,6 +179,14 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		s.recordCluster(r, audit.ActionClusterUpdate, id, audit.OutcomeFailed, err.Error())
 		clusterError(w, err)
 		return
+	}
+	if to != "" {
+		req, err := s.requestEnvironment(r, cur, to)
+		if err != nil {
+			held = "The rest of the change is made, but the environment stays " + cur.Env + ": " + err.Error()
+		} else {
+			held = fmt.Sprintf("The environment stays %s until another SuperAdmin approves the change to %s on Administration › Approvals (request %d); the rest of the change is made.", cur.Env, to, req.ID)
+		}
 	}
 	what := "settings"
 	if !d.Credential.Empty() {

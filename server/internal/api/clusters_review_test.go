@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
 // repointed is a connection "prod" re-pointed from cluster A to cluster B
@@ -86,5 +88,34 @@ func TestTheAuditOfATestNamesTheServerTested(t *testing.T) {
 	}
 	if log := auditOut.String(); !strings.Contains(log, "http://127.0.0.1:1") {
 		t.Fatalf("the audit does not name the server tested: %s", log)
+	}
+}
+
+// Clusters review, cut list: an edit taking a cluster off production
+// filed its two-person request before the edit was validated, and never
+// withdrew it when the edit failed; the environment asked for was not
+// validated either.
+func TestAnEditThatFailsFilesNoEnvironmentRequest(t *testing.T) {
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { o.TwoPerson = twoperson.New(nil, nil) })
+	local := func(name, env string) string {
+		return `{"name":"` + name + `","env":"` + env + `","description":"","server":"https://10.0.0.1:6443","ca":"system","auth":"incluster","mode":"read"}`
+	}
+	if resp, b := send(t, ops, http.MethodPut, srv.URL+"/api/v1/clusters/local", local("Here", "production")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("onto production: %s %s", resp.Status, b)
+	}
+	if resp, b := send(t, ops, http.MethodPut, srv.URL+"/api/v1/clusters/local", local("not a name!", "staging")); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an invalid edit off production: %s %s", resp.Status, b)
+	}
+	if resp, b := send(t, ops, http.MethodPut, srv.URL+"/api/v1/clusters/local", local("Here", "nowhere")); resp.StatusCode != http.StatusBadRequest || !strings.Contains(b, `"field":"env"`) {
+		t.Fatalf("an environment that is none: %s %s", resp.Status, b)
+	}
+	ops2 := signIn(t, srv, "ops2@corp.example")
+	_, b := send(t, ops2, http.MethodGet, srv.URL+"/api/v1/admin/approvals", "")
+	var list struct{ Items []approvalRow }
+	_ = json.Unmarshal([]byte(b), &list)
+	for _, it := range list.Items {
+		if it.State == approvalPending {
+			t.Fatalf("a failed edit left a request: %s", it.What)
+		}
 	}
 }

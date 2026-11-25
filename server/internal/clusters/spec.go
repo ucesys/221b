@@ -216,6 +216,10 @@ var (
 	reserved = map[string]bool{"local": true, "new": true, "test": true}
 )
 
+// ValidEnv says whether env is an environment a cluster can be tagged
+// with.
+func ValidEnv(env string) bool { return envs[env] }
+
 // Slug makes a connection ID from its name: lowercase letters, digits and
 // dashes.
 func Slug(name string) string {
