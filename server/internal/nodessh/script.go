@@ -84,6 +84,9 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`if [ -d "$d" ]; then cp -Rp "$d" "$b/dir" || nospace; fi`,
 		`saved=1`,
 		`mkdir -p "$d" /etc/ssh/sshd_config.d`,
+		// sshd reads the principals file as the login user: under a
+		// umask of 027 or 077 a root-only directory would hide it.
+		`chmod 755 "$d"`,
 		dropConsole,
 		`drop_console`,
 		`printf '%s\n' "$k $t" >> "$d/ca.pub"`,

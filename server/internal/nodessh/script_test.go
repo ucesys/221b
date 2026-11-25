@@ -561,3 +561,29 @@ func TestAPairingThatCannotKeepACopyChangesNothing(t *testing.T) {
 		t.Fatalf("the pairing:\n%s\nsshd_config:\n%s", out, h.read("etc/ssh/sshd_config"))
 	}
 }
+
+// Under a hardened umask the directory is still one the login user reads
+// (finding 3 of the review of November 24, 2026: it was 0750 under umask
+// 027, which hid principals-<user> from sshd reading it as that user),
+// and pairing again mends one made so.
+func TestTheConsolesDirectoryIsReadableUnderAnyUmask(t *testing.T) {
+	h := newHost(t)
+	mode := func() os.FileMode {
+		st, err := os.Stat(filepath.Join(h.root, "etc/ssh/221b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Mode().Perm()
+	}
+	h.mustRun("umask 077\n" + PairScript(testCA, testConsole, user(t), 22))
+	if m := mode(); m != 0o755 {
+		t.Fatalf("under umask 077 the directory is %o", m)
+	}
+	if err := os.Chmod(filepath.Join(h.root, "etc/ssh/221b"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	h.mustRun("umask 027\n" + PairScript(testCA, testConsole, user(t), 22))
+	if m := mode(); m != 0o755 {
+		t.Fatalf("paired again, the directory is %o", m)
+	}
+}
