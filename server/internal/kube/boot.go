@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -48,12 +49,15 @@ type summary struct {
 	} `json:"node"`
 }
 
-// BootedAt returns when a node last booted, if its kubelet has said.
+// BootedAt returns when a node last booted, if its kubelet has said: for
+// the boot the node reports now, so a node that rebooted shows no uptime
+// until its new boot time is read, never its old one (kube-cut-1).
 func (c *Cluster) BootedAt(node string) (time.Time, bool) {
+	n := c.Node(node)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.boots[node]
-	if !ok || e.at.IsZero() {
+	if !ok || e.at.IsZero() || n == nil || n.Status.NodeInfo.BootID != e.bootID {
 		return time.Time{}, false
 	}
 	return e.at, true
@@ -99,7 +103,16 @@ func (c *Cluster) readBoots(ctx context.Context) {
 		return
 	}
 	var todo []*corev1.Node
-	for _, name := range c.NodeNames() {
+	names := c.NodeNames()
+	// The nodes that left take their entries with them (kube-cut-1).
+	c.mu.Lock()
+	for name := range c.boots {
+		if !slices.Contains(names, name) {
+			delete(c.boots, name)
+		}
+	}
+	c.mu.Unlock()
+	for _, name := range names {
 		n := c.Node(name)
 		if n == nil || !wantBoot(n) {
 			continue
