@@ -1346,9 +1346,8 @@ func shortError(err error) string {
 	if i := strings.LastIndex(s, ": "); i > 0 && len(s) > 160 {
 		s = s[i+2:]
 	}
-	if len(s) > 240 {
-		s = s[:240] + "…"
-	}
+	// Cut at a character, never inside one (kube-cut-4).
+	s = cut(s, 240)
 	return s
 }
 

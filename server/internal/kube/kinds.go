@@ -447,9 +447,8 @@ func stripEvent(obj any) (any, error) {
 	e.ManagedFields = nil
 	e.Annotations = nil
 	e.Labels = nil
-	if len(e.Message) > maxEventMessage {
-		e.Message = e.Message[:maxEventMessage] + "…"
-	}
+	// Cut at a character, never inside one (kube-cut-4).
+	e.Message = cut(e.Message, maxEventMessage)
 	return e, nil
 }
 
