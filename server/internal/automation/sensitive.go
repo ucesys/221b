@@ -557,7 +557,14 @@ func hidePlain(r *ring, cluster string, plain map[string]bool, maps ...map[strin
 func sealRuns(r *ring, next *runsRecord, names func(cluster string) map[string]bool, plain map[string]map[string]bool) error {
 	for i := range next.Runs {
 		run := &next.Runs[i]
-		sens, seen := names(run.Cluster), plain[run.Cluster]
+		sens := names(run.Cluster)
+		// What the run used in clear under a name that is sensitive now (a
+		// mark put on while it ran) is blanked wherever its texts quote it,
+		// as the values marked with the save are.
+		seen := runPlain(*run, sens)
+		for v := range plain[run.Cluster] {
+			seen[v] = true
+		}
 		if len(sens) == 0 && len(seen) == 0 {
 			continue
 		}
@@ -599,6 +606,38 @@ func sealRuns(r *ring, next *runsRecord, names func(cluster string) map[string]b
 		}
 	}
 	return nil
+}
+
+// runPlain are the values a run holds in clear under a name sensitive
+// now, sens: its own, what each node got and what each fleet had. A run
+// started before the name was marked holds them so, and its output and
+// tails may quote them.
+func runPlain(run Run, sens map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	if len(sens) == 0 {
+		return out
+	}
+	note := func(name, v string) {
+		if sens[name] && v != "" && !IsHidden(v) {
+			out[v] = true
+		}
+	}
+	for name, v := range run.Overrides {
+		if _, bound := Bound(v); !bound {
+			note(name, Constant(v))
+		}
+	}
+	for _, n := range run.Nodes {
+		for name, v := range n.Values {
+			note(name, v)
+		}
+	}
+	for _, f := range run.Fleets {
+		for name, v := range f.Values {
+			note(name, v)
+		}
+	}
+	return out
 }
 
 // minMasked is the shortest value looked for in a text of the past: a

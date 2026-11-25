@@ -79,7 +79,10 @@ type Engine struct {
 	// output of the newest runs, by run and node.
 	active  map[int]*activeRun
 	outputs map[int]map[string]string
-	order   []int
+	// used are the values the nodes of those runs got, which their
+	// output may quote: a name marked sensitive since is blanked in it.
+	used  map[int]map[string]map[string]string
+	order []int
 	// controlPlane lets one control-plane node of a cluster at a time be
 	// worked on, across runs, so the cluster keeps its quorum.
 	controlPlane map[string]chan struct{}
@@ -131,7 +134,7 @@ func NewEngine(o Options) *Engine {
 	if o.MaxParallel <= 0 || o.MaxParallel > MaxParallel {
 		o.MaxParallel = MaxParallel
 	}
-	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}, controlPlane: map[string]chan struct{}{}}
+	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}, used: map[int]map[string]map[string]string{}, controlPlane: map[string]chan struct{}{}}
 }
 
 // Spec is a run to start: the version, the targets with each node's
@@ -309,34 +312,73 @@ func (e *Engine) Runs(ctx context.Context) ([]Run, error) {
 func (e *Engine) Get(ctx context.Context, id int) (Run, map[string]string, bool, error) {
 	e.mu.Lock()
 	a, ok := e.active[id]
-	kept := e.outputs[id]
+	kept, used := e.outputs[id], e.used[id]
 	e.mu.Unlock()
 	if ok {
 		a.mu.Lock()
-		defer a.mu.Unlock()
 		out := map[string]string{}
 		for n, t := range a.out {
 			out[n] = t.String()
 		}
-		return a.run.Copy(), out, true, nil
+		r := a.run.Copy()
+		a.mu.Unlock()
+		return e.masked(ctx, r, out, nil)
 	}
 	r, found, err := e.opts.Store.Run(ctx, id)
 	if err != nil || !found {
 		return Run{}, nil, false, err
 	}
-	out := map[string]string{}
-	for n, s := range kept {
-		out[n] = s
+	// What the store keeps first: it is masked as it is kept, by the marks
+	// of the moment (DB-71); this console's own copy is the fallback.
+	out, err := e.opts.Store.Outputs(ctx, id)
+	if err != nil {
+		return Run{}, nil, false, err
 	}
 	if len(out) == 0 {
-		if out, err = e.opts.Store.Outputs(ctx, id); err != nil {
-			return Run{}, nil, false, err
+		for n, s := range kept {
+			out[n] = s
 		}
 	}
 	if len(out) == 0 && e.opts.OutputDir != "" {
 		out = readOutputs(e.opts.OutputDir, id)
 	}
-	return r, out, true, nil
+	return e.masked(ctx, r, out, used)
+}
+
+// masked is a run and its output as a page may read them: a value the run
+// used in clear under a name that is sensitive now (marked while it ran,
+// or since) is its digest in the run and blanked in its texts (DB-71).
+// used are the values this console gave the run's nodes, which its own
+// copy of the output may quote.
+func (e *Engine) masked(ctx context.Context, r Run, out map[string]string, used map[string]map[string]string) (Run, map[string]string, bool, error) {
+	names, err := e.opts.Store.namesNow(ctx)
+	if err != nil {
+		return Run{}, nil, false, err
+	}
+	sens := names(r.Cluster)
+	if len(sens) == 0 {
+		return r, out, true, nil
+	}
+	plain := runPlain(r, sens)
+	for _, m := range used {
+		for name, v := range m {
+			if sens[name] && v != "" && !IsHidden(v) {
+				plain[v] = true
+			}
+		}
+	}
+	if len(plain) == 0 {
+		return r, out, true, nil
+	}
+	// A copy: the run's maps are the engine's own while it runs.
+	rec := runsRecord{Runs: []Run{clone(r)}}
+	if err := sealRuns(newRing(ctx, e.opts.Store.sens), &rec, names, map[string]map[string]bool{r.Cluster: plain}); err != nil {
+		return Run{}, nil, false, err
+	}
+	for n, s := range out {
+		out[n] = maskPlain(s, plain)
+	}
+	return rec.Runs[0], out, true, nil
 }
 
 // save writes the run's state; a failure is logged, the run goes on. A
@@ -534,9 +576,11 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 	e.mu.Lock()
 	delete(e.active, r.ID)
 	e.outputs[r.ID] = outs
+	e.used[r.ID] = a.values
 	e.order = append(e.order, r.ID)
 	for len(e.order) > defaultKeepOutputs {
 		delete(e.outputs, e.order[0])
+		delete(e.used, e.order[0])
 		e.order = e.order[1:]
 	}
 	e.mu.Unlock()

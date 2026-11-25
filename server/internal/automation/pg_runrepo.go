@@ -229,14 +229,23 @@ func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output strin
 		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
 			return err
 		}
-		var host string
-		err := tx.QueryRow(ctx, `SELECT h.script_run_host_id::text FROM script_run_hosts h JOIN script_runs x USING (script_run_id)
-			WHERE x.run_number = $1 AND h.host_name = $2`, id, n.Node).Scan(&host)
+		var host, cluster string
+		err := tx.QueryRow(ctx, `SELECT h.script_run_host_id::text, x.cluster_id FROM script_run_hosts h JOIN script_runs x USING (script_run_id)
+			WHERE x.run_number = $1 AND h.host_name = $2`, id, n.Node).Scan(&host, &cluster)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: run %d has no node %s", ErrNotFound, id, n.Node)
 		}
 		if err != nil {
 			return err
+		}
+		// A value the node got in clear under a name marked sensitive since
+		// the run started is blanked in what is kept of it (DB-71).
+		names, err := namesIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if seen := runPlain(Run{Nodes: []NodeResult{n}}, names(cluster)); len(seen) > 0 {
+			text, n.Tail, n.Msg, n.Error = maskPlain(text, seen), maskPlain(n.Tail, seen), maskPlain(n.Msg, seen), maskPlain(n.Error, seen)
 		}
 		var started, ended *time.Time
 		if n.Started != nil {
