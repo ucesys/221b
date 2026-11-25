@@ -53,8 +53,9 @@ var (
 	reBearer = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9\-._~+/]{20,}=*)`)
 	// An HTTP Basic value: user:password in base64.
 	reBasic = regexp.MustCompile(`(?i)\bbasic[ \t]+([A-Za-z0-9+/]{4,}={0,2})`)
-	// A password in an address: scheme://user:password@host.
-	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>@]+)@`)
+	// A password in an address: scheme://user:password@host. The password
+	// runs to the last @, as in Text, so it may hold @ itself.
+	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>]+)@`)
 	reDigit       = regexp.MustCompile(`[0-9]`)
 	reLetter      = regexp.MustCompile(`[A-Za-z]`)
 	// What stands in for a password: $VAR, ${VAR}, $(command), <password>,

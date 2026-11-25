@@ -198,6 +198,11 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#2 a placeholder word":       {"postgres://app:your_password@db/app", false},
 		"#2 a placeholder word, here": {"postgres://app:password_here@db/app", false},
 		"#2 changeme":                 {"postgres://app:changeme@db/app", false},
+		// scrub#3: a URL password holding @ is judged whole.
+		"#3 an at sign after a word": {"postgres://app:Password@123@db:5432/app", true},
+		"#3 two at signs":            {"mysql://root:Pass@w0rd!@db/x", true},
+		"#3 no user name":            {"redis://:Secret@2024@redis:6379/0", true},
+		"#3 a variable, then an at":  {"redis://:$REDIS_PASSWORD@redis:6379/0 mail ops@example.com", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

@@ -10,6 +10,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 
 - **A test case's credential check finds a password in an HTTP Basic header** (AI-49, scrub#1): `Authorization: Basic <base64 of user:password>` passed the check; a Basic value that decodes to `user:password` with a password that is not a placeholder now fails it.
 - **Real passwords no longer count as placeholders in the credential check** (AI-49, scrub#2): a password in an address passed when it started like a placeholder word (`Passw0rd`, `Secret123`, `password2024`) or with `$` or `%` (a percent-encoded `#`). A placeholder is now a variable (`$VAR`, `${VAR}`, `%VAR%`), a format verb, or a placeholder word on its own.
+- **A URL password holding `@` is judged whole** (AI-49, scrub#3): `postgres://app:Password@123@db/app` was judged by `Password` alone, a placeholder word, and passed; the password now runs to the last `@`, as the tool-result scrubber's does.
 
 ## 0.13.2 (2026-11-25)
 
