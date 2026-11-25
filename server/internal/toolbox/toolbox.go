@@ -387,9 +387,28 @@ func (c Config) Check() error {
 			}
 		}
 	}
+	used := map[string]bool{}
 	for _, name := range c.DebugContainer.Images {
+		used[name] = true
 		if _, ok := c.Images[name]; !ok {
 			errs = append(errs, fmt.Sprintf("toolbox.debugContainer.images names %q, which toolbox.images does not define", name))
+			continue
+		}
+		// The debug container is named 221b-<name>-<4 hex>, a DNS label
+		// of 63 characters at most.
+		if !labelRE.MatchString(name) || len(name) > 53 {
+			errs = append(errs, fmt.Sprintf("toolbox.debugContainer.images: %q names debug containers, so it must be lowercase letters, digits and dashes, 53 at most", name))
+		}
+	}
+	for _, name := range c.DebugPod.Profiles {
+		used[name] = true
+	}
+	if c.NodeShell.Enabled {
+		used[c.NodeShell.Image] = true
+	}
+	for name := range used {
+		if im, ok := c.Images[name]; ok && strings.TrimSpace(im.Image) == "" {
+			errs = append(errs, fmt.Sprintf("toolbox.images.%s.image is empty: give the reference to run, such as busybox:1.37@sha256:…", name))
 		}
 	}
 	for _, name := range c.DebugPod.Profiles {
@@ -426,6 +445,9 @@ func (c Config) Check() error {
 	}
 	return nil
 }
+
+// labelRE is a DNS label, as a container's name must be.
+var labelRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // capRE is a Linux capability's name, as a container adds it.
 var capRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)

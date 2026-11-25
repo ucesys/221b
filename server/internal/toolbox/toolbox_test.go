@@ -201,3 +201,29 @@ func TestParseRefusesLimitsKubernetesRefuses(t *testing.T) {
 		}
 	}
 }
+
+// A debug container is named 221b-<image>-<4 hex>, a DNS label: an image
+// key a debug container may use must make one; and every image a tool
+// names has a reference (the toolbox review, finding 8).
+func TestParseRefusesImagesKubernetesCannotRun(t *testing.T) {
+	imgs := func(extra string) string {
+		return `"images":{"general":{"image":"busybox"},"network":{"image":"netshoot"},"node":{"image":"ubuntu"},` + extra + `}`
+	}
+	long := strings.Repeat("a", 54)
+	for in, want := range map[string]string{
+		`{` + imgs(`"netTools":{"image":"x"}`) + `,"debugContainer":{"images":["netTools"]}}`:     `"netTools"`,
+		`{` + imgs(`"net_tools":{"image":"x"}`) + `,"debugContainer":{"images":["net_tools"]}}`:   `"net_tools"`,
+		`{` + imgs(`"`+long+`":{"image":"x"}`) + `,"debugContainer":{"images":["` + long + `"]}}`: long,
+		`{` + imgs(`"db":{"tools":"psql"}`) + `,"debugPod":{"profiles":["db"]}}`:                  "toolbox.images.db.image",
+		`{"images":{"general":{"image":""},"network":{"image":"n"},"node":{"image":"u"}}}`:        "toolbox.images.general.image",
+		`{"images":{"general":{"image":"b"},"network":{"image":"n"},"node":{"image":" "}}}`:       "toolbox.images.node.image",
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+	// A debug pod's profile is no container name: camelCase is fine there.
+	if _, err := Parse([]byte(`{` + imgs(`"netTools":{"image":"x"}`) + `,"debugPod":{"profiles":["netTools"]}}`)); err != nil {
+		t.Error(err)
+	}
+}
