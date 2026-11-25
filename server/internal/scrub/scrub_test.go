@@ -243,6 +243,19 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#8 bearer at a line's end": {"kubelet | Bearer\nkube-state-metrics-6f8b7c9d4-x2v7q | none", false},
 		"#8 basic at a line's end":  {"proxy | Basic\nY2k6cHcxMjM0NQ== | none", false},
 		"#8 bearer and a tab":       {"Authorization: Bearer\t9f8e7d6c5b4a39281706f5e4d3c2b1a0", true},
+		// scrub#9: a token cut short, or a placeholder where one goes.
+		"#9 an elided JWT":           {`curl -k -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6..." https://kubernetes.default.svc/api`, false},
+		"#9 an elided JWT, one char": {"Bearer eyJhbGciOiJSUzI1NiIs…", false},
+		"#9 a whole JWT":             {"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", true},
+		"#9 sk- placeholder":         {"OPENAI_API_KEY=sk-your-api-key-goes-here", false},
+		"#9 xoxb- placeholder":       {"SLACK_BOT_TOKEN=xoxb-your-bot-token-here", false},
+		"#9 ghp_ and X's":            {"GITHUB_TOKEN=ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", false},
+		"#9 AKIA and X's":            {"AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX", false},
+		"#9 bearer placeholder":      {"Authorization: Bearer YOUR_ACCESS_TOKEN_V2", false},
+		"#9 bearer of X's":           {"Authorization: Bearer xxxxxxxxxxxxxxxxxxxxxxxx", false},
+		"#9 sk- with a real body":    {"OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx0123", true},
+		"#9 your inside a token":     {"glpat-yourabcdefghij0123456789", true},
+		"#9 a bearer token":          {"Authorization: Bearer 9f8e7d6c5b4a39281706f5e4d3c2b1a0", true},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

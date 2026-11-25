@@ -65,6 +65,10 @@ var (
 	// but a port: the port, then its path or query up to an @ further on
 	// (an image digest, PromQL's @, an e-mail address in the query).
 	rePortPath = regexp.MustCompile(`^[0-9]+[/?#]`)
+	// A token shape's fixed start, before the part that is the secret.
+	reTokenPrefix = regexp.MustCompile(`^(?:AKIA|ASIA|gh[pousr]_|github_pat_|xox[abposr]-|sk-|AIza|glpat-)`)
+	// "your" as a word of a token's body: sk-your-api-key-goes-here.
+	reYourWord = regexp.MustCompile(`(?i)(?:^|[-_])your(?:[-_]|$)`)
 	reDigit    = regexp.MustCompile(`[0-9]`)
 	reLetter   = regexp.MustCompile(`[A-Za-z]`)
 	// What stands in for a password: $VAR, ${VAR}, $(command), <password>,
@@ -81,10 +85,12 @@ var (
 )
 
 // Credential says whether text carries a real credential's shape: a
-// private key's PEM block with key material in it, a JSON Web Token, a token of a well-known
-// format, a bearer token written out (twenty characters or more, letters
-// and digits), an HTTP Basic value whose user:password has a password that
-// is not a placeholder, or a password in an address that is not one.
+// private key's PEM block with key material in it, a JSON Web Token, a
+// token of a well-known format (not one of X's, nor one written for
+// "your" key), a bearer token written out (twenty characters or more,
+// letters and digits; not a JWT's header cut short, nor a placeholder),
+// an HTTP Basic value whose user:password has a password that is not a
+// placeholder, or a password in an address that is not one.
 // Words such as password or token, and key=value pairs, are not enough:
 // Text removes those from what tools return, erring towards too much,
 // while Credential is for what a model wrote, such as an answer, where
@@ -99,11 +105,19 @@ func Credential(s string) bool {
 		return true
 	}
 	for _, re := range tokenShapes {
-		if re.MatchString(s) {
-			return true
+		for _, m := range re.FindAllString(s, -1) {
+			if !elided(reTokenPrefix.ReplaceAllString(m, "")) {
+				return true
+			}
 		}
 	}
 	for _, m := range reBearer.FindAllStringSubmatch(s, -1) {
+		// A whole JWT is reJWT's to judge; its header alone, cut short,
+		// is what goes where one does (the console's own token field
+		// shows eyJhbGciOiJSUzI1NiIs…).
+		if strings.HasPrefix(m[1], "eyJ") || elided(m[1]) || placeholder(m[1]) {
+			continue
+		}
 		if reDigit.MatchString(m[1]) && reLetter.MatchString(m[1]) {
 			return true
 		}
@@ -132,6 +146,12 @@ func urlPassword(s string) bool {
 		}
 	}
 	return false
+}
+
+// elided says whether a token's body stands in for one: all X's, or
+// written for a person to fill in ("your" as a word of it).
+func elided(body string) bool {
+	return strings.Trim(body, "xX") == "" || reYourWord.MatchString(body)
 }
 
 // keyMaterial says whether what follows a private key's header is base64

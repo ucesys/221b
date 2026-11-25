@@ -15,6 +15,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **Ordinary placeholders pass the credential check** (AI-49, scrub#6): `postgres://app:YOUR_DB_PASSWORD@db/app`, `GITHUB_TOKEN`, `PAT`, `CHANGE_ME`, `…`, and a heredoc's `\${DB_PASSWORD}` failed it as real passwords.
 - **Naming a private key's header no longer fails the credential check** (AI-49, scrub#7): an answer saying a key must begin with `-----BEGIN PRIVATE KEY-----`, or a TLS Secret template with `<your key here>` in the block, failed as a leaked key. A key now needs key material after its header.
 - **`Bearer` at a line's end no longer pairs with the next line's first word** (AI-49, scrub#8): a table with `Bearer` in its last column failed the credential check on the next row's pod name.
+- **Elided and placeholder tokens pass the credential check** (AI-49, scrub#9): `Bearer eyJhbGciOiJSUzI1NiIs…` (what the cluster editor's token field shows), `sk-your-api-key-goes-here`, `xoxb-your-bot-token-here` and `ghp_` followed by X's failed it.
 
 ## 0.13.2 (2026-11-25)
 
