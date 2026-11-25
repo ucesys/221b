@@ -1057,29 +1057,45 @@ func (m *mask) Write(p []byte) (int, error) {
 }
 
 // drain writes all it can: what could still turn out to be the start of a
-// value stays held, unless this is the end.
+// value stays held, unless this is the end. What to hold is decided on the
+// text as written, before anything is replaced: it is held from the first
+// place where the rest is the start of a value, so a value that begins
+// with, or holds, a shorter one is still caught whole when its end comes
+// in the next write. Each place takes the longest value that starts there.
 func (m *mask) drain(final bool) error {
-	s := string(m.buf)
+	b := string(m.buf)
+	longest := 0
 	for _, v := range m.values {
-		s = strings.ReplaceAll(s, v, maskText)
+		longest = max(longest, len(v))
 	}
-	n := len(s)
-	if !final {
-		for _, v := range m.values {
-			for l := min(len(v)-1, len(s)); l > 0; l-- {
-				if strings.HasSuffix(s, v[:l]) {
-					n = min(n, len(s)-l)
-					break
+	var out strings.Builder
+	i := 0
+scan:
+	for i < len(b) {
+		rest := b[i:]
+		if !final && len(rest) < longest {
+			for _, v := range m.values {
+				if len(rest) < len(v) && strings.HasPrefix(v, rest) {
+					break scan
 				}
 			}
 		}
+		for _, v := range m.values {
+			if strings.HasPrefix(rest, v) {
+				out.WriteString(maskText)
+				i += len(v)
+				continue scan
+			}
+		}
+		out.WriteByte(b[i])
+		i++
 	}
-	if n > 0 {
-		if err := m.sink.write([]byte(s[:n])); err != nil {
+	if out.Len() > 0 {
+		if err := m.sink.write([]byte(out.String())); err != nil {
 			return err
 		}
 	}
-	m.buf = append(m.buf[:0], s[n:]...)
+	m.buf = append(m.buf[:0], b[i:]...)
 	return nil
 }
 

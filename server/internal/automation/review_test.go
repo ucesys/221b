@@ -500,3 +500,31 @@ func TestRevokingAHookStopsTheRunThatUsesIt(t *testing.T) {
 		t.Fatalf("%s %q %+v", done.State, done.Note, done.Nodes)
 	}
 }
+
+// The output mask catches a value whose end comes in a later write even
+// when a shorter value it starts with or holds ends the first (finding
+// 14), for a run's output and for a host's pairing (NewMask).
+func TestTheMaskCatchesAValueSplitAfterAShorterOne(t *testing.T) {
+	for _, c := range []struct {
+		values []string
+		writes []string
+		want   string
+	}{
+		{[]string{"admin", "admin2024!"}, []string{"pw=admin", "2024!\n"}, "pw=" + maskText + "\n"},
+		{[]string{"pa55word", "user:pa55word@db"}, []string{"url=user:pa55word@d", "b\n"}, "url=" + maskText + "\n"},
+		{[]string{"admin", "admin2024!"}, []string{"user admin", " logged in\n"}, "user " + maskText + " logged in\n"},
+		{[]string{"s3cret"}, []string{"a s3", "cret b\n"}, "a " + maskText + " b\n"},
+	} {
+		var sink strings.Builder
+		m := NewMask(&sink, c.values)
+		for _, w := range c.writes {
+			if _, err := m.Write([]byte(w)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		m.Flush()
+		if sink.String() != c.want {
+			t.Errorf("%q in %q: %q, want %q", c.values, c.writes, sink.String(), c.want)
+		}
+	}
+}
