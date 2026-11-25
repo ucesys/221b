@@ -181,6 +181,13 @@ func sealPastTables(ctx context.Context, tx pgx.Tx, r *ring, s *sealing, only st
 	}
 	if only != "" {
 		pastPlain(&changes, &runs, names, only, s.plain)
+	} else {
+		// A save of the variables: the clusters on which a name became
+		// sensitive with it are looked through as the move does, so a value
+		// recorded under the name is found under any other name too.
+		for _, cluster := range sortedClusters(s.became) {
+			pastPlain(&changes, &runs, names, cluster, s.plain)
+		}
 	}
 	changed := 0
 	nextChanges := clone(changes)

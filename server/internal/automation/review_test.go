@@ -80,3 +80,48 @@ func TestAMarkMadeDuringARunStaysOnItsOutput(t *testing.T) {
 		t.Fatalf("once it ended, the database holds the value in %v", h)
 	}
 }
+
+// A name marked sensitive through an approved change blanks its old
+// clear value in the past (finding 3): past outputs and tails, and the
+// values recorded under another name, as a mark saved at once does.
+func TestAMarkApprovedThroughAChangeBlanksThePast(t *testing.T) {
+	const marker = "MARKERpast3Vb8hunter"
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: map[string]string{"DB_PASSWORD": marker}}); err != nil {
+		t.Fatal(err)
+	}
+	x := &stubExec{run: func(_, _, _ string, out io.Writer) (int, error) {
+		io.WriteString(out, "connecting with "+marker+"\n")
+		return 0, nil
+	}}
+	e := NewEngine(Options{Store: st, Exec: x})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"n1"},
+		Rollout: Rollout{Mode: RolloutAll}, Values: map[string]map[string]string{"n1": {"P": marker}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, e, r.ID)
+	if h := dbtest.Holding(t, d, marker); h["script_run_outputs"] == 0 || h["script_run_values"] == 0 {
+		t.Fatalf("the run did not keep what the test looks for: %v", h)
+	}
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	c, err := st.NewChange(ctx, VariableChange{Cluster: "local", Fleet: AllNodes, By: ann, State: ChangeWaiting, Changed: []string{"DB_PASSWORD"},
+		Before: FleetVariables{Values: map[string]string{"DB_PASSWORD": marker}},
+		After:  FleetVariables{Values: map[string]string{"DB_PASSWORD": marker}, Sensitive: []string{"DB_PASSWORD"}},
+		Impact: []ImpactItem{{Script: "DB_PASSWORD", Decision: ImpactApproval, Why: "x", By: "rule"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideChange(ctx, "local", c.ID, true, "", sam); err != nil {
+		t.Fatal(err)
+	}
+	vars, _ := st.Variables(ctx, "local")
+	if !IsHidden(vars[AllNodes].Values["DB_PASSWORD"]) {
+		t.Fatalf("the mark did not hide the variable: %+v", vars[AllNodes])
+	}
+	if h := dbtest.Holding(t, d, marker); len(h) > 0 {
+		t.Fatalf("after the approved mark the database holds the old value in %v", h)
+	}
+}

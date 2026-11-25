@@ -359,11 +359,17 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 		}
 		sort.Strings(out.became[cluster])
 		known := map[string]bool{}
-		_ = eachValue(was, func(_ place, v string) (string, error) {
+		_ = eachValue(was, func(p place, v string) (string, error) {
 			known[v] = true
+			// A name that becomes sensitive with this save: what it held in
+			// clear is looked for in the past, whatever stands there now (an
+			// approved change that marked it brings its value as a digest).
+			if names[p.name] && !before[p.name] {
+				out.saw(cluster, plainOf(v))
+			}
 			return v, nil
 		})
-		var check, back []string
+		var check, back, fresh []string
 		err := eachValue(fleets, func(p place, v string) (string, error) {
 			switch {
 			case v == Unmoved:
@@ -381,6 +387,9 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 			case names[p.name]:
 				if !known[v] {
 					check = append(check, v)
+					if !before[p.name] {
+						fresh = append(fresh, v)
+					}
 				}
 			case IsHidden(v):
 				if o, had := p.of(was); !had || o != v {
@@ -402,6 +411,11 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 				if _, added := out.add[cluster][d]; !added && !hasKey(kept, d) {
 					return nil, fmt.Errorf("%w: a sensitive value given by its hidden form is not one the console keeps: type the value", ErrInvalid)
 				}
+			}
+			// The value a name that becomes sensitive is set to may have
+			// been in clear before too (in a run of another name's).
+			for _, d := range fresh {
+				out.saw(cluster, kept[d])
 			}
 		}
 		if len(back) > 0 {
@@ -725,6 +739,15 @@ func gone(old, next map[string]map[string]bool) map[string][]string {
 	return out
 }
 
+// plainOf is a value as a text could quote it: "" for a digest, which
+// stands for one.
+func plainOf(v string) string {
+	if IsHidden(v) {
+		return ""
+	}
+	return v
+}
+
 func hasKey(m map[string]string, k string) bool {
 	_, ok := m[k]
 	return ok
@@ -800,6 +823,19 @@ func (st *Store) sealPast(ctx context.Context, s *sealing) error {
 	names, err := st.namesNow(ctx)
 	if err != nil {
 		return err
+	}
+	// The values recorded under a name sensitive now are looked for under
+	// any other name too, as MoveSensitive does (pastPlain).
+	var changes changesRecord
+	var runs runsRecord
+	if _, err := st.load(ctx, ChangesKey, &changes); err != nil {
+		return err
+	}
+	if _, err := st.load(ctx, RunsKey, &runs); err != nil {
+		return err
+	}
+	for _, cluster := range sortedClusters(s.became) {
+		pastPlain(&changes, &runs, names, cluster, s.plain)
 	}
 	r := newRing(ctx, st.sens)
 	if err := resave(ctx, st, ChangesKey, func(rec *changesRecord) (*sealing, error) { return sealChanges(r, rec, names, s.plain) }); err != nil {
