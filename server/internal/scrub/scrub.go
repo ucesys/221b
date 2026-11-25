@@ -36,6 +36,11 @@ const (
 var (
 	// PEM and PGP private keys.
 	rePEM = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)`)
+	// A private key's PEM block with key material after its header, for
+	// Credential: on the next line, after armour headers (PGP's Version:,
+	// an encrypted key's Proc-Type:), also in a JSON string's \n, or on the
+	// same line. rePEM takes a header alone, as Text should.
+	rePrivateKey = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\(?:r\\)?n)(?:[ \t]*[A-Za-z][A-Za-z-]*:[^\r\n\\]*(?:\r?\n|\\(?:r\\)?n))*(?:\s|\\(?:r\\)?n)*([A-Za-z0-9+/]{6,})|[ \t]+([A-Za-z0-9+/]{20,}))`)
 	// JSON Web Tokens, wherever they are.
 	reJWT = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`)
 	// Tokens of well-known formats: AWS access keys, GitHub, Slack, OpenAI
@@ -76,7 +81,7 @@ var (
 )
 
 // Credential says whether text carries a real credential's shape: a
-// private key's PEM block, a JSON Web Token, a token of a well-known
+// private key's PEM block with key material in it, a JSON Web Token, a token of a well-known
 // format, a bearer token written out (twenty characters or more, letters
 // and digits), an HTTP Basic value whose user:password has a password that
 // is not a placeholder, or a password in an address that is not one.
@@ -85,7 +90,12 @@ var (
 // while Credential is for what a model wrote, such as an answer, where
 // prose about a password is no leak.
 func Credential(s string) bool {
-	if rePEM.MatchString(s) || reJWT.MatchString(s) {
+	for _, m := range rePrivateKey.FindAllStringSubmatch(s, -1) {
+		if keyMaterial(m[1] + m[2]) {
+			return true
+		}
+	}
+	if reJWT.MatchString(s) {
 		return true
 	}
 	for _, re := range tokenShapes {
@@ -122,6 +132,17 @@ func urlPassword(s string) bool {
 		}
 	}
 	return false
+}
+
+// keyMaterial says whether what follows a private key's header is base64
+// rather than a word: it holds a digit, + or /, or a capital letter after
+// a small one's start (MIIEow), where "followed", "Followed" and
+// "REDACTED" do not.
+func keyMaterial(m string) bool {
+	if strings.ContainsAny(m, "0123456789+/") {
+		return true
+	}
+	return strings.ContainsFunc(m[1:], unicode.IsUpper) && strings.ContainsFunc(m, unicode.IsLower)
 }
 
 // placeholder says whether a value stands in for a password, escaped or

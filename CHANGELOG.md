@@ -13,6 +13,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **A URL password holding `@` is judged whole** (AI-49, scrub#3): `postgres://app:Password@123@db/app` was judged by `Password` alone, a placeholder word, and passed; the password now runs to the last `@`, as the tool-result scrubber's does.
 - **An address with a port and a later `@` no longer fails the credential check** (AI-49, scrub#5): `oci://registry.example.com:5000/charts/app@sha256:…`, a PromQL `@` or an e-mail address in a query took the port and path for a password.
 - **Ordinary placeholders pass the credential check** (AI-49, scrub#6): `postgres://app:YOUR_DB_PASSWORD@db/app`, `GITHUB_TOKEN`, `PAT`, `CHANGE_ME`, `…`, and a heredoc's `\${DB_PASSWORD}` failed it as real passwords.
+- **Naming a private key's header no longer fails the credential check** (AI-49, scrub#7): an answer saying a key must begin with `-----BEGIN PRIVATE KEY-----`, or a TLS Secret template with `<your key here>` in the block, failed as a leaked key. A key now needs key material after its header.
 
 ## 0.13.2 (2026-11-25)
 

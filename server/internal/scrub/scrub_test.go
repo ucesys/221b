@@ -227,6 +227,18 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#6 capitals, run together": {"postgres://app:SUPERPASS99@db/app", true},
 		"#6 an escaped real one":    {`postgres://app:\Fake9pass@db/app`, true},
 		"#6 changeme with more":     {"postgres://app:changeme-41x@db/app", true},
+		// scrub#7: a private key's header alone, or around a placeholder, is
+		// no key; a header with key material after it is.
+		"#7 headers named":           {"The tls.key must begin with `-----BEGIN PRIVATE KEY-----`, but yours begins with `-----BEGIN CERTIFICATE-----`.", false},
+		"#7 a template":              {"tls.key: |\n  -----BEGIN PRIVATE KEY-----\n  <your key here>\n  -----END PRIVATE KEY-----", false},
+		"#7 an elided key":           {"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----", false},
+		"#7 a header in prose":       {"-----BEGIN PRIVATE KEY----- followed by the key", false},
+		"#7 an indented key":         {"tls.key: |\n  -----BEGIN PRIVATE KEY-----\n  MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n", true},
+		"#7 a key in a JSON string":  {`{"key":"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n"}`, true},
+		"#7 a PGP key with headers":  {"-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\n\nlQOYBFakeKeyMaterial0\n-----END PGP PRIVATE KEY BLOCK-----", true},
+		"#7 an encrypted RSA key":    {"-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123ABCD\n\nMIIEowFakeKeyMaterial\n-----END RSA PRIVATE KEY-----", true},
+		"#7 a key on one line":       {"-----BEGIN PRIVATE KEY----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC -----END PRIVATE KEY-----", true},
+		"#7 a word on the next line": {"-----BEGIN PRIVATE KEY-----\nREDACTED\n-----END PRIVATE KEY-----", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
