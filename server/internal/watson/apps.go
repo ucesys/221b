@@ -610,6 +610,9 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		if err != nil {
 			return nil, err
 		}
+		if err := damaged(rels); err != nil {
+			return nil, err
+		}
 		sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
 		return rels, nil
 	}

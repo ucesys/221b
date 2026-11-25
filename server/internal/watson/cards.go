@@ -61,7 +61,12 @@ func (s *Service) Fingerprint(ctx context.Context, cl Cluster, line string) (Ins
 	return s.inspect(ctx, cl, line, nil, false)
 }
 
-func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube.Person, describe bool) (Inspection, error) {
+func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube.Person, describe bool) (out Inspection, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("Watson failed reading what it acts on: %v", r)
+		}
+	}()
 	c, err := Parse(line)
 	if err != nil {
 		return Inspection{}, err
@@ -69,7 +74,7 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 	if !c.Change || c.DryRun() {
 		return Inspection{}, fmt.Errorf("%w: %s reads, and runs without an approval", ErrNotChange, c.Name())
 	}
-	out := Inspection{Line: c.Line}
+	out = Inspection{Line: c.Line}
 	if cl.Config == nil {
 		return out, errors.New("the cluster cannot be reached")
 	}

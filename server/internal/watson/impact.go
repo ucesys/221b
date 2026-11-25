@@ -67,6 +67,12 @@ type guard struct {
 // a reason, an object could not be read. That proves nothing either way, so
 // the card stands but is not approved.
 func checkGuards(ctx context.Context, cs *clients, guards []guard) (why string, changed bool) {
+	// A guard that panics proves nothing: the card is not approved.
+	defer func() {
+		if r := recover(); r != nil {
+			why, changed = uncheckedText("the objects this command acts on", fmt.Errorf("%v", r)), false
+		}
+	}()
 	if len(guards) == 0 {
 		return "", false
 	}
@@ -1241,6 +1247,9 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 		if err != nil {
 			return nil, err
 		}
+		if err := damaged(rels); err != nil {
+			return nil, err
+		}
 		sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
 		return rels, nil
 	}
@@ -1296,6 +1305,23 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 		impact = append(impact, fmt.Sprintf("Deletes %s that revision %d does not have: %s.", plural(len(removed), "object", "objects"), to.Version, listText(removed, 6)))
 	}
 	return targets, guards, impact
+}
+
+// damaged says which of a release's records Watson cannot read, or nil:
+// Helm's storage decodes a record without checking it, and anyone who may
+// write Secrets in the namespace can make one without its info or chart.
+func damaged(rels []*release.Release) error {
+	for _, r := range rels {
+		switch {
+		case r == nil:
+			return errors.New("a record of the release is empty")
+		case r.Info == nil:
+			return fmt.Errorf("revision %d of release %s has no info in its record", r.Version, r.Name)
+		case r.Chart == nil || r.Chart.Metadata == nil:
+			return fmt.Errorf("revision %d of release %s has no chart in its record", r.Version, r.Name)
+		}
+	}
+	return nil
 }
 
 // manifestDiff compares two rendered manifests object by object.

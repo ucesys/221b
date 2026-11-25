@@ -659,6 +659,7 @@ func (s *Service) readyLocked(cl Cluster) []string {
 // requester's own, or, where a second person is needed, another holder's.
 // Approve applies every rule a click would (P6-04, P6-07, TB-32).
 func (s *Service) autoApprove(cl Cluster, id string) {
+	defer s.recoverIn("approving a card under a standing approval")
 	s.mu.Lock()
 	it := s.items[id]
 	if it == nil || it.Status != StatusPending || it.Plan == nil || !it.Plan.Ready || !it.Change {
@@ -697,6 +698,15 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 		if _, err := s.Approve(ctx, cl, w, id); err == nil {
 			return
 		}
+	}
+}
+
+// recoverIn logs a panic of a goroutine of the service instead of ending
+// the process: a damaged record read for one card must not take the
+// console down for everyone.
+func (s *Service) recoverIn(what string) {
+	if r := recover(); r != nil {
+		s.opts.Logger.Error(what+" failed", "panic", fmt.Sprint(r))
 	}
 }
 
@@ -850,6 +860,20 @@ func (s *Service) plan(cl Cluster, id string) {
 	if it == nil {
 		return
 	}
+	// A card that cannot be worked out is never approved, and a panic
+	// working it out must not end the console for everyone.
+	defer func() {
+		if r := recover(); r != nil {
+			s.opts.Logger.Error("working out a card failed", "command", MaskLine(it.Line), "panic", fmt.Sprint(r))
+			s.mu.Lock()
+			if it.Status == StatusPending {
+				it.Plan = &Plan{Ready: true, Impact: []string{fmt.Sprintf("Watson failed working out this card (%v): it cannot be approved. Send the command again for a fresh card.", r)},
+					guards: []guard{unreadable("the objects this command acts on", fmt.Errorf("%v", r))}}
+				s.changedLocked(it)
+			}
+			s.mu.Unlock()
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	p := &Plan{pin: &appPin{}}
