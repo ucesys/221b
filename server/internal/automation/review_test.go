@@ -528,3 +528,28 @@ func TestTheMaskCatchesAValueSplitAfterAShorterOne(t *testing.T) {
 		}
 	}
 }
+
+// The console's rule sees the common ways a value changes what a script
+// does (finding 15): a parameter run as a command before && or || or
+// then, its length, an expansion that tests it, and arithmetic.
+func TestConditionsReadAParameterInTheCommonWays(t *testing.T) {
+	for name, line := range map[string]string{
+		"WIPE":  `"$WIPE" && rm -rf /data`,
+		"FORCE": `$FORCE || exit 0`,
+		"DRY":   `if $DRY; then echo dry; fi`,
+		"TOKEN": `if [ ${#TOKEN} -lt 8 ]; then exit 1; fi`,
+		"FOO":   `if [ $((FOO + 1)) -gt 3 ]; then reboot; fi`,
+		"BAR":   `(( BAR > 3 )) && reboot`,
+		"MODE":  `rm -rf ${MODE:+/data}`,
+		"NAME":  `echo ${NAME:-default}`,
+	} {
+		if !ConditionRE(name).MatchString(line) {
+			t.Errorf("not seen as a condition: %s", line)
+		}
+	}
+	for _, line := range []string{`echo "$MODE"`, `rm -rf /tmp/$MODE`, `MODE2=$MODE`, `echo ${MODE}`} {
+		if ConditionRE("MODE").MatchString(line) {
+			t.Errorf("seen as a condition: %s", line)
+		}
+	}
+}

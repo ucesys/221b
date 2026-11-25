@@ -15,8 +15,11 @@ func TestOnProductionARunMayGiveValuesOfItsOwn(t *testing.T) {
 	e := autoSetup(t, "ops@corp.example", clusters.EnvProduction)
 	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:target kubernetes\n# 221b:dry-run yes\n# 221b:k8s get pods\n# 221b:param MODE optional m\nkubectl get pods -A\n"
 	approved(t, e.store, "reads", text)
+	// MODE inherits nothing here and no rule reads it; with Sherlock off it
+	// waits for approval rather than being refused (the review of November
+	// 24, 2026, finding 15: a change Sherlock did not weigh).
 	code, body := e.do(t, "POST", "/api/v1/automation/runs", `{"script":"reads","fleet":"_cluster","params":{"MODE":"wipe"},"rollout":{"mode":"all"}}`)
-	if code != http.StatusOK || !strings.Contains(body, `"MODE":"wipe"`) {
+	if code != http.StatusAccepted || !strings.Contains(body, `"MODE":"wipe"`) {
 		t.Fatalf("%d %s", code, body)
 	}
 	if code, body := e.do(t, "POST", "/api/v1/automation/runs", `{"script":"reads","fleet":"_cluster","dryRun":true,"params":{"MODE":"wipe"},"rollout":{"mode":"all"}}`); code != 200 {

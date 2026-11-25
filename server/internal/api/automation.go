@@ -635,7 +635,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	}
 	before := automation.View(all, id, scope)
 	changed := automation.ChangedVariables(before, next)
-	impact, note := s.weighChange(r, list.Cluster, before, next, changed)
+	impact, note := s.weighChange(r, list.Cluster, list.Production, before, next, changed)
 	if automation.RebootChanged(before, next) {
 		changed = append(changed, "reboot timeout")
 	}

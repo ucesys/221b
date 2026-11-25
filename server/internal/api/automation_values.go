@@ -108,7 +108,7 @@ func (s *Server) weighRun(r *http.Request, list automationFleets, sc automation.
 		return out
 	}
 	one := automation.Script{Name: sc.Name, Group: sc.Group, Versions: []automation.Version{v}}
-	items, note := s.weighScripts(r, list.Cluster, []automation.Script{one}, sensitive, changed, sherlock)
+	items, note := s.weighScripts(r, list.Cluster, list.Production, []automation.Script{one}, sensitive, changed, sherlock)
 	if items != nil {
 		out.Impact = items
 	}

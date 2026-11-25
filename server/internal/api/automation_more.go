@@ -256,19 +256,25 @@ type variablesAnswer struct {
 
 // weighChange lists what a change touches. The console's rule goes first;
 // Sherlock may add to what needs approval, never take away.
-func (s *Server) weighChange(r *http.Request, cluster string, before, after automation.FleetVariables, changed []string) ([]automation.ImpactItem, string) {
+func (s *Server) weighChange(r *http.Request, cluster string, production bool, before, after automation.FleetVariables, changed []string) ([]automation.ImpactItem, string) {
 	scripts, err := s.opts.AutomationStore.Scripts(r.Context())
 	if err != nil {
 		return nil, "the scripts could not be read: " + err.Error()
 	}
-	return s.weighScripts(r, cluster, scripts, append(append([]string(nil), before.Sensitive...), after.Sensitive...), changed, true)
+	return s.weighScripts(r, cluster, production, scripts, append(append([]string(nil), before.Sensitive...), after.Sensitive...), changed, true)
 }
 
 // weighScripts weighs changed values for the scripts given, with the
 // names marked sensitive: a fleet's change for every script, a run's own
 // values for its version alone (FU-05). Without sherlock it is the rule
 // alone, for a preview, and the note says Sherlock weighs it later.
-func (s *Server) weighScripts(r *http.Request, cluster string, scripts []automation.Script, sensitive, changed []string, sherlock bool) ([]automation.ImpactItem, string) {
+//
+// On production a value the console's rule rates passed through needs
+// approval when Sherlock did not weigh it (off, failed, or an answer that
+// could not be read): the rule cannot tell every way a value changes what
+// a script does, and Sherlock is the second look (the review of November
+// 24, 2026, finding 15).
+func (s *Server) weighScripts(r *http.Request, cluster string, production bool, scripts []automation.Script, sensitive, changed []string, sherlock bool) ([]automation.ImpactItem, string) {
 	items := automation.Impact(scripts, automation.FleetVariables{Sensitive: sensitive}, changed)
 	safe := 0
 	for _, i := range items {
@@ -279,8 +285,20 @@ func (s *Server) weighScripts(r *http.Request, cluster string, scripts []automat
 	if safe == 0 {
 		return items, ""
 	}
+	unweighed := func(why string) []automation.ImpactItem {
+		if !production {
+			return items
+		}
+		out := append([]automation.ImpactItem(nil), items...)
+		for i := range out {
+			if out[i].Decision == automation.ImpactSafe {
+				out[i].Decision, out[i].Why = automation.ImpactApproval, "Sherlock did not weigh it ("+why+"), and on production that needs approval"
+			}
+		}
+		return out
+	}
 	if s.opts.Sherlock == nil || !s.sherlockStatusFor(r, cluster).Available {
-		return items, "Sherlock did not weigh this change: it is off for this cluster."
+		return unweighed("it is off for this cluster"), "Sherlock did not weigh this change: it is off for this cluster."
 	}
 	if !sherlock {
 		return items, "Sherlock weighs these values again when the run is asked for, and may still ask for approval."
@@ -301,7 +319,7 @@ func (s *Server) weighScripts(r *http.Request, cluster string, scripts []automat
 	defer cancel()
 	text, err := s.opts.Sherlock.CompleteAs(ctx, s.agentID(ai.ChangePlanner), s.watsonWho(r).Audit, cluster, "weigh a parameter change", automation.ImpactPrompt, b.String())
 	if err != nil {
-		return items, "Sherlock could not weigh this change: " + err.Error()
+		return unweighed("it failed"), "Sherlock could not weigh this change: " + err.Error()
 	}
 	var ans struct {
 		Raise []struct {
@@ -310,7 +328,7 @@ func (s *Server) weighScripts(r *http.Request, cluster string, scripts []automat
 		} `json:"raise"`
 	}
 	if err := json.Unmarshal([]byte(jsonIn(text)), &ans); err != nil {
-		return items, "Sherlock's answer about this change could not be read."
+		return unweighed("its answer could not be read"), "Sherlock's answer about this change could not be read."
 	}
 	raised := map[string]string{}
 	for _, x := range ans.Raise {

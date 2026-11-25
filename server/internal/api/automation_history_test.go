@@ -33,7 +33,9 @@ func TestRunHistoryListsTheRequestsAU24(t *testing.T) {
 	if code, body := doAs(t, other, e, "POST", "/api/v1/automation/waiting-runs/4/approve", ""); code != http.StatusOK {
 		t.Fatalf("approve: %d %s", code, body)
 	}
-	if code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"ZONE":"var:OTHER"}`)); code != http.StatusOK {
+	// A run with no values of its own starts at once (with values that
+	// change something, Sherlock being off, it would wait: review finding 15).
+	if code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{}`)); code != http.StatusOK {
 		t.Fatalf("a run: %d %s", code, body)
 	}
 	type entry struct {

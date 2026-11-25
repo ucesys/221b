@@ -192,3 +192,27 @@ func TestAFleetSaveDoesNotUndoWhatChangedWhileItWasWeighed(t *testing.T) {
 		t.Fatalf("Y is %q", vars[allNodes].Values["Y"])
 	}
 }
+
+// On production a change Sherlock did not weigh needs approval (finding
+// 15; a change of behaviour): the console's rule alone rates ZONE passed
+// through, and with Sherlock off it waits for a second admin all the same.
+// Off production it is applied, as before.
+func TestOnProductionAChangeSherlockDidNotWeighWaits(t *testing.T) {
+	e := autoSetup(t, "ops@corp.example", clusters.EnvProduction)
+	approved(t, e.store, "reads", valuesScript)
+	if err := e.store.SetVariables(context.Background(), clusters.LocalID, allNodes, automation.FleetVariables{Values: map[string]string{"ZONE": "eu"}}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := e.do(t, "PUT", "/api/v1/automation/fleets/_all/variables", `{"values":{"ZONE":"asia"}}`)
+	if code != http.StatusAccepted || !strings.Contains(body, "Sherlock did not weigh it") {
+		t.Fatalf("%d %s", code, body)
+	}
+	if vars, _ := e.store.Variables(context.Background(), clusters.LocalID); vars[allNodes].Values["ZONE"] != "eu" {
+		t.Fatalf("ZONE is %q", vars[allNodes].Values["ZONE"])
+	}
+	other := autoSetup(t, "ops@corp.example", clusters.EnvOther)
+	approved(t, other.store, "reads", valuesScript)
+	if code, body := other.do(t, "PUT", "/api/v1/automation/fleets/_all/variables", `{"values":{"ZONE":"asia"}}`); code != http.StatusOK {
+		t.Fatalf("off production: %d %s", code, body)
+	}
+}

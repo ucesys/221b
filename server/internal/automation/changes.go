@@ -148,10 +148,20 @@ func Impact(scripts []Script, fp FleetVariables, changed []string) []ImpactItem 
 
 // ConditionRE matches a line where a condition reads the parameter: if,
 // elif, while, until, case, test, [ or [[, anywhere on the line, so a
-// test after && or || counts too. When unsure it matches: a value that
+// test after && or || counts too, with the parameter as $NAME, ${NAME},
+// ${#NAME} or inside $(( )); the parameter run as a command (a flag
+// such as "$WIPE" && rm, $FORCE || exit 0, if $DRY; then); an expansion
+// that tests it (${NAME:-…}, ${NAME:+…}, ${NAME:?…}, ${NAME:=…}); and
+// arithmetic that reads it ((( ))). When unsure it matches: a value that
 // changes what a script does needs approval.
 func ConditionRE(name string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)(^|[;&|(!{]|\b(then|do|else))\s*((if|elif|while|until|case|test)\b|\[\[?(\s|$)).*\$\{?` + regexp.QuoteMeta(name) + `\b`)
+	n := regexp.QuoteMeta(name)
+	ref := `(\$\{?[#!]?` + n + `\b|\(\([^\n]*\b` + n + `\b)`
+	cond := `(^|[;&|(!{]|\b(then|do|else))\s*((if|elif|while|until|case|test)\b|\[\[?(\s|$)).*` + ref
+	command := `(^|[;&|(!{]|\b(then|do|else|if|elif|while|until))\s*"?\$\{?` + n + `\}?"?\s*($|[;&|)]|\bthen\b)`
+	expansion := `\$\{` + n + `:?[-+=?]`
+	arithmetic := `\(\([^\n]*\b` + n + `\b`
+	return regexp.MustCompile(`(?m)(` + cond + `|` + command + `|` + expansion + `|` + arithmetic + `)`)
 }
 
 // RaiseImpact applies Sherlock's opinion: it can only make an item
