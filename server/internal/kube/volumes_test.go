@@ -175,3 +175,34 @@ func TestAnExpiredPollKeepsThePodsUsage(t *testing.T) {
 		t.Fatal("an expired poll wiped the pods' usage")
 	}
 }
+
+// Pod usage is not shown as current for ever when every read runs out of
+// time (kube#10): after a few polls without a good read it is cleared.
+func TestPodUsageThatCannotBeReadIsCleared(t *testing.T) {
+	cl, _, changes := start(t, sim.Options{Nodes: 4, Pods: 20, Metrics: true})
+	cl.WantPodUsage(true)
+	pollUntil(t, cl, "pod usage", func() bool { return len(cl.PodUsage()) > 0 })
+	for len(changes) > 0 {
+		<-changes
+	}
+	spent, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for range 5 {
+		cl.Poll(spent)
+	}
+	if n := len(cl.PodUsage()); n != 0 {
+		t.Fatalf("the usage of %d pods stayed after polls that all ran out of time", n)
+	}
+	cleared := false
+	for len(changes) > 0 {
+		c := <-changes
+		for _, k := range c.Views["pods"] {
+			cleared = cleared || k == kube.UsageOnly
+		}
+	}
+	if !cleared {
+		t.Fatal("the browsers were not told")
+	}
+	// A good read brings it back.
+	pollUntil(t, cl, "pod usage again", func() bool { return len(cl.PodUsage()) > 0 })
+}

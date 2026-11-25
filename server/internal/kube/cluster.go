@@ -149,10 +149,13 @@ type Cluster struct {
 	wantPodUsage   atomic.Bool
 	watching       atomic.Bool
 
-	mu                 sync.RWMutex
-	info               Info
-	usage              map[string]nodes.Usage
-	podUsage           map[string]nodes.Usage
+	mu       sync.RWMutex
+	info     Info
+	usage    map[string]nodes.Usage
+	podUsage map[string]nodes.Usage
+	// podMisses counts the polls in a row whose read of pod usage ran out
+	// of time (kube#10).
+	podMisses          int
 	boots              map[string]bootEntry
 	bootForbiddenUntil time.Time
 	// volumes is what the kubelets report about mounted claims (ST-08),
@@ -510,6 +513,7 @@ func (c *Cluster) Poll(ctx context.Context) {
 		c.mu.Lock()
 		had := len(c.podUsage) > 0
 		c.podUsage = map[string]nodes.Usage{}
+		c.podMisses = 0
 		c.mu.Unlock()
 		if had {
 			c.emit(Change{Views: map[string][]string{"pods": {UsageOnly}}})
@@ -1182,8 +1186,25 @@ func (c *Cluster) readPodMetrics(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	raw, err := c.rest.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/pods").SetHeader("Accept", "application/json").Do(ctx).Raw()
-	// Out of time, or stopped: that says nothing about the pods.
+	// Out of time, or stopped: that says nothing about the pods, and the
+	// last figures stand. Not for ever: after podStale polls in a row out
+	// of time they are cleared, so old figures are not shown as current
+	// (kube#10).
 	if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
+		c.mu.Lock()
+		c.podMisses++
+		stale := c.podMisses >= podStale && len(c.podUsage) > 0
+		if stale {
+			c.podUsage = map[string]nodes.Usage{}
+		}
+		c.mu.Unlock()
+		if stale {
+			c.log.Info("pod CPU and memory in use cleared: metrics-server has not answered in time for several refreshes")
+			c.emit(Change{Views: map[string][]string{"pods": {UsageOnly}}})
+		}
 		return
 	}
 	usage := map[string]nodes.Usage{}
@@ -1208,11 +1229,16 @@ func (c *Cluster) readPodMetrics(ctx context.Context) {
 	c.mu.Lock()
 	changed := !sameUsage(c.podUsage, usage)
 	c.podUsage = usage
+	c.podMisses = 0
 	c.mu.Unlock()
 	if changed {
 		c.emit(Change{Views: map[string][]string{"pods": {UsageOnly}}})
 	}
 }
+
+// podStale is how many polls in a row may run out of time before the pods'
+// usage read last is cleared.
+const podStale = 3
 
 func parseUsage(u map[string]string) (nodes.Usage, bool) {
 	cpu, cerr := resource.ParseQuantity(u["cpu"])
