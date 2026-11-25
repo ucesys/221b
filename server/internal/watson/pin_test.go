@@ -437,3 +437,34 @@ func TestADurableCardsChangeRunsWithItsGuards(t *testing.T) {
 		t.Fatalf("%s: %s", done.Status, done.Reason)
 	}
 }
+
+// helm uninstall of an application with no release forgets its record
+// only for someone who may remove applications (HA-02): a Viewer's is
+// refused and the record stays (review of November 24, 2026, finding 8).
+func TestOnlyAnAppManagerForgetsAnApplicationsRecord(t *testing.T) {
+	svc, cl, store := pinSetup(t, Options{})
+	ctx := context.Background()
+	if err := store.Save(ctx, apps.Record{Cluster: "local", Namespace: "web", Name: "shop2", Source: apps.Source{Repo: "https://git.example/shop", Ref: "main", RefKind: apps.RefBranch}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	uninstall := func(w Who) Item {
+		t.Helper()
+		it := card(t, svc, cl, w, "helm uninstall shop2 -n web")
+		if _, err := svc.Approve(ctx, cl, w, it.ID); err != nil {
+			t.Fatal(err)
+		}
+		return wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	}
+	if done := uninstall(alice()); done.Status != StatusFailed || !strings.Contains(outputOf(svc, done.ID), "needs an Admin") {
+		t.Fatalf("a Viewer: %s %s", done.Status, outputOf(svc, done.ID))
+	}
+	if _, _, err := store.Get(ctx, "local", "web", "shop2"); err != nil {
+		t.Fatalf("a Viewer removed the record: %v", err)
+	}
+	if done := uninstall(manager(bob())); done.Status != StatusDone {
+		t.Fatalf("an Admin: %s %s", done.Status, outputOf(svc, done.ID))
+	}
+	if _, _, err := store.Get(ctx, "local", "web", "shop2"); err == nil {
+		t.Fatal("the record stays")
+	}
+}

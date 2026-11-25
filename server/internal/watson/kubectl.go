@@ -90,6 +90,10 @@ type Target struct {
 	// pin is what a card of a deploy showed: its planning fills it, and
 	// its dry run and its run hold to it. A nil pin is no card.
 	pin *appPin
+	// mayForget says the person may remove an application's record
+	// (HA-02): helm uninstall of an application with no release forgets
+	// its record only then.
+	mayForget bool
 }
 
 // Discovery caches each cluster's API discovery, which kubectl and Helm

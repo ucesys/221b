@@ -142,6 +142,24 @@ func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Comman
 	return ""
 }
 
+// mayManageApp says whether a person may manage applications in a
+// namespace: the role, and Kubernetes' answer when the API asks for one.
+func (s *Service) mayManageApp(ctx context.Context, cl Cluster, who Who, ns string) bool {
+	if !who.ManageApps {
+		return false
+	}
+	s.mu.Lock()
+	ask := s.opts.AppAccess
+	s.mu.Unlock()
+	if ask == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	may, err := ask(ctx, cl, who, ns)
+	return err == nil && may
+}
+
 // appChart fetches and loads the chart a command names, with the values
 // it asks for. The record, when the command uses one, supplies the
 // source, the credential, the values file and the parameters.
@@ -463,6 +481,11 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		// release is gone, is removed by forgetting its record (HA-08).
 		if errors.Is(err, driver.ErrReleaseNotFound) && !dry && t.Apps != nil {
 			if _, _, gerr := t.Apps.Get(ctx, t.Cluster, ns, name); gerr == nil {
+				// The record goes through the console's account: only someone
+				// who may remove applications there removes it (HA-02).
+				if !t.mayForget {
+					return fmt.Errorf("there is no release %q; removing the application's record needs an Admin or SuperAdmin whom Kubernetes lets manage applications in %s", name, ns)
+				}
 				if derr := t.Apps.Delete(ctx, t.Cluster, ns, name); derr != nil {
 					return fmt.Errorf("there is no release %q, and the application's record was not removed: %w", name, derr)
 				}

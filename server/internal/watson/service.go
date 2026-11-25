@@ -1432,6 +1432,9 @@ func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who)
 		fmt.Fprintf(errOut, "Error: %s\n", why)
 	} else {
 		t.Discovery = d
+		if it.cmd != nil && it.cmd.Name() == "helm uninstall" {
+			t.mayForget = s.mayManageApp(ctx, cl, runner, helmNamespace(it.cmd))
+		}
 		code = s.opts.Run(ctx, it.cmd, t, out, errOut)
 	}
 	out.flush()

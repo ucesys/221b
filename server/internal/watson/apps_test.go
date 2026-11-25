@@ -94,6 +94,8 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	tg.Cluster = "local"
 	store := appstest.Store(t)
 	tg.Apps = store
+	// Run as someone who may remove an application's record (HA-02).
+	tg.mayForget = true
 	repo := gitChart(t)
 	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.0.0", RefKind: apps.RefTag}
 	if err := store.Save(context.Background(), apps.Record{Cluster: "local", Namespace: "web", Name: "hello", Source: src, Values: "replicas: 2\n", Params: []string{"image=nginx:1.25-alpine"}}, nil); err != nil {
