@@ -167,3 +167,24 @@ func TestCredentialIsTheShapeOfOne(t *testing.T) {
 		}
 	}
 }
+
+// Credential's rules each catch their credential and leave what only
+// looks like one: the findings of the code review of November 25, 2026,
+// by ID. Every secret here is a fake.
+func TestCredentialFindsTheReviewedForms(t *testing.T) {
+	for name, c := range map[string]struct {
+		in   string
+		want bool
+	}{
+		// scrub#1: an HTTP Basic header carries user:password in base64.
+		"#1 a basic header":              {`curl -H "Authorization: Basic Y2k6UGxhbnRlZFBhc3MtNzdReg==" https://registry.example.com/v2/`, true},
+		"#1 a short basic value":         {"basic Y2k6cHcxMjM0NQ==", true},
+		"#1 basic authentication, prose": {"Basic authentication sends the user and password in a header.", false},
+		"#1 basic of a placeholder":      {"Authorization: Basic dXNlcjokUEFTUw==", false},
+		"#1 basic of the word password":  {"Authorization: Basic dXNlcjpwYXNzd29yZA==", false},
+	} {
+		if got := Credential(c.in); got != c.want {
+			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
+		}
+	}
+}

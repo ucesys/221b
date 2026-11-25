@@ -6,6 +6,10 @@ What changed in each release of 221B, for people who use it and people who insta
 
 Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 
+### Fixed
+
+- **A test case's credential check finds a password in an HTTP Basic header** (AI-49, scrub#1): `Authorization: Basic <base64 of user:password>` passed the check; a Basic value that decodes to `user:password` with a password that is not a placeholder now fails it.
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".

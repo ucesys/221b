@@ -3,9 +3,12 @@
 package scrub
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"sigs.k8s.io/yaml"
 )
@@ -48,6 +51,8 @@ var (
 	}
 	// A bearer token written out.
 	reBearer = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9\-._~+/]{20,}=*)`)
+	// An HTTP Basic value: user:password in base64.
+	reBasic = regexp.MustCompile(`(?i)\bbasic[ \t]+([A-Za-z0-9+/]{4,}={0,2})`)
 	// A password in an address: scheme://user:password@host.
 	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>@]+)@`)
 	reDigit       = regexp.MustCompile(`[0-9]`)
@@ -60,7 +65,8 @@ var (
 // Credential says whether text carries a real credential's shape: a
 // private key's PEM block, a JSON Web Token, a token of a well-known
 // format, a bearer token written out (twenty characters or more, letters
-// and digits), or a password in an address that is not a placeholder.
+// and digits), an HTTP Basic value whose user:password has a password that
+// is not a placeholder, or a password in an address that is not one.
 // Words such as password or token, and key=value pairs, are not enough:
 // Text removes those from what tools return, erring towards too much,
 // while Credential is for what a model wrote, such as an answer, where
@@ -79,12 +85,33 @@ func Credential(s string) bool {
 			return true
 		}
 	}
+	for _, m := range reBasic.FindAllStringSubmatch(s, -1) {
+		if basicPassword(m[1]) {
+			return true
+		}
+	}
 	for _, m := range reURLPassword.FindAllStringSubmatch(s, -1) {
 		if !rePlaceholder.MatchString(m[1]) {
 			return true
 		}
 	}
 	return false
+}
+
+// basicPassword says whether an HTTP Basic value decodes to user:password
+// with a password that is not a placeholder.
+func basicPassword(v string) bool {
+	b, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		if b, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(v, "=")); err != nil {
+			return false
+		}
+	}
+	if !utf8.Valid(b) || strings.ContainsFunc(string(b), func(r rune) bool { return !unicode.IsPrint(r) }) {
+		return false
+	}
+	_, pw, ok := strings.Cut(string(b), ":")
+	return ok && pw != "" && !rePlaceholder.MatchString(pw)
 }
 
 // scrubbers find what looks like a credential in text that leaves for the
