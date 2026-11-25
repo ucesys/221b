@@ -144,6 +144,12 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 - **A save that failed at COMMIT left every replica on the old API server with the new token** (clusters review, finding 5). With a database, a connection's Secret is written before its row commits; a cancelled request or a failover then paired the old row with the new credential, and the token went to the old server. A connection's Secret is now marked with the server its credential was written for (annotation `221b.ucesys.com/server`), and a row is never paired with a Secret written for another server: a running connection keeps what it has, one that starts shows as failed until it is edited with its credential. A removal whose commit fails puts the deleted Secret back.
 - **After a rollback to 0.12 and an upgrade again, a connection made again under the same id paired the database's old server with the new token** (clusters review, finding 4). The upgrade dropped the record the older console wrote into the Secret without reading it, and the token went to the old server. A Secret whose record names another API server than the connection's row is now left whole, and the connection does not start until it is edited with its credential.
 
+### Security
+
+### Fixed
+
+- **One crafted Secret no longer puts the console into a crash loop** (kube#1). A Helm release record whose manifest holds a short Secret value that is not text (`data: {a: /w==}`) made the masking of its notes panic in the Secret cache, which ended the process at every start. Such values are now looked for without a pattern, and a record that cannot be read for any other reason loses its release on the Helm tab, logged by the Secret's name, instead of stopping the console.
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".

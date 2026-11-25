@@ -9,10 +9,13 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -186,11 +189,31 @@ func SummarizeSecret(obj any) (any, error) {
 		}
 	}
 	if s.Type == HelmSecretType {
-		if r, err := DecodeHelmRelease(s.Data["release"]); err == nil {
-			out.Release = r
-		}
+		out.Release = releaseOf(s)
 	}
 	return out, nil
+}
+
+// decodeRelease reads a release record; tests replace it.
+var decodeRelease = DecodeHelmRelease
+
+// releaseOf reads the release a Helm Secret records, or nil. It runs in the
+// Secret informer's transform, where a panic would end the process on
+// every relist: a record that cannot be read, however it fails, costs that
+// record its release and nothing else (kube#1). The log names the Secret,
+// never what it holds.
+func releaseOf(s *corev1.Secret) (r *HelmRelease) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Warn("a Helm release record could not be read; its release is not shown", "namespace", s.Namespace, "secret", s.Name)
+			r = nil
+		}
+	}()
+	r, err := decodeRelease(s.Data["release"])
+	if err != nil {
+		return nil
+	}
+	return r
 }
 
 // SummarizeConfigMap replaces a ConfigMap with its summary before it is
@@ -591,8 +614,29 @@ func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
 }
 
 // wholeWord says whether s holds word with no letter or digit against it.
+// Bytes that are not UTF-8 count as neither, so any value, text or not,
+// is looked for without a pattern that could fail to compile (kube#1).
 func wholeWord(s, word string) bool {
-	return regexp.MustCompile(`(?:^|[^\pL\pN])` + regexp.QuoteMeta(word) + `(?:$|[^\pL\pN])`).MatchString(s)
+	if word == "" {
+		return false
+	}
+	wordChar := func(r rune, size int) bool {
+		return size > 0 && r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsNumber(r))
+	}
+	for from := 0; from <= len(s)-len(word); {
+		i := strings.Index(s[from:], word)
+		if i < 0 {
+			return false
+		}
+		i += from
+		before, bs := utf8.DecodeLastRuneInString(s[:i])
+		after, as := utf8.DecodeRuneInString(s[i+len(word):])
+		if !wordChar(before, bs) && !wordChar(after, as) {
+			return true
+		}
+		from = i + 1
+	}
+	return false
 }
 
 // manifestSecrets lists the values of the Secrets a release's manifest
