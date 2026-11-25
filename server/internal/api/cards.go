@@ -281,6 +281,12 @@ func (s *Server) getProposal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postProposalApprove(w http.ResponseWriter, r *http.Request) {
+	// A change is approved with the groups the directory gives now, as in
+	// Watson's panel (RB-23, RB-37).
+	r, ok := s.rereadSession(w, r)
+	if !ok {
+		return
+	}
 	if !s.mayApproveCards(r) {
 		jsonError(w, http.StatusForbidden, "Approving proposed changes needs the approval permission (cases.approverRoles).")
 		return
