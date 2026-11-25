@@ -34,8 +34,11 @@ func TestParseRefusesValuesThatCannotWork(t *testing.T) {
 		`{"debugContainer":{"images":["gpu"]}}`:     `"gpu"`,
 		`{"nodeShell":{"profiles":["root"]}}`:       `"root"`,
 		`{"nodeShell":{"approval":"never"}}`:        "always or cluster",
-		`{"images":{"x":{"image":"a"}}}`:            "does not define",
-		`{"idleTimeout":"soon"}`:                    "not valid",
+		// SSH sessions follow the approval with node shells off (the
+		// toolbox review, finding 9).
+		`{"nodeShell":{"enabled":false,"approval":"Always"},"ssh":{"enabled":true}}`: "always or cluster",
+		`{"images":{"x":{"image":"a"}}}`:                                             "does not define",
+		`{"idleTimeout":"soon"}`:                                                     "not valid",
 	} {
 		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", in, err, want)

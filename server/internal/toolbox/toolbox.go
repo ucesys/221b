@@ -428,9 +428,11 @@ func (c Config) Check() error {
 				errs = append(errs, fmt.Sprintf("toolbox.nodeShell.profiles: %q is not general, netadmin or sysadmin", p))
 			}
 		}
-		if c.NodeShell.Approval != ApprovalAlways && c.NodeShell.Approval != ApprovalCluster {
-			errs = append(errs, "toolbox.nodeShell.approval is always or cluster")
-		}
+	}
+	// The approval rule governs SSH sessions too, which work with node
+	// shells off: a typo there dropped SSH's second SuperAdmin.
+	if c.NodeShell.Approval != ApprovalAlways && c.NodeShell.Approval != ApprovalCluster {
+		errs = append(errs, fmt.Sprintf("toolbox.nodeShell.approval is always or cluster, not %q (it applies to SSH sessions too)", c.NodeShell.Approval))
 	}
 	if c.SSH.Enabled {
 		if c.SSH.Port < 1 || c.SSH.Port > 65535 {
