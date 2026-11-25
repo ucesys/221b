@@ -985,3 +985,26 @@ current-context: c
 		t.Errorf("a token that expired since its backup: %v", err)
 	}
 }
+
+// Sweep: an edit of a kubeconfig connection that sent no API server (the
+// kubeconfig gives one) and no kubeconfig was saved with no server, so
+// every test of it failed at Address.
+func TestAKubeconfigEditWithoutAServerKeepsTheSavedOne(t *testing.T) {
+	_, srv := simServer(t)
+	m, ctx := started(t, clusters.NewMemoryStore())
+	spec := clusters.Spec{Name: "kc", Env: "development", Server: srv.URL, CA: "system", Auth: "kubeconfig", Mode: "read"}
+	_, err := m.Add(ctx, clusters.Draft{Spec: spec, Credential: clusters.Credential{Kubeconfig: kubeconfigFor(srv.URL, saToken("kc"))}})
+	must(t, err)
+	noServer := spec
+	noServer.Server = ""
+	r, err := m.TestDraft(ctx, "kc", clusters.Draft{Spec: noServer})
+	must(t, err)
+	if r.Steps[0].Tone == "err" {
+		t.Errorf("a test with the kubeconfig's server: %+v", r.Steps[0])
+	}
+	sum, err := m.Update(ctx, "kc", clusters.Draft{Spec: noServer})
+	must(t, err)
+	if sum.Server != srv.URL {
+		t.Fatalf("saved with server %q", sum.Server)
+	}
+}

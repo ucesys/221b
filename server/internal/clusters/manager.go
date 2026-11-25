@@ -776,6 +776,11 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		if orig.Unsettled != "" {
 			return Spec{}, nil, invalid(credField(spec.Auth), orig.Unsettled)
 		}
+		// No server given, where a kubeconfig may give it: the saved one,
+		// which came from it.
+		if spec.Server == "" {
+			spec.Server = orig.Server
+		}
 		if spec.Server != "" && serverOrigin(spec.Server) != serverOrigin(orig.Server) {
 			return Spec{}, nil, invalid(credField(spec.Auth), fmt.Sprintf("Give the credentials again for the new API server: the saved ones are kept for %s alone.", orig.Server))
 		}

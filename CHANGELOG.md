@@ -89,6 +89,8 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 
 ### Fixed
 
+- An edit of a kubeconfig connection sent through the API with no API server and no kubeconfig was saved with no server, and every test of it then failed at its address step (clusters review, sweep). The saved server, which came from the kubeconfig, is kept.
+
 - A connection restored from a backup was taken as the backup had it: its name, description and server untrimmed, and its credential unread (clusters review, sweep). A restore now trims them and reads the credential as an edit does: a kubeconfig that signs in through a plugin, refers to files or acts as another user, or a token that is none, is refused; a credential that expired since the backup is restored and shows as expired.
 
 - A connection restored from a backup without its secret was tested as if the backup's placeholder were its credential, and the placeholder was sent to the API server (clusters review, sweep). Its test now says the credential is not in the backup, and sends nothing in its place.
