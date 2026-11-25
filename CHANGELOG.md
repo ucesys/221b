@@ -6,6 +6,10 @@ What changed in each release of 221B, for people who use it and people who insta
 
 Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 
+### Upgrading
+
+- Nothing is migrated. **An AI test case's result can change at its next run**: an answer that writes a literal secret into a script or manifest fails the credential check again, and answers with ordinary placeholders pass ([docs/upgrading.md](docs/upgrading.md#0133)).
+
 ### Fixed
 
 - **A test case's credential check finds a password in an HTTP Basic header** (AI-49, scrub#1): `Authorization: Basic <base64 of user:password>` passed the check; a Basic value that decodes to `user:password` with a password that is not a placeholder now fails it.

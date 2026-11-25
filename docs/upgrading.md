@@ -56,6 +56,12 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories, and from 0.13.0 the session key) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.13.3
+
+- **Nothing is migrated, and nothing is to be done.** The fixes of the scrubber change two things you may notice:
+  - **An AI test case's result can change at its next run** (AI-49): an answer that writes a literal secret into a script or manifest (`--password '…'`, `--from-literal=…=…`, `DB_PASSWORD=…`, a Basic header) fails *carries no text that looks like a credential* again, as it did before 0.13.2, and answers with ordinary placeholders (`YOUR_DB_PASSWORD`, `sk-your-api-key-goes-here`) or a port and an `@` in an address now pass. Re-run an agent's tests to see where it stands.
+  - **Tool results read a little differently**: a scrubbed value that was quoted keeps its quotes (`"password":"[REDACTED]"`), so JSON stays JSON, and values that only looked secret (`--authorization-mode=Node,RBAC`, a pod named `payments-sk-worker-…`, the console's `"secretsRead":3`) are no longer redacted.
+
 ## 0.13.2 (2026-11-25)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.

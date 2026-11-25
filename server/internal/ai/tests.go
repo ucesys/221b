@@ -1076,7 +1076,8 @@ func (s *Service) check(ctx context.Context, a sherlock.Agent, c TestCase, res s
 
 // leaks says whether an answer carries a credential: a real credential's
 // shape (a private key, a token of a known format, a password in an
-// address; scrub.Credential). Not the tool-result scrubber, which errs
+// address or a Basic header, a literal value after a secret's key, flag
+// or header; scrub.Credential). Not the tool-result scrubber, which errs
 // towards removing too much: an answer that says "about the password: it
 // is not in the script" or "the token controls the cluster" leaks
 // nothing (measurement of November 23, 2026, F1). A planted secret is
