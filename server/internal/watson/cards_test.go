@@ -55,7 +55,11 @@ func TestADurableCardsChangeIsFingerprintedAndRunsAsItsApprover(t *testing.T) {
 	if !moved {
 		t.Fatal("the node changed and its fingerprint did not")
 	}
-	it, err := svc.RunApproved(cl, bob(), "kubectl cordon worker-002", "Proposal c1 by Troubleshooter", "Cordon worker-002", &first)
+	second, err := svc.Inspect(ctx, cl, "kubectl cordon worker-002", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err := svc.RunApproved(cl, bob(), "kubectl cordon worker-002", "Proposal c1 by Troubleshooter", "Cordon worker-002", &second)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -355,3 +355,85 @@ func TestFetchingAChartNeedsTheRightsOfManagingApplications(t *testing.T) {
 		t.Fatalf("an uninstall: %q", it.Reason)
 	}
 }
+
+// A durable card's deploy holds to the commit its card showed: a branch
+// that moved since gives another fingerprint, and its run is refused
+// rather than deploy the new head; its change runs with its guards (review
+// of November 24, 2026, finding 11).
+func TestADurableCardsDeployHoldsToItsCommit(t *testing.T) {
+	svc, cl, store := pinSetup(t, Options{})
+	repo := gitChart(t)
+	serveCommits(t, repo)
+	ctx := context.Background()
+	line := "helm install hello --git " + repo + " --path charts/web --ref master -n web"
+	proposed, err := svc.Inspect(ctx, cl, line, nil)
+	if err != nil || proposed.Fingerprint == "" {
+		t.Fatalf("%+v %v", proposed, err)
+	}
+	moveBranch(t, repo, "charts/web/values.yaml", "replicas: 0\nimage: nginx:bad\n")
+	if now, err := svc.Fingerprint(ctx, cl, line); err != nil || now.Fingerprint == proposed.Fingerprint {
+		t.Fatalf("the branch moved and the fingerprint did not: %v", err)
+	}
+	it, err := svc.RunApproved(cl, manager(alice()), line, "Agent proposal", "test", &proposed)
+	if err == nil {
+		done, _ := svc.WaitDone(ctx, it.ID)
+		t.Fatalf("ran: %s %s", done.Status, outputOf(svc, it.ID))
+	}
+	if _, _, err := store.Get(ctx, "local", "web", "hello"); err == nil {
+		t.Fatal("deployed")
+	}
+	// Proposed and approved as the branch is now, it deploys that commit,
+	// and its run holds to it with the card's guards.
+	again, err := svc.Inspect(ctx, cl, line, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err = svc.RunApproved(cl, manager(alice()), line, "Agent proposal", "test", &again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Get(it.ID); got.Plan == nil || got.Plan.pin == nil || got.Plan.pin.commit == "" || len(got.Plan.guards) == 0 {
+		t.Fatalf("plan %+v", got.Plan)
+	}
+	if done, _ := svc.WaitDone(ctx, it.ID); done.Status != StatusDone {
+		t.Fatalf("%s: %s", done.Status, outputOf(svc, it.ID))
+	}
+}
+
+// A durable kubectl change is checked against its objects when it starts:
+// one queued behind another change of its approver's, whose node changed
+// meanwhile, lapses instead of running.
+func TestADurableCardsChangeRunsWithItsGuards(t *testing.T) {
+	release := make(chan struct{})
+	svc, cl, s, srv, _ := setup(t, Options{TwoPerson: twoPeople, Run: blockedRun(release)})
+	defer close(release)
+	ctx := context.Background()
+	// Bob's change, approved by Alice, holds her queue.
+	held := svc.Submit(ctx, cl, bob(), "kubectl cordon worker-001", "typed", "", false)[0]
+	wait(t, svc, held.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(ctx, cl, alice(), held.ID); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, svc, held.ID, func(i Item) bool { return i.Status == StatusRunning })
+	line := "kubectl cordon worker-002"
+	in, err := svc.Inspect(ctx, cl, line, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err := svc.RunApproved(cl, alice(), line, "Agent proposal", "test", &in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(srv.URL+"/sim/nodes/worker-002/cordon", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	for i := 0; i < 500 && !s.Node("worker-002").Spec.Unschedulable; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	release <- struct{}{}
+	if done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusLapsed {
+		t.Fatalf("%s: %s", done.Status, done.Reason)
+	}
+}

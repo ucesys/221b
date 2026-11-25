@@ -108,18 +108,31 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 		}
 		out.Impact = withAlert(alert, asImpact)
 	}
-	parts := make([]string, 0, len(guards))
+	if out.Fingerprint, err = fingerprintOf(ctx, cs, c.Line, guards, w.pin); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// fingerprintOf is the digest of everything a change depends on: what its
+// guards read, with the console's account, and for a deploy the commit
+// and the values its card settled on, so a branch that moved or values
+// saved since give another fingerprint (HA-07).
+func fingerprintOf(ctx context.Context, cs *clients, line string, guards []guard, pin *appPin) (string, error) {
+	parts := make([]string, 0, len(guards)+1)
 	for _, g := range guards {
 		got, err := g.read(ctx, cs)
 		if err != nil {
-			return out, fmt.Errorf("Watson could not read %s: %w", g.what, err)
+			return "", fmt.Errorf("Watson could not read %s: %w", g.what, err)
 		}
 		parts = append(parts, g.what+"\x00"+got)
 	}
+	if pin != nil && pin.commit != "" {
+		parts = append(parts, "deploy\x00"+pin.src.String()+"\x00"+pin.commit+"\x00"+pin.values)
+	}
 	sort.Strings(parts)
-	sum := sha256.Sum256([]byte(c.Line + "\x00" + strings.Join(parts, "\x01")))
-	out.Fingerprint = hex.EncodeToString(sum[:16])
-	return out, nil
+	sum := sha256.Sum256([]byte(line + "\x00" + strings.Join(parts, "\x01")))
+	return hex.EncodeToString(sum[:16]), nil
 }
 
 // consoleView is a change's card worked out with the console's account:
@@ -198,7 +211,25 @@ func (s *Service) RunApproved(cl Cluster, approver Who, line, from, why string, 
 		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 		return it, r
 	}
-	p := &Plan{Ready: true}
+	// What was approved is what runs: the objects as the card's last check
+	// read them, and for a deploy the commit and values it showed. The
+	// guards hold the objects to that when the change starts, and the pin
+	// holds the deploy to it (P6-04, HA-07).
+	if inspected != nil && inspected.Fingerprint != "" {
+		fp, err := fingerprintOf(ctx, w.cs, c.Line, w.guards, w.pin)
+		if err != nil || fp != inspected.Fingerprint {
+			why := "what it acts on changed since its card was checked"
+			if err != nil {
+				why = err.Error()
+			}
+			r := refuse("changed", "Refused: %s, so it ran nothing. A fresh proposed change shows the state as it is.", why)
+			it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+			s.add(it)
+			s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+			return it, r
+		}
+	}
+	p := &Plan{Ready: true, Targets: w.targets, Impact: withAlert(w.alert, w.impact), Tone: w.tone, Alert: w.alert, guards: w.guards, pin: w.pin}
 	if inspected != nil {
 		p.Targets, p.Impact = inspected.Targets, inspected.Impact
 	}

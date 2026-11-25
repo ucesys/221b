@@ -602,7 +602,9 @@ func (a watsonAction) Apply(ctx context.Context, c cards.Card, i int, by cards.A
 	}
 	var plan *watson.Inspection
 	if i < len(c.Plans) {
-		plan = &watson.Inspection{Line: line, Targets: c.Plans[i].Targets, Impact: c.Plans[i].Impact}
+		// Its fingerprint too: Watson runs the change only if what it acts
+		// on, and a deploy's commit and values, are still as proposed.
+		plan = &watson.Inspection{Line: line, Targets: c.Plans[i].Targets, Impact: c.Plans[i].Impact, Fingerprint: c.Plans[i].Fingerprint}
 	}
 	// Run from the proposal (CF-62): its output shows in the drawer's
 	// Watson, and the proposal logs it.
