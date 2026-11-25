@@ -988,7 +988,7 @@ func claimDeleteImpact(ctx context.Context, cs *clients, c *corev1.PersistentVol
 				continue
 			}
 			for _, v := range p.Spec.Volumes {
-				if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == c.Name {
+				if claim, ok := kube.VolumeClaim(&p, v); ok && claim == c.Name {
 					users = append(users, p.Name)
 				}
 			}

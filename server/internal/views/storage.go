@@ -654,10 +654,10 @@ func (ix *storageIndex) storagePod(p *corev1.Pod, c *corev1.PersistentVolumeClai
 	status, tone, _ := podStatus(p, ix.now)
 	sp := StoragePod{Name: p.Name, Node: p.Spec.NodeName, Status: status, Tone: tone}
 	for _, v := range p.Spec.Volumes {
-		if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != c.Name {
+		if claim, ok := kube.VolumeClaim(p, v); !ok || claim != c.Name {
 			continue
 		}
-		sp.ReadOnly = v.PersistentVolumeClaim.ReadOnly
+		sp.ReadOnly = v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ReadOnly
 	mounts:
 		for _, ct := range append(append([]corev1.Container{}, p.Spec.InitContainers...), p.Spec.Containers...) {
 			for _, m := range ct.VolumeMounts {

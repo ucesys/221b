@@ -536,16 +536,9 @@ func countText(n int, one, many string) string {
 // the pod rather than the claim.
 var attachMount = regexp.MustCompile(`Attach|Mount`)
 
-// ClaimsOf names the volume claims a pod mounts.
-func ClaimsOf(p *corev1.Pod) []string {
-	var out []string
-	for _, v := range p.Spec.Volumes {
-		if v.PersistentVolumeClaim != nil {
-			out = append(out, v.PersistentVolumeClaim.ClaimName)
-		}
-	}
-	return out
-}
+// ClaimsOf names the volume claims a pod mounts, generic ephemeral
+// volumes' too (kube#11).
+func ClaimsOf(p *corev1.Pod) []string { return kube.PodClaims(p) }
 
 // volumeList is a list of volumes in a message, as in
 // `unmounted volumes=[data logs]`.
@@ -610,7 +603,7 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 		// Kubernetes names a volume as the pod does, or by the claim.
 		names := []string{c.Name}
 		for _, v := range p.Spec.Volumes {
-			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == c.Name {
+			if claim, ok := kube.VolumeClaim(p, v); ok && claim == c.Name {
 				names = append(names, v.Name)
 			}
 		}

@@ -502,11 +502,11 @@ func volumes(src Source, p *corev1.Pod) []Volume {
 			vol.Mounts = []Mount{}
 		}
 		vol.Type, vol.Source = volumeSource(v.VolumeSource)
-		if v.PersistentVolumeClaim != nil {
-			if pvc, ok := src.Object("persistentvolumeclaims", p.Namespace, v.PersistentVolumeClaim.ClaimName).(*corev1.PersistentVolumeClaim); ok {
+		if name, ok := kube.VolumeClaim(p, v); ok {
+			if pvc, ok := src.Object("persistentvolumeclaims", p.Namespace, name).(*corev1.PersistentVolumeClaim); ok {
 				vol.Claim = claimOf(pvc)
 			} else {
-				vol.Claim = &Claim{Name: v.PersistentVolumeClaim.ClaimName, Phase: "missing", AccessModes: []string{}}
+				vol.Claim = &Claim{Name: name, Phase: "missing", AccessModes: []string{}}
 			}
 		}
 		out = append(out, vol)

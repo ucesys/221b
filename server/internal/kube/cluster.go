@@ -1353,12 +1353,29 @@ func shortError(err error) string {
 }
 
 // podClaims names the volume claims a pod mounts.
-func podClaims(p *corev1.Pod) []string {
+func podClaims(p *corev1.Pod) []string { return PodClaims(p) }
+
+// PodClaims names the volume claims a pod mounts, generic ephemeral
+// volumes' too.
+func PodClaims(p *corev1.Pod) []string {
 	var out []string
 	for _, v := range p.Spec.Volumes {
-		if v.PersistentVolumeClaim != nil {
-			out = append(out, v.PersistentVolumeClaim.ClaimName)
+		if claim, ok := VolumeClaim(p, v); ok {
+			out = append(out, claim)
 		}
 	}
 	return out
+}
+
+// VolumeClaim names the claim a pod's volume mounts: a
+// PersistentVolumeClaim volume's, or the one Kubernetes makes for a
+// generic ephemeral volume, named <pod>-<volume> (kube#11).
+func VolumeClaim(p *corev1.Pod, v corev1.Volume) (string, bool) {
+	switch {
+	case v.PersistentVolumeClaim != nil:
+		return v.PersistentVolumeClaim.ClaimName, true
+	case v.Ephemeral != nil:
+		return p.Name + "-" + v.Name, true
+	}
+	return "", false
 }
