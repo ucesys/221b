@@ -211,6 +211,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A rollout undo card reads `--to-revision` as kubectl does** (P6-02; review of November 24, 2026): the card read it in base 10 and kubectl in base 0, so `--to-revision=010` was revision 10 on the card and 8 in the run; it is now read as kubectl reads it, and a revision that is not a number is refused.
 - **An object made after its card voids the card** (P6-04; review of November 24, 2026): a card that found an object absent (`There is no pod web/x`) set no guard on it, so if the object was created before the approval the change acted on it unseen. The card now lapses when such an object appears.
 - **The delete card says what `--force` does** (P6-04; review of November 24, 2026): it warned of an immediate removal for `--force --now`, which kubectl refuses, and said nothing for `--force` alone, which kubectl turns into an immediate deletion. It now follows kubectl: `--force` with no grace period or 0 removes the pod at once, and `--force` with a grace period (`--now` is one) or `--now` with `--grace-period` is said to be refused.
+- **A Viewer holds no standing approval** (R2-04; review of November 24, 2026): a Viewer could give *Approve all*, and under the two-person rule their grant was the second approval of other people's production cards, which then ran as the Viewer and failed, the card used up. The API refuses a grant to a person whose roles change nothing (a Viewer or SuperViewer), and a holder demoted to one loses it at the next card.
 
 ### Security
 

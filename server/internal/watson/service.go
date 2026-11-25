@@ -88,7 +88,11 @@ type Who struct {
 	// a record with the console's account, so the role is checked here,
 	// and Options.AppAccess asks about the namespace.
 	ManageApps bool
-	Audit      audit.Who
+	// ViewOnly is a person whose roles change nothing (a Viewer or a
+	// SuperViewer): a change approved by them runs as them and fails, so
+	// they hold no standing approval (R2-04).
+	ViewOnly bool
+	Audit    audit.Who
 	From       string
 }
 
@@ -661,6 +665,8 @@ func (s *Service) ApproveAll(cl Cluster, who Who, d time.Duration) (Grant, error
 		return Grant{}, fmt.Errorf("%w: %s is connected read-only", ErrGrant, cl.Name)
 	case who.Session == "":
 		return Grant{}, fmt.Errorf("%w: no session", ErrGrant)
+	case who.ViewOnly:
+		return Grant{}, fmt.Errorf("%w: your roles change nothing on %s, so a change you approved would fail", ErrGrant, cl.Name)
 	case d < time.Minute || d > max:
 		return Grant{}, fmt.Errorf("%w: between 1 and %s", ErrGrant, minutes(max))
 	}
@@ -803,6 +809,12 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 				continue
 			}
 			w = fresh
+		}
+		if w.ViewOnly {
+			// Their roles change nothing any more: what they approve would
+			// run as them and fail.
+			s.Revoke(cl, w)
+			continue
 		}
 		if _, err := s.Approve(ctx, cl, w, id); err == nil {
 			return

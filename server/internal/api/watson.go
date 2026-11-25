@@ -175,6 +175,9 @@ func (s *Server) whoOf(sess auth.Session, person kube.Person, from string) watso
 	w := watson.Who{Session: sess.StateID(), Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
 		ManageApps: s.opts.Auth == nil || sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin),
 		Audit:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: from}
+	// A Viewer or SuperViewer changes nothing: their roles bind them read
+	// only, so they hold no standing approval (R2-04).
+	w.ViewOnly = !w.ManageApps
 	if !w.Person.Nobody() {
 		w.User = sess.User.Username
 		if w.User == "" {

@@ -110,3 +110,33 @@ func TestTurningStandingApprovalsOffEndsTheGrants(t *testing.T) {
 		t.Fatalf("%d ends audited", ends)
 	}
 }
+
+// A person whose roles change nothing holds no standing approval: what
+// they approved would run as them and fail, a second person's approval
+// used up (review of November 24, 2026, cut by the cap: service.go:673).
+func TestAViewerHoldsNoStandingApproval(t *testing.T) {
+	var demoted atomic.Bool
+	svc, cl, _, _, _ := setup(t, Options{TwoPerson: twoPeople, ApproveAllMax: func(Cluster) time.Duration { return time.Hour }})
+	svc.SetReread(func(w Who) (Who, bool) {
+		w.ViewOnly = demoted.Load()
+		return w, true
+	})
+	viewer := alice()
+	viewer.ViewOnly = true
+	if _, err := svc.ApproveAll(cl, viewer, 10*time.Minute); err == nil {
+		t.Fatal("a Viewer was given a standing approval")
+	}
+	if _, err := svc.ApproveAll(cl, alice(), 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	demoted.Store(true)
+	it := svc.Submit(context.Background(), cl, bob(), "kubectl cordon worker-004", "typed", "", false)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	time.Sleep(300 * time.Millisecond)
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusPending {
+		t.Fatalf("approved by a Viewer's grant: %s", got.Status)
+	}
+	if _, ok := svc.Standing(cl, alice()); ok {
+		t.Fatal("the grant stands")
+	}
+}
