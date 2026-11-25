@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // Parameter limits (AU-06).
@@ -429,6 +430,34 @@ func (st *Store) SetVariablesFor(ctx context.Context, cluster, fleet string, fp 
 	return change(ctx, st, VariablesKey, maxVariablesBytes, func(rec *variablesRecord) error {
 		rec.nodesOwn()
 		rec.put(cluster, fleet, fp, nodes)
+		return nil
+	})
+}
+
+// SetVariablesFrom saves a fleet's variables as someone who read them as
+// before and changed them to next: what differs between the two (Items)
+// is set over the variables as they are now, and nothing else, as an
+// approved change is. A value, mark, ceiling or reboot time the save would
+// set that changed since it was read refuses it (ErrBusy), so a save from
+// a read gone stale (the 45 s Sherlock may take to weigh it) never undoes
+// what someone else saved or approved in between.
+func (st *Store) SetVariablesFrom(ctx context.Context, cluster, fleet string, before, next FleetVariables) error {
+	if err := ValidateVariables(next); err != nil {
+		return err
+	}
+	items := Items(before, next)
+	nodes := NamedNodes(before, next)
+	return change(ctx, st, VariablesKey, maxVariablesBytes, func(rec *variablesRecord) error {
+		rec.nodesOwn()
+		cur := View(rec.Clusters[cluster], fleet, nodes)
+		done, moved := weigh(cur, items)
+		switch {
+		case done:
+			return errNoChange
+		case len(moved) > 0:
+			return busyError(fmt.Sprintf("These variables changed since they were read (%s differ): read them again, and save from what they are now.", strings.Join(moved, ", ")))
+		}
+		rec.put(cluster, fleet, applyItems(cur, items), nodes)
 		return nil
 	})
 }

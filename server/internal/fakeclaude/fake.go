@@ -172,6 +172,14 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "invalid_request_error", msg)
 		return
 	}
+	if msg := checkCache(body); msg != "" {
+		apiError(w, 400, "invalid_request_error", msg)
+		return
+	}
+	if msg := checkEffort(body, r.Header.Get("anthropic-beta")); msg != "" {
+		apiError(w, 400, "invalid_request_error", msg)
+		return
+	}
 	question, round, results := where(req.Messages)
 	question, view := splitView(question)
 	if strings.Contains(strings.ToLower(question), "overloaded") {
@@ -225,6 +233,115 @@ func checkThinking(body []byte) string {
 	return ""
 }
 
+// checkCache holds a request to what the API asks of its cache_control
+// markers: four at most, the tools', the system blocks' and the messages'
+// together, and none on a thinking block or an empty text block.
+func checkCache(body []byte) string {
+	type marked struct {
+		Type         string          `json:"type"`
+		Text         *string         `json:"text"`
+		CacheControl json.RawMessage `json:"cache_control"`
+	}
+	var req struct {
+		Tools    []marked        `json:"tools"`
+		System   json.RawMessage `json:"system"`
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	n := 0
+	count := func(where string, bs []marked) string {
+		for i, b := range bs {
+			if len(b.CacheControl) == 0 || string(b.CacheControl) == "null" {
+				continue
+			}
+			n++
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				return fmt.Sprintf("%s.%d.%s.cache_control: Extra inputs are not permitted", where, i, b.Type)
+			}
+			if b.Type == "text" && (b.Text == nil || *b.Text == "") {
+				return fmt.Sprintf("%s.%d: cache_control cannot be set for empty text blocks", where, i)
+			}
+		}
+		return ""
+	}
+	if msg := count("tools", req.Tools); msg != "" {
+		return msg
+	}
+	var sys []marked
+	if json.Unmarshal(req.System, &sys) == nil {
+		if msg := count("system", sys); msg != "" {
+			return msg
+		}
+	}
+	for i, m := range req.Messages {
+		var bs []marked
+		if json.Unmarshal(m.Content, &bs) == nil {
+			if msg := count(fmt.Sprintf("messages.%d.content", i), bs); msg != "" {
+				return msg
+			}
+		}
+	}
+	if n > 4 {
+		return fmt.Sprintf("A maximum of 4 blocks with cache_control may be provided. Found %d.", n)
+	}
+	return ""
+}
+
+// classify is the fake classifier's word for a message: high for an
+// outage, an incident or production down; low for a lookup or a status;
+// medium otherwise.
+func classify(text string) string {
+	t := strings.ToLower(text)
+	switch {
+	case strings.Contains(t, "outage") || strings.Contains(t, "incident") || strings.Contains(t, "down") || strings.Contains(t, "root cause"):
+		return "high"
+	case strings.Contains(t, "list ") || strings.Contains(t, "status") || strings.Contains(t, "ready?") || strings.Contains(t, "what is"):
+		return "low"
+	}
+	return "medium"
+}
+
+// checkEffort holds a request to what the API asks of the effort
+// (phase-13.1-ai): output_config.effort one of the five levels, and a
+// system message's output_config only with the beta that allows it.
+func checkEffort(body []byte, betas string) string {
+	var req struct {
+		OutputConfig *struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+		Messages []struct {
+			Role         string          `json:"role"`
+			Content      json.RawMessage `json:"content"`
+			OutputConfig *struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	levels := map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	if req.OutputConfig != nil && !levels[req.OutputConfig.Effort] {
+		return "output_config.effort: Input should be 'low', 'medium', 'high', 'xhigh' or 'max'"
+	}
+	for i, m := range req.Messages {
+		if m.OutputConfig == nil {
+			continue
+		}
+		if !strings.Contains(betas, "mid-conversation-output-config-2026-07-01") {
+			return fmt.Sprintf("messages.%d.output_config: Extra inputs are not permitted", i)
+		}
+		if m.Role != "system" || string(m.Content) != "[]" || !levels[m.OutputConfig.Effort] {
+			return fmt.Sprintf("messages.%d: an effort change is a system message with empty content and a level", i)
+		}
+	}
+	return ""
+}
+
 // where reads the conversation: the question being answered, how many
 // tool rounds it has had, and the latest tool results.
 func where(msgs []message) (question string, round int, results []string) {
@@ -236,7 +353,9 @@ func where(msgs []message) (question string, round int, results []string) {
 		}
 		text := ""
 		for _, b := range m.Content {
-			if b.Type == "text" {
+			// The time a conversation sends after the question (AI-50) is
+			// not the question.
+			if b.Type == "text" && !reTime.MatchString(b.Text) {
 				text += b.Text
 			}
 		}
@@ -277,6 +396,13 @@ func splitView(q string) (question, view string) {
 	return strings.TrimSpace(q[:i] + q[i+j+len("</console-view>"):]), strings.TrimSpace(q[i+len("<console-view>") : i+j])
 }
 
+// reTime is the time a conversation sends after its question.
+var reTime = regexp.MustCompile(`^It is [A-Z][a-z]+day \d{1,2} [A-Z][a-z]+ \d{4}, \d\d:\d\d UTC\.$`)
+
+// HandedMark starts what a hand-over adds after its task: what the asker
+// knows already. The scripts read the task alone.
+const HandedMark = "\n\nWhat "
+
 // reChain is a scripted chain of hand-overs: [[chain troubleshooter,auditor]].
 var reChain = regexp.MustCompile(`\[\[chain ([a-zA-Z,]*)\]\]`)
 
@@ -301,38 +427,66 @@ func scripted(question, view string, round int, results []string) reply {
 	}
 	// A chain of hand-overs (Phase 12): [[chain a,b,c]] hands the rest of
 	// the chain to a, which hands it to b, and so on; the last one answers.
+	// What the question says beside the chain goes along with it, so the
+	// last one may call the tools it scripts: "[[chain troubleshooter]]
+	// [[get_pod {…}]]" has the Troubleshooter call get_pod.
 	if m := reChain.FindStringSubmatch(question); m != nil {
 		agents := strings.Split(m[1], ",")
-		if agents[0] == "" {
+		along := ""
+		if loc := reChain.FindStringIndex(question); loc != nil {
+			along = strings.TrimSpace(question[loc[1]:])
+			if i := strings.Index(along, HandedMark); i >= 0 {
+				along = strings.TrimSpace(along[:i])
+			}
+		}
+		switch {
+		case agents[0] == "" && reDirective.MatchString(along):
+			question = along
+		case agents[0] == "":
 			return reply{text: []string{"End of the chain."}}
-		}
-		if round == 0 {
+		case round == 0:
 			rest := strings.Join(agents[1:], ",")
-			return reply{text: []string{"Asking " + agents[0] + "."}, tool: "hand_over", input: map[string]any{"agent": agents[0], "task": "[[chain " + rest + "]]", "context": "a test chain"}}
+			task := strings.TrimSpace("[[chain " + rest + "]] " + along)
+			if along == "" {
+				task = "[[chain " + rest + "]]"
+			}
+			return reply{text: []string{"Asking " + agents[0] + "."}, tool: "hand_over", input: map[string]any{"agent": agents[0], "task": task, "context": "a test chain"}}
+		default:
+			return reply{text: []string{"Chain: " + summarize(last)}}
 		}
-		return reply{text: []string{"Chain: " + summarize(last)}}
 	}
 	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
 		// [[sleep 2000]] waits before the next call, as a slow model would.
+		// [[say {"text":"…"}]] is the text the round of the next call
+		// writes before it, in place of "Step N.".
 		type call struct {
-			tool, input string
-			pause       time.Duration
+			tool, input, say string
+			pause            time.Duration
 		}
 		var calls []call
 		var pause time.Duration
+		say := ""
 		for _, c := range found {
 			if c[1] == "sleep" {
 				continue
 			}
-			calls = append(calls, call{tool: c[1], input: c[2], pause: pause})
-			pause = 0
+			if c[1] == "say" {
+				var v struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal([]byte(c[2]), &v)
+				say = v.Text
+				continue
+			}
+			calls = append(calls, call{tool: c[1], input: c[2], say: say, pause: pause})
+			pause, say = 0, ""
 		}
 		for _, c := range regexp.MustCompile(`\[\[sleep (\d+)\]\]`).FindAllStringSubmatchIndex(question, -1) {
 			ms, _ := strconv.Atoi(question[c[2]:c[3]])
 			// The pause goes before the first call after it.
 			before := 0
 			for _, d := range reDirective.FindAllStringSubmatchIndex(question[:c[0]], -1) {
-				if question[d[2]:d[3]] != "sleep" {
+				if name := question[d[2]:d[3]]; name != "sleep" && name != "say" {
 					before++
 				}
 			}
@@ -348,7 +502,11 @@ func scripted(question, view string, round int, results []string) reply {
 			if c.input != "" {
 				_ = json.Unmarshal([]byte(c.input), &input)
 			}
-			return reply{text: []string{fmt.Sprintf("Step %d.", round+1)}, tool: c.tool, input: input, pause: c.pause}
+			text := fmt.Sprintf("Step %d.", round+1)
+			if c.say != "" {
+				text = c.say
+			}
+			return reply{text: []string{text}, tool: c.tool, input: input, pause: c.pause}
 		}
 		return reply{text: []string{uiSummary(last)}, pause: pause}
 	}
@@ -911,6 +1069,23 @@ func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
 			Content    *string `json:"content"`
 			ToolCallID string  `json:"tool_call_id"`
 		} `json:"messages"`
+		StructuredOutputs *struct {
+			Choice []string `json:"choice"`
+		} `json:"structured_outputs"`
+	}
+	// Auto's classifier (phase-13.1-ai): one word of the choices, not
+	// streamed, by what the message says.
+	if err := json.Unmarshal(body, &req); err == nil && req.StructuredOutputs != nil && !req.Stream && len(req.Messages) > 0 {
+		last := ""
+		if c := req.Messages[len(req.Messages)-1].Content; c != nil {
+			last = *c
+		}
+		word := classify(last)
+		w.Header().Set("Content-Type", "application/json")
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": word}}},
+			"usage": map[string]int{"prompt_tokens": 300 + len(last)/4, "completion_tokens": 1}})
+		w.Write(b)
+		return
 	}
 	if err := json.Unmarshal(body, &req); err != nil || len(req.Messages) == 0 || !req.Stream {
 		apiError(w, 400, "invalid_request_error", "messages and stream are required")

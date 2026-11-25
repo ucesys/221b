@@ -74,6 +74,17 @@ type Msg struct {
 	// (Phase 12); Hands are the parts it handed to other agents.
 	Agent string  `json:"agent,omitempty"`
 	Hands []*Hand `json:"hands,omitempty"`
+	// --- Effort and Auto (phase-13.1-ai, AI-48) ---
+	// Effort is the effort the answer ran at, "" for its model's default.
+	// Under Auto, PickBy says how it and the model were picked (classifier
+	// or fixed), PickWhy why, PickCostUSD what the classifier's call cost,
+	// and MovedUpFrom the model this message moved the conversation up
+	// from, when it did.
+	Effort      string  `json:"effort,omitempty"`
+	PickBy      string  `json:"pickBy,omitempty"`
+	PickWhy     string  `json:"pickWhy,omitempty"`
+	PickCostUSD float64 `json:"pickCostUSD,omitempty"`
+	MovedUpFrom string  `json:"movedUpFrom,omitempty"`
 }
 
 // Key names a conversation: one per session and cluster.
@@ -526,7 +537,7 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	}
 	c.msgs = append(c.msgs, question)
 	c.seq++
-	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: a.Model}
+	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: a.Model, Effort: a.Effort}
 	if a.ID != SherlockID {
 		ans.Agent = a.ID
 	}
@@ -619,12 +630,17 @@ func (s *Service) CompleteMeasured(ctx context.Context, agent string, who audit.
 		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
 		return Completion{}, err
 	}
+	// Auto picks no word for one request: the defaults (AI-44).
+	if a.Auto != nil {
+		ch := a.Auto.Choose(ctx, ChooseInput{Single: true})
+		applyChoice(&a, ch)
+	}
 	blocks := []Block{{Type: "text", Text: system}}
 	if s.opts.Agent != nil && strings.TrimSpace(a.Instructions) != "" {
 		blocks = []Block{{Type: "text", Text: a.Instructions}, {Type: "text", Text: system}}
 	}
 	req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: blocks,
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Known(scrub.Text(text), a.Secrets)}}}}}
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Known(scrub.Text(text), a.Secrets)}}}}, OutputConfig: topEffort(&a)}
 	resp, err := s.clientOf(&a).Stream(ctx, req, func(Delta) {})
 	cost := a.Price.Cost(resp.Usage)
 	s.opts.Ledger.AddFor(context.Background(), a.ID, a.Provider, cost, true)
@@ -728,6 +744,16 @@ func (s *Service) Drain(ctx context.Context, settle time.Duration) {
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.
 func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, a Agent) {
+	// Under Auto the effort goes as a system message after each question
+	// (pick), never at the top level, whose change would cost the cache.
+	auto := a.Auto != nil
+	if auto {
+		s.pick(ctx, c, ans, q, &a)
+	}
+	top := topEffort(&a)
+	if auto {
+		top = nil
+	}
 	model := a.Price
 	client := s.clientOf(&a)
 	q.agent = &a
@@ -750,14 +776,28 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 	if !a.Compact {
 		defs = append(defs, uiDefs(q.ViewChanges && a.ID == SherlockID)...)
 	}
-	if n := len(defs); n > 0 {
-		defs = append([]ToolDef(nil), defs...)
-		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
-	}
+	// The tools carry no breakpoint of their own in a conversation: they
+	// come first, so the system blocks' breakpoints cache them too, and
+	// the history takes the two left (withHistoryCache, AI-50).
 	if q.Commands == "" {
 		q.Commands = s.opts.Commands
 	}
 	system := systemPrompt(q, s.opts.Now())
+	// The time goes with the question, not in the system blocks: there it
+	// changed the prefix every minute, and the history after it could
+	// never be read from the cache at the next turn (AI-50).
+	if n := len(system); n > 2 {
+		now := system[n-1]
+		system = system[:n-1]
+		c.mu.Lock()
+		if k := len(c.starts); k > 0 && c.starts[k-1] < len(c.history) && c.history[c.starts[k-1]].Role == "user" {
+			at := c.starts[k-1]
+			m := c.history[at]
+			m.Content = append(append([]Block(nil), m.Content...), now)
+			c.history[at] = m
+		}
+		c.mu.Unlock()
+	}
 	first := func() {
 		if ans.FirstAt == nil {
 			t := s.opts.Now()
@@ -839,6 +879,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		s.record(q, a.Model, tools, total, cost, outcome, detail)
 	}()
 
+	// lead is the text written before view calls alone (withLead).
+	lead := ""
 	for round := 0; ; round++ {
 		err := ch.stop
 		if err == nil {
@@ -859,7 +901,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		c.mu.Lock()
 		s.trimLocked(c)
-		req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs}
+		turn := -1
+		if k := len(c.starts); k > 0 {
+			turn = c.starts[k-1]
+		}
+		req := withHistoryCache(Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs, OutputConfig: top, Agent: a.ID}, turn)
 		c.mu.Unlock()
 		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder
@@ -904,6 +950,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			}
 		}
 		if resp.StopReason != "tool_use" || len(calls) == 0 {
+			ans.Text = withLead(lead, ans.Text)
 			if resp.StopReason == "max_tokens" {
 				ans.Text = strings.TrimSpace(ans.Text) + "\n\n(The answer was cut off at its length limit.)"
 			}
@@ -914,6 +961,19 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		// Text before a tool call is the model thinking aloud: it stays in
 		// the history, and on screen as the note until the next round
 		// speaks; never in the answer.
+		// But text before view calls alone is kept as the answer's lead: a
+		// model that has written its answer and then opens a view answers
+		// after it with a line about the view only (F6, AI-51).
+		onlyUI := true
+		for _, b := range calls {
+			onlyUI = onlyUI && IsUITool(b.Name)
+		}
+		switch {
+		case !onlyUI:
+			lead = ""
+		case strings.TrimSpace(ans.Text) != "":
+			lead = strings.TrimSpace(strings.TrimSpace(lead) + "\n\n" + strings.TrimSpace(ans.Text))
+		}
 		if ans.Text != "" {
 			ans.Note, ans.Text = ans.Text, ""
 		}
@@ -965,6 +1025,36 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.history = append(c.history, Message{Role: "user", Content: results})
 		c.mu.Unlock()
 	}
+}
+
+// pick is Auto's pick for a conversation's message (AI-44, AI-45): the
+// model the conversation started on with Auto, moved up once at most, and
+// the effort for this message, sent as an empty system message after it
+// when it changes, so that the prompt cache holds. It is kept on the
+// answer with why and what the classifier's call cost.
+func (s *Service) pick(ctx context.Context, c *Conversation, ans *Msg, q Question, a *Agent) {
+	in := ChooseInput{Text: q.Text, DayShare: DayShare(s.opts.Settings().Caps, s.opts.Ledger.Now(ctx), a)}
+	c.mu.Lock()
+	for _, m := range c.msgs {
+		if m == ans || m.Role != "sherlock" || m.PickBy == "" || m.Model == "" || (m.Agent != "" && m.Agent != a.ID) || (m.Agent == "" && a.ID != SherlockID) {
+			continue
+		}
+		in.Model = m.Model
+		in.MovedUp = in.MovedUp || m.MovedUpFrom != ""
+	}
+	c.mu.Unlock()
+	ch := a.Auto.Choose(ctx, in)
+	if ch.CostUSD > 0 {
+		s.opts.Ledger.AddFor(context.Background(), a.ID, ch.Provider, ch.CostUSD, false)
+	}
+	applyChoice(a, ch)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ans.Model, ans.Effort, ans.PickBy, ans.PickWhy, ans.PickCostUSD, ans.MovedUpFrom = a.Model, a.Effort, ch.By, ch.Why, ch.CostUSD, ch.MovedUpFrom
+	if a.Effort != "" && a.Effort != EffortInForce(Request{Messages: c.history}) {
+		c.history = append(c.history, EffortMessage(a.Effort))
+	}
+	c.changedLocked()
 }
 
 func (s *Service) secrets() []string {
@@ -1105,6 +1195,24 @@ func newID() string {
 func answerOr(text, note string) string {
 	if strings.TrimSpace(text) == "" {
 		return note
+	}
+	return text
+}
+
+// withLead is the answer of a conversation whose model wrote text before
+// it called the view tools alone (F6, AI-51): that text, then the last
+// round's, when the last round's is shorter, as a line about the view
+// after the answer is; the last round's alone when it is as long, as a
+// full answer after a line such as "Opening the nodes." is.
+func withLead(lead, text string) string {
+	t := strings.TrimSpace(text)
+	switch {
+	case lead == "":
+		return text
+	case t == "":
+		return lead
+	case len(t) < len(lead):
+		return lead + "\n\n" + t
 	}
 	return text
 }

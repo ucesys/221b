@@ -295,8 +295,8 @@ func (p *PGSessions) Get(ctx context.Context, key string) ([]byte, bool, error) 
 // Put writes a session's record as its row: it makes the row when there
 // is none and replace, given nil, says so, and changes it when replace,
 // given the record as the row has it now (the row is locked meanwhile),
-// says so. It reports whether it wrote. A change to anything but the last
-// activity is announced to the other replicas.
+// says so. It reports whether it wrote. A new row, and a change to anything
+// but the last activity, is announced to the other replicas.
 func (p *PGSessions) Put(ctx context.Context, key string, b []byte, replace func(current []byte) bool) (bool, error) {
 	next, err := rowOfRecord(key, b)
 	if err != nil {
@@ -317,13 +317,16 @@ func (p *PGSessions) Put(ctx context.Context, key string, b []byte, replace func
 			if _, err := tx.Exec(ctx, sessionInsertSQL, db.Fields(&next)...); err != nil {
 				return err
 			}
-			if next.Method == endedMethod {
-				// The ending of a signed session that was never exchanged:
-				// the replicas that looked for it a moment ago and found
-				// nothing must not go on answering from that.
-				if err := p.d.Notify(ctx, tx, sessionsTopic); err != nil {
-					return err
-				}
+			// A new row is announced: the replicas that looked for its key a
+			// moment ago and found nothing must not go on answering from
+			// that. That is the ending of a signed session that was never
+			// exchanged, and the stored session a signed one is exchanged
+			// for, whose key every replica shown the cookie looks up
+			// (exchangeID); a sign-in's random key was looked up by nobody,
+			// and sign-ins are rare enough that telling them apart is not
+			// worth it.
+			if err := p.d.Notify(ctx, tx, sessionsTopic); err != nil {
+				return err
 			}
 		case err != nil:
 			return err
@@ -548,7 +551,10 @@ type AfterRollback struct {
 // with a notice to every replica; the rows that say a signed session was
 // ended (DB-65) stay, so it stays ended. It is done once for a given
 // newest sign, recorded in imports under rollbackPrefix and the sign's
-// time; a later rollback, with a newer sign, ends them again. It reads
+// time; a later rollback, with a newer sign, ends them again, but a newer
+// sign within RollbackGrace of the last one ended for is the same roll
+// forward (a replica of the release before not replaced yet) and ends
+// nothing again. It reads
 // the Secrets' records by key, as SessionsToEmpty does, and must be given
 // them before they are emptied. An error ends nothing.
 func EndAfterRollback(ctx context.Context, d *db.DB, recs map[string][]byte) (AfterRollback, error) {
@@ -591,9 +597,13 @@ func EndAfterRollback(ctx context.Context, d *db.DB, recs map[string][]byte) (Af
 		}
 		var done string
 		before := false
+		var last time.Time
 		if _, err := pgx.ForEachRow(rows, []any{&done}, func() error {
-			if t, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(done, rollbackPrefix)); err == nil && !t.Before(newest.UTC()) {
-				before = true
+			if t, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(done, rollbackPrefix)); err == nil {
+				before = before || !t.Before(newest.UTC())
+				if t.After(last) {
+					last = t
+				}
 			}
 			return nil
 		}); err != nil {
@@ -601,6 +611,15 @@ func EndAfterRollback(ctx context.Context, d *db.DB, recs map[string][]byte) (Af
 		}
 		if before {
 			return nil
+		}
+		if !last.IsZero() && !newest.After(last.Add(RollbackGrace)) {
+			// The same roll forward: a replica of the release before, not
+			// replaced yet, signed someone in a moment after the sign the
+			// ending was done for. What was from before the rollback was
+			// ended then; the sessions since are the upgraded replicas'.
+			// The newer sign is recorded, and nothing is ended again.
+			_, err := tx.Exec(ctx, "INSERT INTO imports (import_id, source, record_count) VALUES ($1, $2, 0)", id, "secret")
+			return err
 		}
 		tag, err := tx.Exec(ctx, "DELETE FROM auth_sessions WHERE method <> $1", endedMethod)
 		if err != nil {

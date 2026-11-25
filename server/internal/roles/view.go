@@ -1,6 +1,9 @@
 package roles
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"sort"
 	"strings"
@@ -34,19 +37,31 @@ type Binding struct {
 type BoundSubject struct {
 	Kind string // User, Group or ServiceAccount
 	Name string
+	// Namespace is a ServiceAccount's own namespace.
+	Namespace string
 }
 
-// Description is what a role is for, in a line.
-func Description(id ID) string {
+// Description is what a role is for, in a line, under its definition and
+// the options in use (rbac.roles.admin.exec, secrets.read).
+func Description(id ID, t Template, o Options) string {
 	switch id {
 	case SuperAdmin:
+		if t == ReadOnly {
+			return "Reads everything, Secrets included; connections, settings and users in 221B"
+		}
 		return "Everything, including connections, settings and users"
 	case SuperViewer:
 		return "Reads everything except Secrets"
 	case Admin:
+		if t == ReadOnly {
+			return "Viewer's reads in the bound namespaces, and no change"
+		}
 		return "Viewer plus the namespaced changes Watson supports"
 	}
-	return "Reads the namespaced kinds; Secrets as keys and sizes"
+	if o.Secrets {
+		return "Reads the namespaced kinds; Secrets as keys and sizes"
+	}
+	return "Reads the namespaced kinds; no Secrets"
 }
 
 // Scope is where a role applies.
@@ -57,8 +72,9 @@ func Scope(id ID) string {
 	return "Bound namespaces"
 }
 
-// Can lists what a role allows, in words, for its definition.
-func Can(id ID, t Template) []string {
+// Can lists what a role allows, in words, for its definition and the
+// options in use: the lines follow the rules Definition gives.
+func Can(id ID, t Template, o Options) []string {
 	switch id {
 	case SuperAdmin:
 		if t == ReadOnly {
@@ -71,13 +87,21 @@ func Can(id ID, t Template) []string {
 		if t == ReadOnly {
 			return []string{"Read every shown kind in the bound namespaces"}
 		}
-		return []string{"Read every shown kind in the bound namespaces", "Scale, restart, roll back", "Delete a pod", "Label and annotate", "Roll back a Helm release"}
+		out := []string{"Read every shown kind in the bound namespaces", "Scale, restart, roll back", "Delete a pod", "Label and annotate", "Forward a port"}
+		if o.Secrets {
+			out = append(out, "Roll back a Helm release", "Change and delete a Secret")
+		}
+		if o.Exec {
+			out = append(out, "Open a shell or run a command in a pod", "Start a debug pod")
+		}
+		return out
 	}
 	return []string{"Read every shown kind in the bound namespaces"}
 }
 
-// Cannot lists what a role does not allow, in words.
-func Cannot(id ID, t Template) []string {
+// Cannot lists what a role does not allow, in words, for its definition
+// and the options in use.
+func Cannot(id ID, t Template, o Options) []string {
 	switch id {
 	case SuperAdmin:
 		if t == ReadOnly {
@@ -90,7 +114,17 @@ func Cannot(id ID, t Template) []string {
 		if t == ReadOnly {
 			return []string{"Change anything"}
 		}
-		return []string{"Cordon or drain nodes", "Change roles or bindings", "Open a shell in a pod", "Act outside the bound namespaces"}
+		out := []string{"Cordon or drain nodes", "Change roles or bindings"}
+		if !o.Exec {
+			out = append(out, "Open a shell in a pod, or start a debug pod")
+		}
+		if !o.Secrets {
+			out = append(out, "Read Secrets, or roll back a Helm release")
+		}
+		return append(out, "Act outside the bound namespaces")
+	}
+	if !o.Secrets {
+		return []string{"Change anything", "Read Secrets"}
 	}
 	return []string{"Change anything"}
 }
@@ -101,9 +135,16 @@ type SubjectRow struct {
 	Name       string   `json:"name"`
 	Source     string   `json:"source"`
 	Namespaces []string `json:"namespaces"`
-	Members    int      `json:"members,omitempty"`
-	Managed    bool     `json:"managed"`
-	Orphaned   bool     `json:"orphaned,omitempty"`
+	// ClusterWide says a ClusterRoleBinding binds the subject: the role in
+	// every namespace, whatever Namespaces also lists.
+	ClusterWide bool `json:"clusterWide,omitempty"`
+	// AccountNamespace is a ServiceAccount's own namespace: two accounts of
+	// one name in two namespaces are two subjects.
+	AccountNamespace string `json:"accountNamespace,omitempty"`
+	// Members counts a local group's members, 0 included; nil for others.
+	Members  *int `json:"members,omitempty"`
+	Managed  bool `json:"managed"`
+	Orphaned bool `json:"orphaned,omitempty"`
 }
 
 // Holders counts the people and groups 221B holds a super role for.
@@ -124,7 +165,9 @@ type RoleRow struct {
 	Can         []string     `json:"can"`
 	Cannot      []string     `json:"cannot"`
 	Subjects    []SubjectRow `json:"subjects"`
-	Holders     Holders      `json:"holders"`
+	// Holders is sent to a SuperAdmin alone (RB-42); nil otherwise, so a
+	// count nobody showed is not read as none.
+	Holders *Holders `json:"holders,omitempty"`
 }
 
 // DefinitionsOf names the definitions in use.
@@ -145,9 +188,12 @@ type RolesResponse struct {
 // RolesInput is what the Roles page is built from.
 type RolesInput struct {
 	Templates Templates
-	Deployed  map[ID]Deployed
-	Bindings  []Binding
-	Prefixes  Prefixes
+	// Options are the ones in use (secrets.read, rbac.roles.admin.exec), for
+	// what each role's lines say.
+	Options  Options
+	Deployed map[ID]Deployed
+	Bindings []Binding
+	Prefixes Prefixes
 	// Visible is false when the person may not list RoleBindings.
 	Visible bool
 	// Members counts the users in a local group; Exists says whether a local
@@ -159,12 +205,16 @@ type RolesInput struct {
 }
 
 // sourceOf says where a bound name comes from, by its prefix, and the name
-// without it (RB-15).
-func (in RolesInput) sourceOf(kind, name string) (string, string) {
+// without it (RB-15): "221b" for the reserved groups 221B adds (RB-05,
+// RB-07), and "oidc" for a name the chart bound (managed) that carries no
+// local or directory prefix when OIDC has none, as by default.
+func (in RolesInput) sourceOf(kind, name string, managed bool) (string, string) {
 	p := in.Prefixes
 	switch {
 	case kind == "ServiceAccount":
 		return "other", name
+	case kind == "Group" && strings.HasPrefix(name, "221b:"):
+		return "221b", name
 	case p.Local != "" && strings.HasPrefix(name, p.Local):
 		return string(Local), strings.TrimPrefix(name, p.Local)
 	case p.LDAP != "" && strings.HasPrefix(name, p.LDAP):
@@ -176,6 +226,9 @@ func (in RolesInput) sourceOf(kind, name string) (string, string) {
 	}
 	if oidc != "" && strings.HasPrefix(name, oidc) {
 		return string(OIDC), strings.TrimPrefix(name, oidc)
+	}
+	if oidc == "" && managed && !strings.HasPrefix(name, "system:") {
+		return string(OIDC), name
 	}
 	return "other", name
 }
@@ -190,15 +243,19 @@ func BuildRoles(in RolesInput) RolesResponse {
 		if !dep.Present {
 			missing++
 		}
-		row := RoleRow{ID: id, Name: id.Name(), Description: Description(id), Scope: Scope(id), Definition: t, ClusterRole: id.ClusterRole(), Present: dep.Present,
-			Can: Can(id, t), Cannot: Cannot(id, t), Subjects: []SubjectRow{}, Holders: in.Holders[id]}
+		row := RoleRow{ID: id, Name: id.Name(), Description: Description(id, t, in.Options), Scope: Scope(id), Definition: t, ClusterRole: id.ClusterRole(), Present: dep.Present,
+			Can: Can(id, t, in.Options), Cannot: Cannot(id, t, in.Options), Subjects: []SubjectRow{}}
+		if in.Holders != nil {
+			h := in.Holders[id]
+			row.Holders = &h
+		}
 		if in.Visible {
 			row.Subjects = in.subjects(id)
 		}
 		out.Roles = append(out.Roles, row)
 	}
 	if missing == len(All) {
-		out.Message = "The four 221B roles are not on this cluster, so people see an empty console here. Download the roles as YAML from this page and apply them, or install the chart on this cluster."
+		out.Message = "The four 221B roles are not on this cluster, so people see an empty console here. A SuperAdmin can download the roles as YAML from this page and apply them, or install the chart on this cluster."
 	} else if missing > 0 {
 		out.Message = "Some of the 221B roles are missing on this cluster; the Permissions page names them."
 	}
@@ -206,7 +263,7 @@ func BuildRoles(in RolesInput) RolesResponse {
 }
 
 func (in RolesInput) subjects(id ID) []SubjectRow {
-	type key struct{ kind, name string }
+	type key struct{ kind, ns, name string }
 	rows := map[key]*SubjectRow{}
 	var order []key
 	for _, b := range in.Bindings {
@@ -214,13 +271,17 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 			continue
 		}
 		for _, s := range b.Subjects {
-			src, name := in.sourceOf(s.Kind, s.Name)
-			k := key{s.Kind, s.Name}
+			src, name := in.sourceOf(s.Kind, s.Name, b.Managed)
+			k := key{s.Kind, "", s.Name}
+			if s.Kind == "ServiceAccount" {
+				k.ns = s.Namespace
+			}
 			r, ok := rows[k]
 			if !ok {
-				r = &SubjectRow{Kind: s.Kind, Name: name, Source: src, Namespaces: []string{}, Managed: b.Managed}
+				r = &SubjectRow{Kind: s.Kind, Name: name, Source: src, Namespaces: []string{}, Managed: b.Managed, AccountNamespace: k.ns}
 				if src == string(Local) && s.Kind == "Group" && in.Members != nil {
-					r.Members = in.Members(name)
+					n := in.Members(name)
+					r.Members = &n
 				}
 				if src == string(Local) && s.Kind == "User" && in.Exists != nil && !in.Exists(name) {
 					r.Orphaned = true
@@ -229,6 +290,9 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 				order = append(order, k)
 			}
 			r.Managed = r.Managed && b.Managed
+			if b.Namespace == "" {
+				r.ClusterWide = true
+			}
 			if b.Namespace != "" && !slices.Contains(r.Namespaces, b.Namespace) {
 				r.Namespaces = append(r.Namespaces, b.Namespace)
 			}
@@ -243,7 +307,15 @@ func (in RolesInput) subjects(id ID) []SubjectRow {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		// A local and a directory "ops" show as one name: their source
+		// orders them, so the page does not reorder between polls.
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].AccountNamespace < out[j].AccountNamespace
 	})
 	return out
 }
@@ -284,6 +356,12 @@ type Drift struct {
 	// More says that some role allows more than the shipped one.
 	More      bool      `json:"-"`
 	CheckedAt time.Time `json:"-"`
+	// Of fingerprints the connection the roles were read through (what it
+	// connects to and with): a verdict of another is not this one's.
+	Of string `json:"-"`
+	// Stamp fingerprints the roles as they were read, so a change to one
+	// is seen without comparing again (RB-36).
+	Stamp string `json:"-"`
 }
 
 // PermissionsResponse is the Permissions page.
@@ -297,12 +375,18 @@ type PermissionsResponse struct {
 
 // permRules turns rules into rows with the scope they apply in.
 func permRules(id ID, rules []Rule) []PermRule {
-	var out []PermRule
-	for _, r := range Normalized(rules) {
-		flags := r.Flags()
-		if flags == nil {
-			flags = []string{}
+	// Never nil: a role with no rules is an empty list on the page, not null.
+	out := []PermRule{}
+	// What a row is flagged for is worked out for that row alone, from the
+	// rule narrowed to its group and resource: a rule that lists secrets
+	// among 27 kinds flags the secrets row, not the other 26.
+	flagsOf := func(r Rule) []string {
+		if f := r.Flags(); f != nil {
+			return f
 		}
+		return []string{}
+	}
+	for _, r := range Normalized(rules) {
 		scope := "bound"
 		if id.Super() {
 			scope = "all"
@@ -312,6 +396,7 @@ func permRules(id ID, rules []Rule) []PermRule {
 			kind = "write"
 		}
 		for _, u := range r.NonResourceURLs {
+			flags := flagsOf(Rule{NonResourceURLs: []string{u}, Verbs: r.Verbs})
 			out = append(out, PermRule{Group: "", Resource: u, Verbs: r.Verbs, Kind: kind, Scope: "cluster", Flags: flags, NonResource: true})
 		}
 		for _, g := range r.APIGroups {
@@ -324,6 +409,7 @@ func permRules(id ID, rules []Rule) []PermRule {
 				case id.Super() && isClusterScoped(g, res):
 					s = "cluster"
 				}
+				flags := flagsOf(Rule{APIGroups: []string{g}, Resources: []string{res}, ResourceNames: r.ResourceNames, Verbs: r.Verbs})
 				out = append(out, PermRule{Group: g, Resource: res, Verbs: r.Verbs, Kind: kind, Scope: s, Flags: flags, ResourceNames: r.ResourceNames})
 			}
 		}
@@ -331,7 +417,17 @@ func permRules(id ID, rules []Rule) []PermRule {
 	return out
 }
 
+// clusterKinds are cluster-scoped kinds the console does not watch, which
+// roles name all the same.
+var clusterKinds = []string{"componentstatuses"}
+
+// isClusterScoped says whether a kind, or a subresource of one
+// (nodes/status), belongs to the cluster rather than to a namespace.
 func isClusterScoped(group, resource string) bool {
+	resource, _, _ = strings.Cut(resource, "/")
+	if group == "" && slices.Contains(clusterKinds, resource) {
+		return true
+	}
 	for _, w := range Watched {
 		if w.Group == group && w.Resource == resource {
 			return !w.Namespaced
@@ -378,9 +474,11 @@ func BuildPermissions(templates Templates, deployed map[ID]Deployed, nodes Deplo
 }
 
 // Check compares every deployed role with the definition shipped for it
-// (RB-36). A role that is not there is "missing", and does not count as
-// allowing more.
-func Check(templates Templates, o Options, deployed map[ID]Deployed, at time.Time) Drift {
+// (RB-36), and the nodes role with Nodes(): everyone who signs in holds it
+// cluster-wide (RB-07), so widening it widens every person and counts as
+// allowing more like any other role. A role that is not there is
+// "missing", and does not count as allowing more.
+func Check(templates Templates, o Options, deployed map[ID]Deployed, nodes Deployed, at time.Time) Drift {
 	d := Drift{State: "match", Roles: []RoleDrift{}, CheckedAt: at}
 	missing := 0
 	for _, id := range All {
@@ -399,6 +497,14 @@ func Check(templates Templates, o Options, deployed map[ID]Deployed, at time.Tim
 			d.More = true
 		}
 	}
+	if !nodes.Present {
+		d.Roles = append(d.Roles, RoleDrift{ID: NodesID, Differences: []string{"the ClusterRole " + NodesClusterRole + " does not exist on this cluster"}})
+	} else if diff := Compare(Nodes().Rules, nodes.Rules); !diff.Empty() {
+		d.Roles = append(d.Roles, RoleDrift{ID: NodesID, Differences: diff.Lines()})
+		if diff.MoreThanShipped() {
+			d.More = true
+		}
+	}
 	switch {
 	case missing == len(All):
 		d.State = "missing"
@@ -408,11 +514,19 @@ func Check(templates Templates, o Options, deployed map[ID]Deployed, at time.Tim
 	return d
 }
 
+// MaxCheckAge is how old a comparison may be and still decide whether a
+// change runs under strict (RB-36): three rounds of the five-minute check.
+// An older one, as from a cluster whose roles can no longer be read, is no
+// comparison at all.
+const MaxCheckAge = 15 * time.Minute
+
 // Monitor keeps the last comparison for each cluster, for the Permissions
 // page, the audit log and rbac.enforce (RB-36).
 type Monitor struct {
 	mu    sync.Mutex
 	byKey map[string]Drift
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
 }
 
 // Set stores a comparison and says whether it differs from the last one,
@@ -428,8 +542,19 @@ func (m *Monitor) Set(cluster string, d Drift) (changed bool) {
 	return !had || old.State != d.State || !sameDrift(old, d)
 }
 
+// Stamp fingerprints deployed roles: equal stamps, equal rules.
+func Stamp(deployed map[ID]Deployed, nodes Deployed) string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+	for _, id := range All {
+		_ = enc.Encode(deployed[id])
+	}
+	_ = enc.Encode(nodes)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func sameDrift(a, b Drift) bool {
-	if len(a.Roles) != len(b.Roles) {
+	if a.Of != b.Of || len(a.Roles) != len(b.Roles) {
 		return false
 	}
 	for i := range a.Roles {
@@ -448,16 +573,36 @@ func (m *Monitor) Get(cluster string) (Drift, bool) {
 	return d, ok
 }
 
+// Current returns the last comparison when it is of the connection the
+// cluster runs now (of, its fingerprint) and not older than MaxCheckAge:
+// the one strict may decide by.
+func (m *Monitor) Current(cluster, of string) (Drift, bool) {
+	d, ok := m.Get(cluster)
+	if !ok || d.Of != of {
+		return Drift{}, false
+	}
+	now := time.Now
+	if m.Now != nil {
+		now = m.Now
+	}
+	if now().Sub(d.CheckedAt) > MaxCheckAge {
+		return Drift{}, false
+	}
+	return d, true
+}
+
 // Refusal says why every change on a cluster is refused, or "" when it is
 // not: with rbac.enforce strict, a cluster whose roles allow more than the
 // shipped ones refuses every change, naming the difference, and so does a
 // cluster whose roles have not been compared yet: strict fails closed
-// (RB-36).
-func (m *Monitor) Refusal(cluster, enforce string) string {
+// (RB-36). A comparison counts only while Current: of the connection the
+// cluster runs now (of), and recent; a connection re-pointed at another
+// cluster, or one whose roles can no longer be read, is not compared.
+func (m *Monitor) Refusal(cluster, of, enforce string) string {
 	if enforce != "strict" {
 		return ""
 	}
-	d, ok := m.Get(cluster)
+	d, ok := m.Current(cluster, of)
 	if !ok {
 		return "Changes are refused on this cluster until 221B has compared its roles with the ones it ships (rbac.enforce is strict). Try again in a minute; if this stays, check that the console can read ClusterRoles there."
 	}

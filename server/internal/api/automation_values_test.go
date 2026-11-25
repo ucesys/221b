@@ -54,9 +54,11 @@ func runBody(params string) string {
 func TestOnProductionValuesThatNeedNoApprovalStartAtOnce(t *testing.T) {
 	e := valuesSetup(t)
 	// ZONE is not sensitive and no condition reads it; binding it to OTHER
-	// is a change, which needs no approval either.
+	// is a change, which the rule alone rates passed through. Sherlock did
+	// not weigh it (it is off), so on production it waits all the same
+	// (the review of November 24, 2026, finding 15).
 	code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"ZONE":"var:OTHER"}`))
-	if code != http.StatusOK || !strings.Contains(body, `"overrides":{"ZONE":"var:OTHER"}`) || !strings.Contains(body, `"ZONE":"us"`) || !strings.Contains(body, "its own values need no approval") {
+	if code != http.StatusAccepted || !strings.Contains(body, "Sherlock did not weigh it") {
 		t.Fatalf("%d %s", code, body)
 	}
 	// The same value every node inherits changes nothing.

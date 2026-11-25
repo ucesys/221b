@@ -140,3 +140,30 @@ spec:
 		t.Errorf("text that is not YAML kept a value: %s", got)
 	}
 }
+
+// Credential finds a credential's shape and nothing else: prose about a
+// password, a placeholder or a key=value pair is not one (AI-49).
+func TestCredentialIsTheShapeOfOne(t *testing.T) {
+	for _, in := range []string{
+		"-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig",
+		"AKIAIOSFODNN7EXAMPLE", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "glpat-abcdefghij0123456789",
+		"sk-ant-api03-abcdefghijklmnop0123", "xoxb-1234567890-abcdef",
+		"Authorization: Bearer 9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+		"https://ci:hunter2x@registry.example.com/v2/",
+	} {
+		if !Credential(in) {
+			t.Errorf("not found: %q", in)
+		}
+	}
+	for _, in := range []string{
+		"**About the password:** it isn't in the script.", "this service account's token controls the whole cluster",
+		"password=$REGISTRY_PASSWORD", "token: abc123def", "--password-stdin", "Bearer authentication",
+		"Authorization: Bearer $TOKEN", "postgres://app:${DB_PASSWORD}@db/app", "postgres://app:<password>@db/app",
+		"https://user:password@host/", "mysql://root:***@db", "the secret key: never written", "",
+	} {
+		if Credential(in) {
+			t.Errorf("found in %q", in)
+		}
+	}
+}

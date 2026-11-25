@@ -95,6 +95,12 @@ func (w *wiring) wireAuthConfig() error {
 		if err != nil {
 			return err
 		}
+		// Said at every start, so a file that names nobody is seen.
+		if len(users) == 0 {
+			log.Warn("the local accounts' file names no account", "file", cfg.LocalUsersFile)
+		} else {
+			log.Info("read the local accounts' file", "file", cfg.LocalUsersFile, "accounts", len(users))
+		}
 		authCfg.Local = users
 	}
 	// The roles, the groups and the directory (Phase 6.1) come in a file the
@@ -105,6 +111,11 @@ func (w *wiring) wireAuthConfig() error {
 	}
 	authFile.Apply(&authCfg)
 	authCfg.Prefixes.OIDCUser, authCfg.Prefixes.OIDCGroup = cfg.ImpersonateUserPrefix, cfg.ImpersonateGroupPrefix
+	// A prefix in a reserved name space would make an ordinary group a
+	// reserved one (RB-17); the chart refuses it too.
+	if err := authCfg.Prefixes.Check(); err != nil {
+		return err
+	}
 	authCfg.SetupToken = cfg.SetupToken
 	authCfg.AccessTTL = cfg.AccessTTL
 	if authCfg.Mode == auth.ModeLDAP {
@@ -304,7 +315,10 @@ func (w *wiring) sessionsInDatabase(ctx context.Context, secrets sessionSecrets)
 		})
 	if failed {
 		w.sessionsLeft = func(ctx context.Context) bool {
-			failed = false
+			// Failed until the emptying has run and gone through: a try
+			// that never runs it (the database cannot say the copy was
+			// made) is not taken for done, so the retry goes on.
+			failed = true
 			w.removeCopiedFromSecrets(ctx, auth.SessionsImportID, what, func(ctx context.Context) (int, error) {
 				n, err := empty(ctx)
 				failed = err != nil

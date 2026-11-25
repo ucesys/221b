@@ -34,6 +34,12 @@ import (
 // toolboxSetup is the Watson test console with the toolbox.
 func toolboxSetup(t *testing.T, who, env string) (*httptest.Server, *http.Client, *sim.Sim, *sessions.Manager) {
 	t.Helper()
+	return toolboxSetupWith(t, who, env, tb.Default())
+}
+
+// toolboxSetupWith is toolboxSetup with these toolbox values.
+func toolboxSetupWith(t *testing.T, who, env string, cfg tb.Config) (*httptest.Server, *http.Client, *sim.Sim, *sessions.Manager) {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
@@ -43,7 +49,7 @@ func toolboxSetup(t *testing.T, who, env string) (*httptest.Server, *http.Client
 			TwoPerson: func(c watson.Cluster) bool {
 				return c.Env == clusters.EnvProduction && o.Settings.Current().WatsonOrDefault().TwoPerson
 			}})
-		mgr = sessions.New(sessions.Options{Config: tb.Default(), Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		mgr = sessions.New(sessions.Options{Config: cfg, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 		o.Sessions = mgr
 	})
 	local.restCfg = &rest.Config{Host: simSrv.URL}
@@ -86,6 +92,23 @@ func TestToolboxSaysWhatAPersonMayUse(t *testing.T) {
 	}
 	if _, ok := v.Namespaces["web"]; !ok {
 		t.Fatalf("no tools for web: %s", b)
+	}
+}
+
+// Emptied lists turn tools off; the page is sent empty lists, never null,
+// which it would call .map and .includes on (the toolbox review, finding 1).
+func TestToolboxSendsEmptyListsNotNull(t *testing.T) {
+	cfg := tb.Default()
+	cfg.DebugContainer.Images, cfg.DebugPod.Profiles, cfg.NodeShell.Profiles = []string{}, nil, nil
+	srv, c, _, _ := toolboxSetupWith(t, "ops@corp.example", clusters.EnvStaging, cfg)
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces=web", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	for _, k := range []string{"debugContainerImages", "debugPodProfiles", "nodeProfiles"} {
+		if !strings.Contains(b, `"`+k+`":[]`) {
+			t.Errorf("%s is not an empty list: %s", k, b)
+		}
 	}
 }
 
@@ -650,5 +673,86 @@ func TestToolboxMixesCachedAndAskedNamespaces(t *testing.T) {
 	all(every)
 	if got := all(names); len(got) != len(names) {
 		t.Fatalf("%d of %d namespaces", len(got), len(names))
+	}
+}
+
+// Roles review, finding 6 (the owner, November 23): a Debug pod opens its
+// terminal with pods/exec, so it is offered only to a person who may
+// create pods/exec in the namespace, as well as jobs.
+func TestDebugPodWantsExec(t *testing.T) {
+	srv, c, sm, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	rec := httptest.NewRecorder()
+	sm.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sim/deny", strings.NewReader(`{"resources":["pods/exec"]}`)))
+	if rec.Code >= 300 {
+		t.Fatalf("deny: %d %s", rec.Code, rec.Body)
+	}
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces=web", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	var v struct {
+		Namespaces map[string]struct {
+			Tools map[string]string `json:"tools"`
+		} `json:"namespaces"`
+	}
+	if err := json.Unmarshal([]byte(b), &v); err != nil {
+		t.Fatal(err)
+	}
+	tools := v.Namespaces["web"].Tools
+	if why := tools[tb.ToolDebugPod]; !strings.Contains(why, "pods/exec") {
+		t.Errorf("Debug pod without pods/exec: %q (%s)", why, b)
+	}
+	if tools[tb.ToolForward] != "" {
+		t.Errorf("port forward is off: %q", tools[tb.ToolForward])
+	}
+}
+
+// With SSH turned off, the nodes paired before still trust the console's
+// authority: the page is sent their pairings, so the menu offers Unpair,
+// with a warning, and Unpair is on (the toolbox review, finding 4).
+func TestToolboxOffersUnpairWithSSHOff(t *testing.T) {
+	cfg := tb.Default()
+	srv, c, m, _, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Sessions = sessions.New(sessions.Options{Config: cfg, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.SSH = sshStub{}
+	})
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvStaging, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?nodes=1", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	var v struct {
+		Off map[string]string `json:"off"`
+		SSH *struct {
+			Off      bool                       `json:"off"`
+			Pairings map[string]json.RawMessage `json:"pairings"`
+		} `json:"ssh"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(b), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SSH == nil || !v.SSH.Off || v.SSH.Pairings["worker-001"] == nil || len(v.Warnings) != 1 || !strings.Contains(v.Warnings[0], "still paired") {
+		t.Fatalf("%s", b)
+	}
+	if v.Off["ssh-unpair"] != "" || v.Off["ssh-pair"] == "" || v.Off["ssh"] == "" {
+		t.Fatalf("off: %v", v.Off)
+	}
+}
+
+// Getting Started's SSH step says SSH is off when the chart turns it off:
+// the SSH service always exists, so its absence never told (the toolbox
+// review's sweep).
+func TestGettingStartedSaysSSHIsOff(t *testing.T) {
+	s := &Server{opts: Options{SSH: sshStub{}, Sessions: sessions.New(sessions.Options{Config: tb.Default(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}}
+	if done, why := s.setupHosts(context.Background(), setupRecord{}); done || !strings.Contains(why, "off") {
+		t.Fatalf("%v %q", done, why)
 	}
 }

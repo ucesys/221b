@@ -116,7 +116,10 @@ auth:
   # The names Kubernetes sees for people and groups from each source, so a
   # local "ops" and an LDAP "ops" are different subjects. OIDC names carry
   # auth.kubernetes.userPrefix and groupPrefix. Names that start with
-  # system: or 221b: are never accepted from any source.
+  # system: or 221b: are never accepted from any source, and neither is a
+  # prefix here or in auth.kubernetes that starts with one of them or that a
+  # name could complete into one ("sys", "221b"): it would make an ordinary
+  # group a reserved one.
   prefixes:
     local: "221b-local:"
     ldap: "221b-ldap:"
@@ -239,6 +242,11 @@ auth:
   # SuperAdmins that are not made in the console. Usernames (the username
   # claim, an email for local accounts) and groups. With LDAP, list the
   # directory's SuperAdmin groups under auth.ldap.roles.superAdmin instead.
+  # The SuperAdmins named in these values (here, in the roles' superAdmin
+  # groups and in auth.local.users) are the console's installers, as is the
+  # SuperAdmin the first-run page creates in local mode: a dialog
+  # at sign-in asks them to star 221B on GitHub, until one ticks Never show
+  # this again (Administration > Settings > General turns it on again).
   admins: []
   adminGroups: []
   # A session ends after this long without activity, and this long after
@@ -660,6 +668,12 @@ database:
     # The read-write endpoint: for CloudNativePG the cluster's -rw Service,
     # for Patroni the primary's Service or a load balancer that follows it.
     host: ""
+    # The size of the volume the database's data is on, a quantity such as
+    # 100Gi, when it is known: Administration › AI › Knowledge warns when
+    # the database holds 80 % of it (the knowledge index has no cap of its
+    # own, KN-58). Empty: no warning. The bundled database's is its
+    # storage.size.
+    volumeSize: ""
     port: 5432
     # Made beforehand, owned by the user below; the console makes its
     # tables in it. PostgreSQL 16 or later.
@@ -815,11 +829,13 @@ toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
   # and node opens a shell, runs one command, forwards a port, adds a
   # debug container, starts a debug pod, or opens a shell on a node. Each
-  # is a Watson card first (approved by a second person on production, and
-  # by a second SuperAdmin for anything on a node), then a session in the
-  # Dock that runs as the person who asked, with their roles: the roles
-  # decide who may use what (rbac.roles.admin.exec below); these values
-  # are the ceiling the console never exceeds.
+  # is a Watson card first (approved by a second person where the cluster's
+  # two-person rule says so, and for anything on a node by a second
+  # SuperAdmin on every cluster with nodeShell.approval always), then a
+  # session in the Dock that runs as the person who asked, with their
+  # roles: the roles decide who may use what (rbac.roles.admin.exec
+  # below); these values are the ceiling the console never exceeds. A key
+  # the chart does not know is refused.
   enabled: true
   # No keystrokes, output or forwarded bytes for this long ends a session.
   idleTimeout: 10m
@@ -835,6 +851,9 @@ toolbox:
     storageClass: ""
     # ReadWriteMany with more than one replica.
     accessMode: ReadWriteOnce
+  # How long a transcript is kept after its last write: days as 400d, or a
+  # Go duration (72h). A bare number is seconds. With transcripts pvc it is
+  # at least 1d and at least maxDuration, or the console does not start.
   retention: 400d
   history:
     # Ended sessions kept for Administration › Sessions.
@@ -948,9 +967,9 @@ rbac:
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true
   # Which definition of the two roles that can change things is installed.
-  # full: Admin may do the namespaced changes Watson supports, forward
-  # ports and start debug pods (the Toolbox), and with admin.exec open
-  # shells; SuperAdmin may do everything. readOnly: the role exists, with no write verb, so
+  # full: Admin may do the namespaced changes Watson supports and forward
+  # ports (the Toolbox), and with admin.exec open shells and start debug
+  # pods, whose shell is an exec; SuperAdmin may do everything. readOnly: the role exists, with no write verb, so
   # nobody can change anything through the console; the read-only
   # SuperAdmin lists and watches everything and gets everything except
   # the subresources that run a command or proxy to one (pods/exec,
@@ -961,15 +980,18 @@ rbac:
   roles:
     admin:
       template: full
-      # The full Admin may also open shells and run commands in its
-      # namespaces (create pods/exec). It already forwards ports and starts
-      # debug pods; debug containers and node shells stay SuperAdmin's.
+      # The full Admin may also open shells, run commands and start debug
+      # pods in its namespaces (create pods/exec: a debug pod's shell is an
+      # exec into it, so without this the Toolbox offers it to SuperAdmins
+      # alone). It already forwards ports; debug containers and node shells
+      # stay SuperAdmin's.
       exec: false
     superAdmin:
       template: full
   # strict: when a cluster's 221b roles allow more than the ones this chart
   # installs (someone edited them), the console refuses every change there
-  # and says what differs. off only reports it, on the Permissions page and
+  # and says what differs: Watson's, Automation's, the Toolbox's, and its
+  # own writes (a Secret's edit, a new Secret, a new namespace). off only reports it, on the Permissions page and
   # in the audit log.
   enforce: "off"
 

@@ -89,6 +89,9 @@ type SyncResult struct {
 	// sync stopped asking Mycroft (the run's budget spent).
 	failed bool
 	stop   error
+	// indexed counts the items read for the search alone: Mycroft writes
+	// no page from them (KN-59). Said in the report.
+	indexed int
 }
 
 // The outcomes of a batch (KN-27).
@@ -173,6 +176,11 @@ type readItem struct {
 	item   Item
 	key    string
 	text   string
+	// doc is a section's document, by key (KN-52).
+	doc string
+	// product and version are what its document's front matter says it
+	// is about (KN-56).
+	product, version string
 }
 
 // Status reads the syncs' status.
@@ -225,10 +233,14 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// goneAtStart are the items gone when the sync began: one gone since
 	// was removed while it ran, and stays gone (MY-12).
 	goneAtStart := map[string]bool{}
+	// trustAtStart are the uploaded documents' own trust levels when it
+	// began: one set since, on the document's row, is kept (KN-61).
+	trustAtStart := map[string]string{}
 	for k, st := range m.Items {
 		if st.Gone {
 			goneAtStart[k] = true
 		}
+		trustAtStart[k] = st.Trust
 	}
 	secrets := s.secretValues(ctx)
 	sources := map[string]SourceStatus{}
@@ -284,8 +296,13 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					uploads[key] = it.Version
 				}
 				st := m.Items[key]
+				// The trust chosen at an upload (KN-61).
+				if st != nil && it.SetTrust {
+					st.Trust = it.Trust
+				}
 				if st != nil && it.Version != "" && st.Version == it.Version && !st.Gone && !req.Rebuild {
 					st.LastSeen = now
+					seeSections(m, x.ID, it.ID, now)
 					res.Unchanged++
 					continue
 				}
@@ -295,7 +312,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: “%s” could not be read: %v", x.Name, it.Title, rerr))
 					// Said on the item (KN-47); it is read again next time.
 					if st == nil {
-						st = &ItemState{Source: x.ID, ID: it.ID, Title: it.Title, URL: it.URL, By: it.By, Type: it.Type}
+						st = &ItemState{Source: x.ID, ID: it.ID, Title: it.Title, URL: it.URL, By: it.By, Type: it.Type, Trust: it.Trust}
 						m.Items[key] = st
 					}
 					st.Error, st.Skipped, st.LastSeen, st.Version = clip(scrub.Known(rerr.Error(), secrets), 300), "", now, ""
@@ -304,7 +321,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				text = scrub.Known(scrub.Text(text), secrets)
 				h := hashOf([]byte(text))
 				if st == nil {
-					st = &ItemState{Source: x.ID, ID: it.ID}
+					st = &ItemState{Source: x.ID, ID: it.ID, Trust: it.Trust}
 					m.Items[key] = st
 				}
 				st.Title, st.URL, st.Modified, st.LastSeen, st.Gone = it.Title, it.URL, it.Modified.UTC(), now, false
@@ -325,6 +342,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					// Unchanged, or nothing to read (a page of children only).
 					st.Hash = h
 					st.Version = it.Version
+					seeSections(m, x.ID, it.ID, now)
 					res.Unchanged++
 					continue
 				}
@@ -333,12 +351,27 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 					ss.Reported++
 					res.Reported = append(res.Reported, fmt.Sprintf("%s “%s”%s tried to give instructions, which were not followed: “%s”", x.Name, it.Title, versionWords(it.Version), clip(st.Reported, 160)))
 				}
-				changed = append(changed, readItem{source: x, item: it, key: key, text: text})
+				// A long document is its sections (KN-52): each changed
+				// one is read, and the document keeps no excerpt of its own.
+				secs := cutSections(text)
+				if len(secs) > 0 && st.Sections == 0 {
+					gone = append(gone, key)
+				}
+				read, dropped := readSections(m, x, it, st, secs, req.Rebuild, now)
+				if len(secs) == 0 {
+					read = append(read, readItem{source: x, item: it, key: key, text: text})
+				}
+				product, version := frontTags(text)
+				for i := range read {
+					read[i].product, read[i].version = product, version
+				}
+				changed = append(changed, read...)
+				gone = append(gone, dropped...)
 				res.Read++
 			}
 			if complete {
 				for _, st := range m.bySource(x.ID) {
-					if key := itemKey(st.Source, st.ID); !listed[key] && !st.Gone {
+					if key := itemKey(st.Source, st.ID); !listed[key] && !st.Gone && (st.Of == "" || !listed[itemKey(st.Source, st.Of)]) {
 						st.Gone = true
 						if st.record() {
 							// A record of an item never read holds no excerpt.
@@ -365,7 +398,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 				}
 			}
 			for _, st := range m.bySource(x.ID) {
-				if !st.Gone && !st.record() {
+				if !st.Gone && !st.record() && st.Of == "" {
 					ss.Items++
 				}
 			}
@@ -388,7 +421,7 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 	// The excerpts of what changed, and none for what is gone.
 	var writes []Change
 	for _, ri := range changed {
-		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Chunks: chunks(ri.text)}
+		ex := Excerpt{Key: ri.key, Source: ri.source.ID, Kind: ri.source.Kind, Title: ri.item.Title, Version: ri.item.Version, Date: m.Items[ri.key].ref().Date, URL: ri.item.URL, Heading: m.Items[ri.key].Heading, Product: ri.product, ProductVersion: ri.version, Chunks: chunks(ri.text)}
 		b, _ := json.Marshal(ex)
 		writes = append(writes, Change{Path: excerptPath(ri.key), Body: b})
 	}
@@ -398,11 +431,21 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 			writes = append(writes, Change{Path: excerptPath(key), Body: b})
 		}
 	}
-	// Mycroft drafts the pages.
+	// Mycroft drafts the pages from what matters (KN-59): the items of
+	// a source of high trust and the corrections; the rest is excerpted
+	// and indexed alone.
+	var toDraft []readItem
+	for _, ri := range changed {
+		if writesPages(ri, m.Items[docKeyOf(ri.key)]) {
+			toDraft = append(toDraft, ri)
+		} else {
+			res.indexed++
+		}
+	}
 	var run *Run
-	if len(changed) > 0 {
+	if len(toDraft) > 0 {
 		var unsent map[string]bool
-		run, unsent, err = s.draft(ctx, store, files, m, changed, req, secrets, &res)
+		run, unsent, err = s.draft(ctx, store, files, m, toDraft, req, secrets, &res)
 		if err != nil {
 			res.Errors = append(res.Errors, err.Error())
 		}
@@ -411,6 +454,15 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 		for key := range unsent {
 			if st := m.Items[key]; st != nil {
 				st.Version, st.Hash = "", ""
+				// A section's document is read again, and the section
+				// with it (KN-52).
+				if st.Of != "" {
+					doc := itemKey(st.Source, st.Of)
+					if d := m.Items[doc]; d != nil {
+						d.Version, d.Hash = "", ""
+					}
+					delete(uploads, doc)
+				}
 			}
 			delete(uploads, key)
 		}
@@ -424,13 +476,16 @@ func (s *Service) SyncWith(ctx context.Context, req SyncRequest) (SyncResult, er
 		}
 		s.noteCorrections(ctx, changed, run)
 	}
-	s.letGo(uploads)
 	// The pages retired while this sync ran are kept retired: the
 	// manifest written is this sync's, with the retirements as they are
 	// now (KN-24).
 	s.manifestMu.Lock()
+	let := s.letGo(uploads)
 	s.mu.RLock()
 	m.Retired = maps.Clone(s.manifest.Retired)
+	// So are the trust levels set on the documents' rows while it ran,
+	// and those chosen for a document it read (KN-61).
+	keepTrust(s.manifest, trustAtStart, m, let)
 	// So are the documents removed while it ran (MY-12).
 	writes = keepRemoved(s.manifest, goneAtStart, m, writes, func(p string) bool { _, ok := files[p]; return ok })
 	s.mu.RUnlock()
@@ -492,16 +547,38 @@ func keepRemoved(now *Manifest, goneAtStart map[string]bool, m *Manifest, writes
 }
 
 // letGo lets go of the uploaded documents' text a sync gave Mycroft: the
-// pending documents of those keys, at those versions.
-func (s *Service) letGo(read map[string]string) {
+// pending documents of those keys, at those versions, which it returns.
+func (s *Service) letGo(read map[string]string) []pendingDoc {
 	if len(read) == 0 {
-		return
+		return nil
 	}
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
+	var out []pendingDoc
 	for k, p := range s.pending {
 		if v, ok := read[itemKey(p.source, p.name)]; ok && len(p.hash) >= 16 && p.hash[:16] == v {
 			delete(s.pending, k)
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// keepTrust keeps, in a manifest about to be written (m), an uploaded
+// document's trust as it is now (KN-61): the one chosen at the upload of a
+// document the sync read and let go (let), which may have been changed
+// after the sync listed it, and one set on the row of a document already
+// read while the sync ran (now differs from atStart). manifestMu is held,
+// as SetDocumentTrust holds it.
+func keepTrust(now *Manifest, atStart map[string]string, m *Manifest, let []pendingDoc) {
+	for _, p := range let {
+		if st := m.Items[itemKey(p.source, p.name)]; st != nil && p.setTrust {
+			st.Trust = p.trust
+		}
+	}
+	for key, cur := range now.Items {
+		if st := m.Items[key]; st != nil && cur.Trust != atStart[key] {
+			st.Trust = cur.Trust
 		}
 	}
 }
@@ -535,6 +612,9 @@ func syncReport(r SyncResult) string {
 		fmt.Fprintf(&b, ", %d skipped (%s)", r.Skipped, r.SkippedWhy)
 	}
 	b.WriteString(".")
+	if r.indexed > 0 {
+		fmt.Fprintf(&b, " %d of the changed items were indexed for the search alone: Mycroft writes pages from a source of high trust, from corrections, and on request.", r.indexed)
+	}
 	if r.Pages > 0 {
 		fmt.Fprintf(&b, " %d page changes wait for review in [AIOps › Inbox](%s) (run %s).", r.Pages, DraftHref(r.Run), r.Run)
 	} else {

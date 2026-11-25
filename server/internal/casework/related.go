@@ -3,6 +3,7 @@ package casework
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ const (
 	relatedOpen    = 3
 	relatedKnown   = 3
 	relatedFixes   = 3
+	// relatedCluster bounds the other open cases on the cluster (CF-118).
+	relatedCluster = 10
 )
 
 // related is the records that may bear on a case, as the agent reads
@@ -111,6 +114,21 @@ func (s *Service) related(ctx context.Context, c caseInfo) string {
 		for _, l := range open {
 			parts = append(parts, fmt.Sprintf("- %s (P%d, %s): %s", caseID(l.Number), l.Priority, l.Status, clip(l.Title, 200)))
 		}
+	}
+	// The other open cases on its cluster, newest first, which the
+	// analysis may say share its cause (CF-118): a node's case and its
+	// pods'.
+	var others []string
+	for i := len(lines) - 1; i >= 0 && len(others) < relatedCluster; i-- {
+		l := lines[i]
+		if !l.Open() || l.Cluster != c.Cluster || c.Cluster == "" || seen[l.Number] || slices.ContainsFunc(open, func(x issues.Line) bool { return x.Number == l.Number }) {
+			continue
+		}
+		others = append(others, fmt.Sprintf("- %s (P%d, %s)%s: %s", caseID(l.Number), l.Priority, l.Status, bracketed(clip(l.Object, 200)), clip(l.Title, 200)))
+	}
+	if len(others) > 0 {
+		parts = append(parts, "Other open cases on this cluster, which may share its cause:")
+		parts = append(parts, others...)
 	}
 	if len(known) > 0 {
 		parts = append(parts, "Known issues it matches:")

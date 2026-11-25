@@ -99,8 +99,8 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ $b.name }}
-  namespace: {{ $b.namespace }}
+  name: {{ $b.name | quote }}
+  namespace: {{ $b.namespace | quote }}
   labels:
     {{- include "b221.roleLabels" $ | nindent 4 }}
 roleRef:

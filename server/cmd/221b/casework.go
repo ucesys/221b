@@ -64,7 +64,7 @@ func openCasework(ctx context.Context, cfg config.Config, restCfg *rest.Config, 
 		Clusters: func() []jobs.Cluster {
 			var out []jobs.Cluster
 			for _, c := range manager.List() {
-				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name})
+				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name, Env: c.Env})
 			}
 			return out
 		},

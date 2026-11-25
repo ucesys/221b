@@ -55,7 +55,11 @@ func TestADurableCardsChangeIsFingerprintedAndRunsAsItsApprover(t *testing.T) {
 	if !moved {
 		t.Fatal("the node changed and its fingerprint did not")
 	}
-	it, err := svc.RunApproved(cl, bob(), "kubectl cordon worker-002", "Proposal c1 by Troubleshooter", "Cordon worker-002", &first)
+	second, err := svc.Inspect(ctx, cl, "kubectl cordon worker-002", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err := svc.RunApproved(cl, bob(), "kubectl cordon worker-002", "Proposal c1 by Troubleshooter", "Cordon worker-002", &second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +131,7 @@ func TestADurableCardShowsWhatItsRequesterMaySee(t *testing.T) {
 			t.Fatalf("%s: %s", path, resp.Status)
 		}
 	}
-	post("/api/v1/namespaces/default/secrets", `{"metadata":{"name":"db-creds","annotations":{"note":"value-only-some-may-read"}},"data":{"k":"dg=="}}`)
+	post("/api/v1/namespaces/default/secrets", `{"metadata":{"name":"db-creds","annotations":{"note":"value-only-some-may-read"}},"data":{"k":"c2VjcmV0LXZhbHVl"}}`)
 	post("/sim/deny", `{"only":{"alice@corp.example":["web"]}}`)
 	line := "kubectl annotate secret db-creds -n default note-"
 	own, err := svc.Inspect(ctx, cl, line, nil)

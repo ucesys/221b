@@ -3,7 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
-import { JobsTab, WhenCell } from './JobsTab'
+import { exportTable } from '../../lib/table'
+import { jobColumns, JobsTab, WhenCell } from './JobsTab'
 import { clockInBrowser } from '../../lib/format'
 
 vi.mock('../../api/jobs', async (original) => ({
@@ -360,5 +361,124 @@ describe("a job's schedule beside the browser's time (R2-16)", () => {
     const browser = Intl.DateTimeFormat().resolvedOptions().timeZone
     render(<WhenCell j={job(browser)} />)
     expect(screen.getByTestId('job-when-zone').textContent).toBe(browser)
+  })
+})
+
+// --- A job whose agent is off (JB-25, the owner, November 23) ---
+describe('AIOps › Jobs: a job whose agent is off, and a failed last run', () => {
+  const digest: api.Job = {
+    ...audit,
+    id: 'daily-digest',
+    kind: 'daily-digest',
+    label: 'Daily digest',
+    agent: 'summarizer',
+    agentName: 'Summarizer',
+    on: false,
+    nextText: 'Paused',
+    next: undefined,
+    last: undefined,
+    agentOff: 'the Summarizer is off',
+  }
+  const failed: api.Job = { ...audit, last: { ...audit.last!, id: 'run-9', status: 'failed', note: 'the Auditor is off', findings: 0 } }
+  beforeAll(() => {
+    Element.prototype.scrollTo = () => {}
+  })
+  beforeEach(() => {
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...view(), jobs: [failed, digest] })
+    vi.mocked(api.describeJobSchedule).mockResolvedValue({ description: 'Every day at 02:00, Europe/Berlin', next: ['2026-11-06T01:00:00Z'] })
+    vi.mocked(api.fetchJobRuns).mockResolvedValue({ runs: [], total: 0 })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('shows Run now’s refusal in the drawer, and no “started”', async () => {
+    const refusal = 'The Daily digest runs on the Summarizer, which is off: turn it on in Administration › AI › Agents.'
+    vi.mocked(api.runJobNow).mockRejectedValue(new Error(refusal))
+    const toast = vi.fn()
+    render(<JobsTab route={route('daily-digest')} onToast={toast} />)
+    const drawer = await screen.findByTestId('job-drawer')
+    fireEvent.click(within(drawer).getByTestId('job-run-now'))
+    expect((await within(drawer).findByTestId('job-action-error')).textContent).toBe(refusal)
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('says on the row and in the drawer that the agent is off, with a link to it, and warns on turning it on', async () => {
+    vi.mocked(api.updateJob).mockImplementation(async () => ({ ...digest, on: true }))
+    const toast = vi.fn()
+    render(<JobsTab route={route('daily-digest')} onToast={toast} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const row = rows.find((r) => r.dataset.job === 'daily-digest')!
+    const off = within(row).getByTestId('job-agent-off')
+    expect(off.textContent).toBe('The Summarizer is off: turn it on')
+    expect(off.getAttribute('data-tone')).toBe('warn')
+    expect(within(off).getByRole('link').getAttribute('href')).toContain('/ai/agents/summarizer')
+    expect(within(rows.find((r) => r.dataset.job === 'nightly-audit')!).queryByTestId('job-agent-off')).toBeNull()
+    const callout = await screen.findByTestId('job-agent-off-callout')
+    expect(callout.textContent).toContain('The Summarizer is off: Run now is refused')
+    expect(within(callout).getByRole('link').getAttribute('href')).toContain('/ai/agents/summarizer')
+    fireEvent.click(screen.getByTestId('job-toggle'))
+    await waitFor(() => expect(api.updateJob).toHaveBeenCalledWith('daily-digest', { on: true }))
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Daily digest resumed. The Summarizer is off: its runs fail until it is turned on in Administration › AI › Agents.'))
+    // On, it cannot run: the state says so.
+    expect(within(row).getByTestId('job-state').textContent).toBe('On, cannot run')
+  })
+
+  it('shows a failed last run’s reason on the row and in the drawer, linked to the run', async () => {
+    render(<JobsTab route={route('nightly-audit')} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const last = within(rows.find((r) => r.dataset.job === 'nightly-audit')!).getByTestId('job-last-failed')
+    expect(last.textContent).toBe('Failed: the Auditor is off')
+    expect(last.getAttribute('href')).toContain('run-9')
+    const callout = await screen.findByTestId('job-last-failed-callout')
+    expect(callout.textContent).toContain('Failed · the Auditor is off. Open the run')
+    expect(within(callout).getByRole('link').getAttribute('href')).toContain('run-9')
+  })
+})
+
+// --- Model and Effort columns (the owner, November 23) ---
+describe('AIOps › Jobs › Schedule: each job’s agent’s model and effort', () => {
+  const autoAudit: api.Job = { ...audit, setup: { model: 'auto', autoFrom: 'claude-sonnet-5-5', autoTo: 'claude-opus-5-5', provider: 'Anthropic', effort: 'auto', floorEffort: 'medium' } }
+  const defAlerts: api.Job = { ...alerts, setup: { model: 'claude-opus-5-5', defaultModel: true, provider: 'Anthropic' } }
+  const ownDigest: api.Job = { ...alerts, id: 'daily-digest', kind: 'daily-digest', label: 'Daily digest', setup: { model: 'claude-haiku-5-5', provider: 'Anthropic', effort: 'low' } }
+  beforeAll(() => {
+    Element.prototype.scrollTo = () => {}
+  })
+  beforeEach(() => {
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...view(), jobs: [autoAudit, defAlerts, ownDigest, backup] })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('shows them in their columns, sorts by them, hides them in the column chooser, and exports them', async () => {
+    render(<JobsTab route={route()} />)
+    const rows = await screen.findAllByTestId('job-row')
+    const cell = (r: HTMLElement, id: string) => within(r).getByTestId(id).textContent
+    expect(cell(rows[0]!, 'job-model')).toBe('Auto (Claude Sonnet 5.5 to Claude Opus 5.5)on Anthropic')
+    expect(cell(rows[0]!, 'job-effort')).toBe('Autoat least medium')
+    expect(cell(rows[1]!, 'job-model')).toBe('Default (Claude Opus 5.5)on Anthropic')
+    expect(cell(rows[1]!, 'job-effort')).toBe('Default')
+    expect(cell(rows[2]!, 'job-model')).toBe('Claude Haiku 5.5on Anthropic')
+    expect(cell(rows[2]!, 'job-effort')).toBe('Low')
+    // The backup has no agent.
+    expect(cell(rows[3]!, 'job-model')).toBe('—')
+    expect(screen.getByTestId('jobs-table').querySelector('thead')!.textContent!.replace(/[↑↓]/g, '')).toBe('JobModelEffortWhenBudgetLast runNext runState')
+    // In the jobs' own order until a heading sorts them.
+    fireEvent.click(within(screen.getByTestId('jobs-table')).getByRole('button', { name: /^Model/ }))
+    await waitFor(() => expect(screen.getAllByTestId('job-row').map((r) => r.dataset.job)).toEqual(['nightly-audit', 'daily-digest', 'alert-diagnosis', 'backup-s3']))
+    fireEvent.click(within(screen.getByTestId('jobs-table-tools')).getByRole('button', { name: 'Columns' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Model' }))
+    await waitFor(() => expect(within(screen.getAllByTestId('job-row')[0]!).queryByTestId('job-model')).toBeNull())
+    fireEvent.click(screen.getByTestId('cols-all'))
+    const sheet = exportTable([autoAudit, defAlerts, backup], jobColumns(true, new Map(), new Map()), Date.now())
+    expect(sheet.head.slice(0, 6)).toEqual(['Job', 'Agent', 'Clusters', 'Model', 'Provider', 'Effort'])
+    expect(sheet.rows.map((r) => r.slice(3, 6))).toEqual([
+      ['Auto (Claude Sonnet 5.5 to Claude Opus 5.5)', 'Anthropic', 'Auto (at least medium)'],
+      ['Default (Claude Opus 5.5)', 'Anthropic', 'Default'],
+      ['', '', ''],
+    ])
   })
 })

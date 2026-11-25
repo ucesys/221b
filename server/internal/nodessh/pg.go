@@ -2,6 +2,7 @@ package nodessh
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"time"
@@ -71,6 +72,16 @@ func putHost(ctx context.Context, tx pgx.Tx, x Host) error {
 	id, err := inventory.EnsureHost(ctx, tx, x.Cluster, x.Name)
 	if err != nil {
 		return err
+	}
+	// A node's row with a pairing is a paired node's: a host taking it
+	// over would blank the pinned keys and the login of the pairing.
+	var pairedNode bool
+	if err := tx.QueryRow(ctx, `SELECT h.is_kubernetes_node AND EXISTS (SELECT FROM host_pairings p WHERE p.host_id = h.host_id)
+		FROM hosts h WHERE h.host_id = $1`, id).Scan(&pairedNode); err != nil {
+		return err
+	}
+	if pairedNode {
+		return fmt.Errorf("%w: %s is the name of a Kubernetes node of this cluster paired for SSH", ErrConflict, x.Name)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE hosts SET is_kubernetes_node = false, address = $2, port = $3, state = $4, is_auto_named = $5, added_by = $6, created_at = $7
 		WHERE host_id = $1`, id, x.Address, x.Port, x.State, x.AutoName, x.AddedBy, x.AddedAt.UTC()); err != nil {
@@ -209,6 +220,13 @@ func readPairings(ctx context.Context, q db.Querier) (map[string]Pairing, bool, 
 	return m, len(m) > 0, err
 }
 
+// isNode says whether a row is a Kubernetes node's.
+func isNode(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
+	var node bool
+	err := tx.QueryRow(ctx, "SELECT is_kubernetes_node FROM hosts WHERE host_id = $1", id).Scan(&node)
+	return node, err
+}
+
 func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing) error {
 	if err := inventory.Lock(ctx, tx); err != nil {
 		return err
@@ -247,6 +265,27 @@ func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing)
 		id, err := inventory.EnsureHost(ctx, tx, p.Cluster, p.Node)
 		if err != nil {
 			return err
+		}
+		node, err := isNode(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !node {
+			// A host outside Kubernetes: its port, its login, its pinned
+			// key and who paired it are the host's own columns, which its
+			// record writes (the key once a SuperAdmin trusted it, who
+			// paired it once its first login worked). A pairing writes its
+			// authority and its principal alone, so a pairing set before a
+			// login and taken back, or one a backup brings, changes none
+			// of them.
+			if _, err := tx.Exec(ctx, "UPDATE host_logins SET principal = $3 WHERE host_id = $1 AND login_user = $2", id, p.LoginUser, p.Principal); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, ca_fingerprint) VALUES ($1, $2)
+				ON CONFLICT (host_id) DO UPDATE SET ca_fingerprint = excluded.ca_fingerprint`, id, p.CAFinger); err != nil {
+				return err
+			}
+			continue
 		}
 		if _, err := tx.Exec(ctx, "UPDATE hosts SET port = $2 WHERE host_id = $1", id, p.Port); err != nil {
 			return err

@@ -237,6 +237,9 @@ type Event struct {
 	// one knowledge source starts that source's Wiki sync job alone
 	// (KN-28).
 	JobKind string
+	// CasePriority is the priority of the case the event is about, 0 for
+	// P0 to 4 for P4; nil for none. Auto's rules read it (AI-45).
+	CasePriority *int
 }
 
 // Key names what a finding is about (CF-05): the cluster, the object as
@@ -384,6 +387,24 @@ type Run struct {
 	// NoFindings says its kind makes no findings: it is not an audit.
 	Facts      []Fact `json:"facts,omitempty"`
 	NoFindings bool   `json:"noFindings,omitempty"`
+	// --- Effort and Auto (phase-13.1-ai, AI-48) ---
+	// Provider names the provider its agent ran on; Effort the highest
+	// effort a step ran at ("" the model's default), PickBy and PickWhy how
+	// and why it was picked when Auto picked it (rules); MovedUp the step
+	// that moved its model up, when one did. Model is the model it ended on.
+	Provider string   `json:"provider,omitempty"`
+	Effort   string   `json:"effort,omitempty"`
+	PickBy   string   `json:"pickBy,omitempty"`
+	PickWhy  string   `json:"pickWhy,omitempty"`
+	MovedUp  *MovedUp `json:"movedUp,omitempty"`
+}
+
+// MovedUp is a run's model moved up at one of its steps (AI-44): the step,
+// from 1, the model before it, and why.
+type MovedUp struct {
+	Step int    `json:"step"`
+	From string `json:"from"`
+	Why  string `json:"why,omitempty"`
 }
 
 // Fact is one thing a run did, as its drawer shows it: a label, the value
@@ -740,4 +761,24 @@ var (
 	ErrBudget = errors.New("the job's budget is spent")
 	// ErrRunning is a run asked while the job's last is still going.
 	ErrRunning = errors.New("the job's last run is still going")
+	// ErrAgentOff is an agent turned off, as an AgentChecker says it
+	// (AgentOff).
+	ErrAgentOff = errors.New("the agent is off")
+	// ErrNoAgent is a run asked by hand of a job whose agent cannot answer
+	// now, off or with a provider that cannot (JB-25): refused before it
+	// starts, so no run is recorded; its words say why and what to do.
+	ErrNoAgent = errors.New("the job's agent cannot answer")
 )
+
+// saidError is an error in its own words that is one of the service's.
+type saidError struct {
+	msg string
+	is  error
+}
+
+func (e saidError) Error() string        { return e.msg }
+func (e saidError) Is(target error) bool { return target == e.is }
+
+// AgentOff is an agent turned off, in the agents' own words ("the
+// Summarizer is off"): an error that is ErrAgentOff.
+func AgentOff(why string) error { return saidError{msg: why, is: ErrAgentOff} }

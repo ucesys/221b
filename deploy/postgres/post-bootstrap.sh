@@ -17,3 +17,9 @@ SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'user')
   WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
 SQL
+
+# The knowledge index's extensions (KN-51): pg_trgm and pgvector, in the
+# console's database, as the superuser (the console's role may not create
+# vector). extensions.sh does the same at every start of a primary.
+psql -v ON_ERROR_STOP=1 -h /var/run/postgresql -U "${PATRONI_SUPERUSER_USERNAME:-postgres}" -d "$DB_APP_DATABASE" \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm" -c "CREATE EXTENSION IF NOT EXISTS vector"

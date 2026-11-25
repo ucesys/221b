@@ -68,6 +68,11 @@ type AddInput struct {
 	// A document: its file's name and bytes (base64 in JSON).
 	Name string `json:"name,omitempty"`
 	Data []byte `json:"data,omitempty"`
+	// Trust is a document's trust level, a SuperAdmin's choice (KN-61):
+	// absent chooses none (a new document's is its source's, one
+	// uploaded again keeps its own), "" its source's, or high, normal or
+	// low.
+	Trust *string `json:"trust,omitempty"`
 }
 
 // AddedItem is one item an addition made.
@@ -144,6 +149,13 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 	if _, _, err := s.currentStore(ctx); err != nil {
 		return AddResult{}, err
 	}
+	level, setTrust, err := chosenTrust(c, in.Trust)
+	if err != nil {
+		return AddResult{}, err
+	}
+	if setTrust && in.Kind != AddDocument {
+		return AddResult{}, invalid("a trust level is chosen for a document; a note takes its source's")
+	}
 	secrets := s.secretValues(ctx)
 	now := s.o.Now().UTC()
 	res := AddResult{Kind: in.Kind, Model: s.o.Model != nil}
@@ -190,6 +202,7 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 		// other source of uploaded documents is replaced by this one.
 		for _, x := range set.Sources {
 			if x.Kind == SourceUpload && x.ID != AddedSourceID && s.holds(x.ID, name) {
+				level, setTrust = s.keptTrust(x.ID, name, level, setTrust)
 				if err := s.removeDocument(ctx, c, x.ID, name); err != nil {
 					s.o.Logger.Warn("a document replaced by one of the same name stays in its source", "source", x.ID, "err", err)
 				} else {
@@ -197,6 +210,8 @@ func (s *Service) Add(ctx context.Context, c Caller, in AddInput) (AddResult, er
 				}
 			}
 		}
+		docs[0].trust, docs[0].setTrust = level, setTrust
+		detail += trustWords(level, setTrust)
 	case AddURL:
 		// Since 0.12.1 a web address is a source of its own (KN-44).
 		return AddResult{}, invalid("a web address is read as a Web site source now: a SuperAdmin adds one in Administration › AI › Knowledge")
@@ -345,7 +360,7 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 			b.LastRead, b.Error, b.Reported = ss.LastRead, ss.Error, ss.Reported
 			b.Skipped, b.SkippedWhy = ss.Skipped, ss.SkippedWhy
 		}
-		for _, it := range m.bySource(x.ID) {
+		for _, it := range m.documents(x.ID) {
 			if !it.Gone && !it.record() {
 				b.Items++
 			}

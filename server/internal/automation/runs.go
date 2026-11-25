@@ -333,6 +333,10 @@ func (st *Store) PutNode(ctx context.Context, id int, n NodeResult, output strin
 	return st.runs.PutNode(ctx, id, n, output)
 }
 
+// KeepsOutputs says whether the store keeps each node's whole output
+// (DB-87): the database does, a store of documents does not.
+func (st *Store) KeepsOutputs() bool { return st.runs != nil }
+
 // Outputs is each node's whole output of a run, as the store keeps it:
 // none for a store of documents.
 func (st *Store) Outputs(ctx context.Context, id int) (map[string]string, error) {

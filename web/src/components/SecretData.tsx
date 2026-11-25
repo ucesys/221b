@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { fetchSecretsConfig, revealSecretValue, SecretsError, updateSecret, type SecretsConfig, type SecretValue } from '../api/secrets'
+import { fetchSecretsConfig, revealSecretValue, secretWrites, SecretsError, updateSecret, type SecretsConfig, type SecretValue } from '../api/secrets'
 import type { KeySize } from '../api/types'
 import { fMem, nWord } from '../lib/format'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -11,9 +11,10 @@ function fBytes(n: number): string {
   return n < 1024 ? `${n} B` : fMem(n)
 }
 
-/** What a refused save says: a Secret changed since it was read (SE-04) in plain words, the rest as the server put it. */
+/** What a refused save says: a Secret changed since it was read (SE-04) in plain words, the rest (an immutable Secret, a cluster that takes no change: RB-36) as the server put it. */
 export function saveProblem(e: unknown): string {
-  if (e instanceof SecretsError && e.status === 409 && !/immutable/i.test(e.message)) return 'This Secret changed after you opened it, so nothing was saved. Press Cancel, then Edit, and make your change on what is there now.'
+  if (e instanceof SecretsError && e.status === 409 && !/immutable/i.test(e.message) && !e.message.startsWith('Refused:'))
+    return 'This Secret changed after you opened it, so nothing was saved. Press Cancel, then Edit, and make your change on what is there now.'
   return e instanceof Error ? e.message : String(e)
 }
 
@@ -177,6 +178,10 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
 
   const canEdit = !!cfg?.edit
   const canReveal = !!cfg?.reveal && canEdit
+  // Edit, and with it Add key and Remove, is hidden on a read-only
+  // connection and off where strict refuses the cluster, each saying why;
+  // the keys, and Reveal, stay (RB-36).
+  const writes = secretWrites(cfg)
   const valueBox = (value: string, onChange: (v: string) => void, label: string, testId: string, id?: string, problem?: string) => (
     <textarea
       id={id}
@@ -318,9 +323,11 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
       )}
       {canEdit && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '0 16px 10px' }} data-testid="secret-edit-bar">
-          {!editing && (
+          {!editing && writes.show && (
             <button
               className="rk-btn"
+              disabled={!!writes.off}
+              title={writes.off}
               onClick={() => {
                 setEditedVersion(resourceVersion)
                 setEditing(true)
@@ -329,6 +336,11 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
             >
               Edit
             </button>
+          )}
+          {!editing && writes.off && (
+            <span className="rk-fhint" style={{ fontSize: 12 }} data-testid="secret-edit-off">
+              {writes.show ? writes.off : `Viewed here, not changed: ${writes.off}`}
+            </span>
           )}
           {editing && (
             <>
@@ -359,9 +371,13 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
       <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 11.5, color: 'var(--fg3)' }} data-testid="keys-note">
         221B shows a Secret’s keys and their sizes, never their values (X-01); the YAML tab hides them too.
         {cfg?.edit
-          ? cfg.reveal
-            ? ' Reveal reads one value live, as you, and the audit log records it. Edits are written as you; Kubernetes decides.'
-            : ' Edits are written as you, without showing the old values; Kubernetes decides. Revealing is off here (secrets.reveal in the chart).'
+          ? !writes.show
+            ? cfg.reveal
+              ? ' Reveal reads one value live, as you, and the audit log records it.'
+              : ' Revealing is off here (secrets.reveal in the chart).'
+            : cfg.reveal
+              ? ' Reveal reads one value live, as you, and the audit log records it. Edits are written as you; Kubernetes decides.'
+              : ' Edits are written as you, without showing the old values; Kubernetes decides. Revealing is off here (secrets.reveal in the chart).'
           : ''}
       </p>
     </>

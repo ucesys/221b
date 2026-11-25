@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -43,17 +42,19 @@ const (
 func (s *Service) passwordOn() bool { return s.cfg.Mode == ModeLocal || s.cfg.Mode == ModeLDAP }
 
 func (s *Service) renderPassword(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
-	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
+	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: formTokenOf(r), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
 	if r.Method == http.MethodPost {
-		d.Username, d.Next = audit.Clip(r.PostFormValue("username"), maxLogin), safeNext(r.PostFormValue("next"))
+		// What postPassword parsed, within the form's limit.
+		f := r.PostForm
+		d.Username, d.Next = audit.Clip(f.Get("username"), maxLogin), safeNext(f.Get("next"))
 		switch field {
 		case fieldNew:
-			d.Current = r.PostFormValue("current")
+			d.Current = f.Get("current")
 		case fieldNewAgain:
-			d.Current, d.Password = r.PostFormValue("current"), r.PostFormValue("password")
+			d.Current, d.Password = f.Get("current"), f.Get("password")
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
@@ -88,8 +89,8 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 	login, fits := formLogin(r.PostFormValue("username"))
 	current, password := r.PostFormValue("current"), r.PostFormValue("password")
 	who := User{Username: login, Email: login}
-	if !s.attempt(r, login) {
-		s.record(r, audit.ActionPasswordChange, who, audit.OutcomeDenied, "too many attempts")
+	if ok, by := s.attemptBy(r, login); !ok {
+		s.recordRefusal(r, audit.ActionPasswordChange, who, by)
 		s.renderPassword(w, r, "Too many attempts. Wait a minute and try again.", "", http.StatusTooManyRequests)
 		return
 	}
@@ -125,8 +126,14 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if _, _, err := s.accounts.Update(ctx, acct.Username, Change{Password: &password}); err != nil {
+	// Changed only over the hash the current password was checked against:
+	// this replica's copy may hold one a reset has replaced.
+	if _, _, err := s.accounts.Update(ctx, acct.Username, Change{Password: &password, IfHash: &acct.PasswordHash}); err != nil {
 		s.record(r, audit.ActionPasswordChange, who, audit.OutcomeFailed, err.Error())
+		if errors.Is(err, ErrPasswordChanged) {
+			s.renderPassword(w, r, passwordRefuse, "", http.StatusUnauthorized)
+			return
+		}
 		msg := sentence(err.Error())
 		if errors.Is(err, ErrManaged) {
 			msg = "This account is defined in the deployment’s values, so its password is changed there, with helm upgrade."
@@ -134,8 +141,7 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 		s.renderPassword(w, r, msg, "", http.StatusBadRequest)
 		return
 	}
-	n := s.endSessions(acct.Username)
-	s.record(r, audit.ActionPasswordChange, who, audit.OutcomeOK, fmt.Sprintf("changed from the sign-in page; %d sessions ended", n))
+	s.record(r, audit.ActionPasswordChange, who, audit.OutcomeOK, "changed from the sign-in page; "+s.endSessions(acct.Username))
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	http.Redirect(w, r, "/signin?changed=1&next="+url.QueryEscape(safeNext(r.PostFormValue("next"))), http.StatusSeeOther)
 }

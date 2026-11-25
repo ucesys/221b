@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -55,6 +57,17 @@ type AgentRequest struct {
 	// no call once it says stop (JB-10). A runner that does not is
 	// counted by the result's cost when it ends.
 	Meter Meter
+	// Auto is what Auto's rules read for this step of the run (AI-45): what
+	// started the run and what the step is about, the model the run started
+	// on ("" for its first step) and whether it moved up already.
+	Auto *AutoStep
+}
+
+// AutoStep is a step of a run as Auto's rules see it.
+type AutoStep struct {
+	Input   auto.RunInput
+	Model   string
+	MovedUp bool
 }
 
 // Meter counts a run's model calls as they end and says when the run's
@@ -66,12 +79,21 @@ type Meter interface {
 
 // AgentResult is what an agent's call came to.
 type AgentResult struct {
-	Text    string
-	Model   string
-	Tokens  Tokens
-	CostUSD float64
-	Tools   []string
-	Err     error
+	Text  string
+	Model string
+	// Provider names the provider it ran on; Effort the effort, "" for the
+	// model's default; PickBy and PickWhy how they were picked when Auto
+	// picked them; MovedUpFrom the model this step moved the run up from
+	// (AI-48).
+	Provider    string
+	Effort      string
+	PickBy      string
+	PickWhy     string
+	MovedUpFrom string
+	Tokens      Tokens
+	CostUSD     float64
+	Tools       []string
+	Err         error
 }
 
 // AgentRunner runs agents on their own; cmd/221b gives the console's, over
@@ -91,6 +113,38 @@ type ReadChecker interface {
 	Blind(ctx context.Context, cluster string, reader Settings) (bool, error)
 }
 
+// AgentChecker is an AgentRunner that also says whether an agent can
+// answer at all, on no cluster in particular (JB-25): nil when it can; an
+// error that is ErrAgentOff when it is turned off; another, in its own
+// words, when its provider cannot (gone, no key).
+type AgentChecker interface {
+	Available(ctx context.Context, agent string) error
+}
+
+// AgentDescriber is an AgentRunner that also says each agent's model and
+// effort as set now, for the jobs' list (AIOps › Jobs › Schedule): a
+// person who may see the jobs but not Administration › AI sees them too.
+type AgentDescriber interface {
+	SetupOf(ctx context.Context, agent string) (AgentSetup, bool)
+}
+
+// AgentSetup is a job's agent's model and effort as set now. Model is the
+// model in force, "auto" when Auto picks it among AutoFrom to AutoTo, and
+// DefaultModel says it is its provider's default; Effort is "" (the
+// model's default), a level, or "auto", at least FloorEffort.
+type AgentSetup struct {
+	Model        string `json:"model,omitempty"`
+	DefaultModel bool   `json:"defaultModel,omitempty"`
+	AutoFrom     string `json:"autoFrom,omitempty"`
+	AutoTo       string `json:"autoTo,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	Effort       string `json:"effort,omitempty"`
+	FloorEffort  string `json:"floorEffort,omitempty"`
+}
+
+// AgentsPath is where a person turns an agent on.
+const AgentsPath = "Administration › AI › Agents"
+
 // NoAccessHint is what a run that could not read a cluster tells the
 // person to do (JB-23).
 const NoAccessHint = "set Administration › AI › Jobs › reader role, or bind a role to 221b:agents in the cluster"
@@ -99,6 +153,10 @@ const NoAccessHint = "set Administration › AI › Jobs › reader role, or bin
 type Cluster struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Env is the cluster's environment as its connection marks it
+	// (production, staging, development, other); Auto's rules read it
+	// (AI-45).
+	Env string `json:"env,omitempty"`
 }
 
 // Alert is an alert on a cluster's Alerts tab, as the alert jobs see it.
@@ -436,6 +494,15 @@ type RunBrief struct {
 	NotFiled  int     `json:"notFiled,omitempty"`
 	CostUSD   float64 `json:"costUSD"`
 	Model     string  `json:"model,omitempty"`
+	// Provider, Effort and PickBy are the run's (AI-48), for the row's
+	// "Auditor · Claude Opus 5.5 · high".
+	Provider string `json:"provider,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	PickBy   string `json:"pickBy,omitempty"`
+	// PickWhy is why Auto picked its effort, MovedUp where its model was
+	// moved up: the Runs table's Model and Effort columns say them.
+	PickWhy string   `json:"pickWhy,omitempty"`
+	MovedUp *MovedUp `json:"movedUp,omitempty"`
 	// NotRouted says why its findings were not routed into cases (W-8).
 	NotRouted string `json:"notRouted,omitempty"`
 	// Health is the worst of what it found, or failed, and Severities its
@@ -452,7 +519,7 @@ type RunBrief struct {
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
 		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, CostUSD: r.CostUSD, Model: r.Model,
-		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked}
+		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked, Provider: r.Provider, Effort: r.Effort, PickBy: r.PickBy, PickWhy: r.PickWhy, MovedUp: r.MovedUp}
 	for _, p := range r.Proposals {
 		if p.ID == "" {
 			b.NotFiled++
@@ -496,7 +563,15 @@ type View struct {
 	// stopped it.
 	SpentToday   float64 `json:"spentToday"`
 	StoppedToday string  `json:"stoppedToday,omitempty"`
-	// Unusable says why its agent cannot work now.
+	// Setup is its agent's model and effort as set now; nil for a job
+	// without an agent.
+	Setup *AgentSetup `json:"setup,omitempty"`
+	// AgentOff says its agent is turned off ("the Summarizer is off"), on
+	// or paused (JB-25): Run now is refused, and its scheduled and event
+	// runs fail, until the agent is turned on.
+	AgentOff string `json:"agentOff,omitempty"`
+	// Unusable says why its agent cannot work now otherwise: its provider
+	// cannot answer, or it does not work on the job's cluster.
 	Unusable string `json:"unusable,omitempty"`
 	// External is a job run elsewhere (the backups to S3), with where it
 	// is set.
@@ -602,11 +677,48 @@ func (s *Service) view(ctx context.Context, rec jobsRecord, runs []Run, j Job, k
 	if k.Agent != "" {
 		if s.o.Agents == nil {
 			v.Unusable = "The agents are not running on this console."
-		} else if cl := s.covered(j, nil); len(cl) > 0 {
-			v.Unusable = s.o.Agents.Usable(k.Agent, cl[0])
+		} else {
+			if ad, ok := s.o.Agents.(AgentDescriber); ok {
+				if st, ok := ad.SetupOf(ctx, k.Agent); ok {
+					v.Setup = &st
+				}
+			}
+			if ac, ok := s.o.Agents.(AgentChecker); ok {
+				if err := ac.Available(ctx, k.Agent); errors.Is(err, ErrAgentOff) {
+					v.AgentOff = err.Error()
+				}
+			}
+			if cl := s.covered(j, nil); v.AgentOff == "" && len(cl) > 0 {
+				v.Unusable = s.o.Agents.Usable(k.Agent, cl[0])
+			}
 		}
 	}
 	return v
+}
+
+// agentReady refuses a run asked by hand of a job whose agent cannot
+// answer now (JB-25): turned off, or with a provider that cannot. Nothing
+// is recorded; the error says why and what to do. Scheduled and event
+// runs are not asked: they run and fail with the note, as nobody is at
+// the screen to read a refusal.
+func (s *Service) agentReady(ctx context.Context, j Job, k Kind) error {
+	if k.Agent == "" || s.o.Agents == nil {
+		return nil
+	}
+	ac, ok := s.o.Agents.(AgentChecker)
+	if !ok {
+		return nil
+	}
+	err := ac.Available(ctx, k.Agent)
+	if err == nil {
+		return nil
+	}
+	name := firstNonEmpty(k.AgentName, k.Agent)
+	if errors.Is(err, ErrAgentOff) {
+		return saidError{msg: fmt.Sprintf("The %s runs on the %s, which is off: turn it on in %s.", labelOf(j, k), name, AgentsPath), is: ErrNoAgent}
+	}
+	why := strings.TrimRight(strings.TrimSpace(err.Error()), ".")
+	return saidError{msg: fmt.Sprintf("The %s runs on the %s, which cannot answer now: %s.", labelOf(j, k), name, why), is: ErrNoAgent}
 }
 
 // List lists the jobs.

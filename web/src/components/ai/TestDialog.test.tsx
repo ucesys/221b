@@ -184,6 +184,18 @@ describe('the test dialog', () => {
     expect(replays.map((r) => within(r).getByTestId('test-replay-same').textContent)).toEqual(['= Same', '≠ Different'])
     expect(replays[1]!.textContent).toContain('A deploy.')
     expect(replays[1]!.textContent).toContain('Nothing.')
+    expect(within(dlg).queryByTestId('test-dialog-measured')).toBeNull()
+  })
+
+  it('says when the run measured at an effort or on a model of its own, not the draft’s test (AI-48, review finding 3)', async () => {
+    run = running({ state: 'done', model: 'claude-opus-5-5', effort: 'high' })
+    render(<TestDialog agentId="troubleshooter" agentName="Troubleshooter" draftRev={3} onClose={() => {}} />)
+    const dlg = await screen.findByTestId('test-dialog')
+    await waitFor(() => expect(within(dlg).getByTestId('test-dialog-measured').textContent).toBe('This run measured claude-opus-5-5 at effort high, with Auto off: it is not kept as the draft’s test.'))
+    cleanup()
+    run = running({ state: 'done', model: 'claude-haiku-5-5', effort: '' })
+    render(<TestDialog agentId="troubleshooter" agentName="Troubleshooter" draftRev={3} onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('test-dialog-measured').textContent).toContain('claude-haiku-5-5 at the model’s own effort'))
   })
 })
 

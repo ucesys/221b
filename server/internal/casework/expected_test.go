@@ -187,7 +187,7 @@ func TestTheAlertsNameCF84(t *testing.T) {
 	w := setup(t)
 	ctx := context.Background()
 	canal := jobs.Alert{Cluster: "prod", Key: "pod:kube-system/rke2-canal-n6fkh", Kind: "pod", Severity: jobs.SeverityError, Name: "rke2-canal-n6fkh", Namespace: "kube-system", Status: "Unknown", Node: "r620-worker", Fingerprint: "failed|Unknown"}
-	id, err := w.svc.openForAlert(ctx, canal, 15*time.Minute)
+	id, err := w.svc.openForAlert(ctx, canal, 15*time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestTheAnalysisLowersThePriorityCF83(t *testing.T) {
 	ctx := context.Background()
 	w.agents.answer = expectedAnswer
 	// The safety net's case, P0.
-	net, err := w.svc.openForAlert(ctx, criticalAlert("canal"), 15*time.Minute)
+	net, err := w.svc.openForAlert(ctx, criticalAlert("canal"), 15*time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestTheAnalysisLowersThePriorityCF83(t *testing.T) {
 	}
 	// The console's case whose priority a person set stays as they set it.
 	w.agents.answer = fixAnswer
-	other, err := w.svc.openForAlert(ctx, criticalAlert("db-0"), 15*time.Minute)
+	other, err := w.svc.openForAlert(ctx, criticalAlert("db-0"), 15*time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestTheAnalysisLowersThePriorityCF83(t *testing.T) {
 	}
 	// A verdict without its reason is no verdict.
 	w.agents.answer = `{"summary": "Fine.", "cause": "", "evidence": [], "fix": {"summary": "", "commands": []}, "proposals": [], "expected": true, "expectedWhy": " "}`
-	bare, err := w.svc.openForAlert(ctx, criticalAlert("web-9"), 15*time.Minute)
+	bare, err := w.svc.openForAlert(ctx, criticalAlert("web-9"), 15*time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}

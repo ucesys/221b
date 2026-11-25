@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -61,6 +63,23 @@ type Session struct {
 	Signed bool
 	// sid tells one signed session from another.
 	sid string
+	// state is, for a signed session, the ID of the stored session it is
+	// exchanged for (exchangeID): see StateID.
+	state string
+}
+
+// StateID names what the console keeps for a session (a conversation
+// with Sherlock, Watson's cards and grants, the window a view action goes
+// to, the toolbox's sessions): the session's ID, or, for a signed session,
+// the ID of the stored session it is exchanged for once the store is back,
+// so what the person started while the store was away is still theirs
+// after the exchange. It is as secret as the ID: never shown, logged or
+// sent.
+func (s Session) StateID() string {
+	if s.state != "" {
+		return s.state
+	}
+	return s.ID
 }
 
 // SharedStore keeps session records where every replica of the console
@@ -114,11 +133,14 @@ func StoreAway(err error) bool {
 const seenEvery = 5 * time.Minute
 
 const (
-	// awayFor is how long a shared store found away is left alone. A store
-	// that swallows what it is sent answers each call only when the call's
-	// time runs out; asked on every request it would hold every click that
-	// long. After awayFor one call at a time tries it again.
-	awayFor = 10 * time.Second
+	// maxStoreCalls bounds the calls of one replica that are with the
+	// shared store at once. Every call asks the store, with its own time
+	// (timeout): one that runs out says nothing of the next (the review of
+	// November 23, 2026; the owner, November 24, 2026, took the breaker
+	// that left the store alone for 10 seconds out). A store that swallows
+	// what it is sent so holds this many calls; one more waits for its turn
+	// within its own time, and is away when that runs out.
+	maxStoreCalls = 32
 	// exchangeEvery is how long a signed session waits, after a stored
 	// session could not be started in its place, before that is tried again.
 	exchangeEvery = 30 * time.Second
@@ -148,16 +170,23 @@ type Sessions struct {
 	extra map[string]map[string]json.RawMessage
 	// newer marks records a newer console wrote: read, never written back.
 	newer map[string]bool
-	log   *slog.Logger
+	// unstored are the sessions started here whose record the shared store
+	// refused (it answered, so no signed session was made): this replica's
+	// own, which the store not holding them does not end.
+	unstored map[string]bool
+	log      *slog.Logger
 
 	// key signs the sessions made while the shared store is away, and
 	// outage is how long one lasts (DB-65).
 	key    *SessionKey
 	outage time.Duration
-	// awayUntil is set while the shared store is known to be away: until
-	// then it is not asked. probing says one call is trying it again.
-	awayUntil time.Time
-	probing   bool
+	// calls holds a place for each call with the shared store
+	// (maxStoreCalls).
+	calls chan struct{}
+	// awayNoted says the last call found the store away: for the log only,
+	// which says it once and says when it is back. Nothing is refused for
+	// it.
+	awayNoted bool
 	// ended are the keys of the sessions ended here (a sign-out, an
 	// account disabled) while the store could not be told: refused on this
 	// replica, and removed from the store, or marked ended there (ending),
@@ -242,8 +271,9 @@ func NewSessions(idle, max time.Duration, now func() time.Time) *Sessions {
 	if now == nil {
 		now = time.Now
 	}
-	return &Sessions{idle: idle, max: max, now: now, byID: map[string]*Session{}, written: map[string]time.Time{}, extra: map[string]map[string]json.RawMessage{}, newer: map[string]bool{}, log: slog.Default(),
-		key: NewSessionKey(nil, now), outage: defaultOutage, ended: map[string]ending{}, revoked: map[string]time.Time{}, exchanged: map[string]exchange{}, tryAfter: map[string]time.Time{}}
+	return &Sessions{idle: idle, max: max, now: now, byID: map[string]*Session{}, written: map[string]time.Time{}, extra: map[string]map[string]json.RawMessage{}, newer: map[string]bool{}, unstored: map[string]bool{}, log: slog.Default(),
+		key: NewSessionKey(nil, now), outage: defaultOutage, ended: map[string]ending{}, revoked: map[string]time.Time{}, exchanged: map[string]exchange{}, tryAfter: map[string]time.Time{},
+		calls: make(chan struct{}, maxStoreCalls)}
 }
 
 // Outage sets the key that signs the sessions made while the shared store
@@ -261,47 +291,64 @@ func (s *Sessions) Outage(key *SessionKey, lasts time.Duration) {
 }
 
 // OutageLasts is how long a session made while the shared store is away
-// lasts.
+// lasts: the outage session's time, or the idle limit or the maximum
+// lifetime when one is shorter. A signed session cannot carry its last
+// activity from replica to replica, so it is held to the idle limit from
+// its sign-in.
 func (s *Sessions) OutageLasts() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.outage
+	return s.outageLasts()
 }
 
-// reach asks the shared store, unless it is known to be away: then it
-// returns ErrStoreAway at once. A call that finds the store away marks it
-// so for awayFor; after that one call at a time tries it again.
+// outageLasts is OutageLasts for callers that hold the lock.
+func (s *Sessions) outageLasts() time.Duration {
+	d := s.outage
+	for _, limit := range []time.Duration{s.idle, s.max} {
+		if limit > 0 && limit < d {
+			d = limit
+		}
+	}
+	return d
+}
+
+// reach asks the shared store, every time: a call that found it away, or
+// ran out of time, does not keep the next one from asking. Each call has
+// its own time (timeout), and at most maxStoreCalls are with the store at
+// once; a call that waits for its turn past its time is away.
 func (s *Sessions) reach(fn func(ctx context.Context, store SharedStore) error) error {
+	return s.ask(fn, true)
+}
+
+// ask is reach; back says whether an answer says the store is back, which
+// a list does not: a store may list from a copy it keeps (the Secrets'
+// store does).
+func (s *Sessions) ask(fn func(ctx context.Context, store SharedStore) error, back bool) error {
 	s.mu.Lock()
 	shared := s.shared
+	s.mu.Unlock()
 	if shared == nil {
-		s.mu.Unlock()
 		return ErrStoreAway
 	}
-	probe := false
-	if !s.awayUntil.IsZero() {
-		if s.probing || s.now().Before(s.awayUntil) {
-			s.mu.Unlock()
-			return ErrStoreAway
-		}
-		s.probing, probe = true, true
-	}
-	s.mu.Unlock()
 	ctx, cancel := timeout()
-	err := fn(ctx, shared)
-	cancel()
-	s.mu.Lock()
-	if probe {
-		s.probing = false
+	defer cancel()
+	var err error
+	select {
+	case s.calls <- struct{}{}:
+		err = fn(ctx, shared)
+		<-s.calls
+	case <-ctx.Done():
+		err = fmt.Errorf("%w: %d calls of the session store under way", ErrStoreAway, maxStoreCalls)
 	}
-	was := !s.awayUntil.IsZero()
+	s.mu.Lock()
+	was := s.awayNoted
 	switch {
 	case StoreAway(err):
-		s.awayUntil = s.now().Add(awayFor)
-	case probe || err == nil:
-		s.awayUntil = time.Time{}
+		s.awayNoted = true
+	case back:
+		s.awayNoted = false
 	}
-	is := !s.awayUntil.IsZero()
+	is := s.awayNoted
 	s.mu.Unlock()
 	switch {
 	case is && !was:
@@ -312,37 +359,15 @@ func (s *Sessions) reach(fn func(ctx context.Context, store SharedStore) error) 
 	return err
 }
 
-// list reads the shared store's list, unless the store is known to be
-// away. A list that fails as away marks the store so; one that is read
-// does not say the store is back, since a store may list from a copy it
-// keeps (the Secrets' store does).
+// list reads the shared store's list.
 func (s *Sessions) list() (map[string][]byte, error) {
-	if s.away() {
-		return nil, ErrStoreAway
-	}
-	s.mu.Lock()
-	shared := s.shared
-	s.mu.Unlock()
-	ctx, cancel := timeout()
-	defer cancel()
-	stored, err := shared.List(ctx)
-	if StoreAway(err) {
-		s.mu.Lock()
-		was := !s.awayUntil.IsZero()
-		s.awayUntil = s.now().Add(awayFor)
-		s.mu.Unlock()
-		if !was {
-			s.log.Warn("the session store is away: the sessions this replica holds stand, and a sign-in is kept in its cookie until the store is back", "err", err)
-		}
-	}
+	var stored map[string][]byte
+	err := s.ask(func(ctx context.Context, shared SharedStore) error {
+		var err error
+		stored, err = shared.List(ctx)
+		return err
+	}, false)
 	return stored, err
-}
-
-// away says whether the shared store is being left alone just now.
-func (s *Sessions) away() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.shared != nil && !s.awayUntil.IsZero() && (s.probing || s.now().Before(s.awayUntil))
 }
 
 // Share keeps the sessions in a store every replica sees.
@@ -433,6 +458,11 @@ func (s *Sessions) open(sess Session, refuse bool) (*Session, error) {
 	}
 	_, err := s.store(key, sess, true)
 	if !StoreAway(err) {
+		if err != nil {
+			s.mu.Lock()
+			s.unstored[key] = true
+			s.mu.Unlock()
+		}
 		return &sess, nil
 	}
 	signed, err := s.sign(sess)
@@ -540,6 +570,7 @@ func (s *Sessions) forgetOf(key string, ended bool, known *Session) {
 	delete(s.written, key)
 	delete(s.extra, key)
 	delete(s.newer, key)
+	delete(s.unstored, key)
 	shared := s.shared
 	if sess != nil && sess.Signed {
 		s.revoked[sess.sid] = sess.Expires
@@ -637,8 +668,9 @@ func (s *Sessions) find(id string) (string, *Session, int) {
 	shared := s.shared
 	local := s.byID[key]
 	_, ended := s.ended[key]
+	unstored := s.unstored[key]
 	s.mu.Unlock()
-	if shared == nil {
+	if shared == nil || (unstored && local != nil) {
 		if local == nil {
 			return key, nil, gone
 		}
@@ -754,6 +786,7 @@ func (s *Sessions) listed() (map[string]Session, map[string]time.Time, error) {
 	for k := range s.ended {
 		ended[k] = true
 	}
+	unstored := maps.Clone(s.unstored)
 	s.mu.Unlock()
 	if shared == nil {
 		return out, nil, nil
@@ -764,7 +797,7 @@ func (s *Sessions) listed() (map[string]Session, map[string]time.Time, error) {
 	}
 	markers := map[string]time.Time{}
 	for k, v := range out {
-		if _, ok := stored[k]; !ok && !v.Signed {
+		if _, ok := stored[k]; !ok && !v.Signed && !unstored[k] {
 			delete(out, k)
 		}
 	}
@@ -810,20 +843,22 @@ func (s *Sessions) Live() []Session {
 // DeleteWhere ends every session the test selects, on every replica, and
 // says how many. While the shared store's list cannot be had it ends the
 // ones this replica holds, and no other: those it refuses from then on and
-// removes from the store when the store can be reached. A signed session
-// this replica holds is ended here, and its ending kept in the store for
-// the replicas that do not remember it; one this replica has never seen
-// cannot be found, and lasts until it expires (DB-65).
-func (s *Sessions) DeleteWhere(match func(Session) bool) int {
+// removes from the store when the store can be reached, and the error says
+// the ending is partial. A signed session this replica holds is ended
+// here, and its ending kept in the store for the replicas that do not
+// remember it; one this replica has never seen cannot be found here
+// (DB-65). What ends the others is the account's note of the ending
+// (Accounts.SessionsEnded), which every replica checks.
+func (s *Sessions) DeleteWhere(match func(Session) bool) (int, error) {
 	n := 0
-	all, _ := s.all()
+	all, err := s.all()
 	for key, sess := range all {
 		if match(sess) {
 			s.forgetOf(key, true, &sess)
 			n++
 		}
 	}
-	return n
+	return n, err
 }
 
 // Get finds a live session and notes the activity; an expired one is
@@ -836,8 +871,16 @@ func (s *Sessions) Get(id string) (Session, bool) {
 	now := s.now()
 	s.mu.Lock()
 	if s.expired(sess, now) {
+		// With a shared store another replica may hold activity it has not
+		// written back yet (every seenEvery): by the last activity known
+		// here the session is idle, so it is refused here, but it is ended
+		// for every replica only once it is idle by any count, as the
+		// sweep does.
+		gone := s.shared == nil || now.Sub(sess.LastSeen) > s.idle+seenEvery || now.After(sess.Expires)
 		s.mu.Unlock()
-		s.forget(key, false)
+		if gone {
+			s.forget(key, false)
+		}
 		return Session{}, false
 	}
 	sess.LastSeen = now
@@ -860,8 +903,32 @@ func (s *Sessions) Alive(id string) bool {
 	if state == unknown {
 		return true
 	}
+	if state == gone && s.signedAlive(id) {
+		// The StateID of a signed session not exchanged yet: what is kept
+		// for it lives as long as the signed session does.
+		return true
+	}
 	_, ok := s.peekAt(key, sess, state == here)
 	return ok
+}
+
+// signedAlive says whether this replica holds a signed session, not
+// exchanged, not ended and not expired, whose StateID is id.
+func (s *Sessions) signedAlive(id string) bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.byID {
+		if !sess.Signed || sess.state != id {
+			continue
+		}
+		_, ended := s.revoked[sess.sid]
+		_, exchanged := s.exchanged[sess.sid]
+		if !ended && !exchanged && !s.expired(sess, now) {
+			return true
+		}
+	}
+	return false
 }
 
 // peek is Get without counting as activity, and without dropping an expired
@@ -905,6 +972,11 @@ func (s *Sessions) Delete(id string) {
 		}
 		return
 	}
+	if !plausibleID(id) {
+		// No ID this console gave: nothing of it is held or stored, and the
+		// store is not asked (a made-up cookie costs nothing).
+		return
+	}
 	s.forget(keyOf(id), true)
 }
 
@@ -946,9 +1018,6 @@ func (s *Sessions) Sweep() {
 		ended = append(ended, key)
 	}
 	s.mu.Unlock()
-	if shared != nil && s.away() {
-		return
-	}
 	all, markers, err := s.allAndEnded()
 	if err != nil {
 		if !StoreAway(err) {
@@ -983,14 +1052,17 @@ func (s *Sessions) Sweep() {
 	if !s.tellEnded(ended) {
 		return
 	}
-	// Drop what this replica holds of sessions it no longer uses.
+	// Drop what this replica holds of sessions it no longer uses, and of
+	// sessions ended elsewhere, whose key the store keeps for the record of
+	// their ending (endedRecord): a copy kept here would be served while
+	// the store cannot be asked.
 	stored, err := s.list()
 	if err != nil {
 		return
 	}
 	s.mu.Lock()
 	for key, sess := range s.byID {
-		if _, ok := stored[key]; !ok && !sess.Signed {
+		if b, ok := stored[key]; (!ok || isEnded(b)) && !sess.Signed && !s.unstored[key] {
 			delete(s.byID, key)
 			delete(s.written, key)
 			delete(s.extra, key)
@@ -1025,19 +1097,18 @@ func (s *Sessions) tellEnded(ended []string) bool {
 }
 
 // StoreIsBack is told when the shared store answers again after being
-// away (the database's health says so, db.OnAvailable): the store is not
-// left alone any longer, and the sessions ended here meanwhile are
-// told to it now, not at the next sweep, so the other replicas stop
-// taking them. A store that is not back after all is found away again by
-// the first call.
+// away (the database's health says so, db.OnAvailable): the sessions
+// ended here meanwhile are told to it now, not at the next sweep, so the
+// other replicas stop taking them. A store that is not back after all is
+// found away again by the next call.
 func (s *Sessions) StoreIsBack() {
 	s.mu.Lock()
-	if s.shared == nil || s.probing {
+	if s.shared == nil {
 		s.mu.Unlock()
 		return
 	}
-	was := !s.awayUntil.IsZero()
-	s.awayUntil = time.Time{}
+	was := s.awayNoted
+	s.awayNoted = false
 	ended := make([]string, 0, len(s.ended))
 	for key := range s.ended {
 		ended = append(ended, key)

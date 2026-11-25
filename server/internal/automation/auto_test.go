@@ -297,14 +297,24 @@ func TestHooksRunAroundEachNodeAndAFailureLeavesItCordoned(t *testing.T) {
 		t.Fatalf("%v %+v", k.lines, r.Nodes[0])
 	}
 
-	// A drain that fails skips the script.
+	// A drain that fails skips the script, and leaves the node cordoned,
+	// which the record says (the review of November 24, 2026, finding 13).
 	k.lines, k.fail = nil, "drain"
 	x := &stubExec{}
 	e3, _ := stubEngine(x, k, nil)
 	r, _ = e3.Start(context.Background(), sp)
 	r = waitRun(t, e3, r.ID)
-	if len(x.calls) != 0 || r.State != RunFailed {
-		t.Fatalf("%v %s", x.calls, r.State)
+	if len(x.calls) != 0 || r.State != RunFailed || !r.Nodes[0].Cordoned || !strings.Contains(r.Note, "left cordoned: a") {
+		t.Fatalf("%v %s %q %+v", x.calls, r.State, r.Note, r.Nodes[0])
+	}
+
+	// Drained with no hook after it to uncordon: cordoned too.
+	k.lines, k.fail = nil, ""
+	e4, _ := stubEngine(&stubExec{}, k, nil)
+	r, _ = e4.Start(context.Background(), Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Nodes: []string{"a"}, Rollout: Rollout{Mode: RolloutAll}, Before: []Hook{DrainHook()}})
+	r = waitRun(t, e4, r.ID)
+	if r.State != RunSucceeded || !r.Nodes[0].Cordoned || !strings.Contains(r.Note, "left cordoned: a") {
+		t.Fatalf("%s %q %+v", r.State, r.Note, r.Nodes[0])
 	}
 }
 

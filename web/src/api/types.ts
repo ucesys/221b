@@ -497,6 +497,8 @@ export interface Settings {
   fleetsPage?: boolean
   /** Whether the leader looks for newer images than the Helm releases run (HA-23); absent is true. */
   imageChecks?: boolean
+  /** Whether the installers are asked to star 221B on GitHub (CU-21); absent is true. */
+  starPrompt?: boolean
   /** Whether dollar amounts show anywhere (CF-40); absent is true. Set by a SuperAdmin at /api/v1/settings/ui. */
   showCosts?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */
@@ -570,6 +572,10 @@ export interface Me {
   sessionIdleSeconds: number
   /** For a SuperAdmin: a peer that sent X-Forwarded-For, Forwarded or X-Real-IP without being listed under auth.trustedProxies (SEC-30). */
   untrustedProxy?: string
+  /** The console's version, the chart's (RB-58): told to people signed in only, never with sign-in off. */
+  version?: string
+  /** The short commit of a build that is not a release; absent for a release. */
+  build?: string
 }
 
 /** One row of an alert's table: an event, or a node's condition or state (P4-07). */

@@ -39,8 +39,15 @@ function overview(): AIOverview {
         needsKey: true,
         key: { set: true, store: 'secret' },
         usedBy: ['Sherlock'],
+        // A9: as an upgrade has it, every listed model offered and Auto among the three Claude models.
+        offers: [
+          { model: 'claude-haiku-5-5', tier: 'light' },
+          { model: 'claude-sonnet-5-5', tier: 'standard' },
+          { model: 'claude-opus-5-5', tier: 'strong' },
+        ],
+        offersAll: true,
       },
-      { id: 'gw', name: 'Gateway', kind: 'openai', model: 'gpt-5', resolved: { kind: 'openai', auth: 'header' }, default: false, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: [] },
+      { id: 'gw', name: 'Gateway', kind: 'openai', model: 'gpt-5', resolved: { kind: 'openai', auth: 'header' }, default: false, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: [], offers: [], offersAll: true },
     ],
     agents: [
       agent('sherlock', 'Sherlock', { viewControl: true, clusters: ['local'] }),
@@ -130,7 +137,12 @@ describe('the Agents section', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists every agent with its model, cap, clusters, state and on/off', async () => {
+  it('lists every agent with its model, effort, cap, clusters, state and on/off', async () => {
+    // The Automation author left to Auto, at least Low; the others on the model's own effort.
+    const withEffort = overview()
+    withEffort.agents[2] = { ...withEffort.agents[2]!, settings: { ...withEffort.agents[2]!.settings, effort: 'auto', floorEffort: 'low' } }
+    const served = globalThis.fetch
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => (String(url) === '/api/v1/ai' ? new Response(JSON.stringify(withEffort)) : served(url, init)))
     render(<AgentsSection />)
     const table = await screen.findByTestId('agents-table')
     const rows = within(table).getAllByTestId('agent-row')
@@ -142,12 +154,28 @@ describe('the Agents section', () => {
     expect(rows[1]!.textContent).toContain('$15.00')
     expect(rows[1]!.textContent).toContain('Edited in app')
     expect(rows[1]!.textContent).toContain('Draft tested')
+    // The effort column: the model's own default, a level, or Auto with its floor (AI-43).
+    expect(within(rows[0]!).getByTestId('agent-effort').textContent).toBe('Default')
+    expect(within(rows[2]!).getByTestId('agent-effort').textContent).toBe('Autoat least low')
     expect(rows[4]!.textContent).toContain('Baseline changed')
     expect(rows[4]!.dataset.on).toBe('false')
     // Sherlock has no switch: its clusters say where it is on.
     expect(within(rows[0]!).queryByTestId('agent-on')).toBeNull()
     fireEvent.click(within(rows[4]!).getByTestId('agent-on'))
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/summarizer', body: { on: true } }))
+  })
+
+  it('says in the table when Auto has no tiered model to pick, and the agent still turns off (A9, review finding 2)', async () => {
+    const noTier = overview()
+    noTier.agents[2] = { ...noTier.agents[2]!, model: 'auto', autoNoTier: true, providerId: 'gw', providerName: 'Gateway', settings: { provider: 'gw', model: 'auto' } }
+    const served = globalThis.fetch
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => (String(url) === '/api/v1/ai' ? new Response(JSON.stringify(noTier)) : served(url, init)))
+    render(<AgentsSection />)
+    const rows = within(await screen.findByTestId('agents-table')).getAllByTestId('agent-row')
+    expect(within(rows[2]!).getByTestId('agent-auto-no-tier').textContent).toBe('no tier: on the default model')
+    expect(within(rows[0]!).queryByTestId('agent-auto-no-tier')).toBeNull()
+    fireEvent.click(within(rows[2]!).getByTestId('agent-on'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/automationAuthor', body: { model: 'auto', on: false } }))
   })
 
   it('opens an agent in a drawer with its instructions, values key, stages and versions', async () => {
@@ -213,6 +241,50 @@ describe('the Agents section', () => {
     fireEvent.click(within(drawer).getByTestId('agent-some-clusters'))
     fireEvent.click(within(drawer).getByTestId('agent-save'))
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/ai/agents/troubleshooter', body: { tools: ['list_pods', 'top'], dailyUSD: 7, clusters: ['local'] } }))
+  })
+
+  it('sets an effort beside the model, Auto for the model where the provider has tiers, and the floor under Auto (AI-43, AI-44, AI-47, A9)', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    const effort = within(drawer).getByTestId('agent-effort') as HTMLSelectElement
+    expect([...effort.options].map((o) => o.textContent)).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Auto'])
+    expect(effort.value).toBe('')
+    expect(within(drawer).queryByTestId('agent-auto')).toBeNull()
+    fireEvent.change(effort, { target: { value: 'auto' } })
+    fireEvent.change(within(drawer).getByTestId('agent-model-list'), { target: { value: 'auto' } })
+    expect((within(drawer).getByTestId('agent-model-list') as HTMLSelectElement).value).toBe('auto')
+    expect([...(within(drawer).getByTestId('agent-floor-model') as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(['None', 'Claude Haiku 5.5 · light', 'Claude Sonnet 5.5 · standard', 'Claude Opus 5.5 · strong'])
+    const line = within(drawer).getByTestId('agent-auto-line').textContent
+    expect(line).toContain('the effort for every message and the model when a conversation or a run starts')
+    expect(line).toContain('Never xhigh or max without an open P0 or P1 case')
+    expect(line).toContain('off: medium on Claude Sonnet 5.5')
+    fireEvent.change(within(drawer).getByTestId('agent-floor-effort'), { target: { value: 'medium' } })
+    fireEvent.change(within(drawer).getByTestId('agent-floor-model'), { target: { value: 'claude-sonnet-5-5' } })
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PUT')).toMatchObject({
+        url: '/api/v1/ai/agents/troubleshooter',
+        body: { effort: 'auto', model: 'auto', floorEffort: 'medium', floorModel: 'claude-sonnet-5-5' },
+      }),
+    )
+  })
+
+  it('offers no Auto model on a provider with no tiered model, and says what its effort means there (AI-43, A9)', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.change(within(drawer).getByTestId('agent-model-list'), { target: { value: 'auto' } })
+    fireEvent.change(within(drawer).getByTestId('agent-provider'), { target: { value: 'gw' } })
+    const model = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
+    expect(model.value).toBe('')
+    expect([...model.options].map((o) => o.value)).not.toContain('auto')
+    expect(model.options[0]!.textContent).toBe('Default (gpt-5 on Gateway)')
+    fireEvent.change(within(drawer).getByTestId('agent-effort'), { target: { value: 'low' } })
+    expect(within(drawer).getByTestId('agent-effort-hint').textContent).toContain('Low turns the model’s thinking off')
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({ provider: 'gw', effort: 'low' }))
+    expect((calls.find((c) => c.method === 'PUT')?.body as { model?: string }).model).toBeUndefined()
   })
 
   it('asks for the single-provider confirmation before the Script reviewer shares the author’s provider', async () => {
@@ -589,7 +661,6 @@ describe('an agent’s built-in text, stages and context', () => {
     fireEvent.click(tabs[1]!)
     expect((within(drawer).getByTestId('ins-part') as HTMLTextAreaElement).value).toBe('You are Sherlock, briefly.')
     // A model of its own, picked from the endpoint's list, brings its context window.
-    fireEvent.click(within(drawer).getByTestId('agent-default-model'))
     const list = (await within(drawer).findByTestId('agent-model-list')) as HTMLSelectElement
     await waitFor(() => expect([...list.options].map((o) => o.textContent)).toContain('qwen3.8-27b · 16,384 tokens'))
     fireEvent.change(list, { target: { value: 'llama-4-scout-17b' } })
@@ -621,7 +692,7 @@ describe('an agent’s built-in text, stages and context', () => {
     await waitFor(() => expect(within(drawer).getByTestId('agent-model-picker').dataset.state).toBe('listed'))
     let list = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
     expect(list.value).toBe('my-old-model')
-    expect([...list.options].map((o) => o.textContent)).toEqual(['my-old-model (not listed by the provider)', 'qwen3.8-27b · 16,384 tokens'])
+    expect([...list.options].map((o) => o.textContent)).toEqual(['Default (claude-opus-5-5 on Anthropic)', 'Auto', 'my-old-model (not listed by the provider)', 'qwen3.8-27b · 16,384 tokens'])
     expect(within(drawer).queryByTestId('agent-model')).toBeNull()
     expect([...list.options].some((o) => o.textContent === 'Another model…')).toBe(false)
     // Another provider: its models.
@@ -641,6 +712,77 @@ describe('an agent’s built-in text, stages and context', () => {
     await waitFor(() => expect(within(again).getByTestId('agent-model-picker').dataset.state).toBe('typed'))
     expect((within(again).getByTestId('agent-model') as HTMLInputElement).value).toBe('my-old-model')
     expect(within(again).getByTestId('agent-model-hint').textContent).toContain('Type the model’s name.')
+  })
+})
+
+describe('the agent’s one Model dropdown (A9)', () => {
+  const calls: { method: string; url: string; body?: unknown }[] = []
+  let ov = overview()
+  beforeEach(() => {
+    Element.prototype.scrollTo = () => {}
+    calls.length = 0
+    ov = overview()
+    // The gateway's offered models were chosen: two with tiers, one without.
+    ov.providers[1] = {
+      ...ov.providers[1]!,
+      offeredChosen: true,
+      offered: [{ model: 'qwen-small', tier: 'light' }, { model: 'qwen-big', tier: 'strong' }, { model: 'embed-1' }],
+      offers: [{ model: 'qwen-small', tier: 'light' }, { model: 'qwen-big', tier: 'strong' }, { model: 'embed-1' }, { model: 'gpt-5' }],
+      offersAll: false,
+    }
+    ov.agents[1] = { ...ov.agents[1]!, settings: { provider: 'gw', model: 'qwen-old' }, providerId: 'gw', providerName: 'Gateway', notOffered: true }
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      calls.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      if (String(url).endsWith('/instructions')) return new Response(JSON.stringify(instructions()))
+      return new Response(JSON.stringify(ov))
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('offers Default, Auto and the provider’s offered models, says a model is no longer offered, and saves each choice', async () => {
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    expect(within(drawer).queryByTestId('agent-default-model')).toBeNull()
+    expect(within(drawer).queryByTestId('agent-auto-model')).toBeNull()
+    const model = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
+    expect(within(drawer).getByTestId('agent-model-picker').dataset.state).toBe('listed')
+    expect([...model.options].map((o) => o.textContent)).toEqual(['Default (gpt-5 on Gateway)', 'Auto', 'qwen-old (no longer offered)', 'qwen-small · light', 'qwen-big · strong', 'embed-1', 'gpt-5'])
+    expect(model.value).toBe('qwen-old')
+    expect(within(drawer).getByTestId('agent-not-offered').textContent).toContain('Gateway no longer offers qwen-old: the Troubleshooter answers on it until you choose another model.')
+    // No request for the endpoint's list: the offered models were chosen.
+    expect(calls.some((c) => c.url.endsWith('/models'))).toBe(false)
+    // A fixed model has its context window; Auto has the floor among the tiered models.
+    fireEvent.change(model, { target: { value: 'qwen-big' } })
+    expect(within(drawer).queryByTestId('agent-not-offered')).toBeNull()
+    expect(within(drawer).getByTestId('agent-context')).toBeTruthy()
+    fireEvent.change(model, { target: { value: 'auto' } })
+    expect(within(drawer).queryByTestId('agent-context')).toBeNull()
+    expect([...(within(drawer).getByTestId('agent-floor-model') as HTMLSelectElement).options].map((o) => o.value)).toEqual(['', 'qwen-small', 'qwen-big'])
+    fireEvent.change(within(drawer).getByTestId('agent-floor-model'), { target: { value: 'qwen-small' } })
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({ provider: 'gw', model: 'auto', floorModel: 'qwen-small' }))
+    // Default: no model of its own.
+    calls.length = 0
+    fireEvent.change(within(drawer).getByTestId('agent-model-list'), { target: { value: '' } })
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')).toBeTruthy())
+    const body = calls.find((c) => c.method === 'PUT')!.body as { model?: string; floorModel?: string }
+    expect(body.model).toBeUndefined()
+    expect(body.floorModel).toBeUndefined()
+  })
+
+  it('says Auto cannot pick the model when the provider’s models lost their tiers', async () => {
+    ov.providers[1] = { ...ov.providers[1]!, offered: [{ model: 'embed-1' }], offers: [{ model: 'embed-1' }, { model: 'gpt-5' }] }
+    ov.agents[1] = { ...ov.agents[1]!, settings: { provider: 'gw', model: 'auto' }, autoNoTier: true, notOffered: false }
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    expect(within(drawer).getByTestId('agent-auto-no-tier').textContent).toContain('None of the models Gateway offers has a tier')
   })
 })
 

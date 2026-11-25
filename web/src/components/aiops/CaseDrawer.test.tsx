@@ -38,6 +38,7 @@ vi.mock('../../api/casework', async (original) => {
     applyOffer: vi.fn(),
     closeException: vi.fn(),
     reopenCase: vi.fn(),
+    mergeCase: vi.fn(),
     skipValidation: vi.fn(),
     joinCase: vi.fn(),
     fetchSimilar: vi.fn(),
@@ -1167,5 +1168,91 @@ describe('a case names its job, not its id (R2-15)', () => {
     vi.mocked(api.fetchCase).mockResolvedValue(found({ createdBy: { name: 'Auditor', kind: 'agent' }, source: { kind: 'finding', run: 'run-3', job: 'nightly-audit' } }))
     render(<CaseDrawer id="20" onClose={() => undefined} />)
     expect(txt(await screen.findByTestId('case-kicker'))).toContain('found by Auditor (nightly-audit)')
+  })
+})
+
+describe('one case for one failure (CF-117 to CF-119)', () => {
+  const node = { id: 'C-13', number: 13, title: 'r620-worker stopped reporting' }
+  const podCase = (over: Partial<Case> = {}) =>
+    kase({
+      id: 'C-15',
+      number: 15,
+      priority: 0,
+      title: 'Pod status Unknown: node r620-worker stopped reporting (shop/Pod/app-3)',
+      source: { kind: 'alert', alert: 'Pod status Unknown: node r620-worker stopped reporting', alertKey: 'pod:shop/app-3' },
+      analysis: { at: '2026-11-23T00:30:00Z', summary: 'Its node stopped reporting.', fix: {}, sameCauseAs: ['C-13', 'C-14'], rootCase: 'C-13' },
+      mergeSuggestion: node,
+      ...over,
+    })
+
+  it('shows the analysis’s "Merge into C-13" and merges with one click (CF-118)', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(podCase())
+    const merged = podCase({ status: 'closed', outcome: 'duplicate', duplicateOf: 'C-13', mergedInto: 'C-13', pending: false, mergeSuggestion: undefined, explanation: 'Merged into C-13' })
+    vi.mocked(api.mergeCase).mockResolvedValue(merged)
+    const toast = vi.fn()
+    render(<CaseDrawer id="15" onClose={() => undefined} onToast={toast} />)
+    const hint = await screen.findByTestId('case-merge-suggestion')
+    expect(txt(hint)).toContain('The analysis says this case has the same cause as C-13 r620-worker stopped reporting.')
+    expect(txt(screen.getByTestId('case-merge-suggested'))).toBe('Merge into C-13')
+    fireEvent.click(screen.getByTestId('case-merge-suggested'))
+    await waitFor(() => expect(api.mergeCase).toHaveBeenCalledWith('C-15', 'C-13'))
+    // Closed, "Merged into C-13", pointing at it; the suggestion is gone.
+    expect(txt(await screen.findByTestId('case-merged-into'))).toContain('Merged into C-13')
+    expect(screen.getByTestId('case-merged-into').querySelector('a')?.getAttribute('href')).toBe('#/aiops/inbox/case/13')
+    expect(txt(screen.getByTestId('case-status'))).toContain('Closed')
+    expect(screen.queryByTestId('case-merge-suggestion')).toBeNull()
+    expect(screen.queryByTestId('case-duplicate-of')).toBeNull()
+  })
+
+  it('offers no merge to one who may not close the case, and none without a suggestion', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(podCase({ mayChange: false }))
+    const { unmount } = render(<CaseDrawer id="15" onClose={() => undefined} />)
+    expect(await screen.findByTestId('case-merge-suggestion')).toBeTruthy()
+    expect(screen.queryByTestId('case-merge-suggested')).toBeNull()
+    expect(screen.queryByTestId('case-merge-open')).toBeNull()
+    unmount()
+    vi.mocked(api.fetchCase).mockResolvedValue(podCase({ mergeSuggestion: undefined }))
+    render(<CaseDrawer id="15" onClose={() => undefined} />)
+    await screen.findByTestId('case-merge-open')
+    expect(screen.queryByTestId('case-merge-suggestion')).toBeNull()
+  })
+
+  it('merges into any open case by hand, from Merge into case… (CF-119)', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(podCase({ mergeSuggestion: undefined }))
+    vi.mocked(api.mergeCase).mockResolvedValue(podCase({ status: 'closed', outcome: 'duplicate', duplicateOf: 'C-13', mergedInto: 'C-13', pending: false, mergeSuggestion: undefined }))
+    render(<CaseDrawer id="15" onClose={() => undefined} onToast={() => undefined} />)
+    fireEvent.click(await screen.findByTestId('case-merge-open'))
+    expect(screen.getByTestId('case-merge-form')).toBeTruthy()
+    expect(disabled('case-merge-save')).toBe(true)
+    // Not into itself.
+    fireEvent.change(screen.getByTestId('case-merge-into'), { target: { value: 'c-15' } })
+    expect(disabled('case-merge-save')).toBe(true)
+    fireEvent.change(screen.getByTestId('case-merge-into'), { target: { value: '13' } })
+    fireEvent.change(screen.getByTestId('case-merge-why'), { target: { value: 'Same node.' } })
+    fireEvent.click(screen.getByTestId('case-merge-save'))
+    await waitFor(() => expect(api.mergeCase).toHaveBeenCalledWith('C-15', 'C-13', 'Same node.'))
+    expect(await screen.findByTestId('case-merged-into')).toBeTruthy()
+  })
+
+  it('lists the alerts attached to a node’s case (CF-117)', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(
+      kase({
+        id: 'C-13',
+        number: 13,
+        resource: 'Node/r620-worker',
+        correlationKey: 'node:prod/r620-worker',
+        signalCount: 2,
+        signals: [
+          { cluster: 'prod', key: 'pod:shop/app-3', name: 'Pod status Unknown: node r620-worker stopped reporting', object: 'shop/Pod/app-3', at: '2026-11-22T17:24:00Z', by: 'The console (alert safety net)', why: 'same node' },
+          { cluster: 'prod', key: 'pod:shop/app-4', at: '2026-11-23T00:40:00Z', by: 'Olivia', why: 'merged from C-15' },
+        ],
+      }),
+    )
+    render(<CaseDrawer id="13" onClose={() => undefined} />)
+    const sec = await screen.findByTestId('case-signals')
+    expect(txt(sec)).toContain('Alerts attached (2)')
+    const rows = screen.getAllByTestId('case-signal').map(txt)
+    expect(rows[0]).toContain('Pod status Unknown: node r620-worker stopped reporting (shop/Pod/app-3) · same node · The console (alert safety net)')
+    expect(rows[1]).toContain('pod:shop/app-4 · merged from C-15 · Olivia')
   })
 })

@@ -67,11 +67,19 @@ func TestTheAnalysisStartsFromWhatTheConsoleHoldsCF43(t *testing.T) {
 	if last := w.agents.last(); !strings.Contains(last, "<related>") || !strings.Contains(last, "RCA cause: The chart sets no limits.") || !strings.Contains(last, "KI-1") {
 		t.Errorf("%s's analysis: %s", mine.ID, last)
 	}
-	// Nothing like it: nothing is said.
+	// Nothing like it: only the other open cases on its cluster are said,
+	// which may share its cause (CF-118).
 	lone, _ := w.svc.Create(ctx, NewCase{Title: "Certificates expire on the ingress", Cluster: "prod"}, olivia)
 	w.svc.Wait()
-	if last := w.agents.last(); strings.Contains(last, "<related>") {
+	if last := w.agents.last(); !strings.Contains(last, "<related>\nOther open cases on this cluster, which may share its cause:\n- C-") ||
+		strings.Contains(last, "Open cases like it") || strings.Contains(last, "Known issues it matches") {
 		t.Errorf("%s's analysis: %s", lone.ID, last)
+	}
+	// Nothing like it and nothing else open on its cluster: nothing is said.
+	alone, _ := w.svc.Create(ctx, NewCase{Title: "Backups of etcd take too long", Cluster: "local"}, olivia)
+	w.svc.Wait()
+	if last := w.agents.last(); strings.Contains(last, "<related>") {
+		t.Errorf("%s's analysis: %s", alone.ID, last)
 	}
 }
 

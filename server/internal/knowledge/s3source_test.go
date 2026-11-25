@@ -37,7 +37,7 @@ var docsKey = awsv4.Credentials{AccessKeyID: docsKeyID, SecretAccessKey: docsSec
 func (f *fixture) bucketSource(t *testing.T, b *s3test.Fake) Source {
 	t.Helper()
 	id, secret := docsKeyID, docsSecret
-	x, err := f.s.SaveSourceWith(ctx, admin, Source{ID: "docs", Name: "Ops bucket", Kind: SourceS3, Bucket: b.Bucket, Prefix: "ops", Region: b.Region, Endpoint: b.URL, PathStyle: true}, CredsChange{AccessKeyID: &id, SecretAccessKey: &secret}, true)
+	x, err := f.s.SaveSourceWith(ctx, admin, Source{ID: "docs", Name: "Ops bucket", Kind: SourceS3, Bucket: b.Bucket, Prefix: "ops", Region: b.Region, Endpoint: b.URL, PathStyle: true, Trust: TrustHigh}, CredsChange{AccessKeyID: &id, SecretAccessKey: &secret}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

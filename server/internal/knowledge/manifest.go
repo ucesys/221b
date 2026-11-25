@@ -77,6 +77,21 @@ type ItemState struct {
 	// Mycroft does not read, too large, robots.txt): a record only, with
 	// no excerpt.
 	Skipped string `json:"skipped,omitempty"`
+	// --- Documents cut by section (phase-13.1-ai, KN-52) ---
+	// Of is the document a section is of, by its item id: a long
+	// document's items are its sections, each with its heading path in
+	// Heading. Sections is how many sections a document was cut into; it
+	// has no excerpt of its own then.
+	Of       string `json:"of,omitempty"`
+	Heading  string `json:"heading,omitempty"`
+	Sections int    `json:"sections,omitempty"`
+	// --- A trust level per uploaded document (0.13.2, KN-61) ---
+	// Trust is an uploaded document's own trust level, TrustHigh,
+	// TrustNormal or TrustLow, as a SuperAdmin chose it at its upload or
+	// on its row; "" is its source's (Source.levelOf). Its sections take
+	// their document's. The manifest holds it, as it holds the
+	// retirements, so that it travels with the wiki.
+	Trust string `json:"trust,omitempty"`
 }
 
 // record says the entry is a record of an item never read (KN-47): one a
@@ -171,14 +186,18 @@ type Excerpt struct {
 	Version string    `json:"version,omitempty"`
 	Date    time.Time `json:"date,omitzero"`
 	URL     string    `json:"url,omitempty"`
-	Chunks  []string  `json:"chunks"`
+	// Heading is a section's heading path (KN-52).
+	Heading string `json:"heading,omitempty"`
+	// Product and ProductVersion are what its document's front matter
+	// says it is about (KN-56).
+	Product        string   `json:"product,omitempty"`
+	ProductVersion string   `json:"productVersion,omitempty"`
+	Chunks         []string `json:"chunks"`
 }
 
-// Excerpt limits: a chunk is about a paragraph or a few.
-const (
-	chunkSize = 1200
-	maxChunks = 24
-)
+// chunkSize is about a paragraph or a few. An excerpt holds every chunk
+// of its item (KN-53): before, a file's excerpt stopped at 24.
+const chunkSize = 1200
 
 func excerptPath(key string) string {
 	source, _, _ := strings.Cut(key, ":")
@@ -219,15 +238,23 @@ func chunks(text string) []string {
 			cur.WriteString("\n\n")
 		}
 		cur.WriteString(para)
-		if len(out) >= maxChunks {
-			break
-		}
 	}
-	if cur.Len() > 0 && len(out) < maxChunks {
+	if cur.Len() > 0 {
 		out = append(out, cur.String())
 	}
-	if len(out) > maxChunks {
-		out = out[:maxChunks]
-	}
 	return out
+}
+
+// documents are a source's items without the sections of its long
+// documents (KN-52): what is listed, read and counted as its items.
+func (m *Manifest) documents(source string) []*ItemState {
+	out := m.bySource(source)
+	n := 0
+	for _, st := range out {
+		if st.Of == "" {
+			out[n] = st
+			n++
+		}
+	}
+	return out[:n]
 }

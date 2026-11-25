@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ALL_CLUSTERS,
+  AUTO,
+  EFFORTS,
+  modelLabel,
+  tieredOf,
   backToDraft,
   discardDraft,
   estimateTest,
@@ -26,6 +30,7 @@ import {
   words,
   type AgentChange,
   type CompactMode,
+  type Effort,
   type AgentView,
   type AIOverview,
   type Instructions,
@@ -38,7 +43,7 @@ import { fmtTs } from '../../lib/format'
 import { Card, Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { AgentJobs } from '../aiops/AgentJobs'
-import { ModelPicker } from './ModelPicker'
+import { ModelChoice } from './ModelChoice'
 import { TestDialog } from './TestDialog'
 import { PilotHistoryDialog } from './PilotHistoryDialog'
 import { HistoryDialog } from './HistoryDialog'
@@ -148,6 +153,15 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   const changed = canon(set) !== canon({ ...agent.settings, ...(sherlock ? { sherlockClusters: agent.clusters ?? [], viewControl: ov.viewControl } : {}) })
   useUnsaved(changed, 'the agent drawer')
   const tools = set.tools ?? agent.tools
+  // Effort and Auto (phase-13.1-ai, AI-43, AI-44), Auto among the provider's tiered models (A9).
+  const anthropic = !provider?.kind || provider.kind === 'anthropic'
+  const autoModel = set.model === AUTO
+  const autoEffort = set.effort === AUTO
+  const tiered = tieredOf(provider)
+  const standard = tiered.find((o) => o.tier === 'standard')?.model ?? tiered[0]?.model
+  // The model saved is one its provider no longer offers (A9): it keeps answering on it until changed.
+  const offersAll = provider?.offersAll ?? !provider?.offeredChosen
+  const notOffered = !!set.model && set.model !== AUTO && !offersAll && !(provider?.offers ?? []).some((o) => o.model === set.model)
   const save = async () => {
     setBusy(true)
     setError('')
@@ -197,22 +211,51 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
         <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="agent-model-row">
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 200px' }}>
             Provider
-            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width={200} />
+            <Select
+              label="Provider"
+              value={providerId}
+              options={ov.providers.map((p) => [p.id, p.name])}
+              onChange={(v) => {
+                const next = ov.providers.find((p) => p.id === v)
+                // A9: Auto stays only where the provider has a tiered model; a fixed model only where it is offered (or every listed model is).
+                const keepsAuto = tieredOf(next).length > 0
+                const keepsModel = !!set.model && set.model !== AUTO && ((next?.offersAll ?? !next?.offeredChosen) || (next?.offers ?? []).some((o) => o.model === set.model))
+                const model = autoModel ? (keepsAuto ? AUTO : undefined) : keepsModel ? set.model : undefined
+                setSet({ ...set, provider: v === 'default' ? undefined : v, model, ...(model === AUTO ? {} : { floorModel: undefined }), ...(model ? {} : { contextWindow: undefined }) })
+              }}
+              testId="agent-provider"
+              width={200}
+            />
           </label>
-          {/* --- AI settings, round 2 (Phase 12, wave 5): the provider's models in a dropdown, and the model's context. --- */}
-          {/* --- FU-01: listed as the drawer opens and again when the provider changes; typed only when they cannot be listed. --- */}
-          <ModelPicker
-            label="Model"
-            listOnly
-            value={set.model || provider?.model || ''}
-            disabled={!set.model}
-            onChange={(model, listed) => setSet({ ...set, model: model || undefined, contextWindow: listed?.contextWindow || set.contextWindow })}
+          {/* --- A9: one Model dropdown: Default, Auto (on a provider with a tiered model), then the models the provider offers. --- */}
+          <ModelChoice
+            provider={provider}
+            defaultText={`${provider?.model || ov.defaultModel} on ${provider?.name ?? 'the default provider'}`}
+            value={set.model ?? ''}
+            onChange={(model, listed) =>
+              setSet({
+                ...set,
+                model: model || undefined,
+                contextWindow: !model || model === AUTO ? undefined : listed?.contextWindow || set.contextWindow,
+                ...(model === AUTO ? {} : { floorModel: undefined }),
+              })
+            }
             load={() => fetchModels(providerId)}
-            from={providerId}
-            suggestions={ov.models.map((m) => m.id)}
             testId="agent-model"
           />
-          {!!set.model && (
+          {/* --- Effort (phase-13.1-ai, AI-43): beside the model. --- */}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 150px' }}>
+            Effort
+            <Select
+              label="Effort"
+              value={set.effort ?? ''}
+              options={EFFORTS.map((e) => [e.id, e.label] as [string, string])}
+              onChange={(v) => setSet({ ...set, effort: (v || undefined) as Effort | undefined, ...(v === AUTO || autoModel ? {} : { floorEffort: undefined }) })}
+              testId="agent-effort"
+              width={150}
+            />
+          </label>
+          {!!set.model && !autoModel && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
               Context window (tokens)
               <span className="rk-field" style={{ width: 150 }}>
@@ -229,17 +272,69 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
             </label>
           )}
         </div>
-        <label className="rk-tcheck" data-wrap="true" style={{ color: 'var(--fg)' }}>
-          <input
-            type="checkbox"
-            checked={!set.model}
-            onChange={(e) => setSet({ ...set, model: e.target.checked ? undefined : provider?.model || ov.defaultModel, contextWindow: e.target.checked ? undefined : set.contextWindow })}
-            data-testid="agent-default-model"
-          />
-          <span>
-            Use the default model instead ({provider?.model || ov.defaultModel} on {provider?.name ?? 'the default provider'})
+        {notOffered && (
+          <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="agent-not-offered">
+            {provider?.name ?? 'Its provider'} no longer offers {set.model}: the {agent.name} answers on it until you choose another model.
           </span>
-        </label>
+        )}
+        {autoModel && tiered.length === 0 && (
+          <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid="agent-auto-no-tier">
+            None of the models {provider?.name ?? 'its provider'} offers has a tier, so Auto cannot pick the model: the {agent.name} answers on the default model. Give the models tiers in Administration › AI › Providers, or choose a model.
+          </span>
+        )}
+        {(autoModel || autoEffort) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="agent-auto">
+            <span className="rk-fhint" data-testid="agent-auto-line">
+              Auto picks {autoEffort ? 'the effort for every message' : ''}
+              {autoEffort && autoModel ? ' and ' : ''}
+              {autoModel ? 'the model when a conversation or a run starts, moving it up once at most' : ''}: a job’s run by what started it (a P0 or P1 case, a production cluster, an alert, a schedule), a conversation by the classifier (
+              {ov.classifier ? (ov.providers.find((p) => p.id === ov.classifier)?.name ?? ov.classifier) : `off: medium${autoModel && standard ? ` on ${modelLabel(standard)}` : ''}`}). Never xhigh or max without an open P0 or P1 case; one
+              level lower past 80% of the day’s budget. Each pick is shown with the run or the answer.
+            </span>
+            <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {autoEffort && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
+                  Lowest effort Auto may pick
+                  <Select
+                    label="Lowest effort Auto may pick"
+                    value={set.floorEffort ?? ''}
+                    options={[
+                      ['', 'None'],
+                      ['low', 'Low'],
+                      ['medium', 'Medium'],
+                      ['high', 'High'],
+                    ]}
+                    onChange={(v) => setSet({ ...set, floorEffort: v || undefined })}
+                    testId="agent-floor-effort"
+                    width={150}
+                  />
+                </label>
+              )}
+              {autoModel && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
+                  Lowest model Auto may pick
+                  <Select
+                    label="Lowest model Auto may pick"
+                    value={set.floorModel ?? ''}
+                    options={[
+                      ['', 'None'],
+                      ...(set.floorModel && !tiered.some((o) => o.model === set.floorModel) ? [[set.floorModel, `${set.floorModel} (no longer offered with a tier)`] as [string, string]] : []),
+                      ...tiered.map((o) => [o.model, `${modelLabel(o.model)} · ${o.tier}`] as [string, string]),
+                    ]}
+                    onChange={(v) => setSet({ ...set, floorModel: v || undefined })}
+                    testId="agent-floor-model"
+                    width={190}
+                  />
+                </label>
+              )}
+            </div>
+          </div>
+        )}
+        {!!set.effort && set.effort !== AUTO && !anthropic && (
+          <span className="rk-fhint" data-testid="agent-effort-hint">
+            {provider?.kind === 'openai' ? 'On an OpenAI-compatible provider, Low turns the model’s thinking off and any other level on.' : 'Sent where the model takes it; a model that takes no effort is sent none.'}
+          </span>
+        )}
         <ContextLine agent={agent} />
         {sherlock && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>

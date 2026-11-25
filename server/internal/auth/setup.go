@@ -50,18 +50,21 @@ func (s *Service) renderSetup(w http.ResponseWriter, r *http.Request, msg string
 }
 
 func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
-	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), NeedToken: s.cfg.SetupToken != ""}
+	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: formTokenOf(r), NeedToken: s.cfg.SetupToken != ""}
 	if r.Method == http.MethodPost {
-		d.Username, d.Name = audit.Clip(r.PostFormValue("username"), maxLogin), audit.Clip(r.PostFormValue("name"), maxLogin)
+		// What postSetup parsed, within the form's limit; a POST the gate
+		// answers with this page is not read (r.PostForm is nil then).
+		f := r.PostForm
+		d.Username, d.Name = audit.Clip(f.Get("username"), maxLogin), audit.Clip(f.Get("name"), maxLogin)
 		switch field {
 		case fieldPassword:
 		case fieldAgain:
-			d.Password = r.PostFormValue("password")
+			d.Password = f.Get("password")
 		default:
-			d.Password, d.Again = r.PostFormValue("password"), r.PostFormValue("again")
+			d.Password, d.Again = f.Get("password"), f.Get("again")
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
@@ -97,9 +100,12 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	// The first-run page keeps its limit per address behind a proxy too: it
 	// is all that slows guessing at the setup token, and it stands only
 	// until the first administrator exists.
-	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin)}
-	if !s.setup.allow(from(r)) {
-		s.record(r, audit.ActionSetupFailed, who, audit.OutcomeDenied, "too many attempts")
+	// Named in the record as typed, as at sign-in (the record keeps a
+	// subject, an email and a name, not a user name).
+	typed, _ := formLogin(r.PostFormValue("username"))
+	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin), Email: typed}
+	if !s.setup.allow(addressKey(from(r))) {
+		s.recordRefusal(r, audit.ActionSetupFailed, who, "address "+addressKey(from(r)))
 		s.renderSetup(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
@@ -110,7 +116,7 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.PostFormValue("password")
 	if !roles.ValidUsername(who.Username, true) {
-		s.renderSetupField(w, r, "Use lowercase letters, digits, dot, dash and underscore.", fieldUsername, http.StatusBadRequest)
+		s.renderSetupField(w, r, "Use "+consoleUserRule+".", fieldUsername, http.StatusBadRequest)
 		return
 	}
 	if err := CheckPasswordRules(who.Username, password); err != nil {
@@ -164,8 +170,9 @@ func (s *Service) live(sess Session) (Session, bool) {
 	// is and nothing of what they may do (DB-65): that is worked out here,
 	// on every request, from the configuration and the account as they are
 	// now. One of a way of signing in this console does not have is
-	// refused.
-	if sess.Signed && !s.signsIn(sess.Method) {
+	// refused, stored or signed: after a change of the sign-in mode a
+	// stored session of the old one would keep the roles saved in it.
+	if !s.signsIn(sess.Method) {
 		s.sessions.Delete(sess.ID)
 		return Session{}, false
 	}
@@ -174,12 +181,24 @@ func (s *Service) live(sess Session) (Session, bool) {
 		if s.accounts == nil {
 			return sess, true
 		}
-		a, ok := s.accounts.Find(sess.User.Username)
-		if !ok || a.Disabled {
+		// This replica's copy of the accounts may lag a change made on
+		// another, by seconds, or not be read at all: a miss is read
+		// again, and only a miss after a read that succeeded ends the
+		// session. One that could not be read refuses the request and
+		// ends nothing.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		a, ok, sure := s.accounts.FindRead(ctx, sess.User.Username)
+		cancel()
+		if !sure {
+			return Session{}, false
+		}
+		if !ok || a.Disabled || s.endedBefore(sess) {
 			s.sessions.Delete(sess.ID)
 			return Session{}, false
 		}
-		sess.User.Groups = a.Groups
+		// The account as it is now: its email and name decide the admin
+		// list's grant (auth.admins), not the ones read at sign-in.
+		sess.User.Groups, sess.User.Email, sess.User.Name = a.Groups, a.Email, a.Name
 		s.grant(roles.Local, sess.User, a.Super).apply(&sess)
 		return sess, true
 	case string(ModeLDAP):
@@ -196,6 +215,22 @@ func (s *Service) live(sess Session) (Session, bool) {
 		}
 	}
 	return sess, true
+}
+
+// endedBefore says whether a local account's sessions were ended after this
+// one was signed in (a reset, End sessions): it is refused on every
+// replica, though the session store could not be told of the ending. A
+// signed session's time of sign-in is in whole seconds, and so is the
+// ending it is compared with.
+func (s *Service) endedBefore(sess Session) bool {
+	at, ok := s.accounts.SessionsEnded(sess.User.Username)
+	if !ok {
+		return false
+	}
+	if sess.Signed {
+		at = at.Truncate(time.Second)
+	}
+	return sess.Created.Before(at)
 }
 
 // signsIn says whether this console signs people in that way: the local

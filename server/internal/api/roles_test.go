@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +72,7 @@ func TestRolesPages(t *testing.T) {
 		t.Errorf("a Viewer's roles page = %d %+v, want 200 with the four roles", code, seen)
 	}
 	for _, row := range seen.Roles {
-		if row.Holders != (roles.Holders{}) {
+		if row.Holders != nil {
 			t.Errorf("a Viewer sees the holders of %s: %+v", row.ID, row.Holders)
 		}
 	}
@@ -161,5 +162,171 @@ func TestARoleCheckThatReadNothingComesBackSoon(t *testing.T) {
 	}
 	if _, ok := s.monitor().Get(clusters.LocalID); !ok {
 		t.Fatal("the check kept nothing")
+	}
+}
+
+// Roles review, finding 3: the nodes role, which everyone who signs in
+// holds, was never compared, so widening it tripped neither the report nor
+// rbac.enforce strict.
+func TestWideningTheNodesRoleIsADrift(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog(), Roles: RolesOptions{Enforce: "strict"}})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	if d, _, _, ok := s.checkRoles(clusters.LocalID, local); !ok || d.State != "match" || s.RoleRefusal(clusters.LocalID) != "" {
+		t.Fatalf("shipped roles: %+v, refusal %q", d, s.RoleRefusal(clusters.LocalID))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, append(roles.Nodes().Rules, roles.Rule{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}})))
+	d, _, _, _ := s.checkRoles(clusters.LocalID, local)
+	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != roles.NodesID {
+		t.Fatalf("a widened nodes role: %+v", d)
+	}
+	if why := s.RoleRefusal(clusters.LocalID); !strings.Contains(why, "221b-nodes allows") {
+		t.Fatalf("strict with a widened nodes role: %q", why)
+	}
+}
+
+// Roles review, finding 4: under strict, a verdict kept from before was
+// used however old it was, and whatever the connection now reached.
+func TestStrictDoesNotTrustAnOldVerdict(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog(), Roles: RolesOptions{Enforce: "strict"}})
+	for _, id := range roles.All {
+		rules := (roles.Templates{}).For(id, roles.Options{}).Rules
+		if id == roles.Admin {
+			rules = append(rules, roles.Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
+		}
+		local.Put(clusterRoleOf(id.ClusterRole(), rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	// A "match" an hour old, from before the role was widened.
+	s.monitor().Set(clusters.LocalID, roles.Drift{State: "match", Roles: []roles.RoleDrift{}, CheckedAt: time.Now().Add(-time.Hour)})
+	if why := s.RoleRefusal(clusters.LocalID); !strings.Contains(why, "delete nodes") {
+		t.Fatalf("an hour-old match was trusted: %q", why)
+	}
+}
+
+// Roles review, finding 10: a cluster-wide binding beside a namespaced one
+// vanished from the Roles page, and ServiceAccounts of the same name in two
+// namespaces became one row.
+func TestRolesPageShowsClusterWideBindingsAndEachServiceAccount(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	admin := rbacv1.RoleRef{Kind: "ClusterRole", Name: roles.Admin.ClusterRole()}
+	local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "ops", Namespace: "web", Labels: map[string]string{managedLabel: "true"}}, RoleRef: admin,
+		Subjects: []rbacv1.Subject{{Kind: "Group", Name: "221b-ldap:team-a-ops"}}})
+	local.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "x"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "221b-ldap:team-a-ops"}}})
+	for _, ns := range []string{"a", "b"} {
+		local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "sa", Namespace: ns}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "default", Namespace: ns}}})
+	}
+	page := roles.BuildRoles(roles.RolesInput{Bindings: bindingsOf(local), Prefixes: roles.DefaultPrefixes(), Visible: true})
+	var rows []byte
+	for _, r := range page.Roles {
+		if r.ID == roles.Admin {
+			rows, _ = json.Marshal(r.Subjects)
+		}
+	}
+	var subjects []map[string]any
+	_ = json.Unmarshal(rows, &subjects)
+	sas, wide := 0, false
+	for _, s := range subjects {
+		if s["kind"] == "ServiceAccount" {
+			sas++
+		}
+		if s["name"] == "team-a-ops" && s["clusterWide"] == true {
+			wide = true
+		}
+	}
+	if !wide {
+		t.Errorf("the cluster-wide binding is not shown: %s", rows)
+	}
+	if sas != 2 {
+		t.Errorf("%d ServiceAccount rows for default in a and in b: %s", sas, rows)
+	}
+}
+
+// Roles review, finding 12: the Roles page's lines ignored the options,
+// so with rbac.roles.admin.exec it said Admin cannot open a shell, and
+// without secrets.read that it rolls back Helm releases.
+func TestRolesPageFollowsTheOptions(t *testing.T) {
+	srv, ops, _, _, local, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Exec: true, Secrets: false}
+	})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{Exec: true}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	var page roles.RolesResponse
+	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/roles", &page); code != http.StatusOK {
+		t.Fatalf("roles = %d", code)
+	}
+	for _, r := range page.Roles {
+		if r.ID != roles.Admin {
+			continue
+		}
+		can, cannot := strings.Join(r.Can, "; "), strings.Join(r.Cannot, "; ")
+		if strings.Contains(cannot, "shell") || !strings.Contains(can, "shell") {
+			t.Errorf("Admin with exec: can %q, cannot %q", can, cannot)
+		}
+		if strings.Contains(can, "Helm") {
+			t.Errorf("Admin without Secrets rolls back Helm releases: %q", can)
+		}
+	}
+}
+
+// Roles review, cut list: nothing compared the roles when a ClusterRole
+// changed (RB-36 says "and when the roles change"); an edit waited for the
+// next five-minute round.
+func TestAChangedRoleIsComparedAtOnce(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Logger: quietLog()})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	s.checkChangedRoles()
+	first, ok := s.monitor().Get(clusters.LocalID)
+	if !ok || first.State != "match" {
+		t.Fatalf("first look: %+v", first)
+	}
+	// Nothing changed: no new comparison.
+	s.checkChangedRoles()
+	if again, _ := s.monitor().Get(clusters.LocalID); !again.CheckedAt.Equal(first.CheckedAt) {
+		t.Error("compared again though nothing changed")
+	}
+	local.Put(clusterRoleOf(roles.Viewer.ClusterRole(), []roles.Rule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}))
+	s.checkChangedRoles()
+	if d, _ := s.monitor().Get(clusters.LocalID); d.State != "differs" || !d.More {
+		t.Fatalf("after an edit: %+v", d)
+	}
+}
+
+// Roles review, cut list: the Roles page asked Kubernetes only whether the
+// person may list RoleBindings, and showed ClusterRoleBindings' subjects
+// to a person who may not list those.
+func TestRolesPageShowsClusterBindingsOnlyToWhoMayListThem(t *testing.T) {
+	srv, ops, _, _, local, _ := multiSetupWith(t, "ops@corp.example", map[string]bool{"list clusterrolebindings/": true}, func(o *Options) {
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes()}
+	})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	admin := rbacv1.RoleRef{Kind: "ClusterRole", Name: roles.Admin.ClusterRole()}
+	local.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "everywhere"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "hidden-wide"}}})
+	local.Put(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "here", Namespace: "web"}, RoleRef: admin, Subjects: []rbacv1.Subject{{Kind: "Group", Name: "seen-here"}}})
+	var page roles.RolesResponse
+	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/roles", &page); code != http.StatusOK || !page.Visible {
+		t.Fatalf("roles = %d, visible %v", code, page.Visible)
+	}
+	names := map[string]bool{}
+	for _, r := range page.Roles {
+		for _, s := range r.Subjects {
+			names[s.Name] = true
+		}
+	}
+	if names["hidden-wide"] || !names["seen-here"] {
+		t.Errorf("subjects shown: %v", names)
 	}
 }

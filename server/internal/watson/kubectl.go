@@ -3,6 +3,8 @@ package watson
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -30,7 +32,6 @@ import (
 	"k8s.io/kubectl/pkg/cmd/events"
 	"k8s.io/kubectl/pkg/cmd/get"
 	"k8s.io/kubectl/pkg/cmd/label"
-	"k8s.io/kubectl/pkg/cmd/logs"
 	"k8s.io/kubectl/pkg/cmd/patch"
 	"k8s.io/kubectl/pkg/cmd/rollout"
 	"k8s.io/kubectl/pkg/cmd/scale"
@@ -90,6 +91,10 @@ type Target struct {
 	// pin is what a card of a deploy showed: its planning fills it, and
 	// its dry run and its run hold to it. A nil pin is no card.
 	pin *appPin
+	// mayForget says the person may remove an application's record
+	// (HA-02): helm uninstall of an application with no release forgets
+	// its record only then.
+	mayForget bool
 }
 
 // Discovery caches each cluster's API discovery, which kubectl and Helm
@@ -103,17 +108,22 @@ type Discovery struct {
 type cachedDisc struct {
 	disc discovery.CachedDiscoveryInterface
 	at   time.Time
+	// conn is a digest of what the client connects to and with.
+	conn string
 }
 
-// For returns the cached discovery of a cluster, by its connection ID.
+// For returns the cached discovery of a cluster, by its connection ID. A
+// connection whose server, credential or certificates changed (an
+// administrator pasted a new token, a CA rotated) gets a new client: the
+// old one would ask with what the cluster no longer takes until a restart.
 func (d *Discovery) For(cluster string, cfg *rest.Config) (discovery.CachedDiscoveryInterface, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.byKey == nil {
 		d.byKey = map[string]*cachedDisc{}
 	}
-	key := cluster + "\x00" + cfg.Host
-	if c := d.byKey[key]; c != nil {
+	conn := connDigest(cfg)
+	if c := d.byKey[cluster]; c != nil && c.conn == conn {
 		if time.Since(c.at) > 5*time.Minute {
 			c.disc.Invalidate()
 			c.at = time.Now()
@@ -124,9 +134,30 @@ func (d *Discovery) For(cluster string, cfg *rest.Config) (discovery.CachedDisco
 	if err != nil {
 		return nil, err
 	}
-	c := &cachedDisc{disc: memory.NewMemCacheClient(dc), at: time.Now()}
-	d.byKey[key] = c
+	c := &cachedDisc{disc: memory.NewMemCacheClient(dc), at: time.Now(), conn: conn}
+	d.byKey[cluster] = c
 	return c.disc, nil
+}
+
+// connDigest sums up what a REST config connects to and with: the server,
+// the credential and the TLS settings. Only the digest is kept.
+func connDigest(cfg *rest.Config) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%q %q %q %q %q %q %q\x00", cfg.Host, cfg.APIPath, cfg.BearerToken, cfg.BearerTokenFile, cfg.Username, cfg.Password, cfg.Impersonate.UserName)
+	tls := cfg.TLSClientConfig
+	fmt.Fprintf(h, "%v %q %q %q %q\x00", tls.Insecure, tls.ServerName, tls.CertFile, tls.KeyFile, tls.CAFile)
+	h.Write(tls.CertData)
+	h.Write([]byte{0})
+	h.Write(tls.KeyData)
+	h.Write([]byte{0})
+	h.Write(tls.CAData)
+	if cfg.ExecProvider != nil {
+		fmt.Fprintf(h, "\x00exec %q %q", cfg.ExecProvider.Command, cfg.ExecProvider.Args)
+	}
+	if cfg.AuthProvider != nil {
+		fmt.Fprintf(h, "\x00auth %q %q", cfg.AuthProvider.Name, fmt.Sprint(cfg.AuthProvider.Config))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // getter is the RESTClientGetter kubectl's factory and Helm read their
@@ -278,13 +309,14 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		return canI(c, f, streams, args)
 	}
 	var cmd *cobra.Command
+	var waitFor []deleted
 	switch c.Name() {
 	case "kubectl get":
 		cmd = get.NewCmdGet("kubectl", f, streams)
 	case "kubectl describe":
 		cmd = describe.NewCmdDescribe("kubectl", f, streams)
 	case "kubectl logs":
-		cmd = logs.NewCmdLogs(f, streams)
+		cmd = newCmdLogs(f, streams)
 	case "kubectl top":
 		cmd = top.NewCmdTop(f, streams)
 	case "kubectl events":
@@ -301,6 +333,15 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		cmd = rollout.NewCmdRollout("kubectl", f, streams)
 	case "kubectl delete":
 		cmd = delete.NewCmdDelete(f, streams)
+		// kubectl's own wait for the deletion runs under
+		// context.Background() and a signal handler that ends the process:
+		// Stop could not end it, and SIGTERM ended the console. kubectl
+		// deletes without waiting, and Watson waits under the command's
+		// context (deletewait.go).
+		if waitsForDeletion(c, extra) {
+			waitFor = resolveDeleted(f, c)
+			args = append(args, "--wait=false")
+		}
 	case "kubectl label":
 		cmd = label.NewCmdLabel(f, streams)
 	case "kubectl annotate":
@@ -329,6 +370,15 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		fmt.Fprintf(errOut, "error: %v\n", err)
 		return 1
 	}
+	if len(waitFor) > 0 {
+		if err := waitDeleted(ctx, f, waitFor, deleteTimeout(c)); err != nil {
+			if ctx.Err() != nil {
+				return 130
+			}
+			fmt.Fprintf(errOut, "error: %v\n", err)
+			return 1
+		}
+	}
 	if ctx.Err() != nil {
 		return 130
 	}
@@ -356,7 +406,13 @@ func (r *refusalSniffer) Write(p []byte) (int, error) {
 // ends the process for a "no".
 func canI(c *Command, f cmdutil.Factory, streams genericiooptions.IOStreams, args []string) int {
 	o := &auth.CanIOptions{IOStreams: streams, AllNamespaces: c.Has("all-namespaces"), Quiet: c.Has("quiet"), NoHeaders: c.Has("no-headers"), List: c.Has("list"), Subresource: c.Flag("subresource")}
-	cmdutil.CheckErr(o.Complete(f, c.Positionals))
+	pos := c.Positionals
+	if len(pos) == 3 {
+		// VERB TYPE NAME, as Watson's usage writes it: kubectl takes the
+		// name as TYPE/NAME and refuses a third argument.
+		pos = []string{pos[0], pos[1] + "/" + pos[2]}
+	}
+	cmdutil.CheckErr(o.Complete(f, pos))
 	cmdutil.CheckErr(o.Validate())
 	if o.List {
 		cmdutil.CheckErr(o.RunAccessList())

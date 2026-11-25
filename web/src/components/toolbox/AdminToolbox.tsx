@@ -227,7 +227,8 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
     command: info.values && (info.values as { adminExec?: boolean }).adminExec ? 'SuperAdmin; Admin in its namespaces' : 'SuperAdmin (Admin with rbac.roles.admin.exec)',
     forward: 'SuperAdmin; Admin in its namespaces',
     'debug-container': 'SuperAdmin',
-    'debug-pod': 'SuperAdmin; Admin in its namespaces',
+    // A debug pod opens its shell with pods/exec (TB-28, TB-50).
+    'debug-pod': info.values && (info.values as { adminExec?: boolean }).adminExec ? 'SuperAdmin; Admin in its namespaces' : 'SuperAdmin (Admin with rbac.roles.admin.exec)',
     'node-shell': 'SuperAdmin',
     'node-command': 'SuperAdmin',
     ssh: 'SuperAdmin',
@@ -242,6 +243,11 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </h2>
         <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>From the chart’s toolbox values, read-only: a change is a helm upgrade. The roles decide who may use each tool.</span>
       </div>
+      {(info.warnings ?? []).map((w) => (
+        <div key={w} className="rk-callout" data-tone="warn" role="alert">
+          <span>{w}</span>
+        </div>
+      ))}
       <div className="tb-stats">
         <div className="tb-stat">
           <span>Idle timeout</span>
@@ -315,8 +321,8 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
               <td>{im.tools || '—'}</td>
               <td>
                 {[
-                  info.debugContainerImages.includes(im.name) && 'debug containers',
-                  info.debugPodProfiles.includes(im.name) && 'debug pods',
+                  (info.debugContainerImages ?? []).includes(im.name) && 'debug containers',
+                  (info.debugPodProfiles ?? []).includes(im.name) && 'debug pods',
                   (info.values as { nodeShell?: { image?: string } })?.nodeShell?.image === im.name && 'node shells',
                 ]
                   .filter(Boolean)
@@ -327,7 +333,7 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </tbody>
       </table>
       <p className="tb-hint" style={{ margin: 0 }}>
-        K8S node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {info.nodeProfiles.join(', ')}.
+        K8S node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {(info.nodeProfiles ?? []).join(', ')}.
       </p>
       <details>
         <summary style={{ cursor: 'pointer', fontSize: 12.5 }}>The values</summary>

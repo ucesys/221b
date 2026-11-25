@@ -341,6 +341,9 @@ func (s *Service) RunNow(ctx context.Context, id string, by Person) (RunBrief, e
 		w := describeWhen(j.When)
 		return RunBrief{}, fmt.Errorf("%w: %s cannot be run by hand; it runs %s", ErrInvalid, k.Label, strings.ToLower(w[:1])+w[1:])
 	}
+	if err := s.agentReady(ctx, j, k); err != nil {
+		return RunBrief{}, err
+	}
 	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: "Run now by " + by.Label(), SetBy: j.SetBy, By: by.Label()})
 }
 
@@ -358,6 +361,9 @@ func (s *Service) RebuildNow(ctx context.Context, id string, by Person) (RunBrie
 	}
 	if !k.Rebuild || k.Run == nil {
 		return RunBrief{}, fmt.Errorf("%w: %s has nothing to rebuild; use Run now", ErrInvalid, k.Label)
+	}
+	if err := s.agentReady(ctx, j, k); err != nil {
+		return RunBrief{}, err
 	}
 	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: "Rebuild now by " + by.Label(), SetBy: j.SetBy, By: by.Label(), Rebuild: true})
 }
@@ -378,6 +384,9 @@ func (s *Service) Start(ctx context.Context, id, what string, by Person) (RunBri
 	}
 	if k.Run == nil || k.External != nil {
 		return RunBrief{}, fmt.Errorf("%w: %s cannot be started here", ErrInvalid, k.Label)
+	}
+	if err := s.agentReady(ctx, j, k); err != nil {
+		return RunBrief{}, err
 	}
 	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: what, SetBy: j.SetBy, By: by.Label()})
 }

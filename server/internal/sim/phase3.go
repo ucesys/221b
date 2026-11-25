@@ -66,10 +66,11 @@ func (s *Sim) setToken(r *http.Request) error {
 
 // setDeny makes access reviews refuse some things: POST /sim/deny with
 // {"verbs": ["impersonate"], "namespaces": ["kube-system"], "users":
-// ["x"], "only": {"dev@corp.example": ["web", "analytics"]}}; empty
+// ["x"], "resources": ["pods/exec"], "only": {"dev@corp.example": ["web", "analytics"]}}; empty
 // lists allow everything again. A denied namespace refuses every
 // namespaced verb for people (impersonated or named), a denied user
-// everything, and "only" limits a user to the namespaces listed, with
+// everything, a denied resource ("pods/exec", "jobs") every verb on it,
+// and "only" limits a user to the namespaces listed, with
 // nothing cluster-wide; none of it applies to the console's own account,
 // which watches everything.
 func (s *Sim) setDeny(r *http.Request) error {
@@ -77,13 +78,14 @@ func (s *Sim) setDeny(r *http.Request) error {
 		Verbs      []string            `json:"verbs"`
 		Namespaces []string            `json:"namespaces"`
 		Users      []string            `json:"users"`
+		Resources  []string            `json:"resources"`
 		Only       map[string][]string `json:"only"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.denyVerbs, s.denyNamespaces, s.denyUsers, s.onlyNamespaces = in.Verbs, in.Namespaces, in.Users, in.Only
+	s.denyVerbs, s.denyNamespaces, s.denyUsers, s.denyResources, s.onlyNamespaces = in.Verbs, in.Namespaces, in.Users, in.Resources, in.Only
 	s.mu.Unlock()
 	return nil
 }
@@ -190,6 +192,15 @@ func (s *Sim) decide(user string, impersonated bool, attrs *authzv1.ResourceAttr
 		for _, u := range s.denyUsers {
 			if u == user {
 				return false, "the simulator denies " + user
+			}
+		}
+		res := attrs.Resource
+		if attrs.Subresource != "" {
+			res += "/" + attrs.Subresource
+		}
+		for _, d := range s.denyResources {
+			if d == res {
+				return false, "the simulator denies " + user + " " + res
 			}
 		}
 		for _, ns := range s.denyNamespaces {

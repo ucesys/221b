@@ -214,6 +214,18 @@ type transcript struct {
 	f     *os.File
 	start time.Time
 	enc   *json.Encoder
+	// onFail is told once of the first write that fails (a full or
+	// vanished volume): the session ends rather than run unrecorded.
+	onFail   func(error)
+	failOnce sync.Once
+}
+
+// failed tells onFail, once and outside the transcript's lock.
+func (t *transcript) failed(err error) {
+	if err == nil || t.onFail == nil {
+		return
+	}
+	t.failOnce.Do(func() { go t.onFail(err) })
 }
 
 // TranscriptPath is where a session's transcript is kept.
@@ -246,7 +258,7 @@ func (t *transcript) event(kind string, b []byte) {
 	if t.f == nil {
 		return
 	}
-	_ = t.enc.Encode([]any{time.Since(t.start).Seconds(), kind, string(b)})
+	t.failed(t.enc.Encode([]any{time.Since(t.start).Seconds(), kind, string(b)}))
 }
 
 func (t *transcript) resize(sz Size) {
@@ -255,7 +267,7 @@ func (t *transcript) resize(sz Size) {
 	if t.f == nil {
 		return
 	}
-	_ = t.enc.Encode([]any{time.Since(t.start).Seconds(), "r", jsonSize(sz)})
+	t.failed(t.enc.Encode([]any{time.Since(t.start).Seconds(), "r", jsonSize(sz)}))
 }
 
 // jsonSize is asciicast's resize data: COLSxROWS.

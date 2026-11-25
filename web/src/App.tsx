@@ -26,6 +26,7 @@ import { AdminPageView } from './components/AdminPage'
 import { TipLayer } from './components/TipLayer'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
+import { StarPrompt } from './components/StarPrompt'
 import { alertBannersShown, badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
@@ -539,6 +540,7 @@ function Shell() {
               me={me}
               route={route}
               onEditCluster={(id) => setEditing(id)}
+              onToast={setToast}
             />
             {/* On every page while the console's database is away (DB-15). */}
             <DatabaseBanner />
@@ -678,6 +680,8 @@ function Shell() {
               />
             )}
             {toast && <Toast message={toast} onDone={clearToast} />}
+            {/* Star us on GitHub (CU-21): the server says whom it asks, a SuperAdmin the values name or the first-run page's. */}
+            {me?.admin && <StarPrompt />}
             <TipLayer />
           </div>
         </ToolboxContext.Provider>

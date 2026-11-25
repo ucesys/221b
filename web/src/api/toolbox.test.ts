@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AssistantHandlers } from './assistants'
-import { clock, COMMAND_TOOLS, endedWords, fBytes, fetchToolbox, HOST_TOOLS, NODE_TOOLS, shownSessions, sortSessions, tabLabel, useSessions, type SessionView } from './toolbox'
+import { clock, COMMAND_TOOLS, debugContainerProfile, debugContainerProfiles, endedWords, fBytes, fetchToolbox, HOST_TOOLS, NODE_TOOLS, shownSessions, sortSessions, tabLabel, useSessions, type SessionView } from './toolbox'
 import { remaining, tabState } from '../components/toolbox/SessionPanes'
 
 const stream = vi.hoisted(() => ({ h: null as AssistantHandlers | null }))
@@ -152,11 +152,38 @@ describe('session clocks', () => {
     expect(tabState({ ...base, state: 'ended' }, now)).toBe('ended')
   })
 
+  // The warning comes 120 s before the idle end, or halfway with a shorter
+  // idle limit: with toolbox.idleTimeout 1m it showed from the first
+  // second (the toolbox review's sweep).
+  it('warns of the idle end halfway with a short idle limit', () => {
+    const short = { ...base, idleSeconds: 60, lastActive: '2026-10-26T10:00:00Z' }
+    expect(tabState(short, Date.parse('2026-10-26T10:00:05Z'))).toBe('live')
+    expect(tabState(short, Date.parse('2026-10-26T10:00:40Z'))).toBe('idle')
+  })
+
   it('formats', () => {
     expect(clock(65)).toBe('1:05')
     expect(clock(3725)).toBe('1:02:05')
     expect(fBytes(512)).toBe('512 B')
     expect(fBytes(1536)).toBe('1.5 KB')
     expect(fBytes(50 * 1024 * 1024)).toBe('50 MB')
+  })
+})
+
+// A debug container takes general or restricted, restricted alone in a
+// restricted namespace; a prefill of another (Sherlock's sysadmin) sends
+// what the select shows (the toolbox review, finding 12).
+describe('debug container profiles', () => {
+  it('admits what the level does', () => {
+    expect(debugContainerProfiles('restricted')).toEqual(['restricted'])
+    expect(debugContainerProfiles('baseline')).toEqual(['restricted', 'general'])
+    expect(debugContainerProfiles('privileged')).toEqual(['restricted', 'general'])
+  })
+  it('sends restricted for a profile the level does not admit', () => {
+    expect(debugContainerProfile('privileged', 'sysadmin')).toBe('restricted')
+    expect(debugContainerProfile('privileged', 'netadmin')).toBe('restricted')
+    expect(debugContainerProfile('restricted', 'general')).toBe('restricted')
+    expect(debugContainerProfile('baseline', 'general')).toBe('general')
+    expect(debugContainerProfile('baseline', '')).toBe('restricted')
   })
 })

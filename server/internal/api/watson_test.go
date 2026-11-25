@@ -22,7 +22,7 @@ import (
 
 // watsonSetup is the test console with Watson, its local cluster a
 // simulated one it can change.
-func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, *http.Client, *sim.Sim, *lockedBuffer, *clusters.Manager) {
+func watsonSetup(t *testing.T, who string, env, mode string, mods ...func(*Options)) (*httptest.Server, *http.Client, *sim.Sim, *lockedBuffer, *clusters.Manager) {
 	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
@@ -37,6 +37,9 @@ func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, 
 				return time.Duration(o.Settings.Current().WatsonOrDefault().ApproveAllMinutes) * time.Minute
 			}})
 		o.Watson = svc
+		for _, mod := range mods {
+			mod(o)
+		}
 	})
 	local.restCfg = &rest.Config{Host: simSrv.URL}
 	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: env, Mode: mode, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {

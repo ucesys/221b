@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/schedule"
 )
@@ -37,6 +38,63 @@ type RunEnv struct {
 	tokens   Tokens
 	model    string
 	notes    []string
+	// What the run's steps ran with (AI-48): the provider, the highest
+	// effort and how it was picked, the steps asked, and the step that
+	// moved the model up. pickModel is the model the run started on with
+	// Auto.
+	provider  string
+	effort    string
+	pickBy    string
+	pickWhy   string
+	steps     int
+	pickModel string
+	movedUp   *MovedUp
+}
+
+// clusterEnv is a cluster's environment, as its connection marks it.
+func (s *Service) clusterEnv(id string) string {
+	for _, c := range s.clusters() {
+		if c.ID == id {
+			return c.Env
+		}
+	}
+	return ""
+}
+
+// autoStep is what Auto's rules read for a step on a cluster (AI-45):
+// what started the run, the case it is about, whether the cluster is
+// production, the job's kind and the share of its day budget spent. mu
+// is held.
+func (e *RunEnv) autoStep(cluster string) *AutoStep {
+	in := auto.RunInput{Trigger: e.Trigger.Kind, CasePriority: -1, Kind: e.Kind.ID, Production: e.s.clusterEnv(cluster) == "production"}
+	if e.Event != nil {
+		in.Event = e.Event.Kind
+		if e.Event.CasePriority != nil {
+			in.CasePriority = *e.Event.CasePriority
+		}
+	}
+	if b := e.Job.Budget.DayUSD; b > 0 {
+		in.DayShare = (e.daySpent + e.cost) / b
+	}
+	return &AutoStep{Input: in, Model: e.pickModel, MovedUp: e.movedUp != nil}
+}
+
+// noteStep keeps what a step ran with; mu is held.
+func (e *RunEnv) noteStep(res AgentResult) {
+	e.steps++
+	if res.Provider != "" {
+		e.provider = res.Provider
+	}
+	if res.PickBy != "" && e.pickModel == "" {
+		e.pickModel = res.Model
+	}
+	if res.MovedUpFrom != "" && e.movedUp == nil {
+		e.movedUp = &MovedUp{Step: e.steps, From: res.MovedUpFrom, Why: res.PickWhy}
+		e.pickModel = res.Model
+	}
+	if res.Effort != "" && (e.effort == "" || auto.Rank(res.Effort) > auto.Rank(e.effort)) {
+		e.effort, e.pickBy, e.pickWhy = res.Effort, res.PickBy, res.PickWhy
+	}
 }
 
 // ClusterName is a cluster's name.
@@ -118,9 +176,13 @@ func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, er
 		return AgentResult{}, errors.New("this job has no agent")
 	}
 	m := &runMeter{e: e}
-	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings,
-		ForReporters: e.Kind.ForReporters, Meter: m})
 	e.mu.Lock()
+	step := e.autoStep(cluster)
+	e.mu.Unlock()
+	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings,
+		ForReporters: e.Kind.ForReporters, Meter: m, Auto: step})
+	e.mu.Lock()
+	e.noteStep(res)
 	if !m.counted {
 		// A runner that counts nothing on the meter is counted when it ends.
 		e.cost += res.CostUSD
@@ -444,6 +506,7 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	r.Ended = s.o.Now().UTC()
 	env.mu.Lock()
 	r.Model, r.Tokens, r.CostUSD = env.model, env.tokens, round(env.cost)
+	r.Provider, r.Effort, r.PickBy, r.PickWhy, r.MovedUp = env.provider, env.effort, env.pickBy, env.pickWhy, env.movedUp
 	notes := append([]string(nil), env.notes...)
 	env.mu.Unlock()
 	switch {

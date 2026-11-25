@@ -54,6 +54,8 @@ type fakeAgents struct {
 	err         error
 	round, hand float64
 	modelCalls  int
+	// picked, when set, says what each call ran with (AI-48).
+	picked func(AgentRequest) AgentResult
 }
 
 func (f *fakeAgents) Run(ctx context.Context, req AgentRequest) AgentResult {
@@ -77,6 +79,11 @@ func (f *fakeAgents) Run(ctx context.Context, req AgentRequest) AgentResult {
 			}
 		}
 		return AgentResult{Text: f.text, Model: "claude-test", CostUSD: own}
+	}
+	if f.picked != nil {
+		r := f.picked(req)
+		r.Text, r.CostUSD = f.text, f.cost
+		return r
 	}
 	return AgentResult{Text: f.text, Model: "claude-test", CostUSD: f.cost, Tokens: Tokens{In: 100, Out: 20}, Err: f.err}
 }
@@ -153,7 +160,9 @@ func setupWith(t *testing.T, b kv.Backend) *world {
 func (w *world) service(b kv.Backend) *Service {
 	return New(Options{Backend: b, Kinds: w.kinds, Agents: w.agents, Proposer: w.props, Now: w.clock.Now, Every: 30 * time.Second,
 		Audit: audit.New(audit.Options{Out: w.audit}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clusters: func() []Cluster { return []Cluster{{ID: "local", Name: "local"}, {ID: "prod", Name: "prod-eu"}} }})
+		Clusters: func() []Cluster {
+			return []Cluster{{ID: "local", Name: "local"}, {ID: "prod", Name: "prod-eu", Env: "production"}}
+		}})
 }
 
 func on(t *testing.T, s *Service, id string, c Change) View {

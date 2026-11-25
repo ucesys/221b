@@ -10,6 +10,9 @@ import { BACKGROUND, unauthorized } from './auth'
 
 export type RoleId = 'superAdmin' | 'superViewer' | 'admin' | 'viewer'
 
+/** A role a person holds: the four, or the issue service's Reporter (IS-20), which is no Kubernetes role and grants nothing in a cluster. */
+export type HeldRole = RoleId | 'reporter'
+
 /** The roles held in 221B, applied to every cluster (RB-05). */
 export type SuperRole = 'superAdmin' | 'superViewer'
 
@@ -24,10 +27,14 @@ export interface Subject {
   kind: 'Group' | 'User' | 'ServiceAccount'
   /** The name without 221B's prefix (RB-15). */
   name: string
-  /** Where it comes from; "other" for a binding 221B did not make. */
-  source: Source | 'other'
+  /** Where it comes from; "221b" for the reserved groups 221B adds, "other" for a binding 221B did not make. */
+  source: Source | '221b' | 'other'
   /** The namespaces it is bound in; empty for a role that is not bound per namespace. */
   namespaces: string[]
+  /** Bound by a ClusterRoleBinding: the role in every namespace, whatever `namespaces` also lists. */
+  clusterWide?: boolean
+  /** A ServiceAccount's own namespace. */
+  accountNamespace?: string
   /** Members of a local group. */
   members?: number
   /** True when 221B's chart made the binding; false for one made by hand (RB-42). */
@@ -50,8 +57,8 @@ export interface RoleRow {
   can: string[]
   cannot: string[]
   subjects: Subject[]
-  /** Super roles are held in 221B, so these are the people and groups 221B lists, shown to SuperAdmin only. */
-  holders: { groups: number; users: number }
+  /** Super roles are held in 221B, so these are the people and groups 221B lists, sent to SuperAdmin only. */
+  holders?: { groups: number; users: number }
 }
 
 export interface RolesResponse {
@@ -86,9 +93,12 @@ export interface PermRole {
   rules: PermRule[]
 }
 
+/** A role the comparison covers: the four, and the nodes role everyone who signs in holds (RB-07, RB-36). */
+export type DriftId = RoleId | 'nodes'
+
 export interface Drift {
   state: 'match' | 'differs' | 'unknown' | 'missing'
-  roles: { id: RoleId; differences: string[] }[]
+  roles: { id: DriftId; differences: string[] }[]
 }
 
 export interface PermissionsResponse {
@@ -102,14 +112,14 @@ export interface PermissionsResponse {
 
 export interface LocalGroup {
   name: string
-  role: 'viewer' | 'admin'
+  role: 'viewer' | 'admin' | 'reporter'
   namespaces: string[]
   members: number
 }
 
 /** A role a person holds, and why. */
 export interface Holding {
-  role: RoleId
+  role: HeldRole
   /** The group it comes through; empty when it was given to the person. */
   via?: string
   namespaces?: string[]

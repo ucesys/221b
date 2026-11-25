@@ -124,6 +124,9 @@ func buildOpenAI(p Provider, base string, req Request) (string, []byte, reader, 
 	if len(tools) > 0 {
 		body["tools"] = tools
 	}
+	if k, ok := openAIThinking(base, req); ok {
+		body["chat_template_kwargs"] = k
+	}
 	// OpenAI's own and Azure's newer models take max_completion_tokens and
 	// refuse max_tokens; the servers that copy the API take max_tokens.
 	if u, err := url.Parse(base); err == nil && (u.Host == "api.openai.com" || strings.HasSuffix(u.Host, ".openai.azure.com")) {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createUser, setSuperRoles, type LocalGroup, type SuperRole } from '../api/admin'
-import { groupChoice, passwordProblem, usernameProblem } from '../lib/admin'
+import { USERNAME_RULE, groupChoice, passwordProblem, usernameProblem } from '../lib/admin'
 
 interface Props {
   groups: LocalGroup[]
@@ -82,7 +82,7 @@ export function CreateUser({ groups, onClose, onDone }: Props) {
             <input type="text" autoFocus autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} aria-invalid={touched && !!nameProblem} data-testid="new-username" />
           </span>
           <span className="rk-fhint" role={touched && nameProblem ? 'alert' : undefined} style={touched && nameProblem ? { color: 'var(--err)' } : undefined}>
-            {touched && nameProblem ? nameProblem : 'Lowercase letters, digits, dot, dash and underscore.'}
+            {touched && nameProblem ? nameProblem : USERNAME_RULE}
           </span>
         </label>
         <label style={field}>

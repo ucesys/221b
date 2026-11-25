@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchRuns, HEALTH_LABEL, healthTone, mergedNote, runStatus, usd, type RunBrief } from '../../api/jobs'
 import { useShowCosts } from '../../lib/costs'
 import { fmtTs } from '../../lib/format'
 import { navigate, type Route } from '../../lib/router'
+import type { ColumnDef, Term } from '../../lib/table'
+import { useTable } from '../../lib/useTable'
+import { SortTh } from '../automation/SortTh'
+import { ColumnsMenu } from '../ColumnsMenu'
 import { Drawer } from '../Drawer'
+import { ExportMenu } from '../ExportMenu'
 import { Select } from '../Select'
 import { pathId, runHref, runsHref, scheduleHref } from './jobsRoute'
 import { refLink, RunDetail } from './RunDetail'
-import { useRunNames } from './runNames'
+import { runEffort, runModel, SaidCell, saidText } from './modelEffort'
+import { useRunNames, type RunNames } from './runNames'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -72,6 +78,10 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
   const names = useRunNames()
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
+  const [now] = useState(() => Date.now())
+  const columns = useMemo(() => runColumns(costs, names), [costs, names])
+  const rows = useMemo(() => runs ?? [], [runs])
+  const table = useTable<RunBrief>({ id: 'aiops-runs', columns, rows, terms: runTerms, now, defaultSort: { col: 'started', dir: 'desc' } })
   const load = useCallback(
     (background = false) => {
       fetchRuns({ status, mine, limit: 200 }, background).then(
@@ -119,69 +129,40 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
         </p>
       )}
       {runs && runs.length > 0 && (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 13 }} data-testid="runs-table">
-            <thead>
-              <tr>
-                {['Started', 'Ended', 'Job', 'Started by', 'Status', 'Health', 'Result', ...(costs ? ['Cost'] : [])].map((h) => (
-                  <th key={h} style={{ fontSize: 12, color: 'var(--fg2)', fontWeight: 500, textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => {
-                const ref = refLink(r.ref)
-                return (
+        <>
+          {/* Columns and Export above the table they act on, as every table's (CF-66). */}
+          <div className="rk-tools" data-testid="runs-table-tools">
+            <ColumnsMenu cols={columns} hidden={table.hidden} defaults={table.defaults} onChange={table.setHidden} compact={false} />
+            <ExportMenu onExport={(fmt) => table.exportRows(fmt, undefined, 'runs', onToast ?? (() => undefined))} disabled={!table.shown.length} what="the runs in view" />
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 13 }} data-testid="runs-table">
+              <thead>
+                <tr>
+                  {table.cols.map((c) => (
+                    <SortTh key={c.id} col={c.id} label={c.label} sort={table.sort} onSort={table.onSort} />
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {table.shown.map((r) => (
                   <tr key={r.id} style={{ background: r.id === open ? 'var(--accent-weak)' : undefined, cursor: 'pointer' }} onClick={() => navigate(runHref(r.id))} data-testid="run-row">
-                    <td style={td}>
-                      <a className="rk-link" href={runHref(r.id)} onClick={(e) => e.stopPropagation()}>
-                        {fmtTs(r.started)}
-                      </a>
-                    </td>
-                    <td style={{ ...td, color: r.ended ? undefined : 'var(--fg3)' }} data-testid="run-ended">
-                      {r.ended ? fmtTs(r.ended) : r.status === 'running' ? 'running' : '—'}
-                    </td>
-                    <td style={td}>
-                      <strong>{r.label}</strong>
-                      <br />
-                      <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
-                        {r.agent ? names.agent(r.agent) : 'no agent'}
-                        {r.clusters?.length ? ` · ${r.clusters.map(names.cluster).join(', ')}` : ''}
-                      </span>
-                    </td>
-                    <td style={td}>
-                      {r.trigger.what}
-                      {r.repeats ? <span style={{ color: 'var(--fg3)' }}> · {r.repeats} repeats</span> : null}
-                      {ref && (
-                        <>
-                          {' · '}
-                          <a className="rk-link" href={ref.href} onClick={(e) => e.stopPropagation()}>
-                            {ref.label}
-                          </a>
-                        </>
-                      )}
-                    </td>
-                    <td style={td}>
-                      <StatusPill run={r} testId="run-status-cell" />
-                    </td>
-                    <td style={td}>
-                      <HealthPill run={r} />
-                    </td>
-                    <td style={{ ...td, color: r.status === 'ok' ? undefined : 'var(--fg2)' }}>{runSummary(r)}</td>
-                    {costs && <td style={td}>{usd(r.costUSD)}</td>}
+                    {table.cols.map((c) => (
+                      <td key={c.id} style={td}>
+                        {c.cell(r, now)}
+                      </td>
+                    ))}
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {total > runs.length && (
-            <p className="rk-fhint">
-              The newest {runs.length} of {total} runs.
-            </p>
-          )}
-        </div>
+                ))}
+              </tbody>
+            </table>
+            {total > runs.length && (
+              <p className="rk-fhint">
+                The newest {runs.length} of {total} runs.
+              </p>
+            )}
+          </div>
+        </>
       )}
       {open && (
         <Drawer label="Run" kicker="Run" title={runs?.find((r) => r.id === open)?.label ?? open} facts={open} onClose={() => navigate(runsHref)} width={860} copy={false} testId="run-drawer">
@@ -193,3 +174,157 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
 }
 
 const td: React.CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', verticalAlign: 'top' }
+
+const time = (t?: string) => (t ? Date.parse(t) : null)
+const runTerms = (r: RunBrief): Term[] => [{ kind: 'job', text: r.label }]
+
+/**
+ * The Runs table's columns: each sorts, exports and may be hidden in the
+ * Columns menu, as every table's (X-13). Model and Effort say what the run
+ * ran with (the owner, November 23; AI-48): the model on its provider and
+ * what it moved up from, the effort with Auto's reason.
+ */
+export function runColumns(costs: boolean, names: RunNames): ColumnDef<RunBrief>[] {
+  const cols: ColumnDef<RunBrief>[] = [
+    {
+      id: 'started',
+      label: 'Started',
+      width: '',
+      min: 140,
+      defaultDir: 'desc',
+      sortValue: (r) => time(r.started),
+      cell: (r) => (
+        <a className="rk-link" href={runHref(r.id)} onClick={(e) => e.stopPropagation()}>
+          {fmtTs(r.started)}
+        </a>
+      ),
+      export: (r) => [{ head: 'Started', cell: r.started }],
+    },
+    {
+      id: 'ended',
+      label: 'Ended',
+      width: '',
+      min: 140,
+      defaultDir: 'desc',
+      sortValue: (r) => time(r.ended),
+      cell: (r) => (
+        <span style={{ color: r.ended ? undefined : 'var(--fg3)' }} data-testid="run-ended">
+          {r.ended ? fmtTs(r.ended) : r.status === 'running' ? 'running' : '—'}
+        </span>
+      ),
+      export: (r) => [{ head: 'Ended', cell: r.ended ?? '' }],
+    },
+    {
+      id: 'job',
+      label: 'Job',
+      width: '',
+      min: 160,
+      sortValue: (r) => r.label,
+      cell: (r) => (
+        <>
+          <strong>{r.label}</strong>
+          <br />
+          <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
+            {/* The agent alone: the Model and Effort columns say what it ran with. */}
+            <span data-testid="run-agent-line">{r.agent ? names.agent(r.agent) : 'no agent'}</span>
+            {r.clusters?.length ? ` · ${r.clusters.map(names.cluster).join(', ')}` : ''}
+          </span>
+        </>
+      ),
+      export: (r) => [
+        { head: 'Job', cell: r.label },
+        { head: 'Agent', cell: r.agent ? names.agent(r.agent) : '' },
+        { head: 'Clusters', cell: (r.clusters ?? []).map(names.cluster).join(', ') },
+      ],
+    },
+    {
+      id: 'model',
+      label: 'Model',
+      hint: 'The model the run ran on, on its provider, and the model it moved up from',
+      width: '',
+      min: 130,
+      sortValue: (r) => runModel(r).text.replace('—', ''),
+      cell: (r) => <SaidCell said={runModel(r)} testId="run-model" />,
+      export: (r) => [
+        { head: 'Model', cell: r.model ?? '' },
+        { head: 'Provider', cell: r.provider ?? '' },
+        { head: 'Moved up from', cell: r.movedUp?.from ?? '' },
+      ],
+    },
+    {
+      id: 'effort',
+      label: 'Effort',
+      hint: 'The highest effort a step ran at, and why Auto picked it',
+      width: '',
+      min: 90,
+      sortValue: (r) => r.effort ?? '',
+      cell: (r) => <SaidCell said={runEffort(r)} testId="run-effort-cell" />,
+      export: (r) => [{ head: 'Effort', cell: saidText(runEffort(r)) }],
+    },
+    {
+      id: 'by',
+      label: 'Started by',
+      width: '',
+      min: 160,
+      sortValue: (r) => r.trigger.what,
+      cell: (r) => {
+        const ref = refLink(r.ref)
+        return (
+          <>
+            {r.trigger.what}
+            {r.repeats ? <span style={{ color: 'var(--fg3)' }}> · {r.repeats} repeats</span> : null}
+            {ref && (
+              <>
+                {' · '}
+                <a className="rk-link" href={ref.href} onClick={(e) => e.stopPropagation()}>
+                  {ref.label}
+                </a>
+              </>
+            )}
+          </>
+        )
+      },
+      export: (r) => [{ head: 'Started by', cell: r.trigger.what }],
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '',
+      min: 100,
+      sortValue: (r) => runStatus(r)[0],
+      cell: (r) => <StatusPill run={r} testId="run-status-cell" />,
+      export: (r) => [{ head: 'Status', cell: runStatus(r)[0] }],
+    },
+    {
+      id: 'health',
+      label: 'Health',
+      width: '',
+      min: 90,
+      sortValue: (r) => (r.health ? HEALTH_LABEL[r.health] : null),
+      cell: (r) => <HealthPill run={r} />,
+      export: (r) => [{ head: 'Health', cell: r.health ? HEALTH_LABEL[r.health] : '' }],
+    },
+    {
+      id: 'result',
+      label: 'Result',
+      width: '',
+      min: 160,
+      sortValue: (r) => runSummary(r),
+      cell: (r) => <span style={{ color: r.status === 'ok' ? undefined : 'var(--fg2)' }}>{runSummary(r)}</span>,
+      export: (r) => [{ head: 'Result', cell: runSummary(r) }],
+    },
+  ]
+  if (costs)
+    cols.push({
+      id: 'cost',
+      label: 'Cost',
+      width: '',
+      min: 70,
+      right: true,
+      defaultDir: 'desc',
+      sortValue: (r) => r.costUSD,
+      cell: (r) => usd(r.costUSD),
+      export: (r) => [{ head: 'Cost (US$)', cell: r.costUSD }],
+    })
+  return cols
+}

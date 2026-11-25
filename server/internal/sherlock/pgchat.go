@@ -71,7 +71,7 @@ func msgRow(m Msg) []any {
 		in = &u.InputTokens
 	}
 	return []any{m.ID, m.Role, m.Text, m.Note, m.Status, m.Error, m.Asker, m.Agent, m.Model, chatTime(m.At), chatTimeOrNone(m.FirstAt), chatTimeOrNone(m.DoneAt),
-		m.CostUSD, in, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens, parts}
+		m.CostUSD, in, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens, parts, m.Effort, m.PickBy, m.PickWhy, m.PickCostUSD, m.MovedUpFrom}
 }
 
 func sameRow(a, b []any) bool {
@@ -151,7 +151,8 @@ func readChats(ctx context.Context, q db.Querier, name, rest string, args ...any
 		return out, nil
 	}
 	rows, err = q.Query(ctx, `SELECT `+name+`, m.message_number, m.role, m.body, m.note, m.status, m.error, m.asked_by, m.agent_id, m.model, m.at, m.first_at, m.done_at,
-			m.cost_usd::float8, m.tokens_in, m.tokens_out, m.tokens_cache_write, m.tokens_cache_read, m.parts
+			m.cost_usd::float8, m.tokens_in, m.tokens_out, m.tokens_cache_write, m.tokens_cache_read, m.parts, m.effort, m.pick_method, m.pick_why,
+			m.pick_cost_usd::float8, m.moved_up_from_model
 		FROM chat_messages m JOIN chats c USING (chat_id) `+rest+` ORDER BY 1, m.position`, args...)
 	if err != nil {
 		return nil, err
@@ -163,7 +164,8 @@ func readChats(ctx context.Context, q db.Querier, name, rest string, args ...any
 	var u Usage
 	var parts []byte
 	if _, err := pgx.ForEachRow(rows, []any{&of, &m.ID, &m.Role, &m.Text, &m.Note, &m.Status, &m.Error, &m.Asker, &m.Agent, &m.Model, &at, &first, &done,
-		&m.CostUSD, &in, &u.OutputTokens, &u.CacheCreationInputTokens, &u.CacheReadInputTokens, &parts}, func() error {
+		&m.CostUSD, &in, &u.OutputTokens, &u.CacheCreationInputTokens, &u.CacheReadInputTokens, &parts, &m.Effort, &m.PickBy, &m.PickWhy, &m.PickCostUSD,
+		&m.MovedUpFrom}, func() error {
 		x := m
 		x.At, x.FirstAt, x.DoneAt, x.Usage = at.UTC(), nil, nil, nil
 		if first != nil {
@@ -246,9 +248,10 @@ func queueChat(b *pgx.Batch, o chatOf, of string, old, next *KeptChat) {
 		// From the conversation's row: no row, as for a change that has
 		// none, and no message.
 		b.Queue(`INSERT INTO chat_messages (chat_id, position, message_number, role, body, note, status, error, asked_by, agent_id, model, at, first_at, done_at,
-				cost_usd, tokens_in, tokens_out, tokens_cache_write, tokens_cache_read, parts)
+				cost_usd, tokens_in, tokens_out, tokens_cache_write, tokens_cache_read, parts, effort, pick_method, pick_why, pick_cost_usd, moved_up_from_model)
 			SELECT chat_id, $2::integer, $3::integer, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, $11::text, $12::timestamptz, $13::timestamptz,
-				$14::timestamptz, $15::double precision, $16::integer, $17::integer, $18::integer, $19::integer, $20::json
+				$14::timestamptz, $15::double precision, $16::integer, $17::integer, $18::integer, $19::integer, $20::json, $21::text, $22::text, $23::text,
+				$24::double precision, $25::text
 			FROM chats WHERE `+mine,
 			append([]any{of, i}, row...)...)
 	}

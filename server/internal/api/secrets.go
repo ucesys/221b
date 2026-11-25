@@ -78,6 +78,9 @@ func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.writeRefused(w, r, ActionNamespaceCreate, in.Name) {
+		return
+	}
 	if err := cl.CreateNamespace(r.Context(), s.person(r), in.Name, in.Labels); err != nil {
 		s.recordOn(r, refusedOr(err), ActionNamespaceCreate, in.Name, "")
 		jsonError(w, kubeStatus(err), err.Error())
@@ -97,6 +100,13 @@ type secretsConfig struct {
 	// Edit says the person holds Admin or SuperAdmin; Kubernetes still
 	// decides each write.
 	Edit bool `json:"edit"`
+	// ReadOnly says the cluster's connection is read-only, so the page
+	// hides what would write a Secret or a namespace, and Refused why the
+	// console's writes are refused there (read-only, or rbac.enforce
+	// strict), as putSecret, postSecret and postNamespace would answer
+	// (RB-36). They stay the guard.
+	ReadOnly bool   `json:"readOnly,omitempty"`
+	Refused  string `json:"refused,omitempty"`
 }
 
 // mayEditSecrets says whether the person holds a role that edits Secrets:
@@ -135,6 +145,9 @@ func (s *Server) getSecretsConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)}
+	if cfg.Edit {
+		cfg.Refused, cfg.ReadOnly = s.writeRefusal(r, clusterID(r))
+	}
 	// Given a namespace, Reveal says what holds there.
 	if ns := r.URL.Query().Get("namespace"); ns != "" && cfg.Reveal {
 		cfg.Reveal, _ = s.mayReveal(r, cl, ns)
@@ -298,6 +311,9 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "nothing to change")
 		return
 	}
+	if s.writeRefused(w, r, ActionSecretUpdate, ns+"/"+name) {
+		return
+	}
 	p := s.person(r)
 	sec, err := cl.GetSecret(r.Context(), p, ns, name)
 	if err != nil {
@@ -359,6 +375,9 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: ns}, Type: typ, Data: set}
 	detail := "type=" + strconv.Quote(string(typ)) + " " + editDetail(set, nil)
+	if s.writeRefused(w, r, ActionSecretCreate, ns+"/"+in.Name) {
+		return
+	}
 	if _, err := cl.CreateSecret(r.Context(), s.person(r), sec); err != nil {
 		s.recordOn(r, refusedOr(err), ActionSecretCreate, ns+"/"+in.Name, detail)
 		jsonError(w, kubeStatus(err), err.Error())

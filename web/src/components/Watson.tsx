@@ -720,6 +720,11 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
         )}
         {controls}
       </div>
+      {status?.impossible && (
+        <div className="rk-tl" data-k="warn" role="note" data-testid="watson-impossible" style={{ padding: '4px 12px' }}>
+          Changes are impossible by configuration: the Admin and SuperAdmin roles are both read-only, so no role of 221B can change anything. Watson runs reads only.
+        </div>
+      )}
       <div
         className="rk-term"
         ref={scroller}

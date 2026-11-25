@@ -9,6 +9,7 @@ package sessions
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -173,8 +174,10 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		if r.Profile == "" {
 			r.Profile = toolbox.ProfileRestricted
 		}
-		if !contains([]string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}, r.Profile) {
-			errs = append(errs, fmt.Errorf("%q is not a capability profile", r.Profile))
+		// Two profiles since the October 26, 2026 review: netadmin and
+		// sysadmin (a privileged container) are node shells' alone.
+		if !contains(ProfilesAllowed(LevelPrivileged), r.Profile) {
+			errs = append(errs, fmt.Errorf("a debug container's profile is general or restricted, not %q", r.Profile))
 		}
 		if r.MountVolumes && !c.DebugContainer.MountVolumes {
 			errs = append(errs, errors.New("mounting the pod's volumes is turned off on this console"))
@@ -204,7 +207,10 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 	}
 	if r.Tool == toolbox.ToolSSHPair || r.Tool == toolbox.ToolSSHUnpair {
 		r.Profile = toolbox.ProfileGeneral
-		if !contains(c.NodeShell.Profiles, r.Profile) {
+		// Unpairing runs the console's own script, which takes the trust
+		// away: it is not held to the profiles, or a node paired before
+		// they changed could never be unpaired.
+		if r.Tool == toolbox.ToolSSHPair && !contains(c.NodeShell.Profiles, r.Profile) {
 			errs = append(errs, fmt.Errorf("pairing runs with the %s node profile, and the node shell profiles here are %s", r.Profile, strings.Join(c.NodeShell.Profiles, ", ")))
 		}
 	}
@@ -433,22 +439,22 @@ func PodSecurity(ns *corev1.Namespace) string {
 var baselineCaps = map[string]bool{"AUDIT_WRITE": true, "CHOWN": true, "DAC_OVERRIDE": true, "FOWNER": true, "FSETID": true, "KILL": true, "MKNOD": true, "NET_BIND_SERVICE": true, "SETFCAP": true, "SETGID": true, "SETPCAP": true, "SETUID": true, "SYS_CHROOT": true}
 
 // ProfilesAllowed lists the debug container capability profiles a
-// namespace's level admits (TB-24, TB-52).
+// namespace's level admits (TB-24, TB-52): general and restricted, the
+// two since the October 26, 2026 review, and restricted alone where the
+// level is restricted, which admits no container as the image's user.
 func ProfilesAllowed(level string) []string {
-	switch level {
-	case LevelRestricted:
+	if level == LevelRestricted {
 		return []string{toolbox.ProfileRestricted}
-	case LevelBaseline:
-		return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted}
 	}
-	return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}
+	return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted}
 }
 
 func ptr[T any](v T) *T { return &v }
 
 // securityFor is the security context of a capability profile. General
 // runs as the image's own user with the capabilities its image asks for,
-// as many as the namespace's Pod Security level allows.
+// as many as the namespace's Pod Security level allows; anything else is
+// restricted (EphemeralContainer admits general and restricted alone).
 func securityFor(profile string, img toolbox.Image, level string) *corev1.SecurityContext {
 	switch profile {
 	case toolbox.ProfileGeneral:
@@ -462,14 +468,8 @@ func securityFor(profile string, img toolbox.Image, level string) *corev1.Securi
 			}
 		}
 		return sc
-	case toolbox.ProfileNetAdmin:
-		return &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN", "NET_RAW"}}}
-	case toolbox.ProfileSysAdmin:
-		return &corev1.SecurityContext{Privileged: ptr(true)}
-	case toolbox.ProfileRestricted:
-		return restrictedContext()
 	}
-	return &corev1.SecurityContext{AllowPrivilegeEscalation: ptr(false)}
+	return restrictedContext()
 }
 
 func restrictedContext() *corev1.SecurityContext {
@@ -483,18 +483,27 @@ func restrictedContext() *corev1.SecurityContext {
 }
 
 // EphemeralContainer is the debug container of TB-24: an allowlisted
-// image that sleeps until a shell is opened into it, sees the target's
-// processes, and mounts the pod's volumes at the target's paths (without
-// subPath, which ephemeral containers may not use).
-func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod, level string) (corev1.EphemeralContainer, error) {
+// image that waits while its session lasts, sees the target's processes,
+// and mounts the pod's volumes at the target's paths (without subPath,
+// which ephemeral containers may not use). An ephemeral container cannot
+// be removed, so it stops instead: its main process waits for the mark the
+// session's end leaves, or for its deadline should the console not, and
+// the container stops with it, its shells too (the toolbox review,
+// finding 13).
+func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod, level string, deadline time.Duration) (corev1.EphemeralContainer, error) {
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return corev1.EphemeralContainer{}, fmt.Errorf("no image named %q", r.Image)
 	}
+	// The server refuses what the namespace's Pod Security level forbids,
+	// as the dialog does (TB-52): the plan and the start both come here.
+	if allowed := ProfilesAllowed(level); !contains(allowed, r.Profile) {
+		return corev1.EphemeralContainer{}, fmt.Errorf("namespace %s enforces the %s Pod Security level, which admits the %s profile alone, not %s", r.Namespace, level, strings.Join(allowed, " and "), r.Profile)
+	}
 	ec := corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 		Name:            "221b-" + r.Image + "-" + id[:4],
 		Image:           img.Image,
-		Command:         []string{"sleep", "infinity"},
+		Command:         debugWait(id, deadline),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		SecurityContext: securityFor(r.Profile, img, level),
 		Stdin:           true,
@@ -534,6 +543,19 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 	return ec, nil
 }
 
+// endMark is the file whose making stops a session's debug container.
+func endMark(id string) string { return "/tmp/.221b-end-" + id }
+
+// debugWait is a debug container's main process: it waits, a second at a
+// time, until the session's end leaves its mark or the deadline passes.
+func debugWait(id string, deadline time.Duration) []string {
+	return []string{"sh", "-c", fmt.Sprintf(`i=0; while [ ! -e %s ] && [ "$i" -lt %d ]; do sleep 1; i=$((i+1)); done`, endMark(id), seconds(deadline, 1))}
+}
+
+// StopDebug is what a session's end runs in its debug container: the mark
+// its main process waits for.
+func StopDebug(id string) []string { return []string{"sh", "-c", "touch " + endMark(id)} }
+
 // DebugJob is the debug pod of TB-28: a Job with one pod, a deadline and
 // a time to live, labels copied from a pod or typed, a readiness gate that
 // never holds so no Service sends it traffic, and only the capabilities
@@ -567,8 +589,8 @@ func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copie
 		sc.RunAsNonRoot, sc.RunAsUser = ptr(true), ptr(int64(65532))
 		notes = append(notes, fmt.Sprintf("It runs as a user other than root: namespace %s enforces the restricted Pod Security level.", r.Namespace))
 	}
-	secs := int64(deadline / time.Second)
-	ttl := int32(c.DebugPod.TTLAfterFinished.D() / time.Second)
+	secs := seconds(deadline, 1)
+	ttl := int32(seconds(c.DebugPod.TTLAfterFinished.D(), 0))
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: m.Labels, Annotations: m.Annotations},
 		Spec: corev1.PodSpec{
@@ -635,7 +657,7 @@ func NodePod(c toolbox.Config, id, owner string, r Request, deadline time.Durati
 		return nil, fmt.Errorf("no image named %q", c.NodeShell.Image)
 	}
 	m := meta(id, r.Tool, c.NodeShell.Namespace, owner, nil)
-	secs := int64(deadline / time.Second)
+	secs := seconds(deadline, 1)
 	spec := corev1.PodSpec{
 		NodeName:                      r.Node,
 		RestartPolicy:                 corev1.RestartPolicyNever,
@@ -697,6 +719,15 @@ func Containers(p *corev1.Pod) []string {
 	}
 	sort.Strings(eph)
 	return append(out, eph...)
+}
+
+// seconds is a duration as the seconds Kubernetes takes (a pod's deadline,
+// a Job's time to live): at least least, at most 2^31-1, which is what a
+// pod's activeDeadlineSeconds and a Job's int32 hold, so a long value is
+// clamped rather than wrapped (the toolbox review, finding 7).
+func seconds(d time.Duration, least int64) int64 {
+	s := int64(d / time.Second)
+	return min(max(s, least), math.MaxInt32)
 }
 
 func short(d time.Duration) string {

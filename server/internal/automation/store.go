@@ -320,6 +320,12 @@ type Store struct {
 	// runs keeps the runs and the run requests in a database (KeepRunsIn,
 	// DB-87); nil keeps them in the documents RunsKey and ChangesKey.
 	runs RunRepo
+	// decideMu orders the decisions on variable changes, and the changes
+	// asked for, in a store of documents: a decision checks, applies and
+	// marks under it. decideIn, set with the tables, does all of it in one
+	// transaction instead (DecideChange).
+	decideMu sync.Mutex
+	decideIn func(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error)
 }
 
 // RunsKeys are the keys that may live apart from the scripts, so neither
@@ -405,7 +411,9 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 			}
 		}
 		b, _ := json.Marshal(v)
-		if limit > 0 && len(b) > limit {
+		// The byte limits are a ConfigMap's: a document kept as rows of the
+		// database has none, only the limits on how many records it keeps.
+		if limit > 0 && len(b) > limit && !st.inRows(key) {
 			return fmt.Errorf("%w: %s would be %d KiB, over its %d KiB", ErrFull, key, len(b)>>10, limit>>10)
 		}
 		if _, err = st.backend.SaveKey(ctx, key, b, version); errors.Is(err, kv.ErrConflict) {
@@ -430,6 +438,32 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		return err
 	}
 	return err
+}
+
+// inRows says whether the document under key is kept as rows of the
+// database's tables (db.Doc) rather than in a ConfigMap or in memory.
+func (st *Store) inRows(key string) bool {
+	b := st.backend
+	for {
+		switch x := b.(type) {
+		case *kv.Routed:
+			if r, ok := x.Routes[key]; ok && r != nil {
+				b = r
+			} else {
+				b = x.Default
+			}
+			continue
+		case *kv.Keyed:
+			if r, ok := x.Keys[key]; ok && r != nil {
+				b = r
+			} else {
+				b = x.Rest
+			}
+			continue
+		}
+		_, rows := b.(interface{ ImportID() string })
+		return rows
+	}
 }
 
 // liveIn are the digests a document names whose values are still to be
@@ -563,7 +597,7 @@ func (st *Store) usedVersions(ctx context.Context) (map[string]map[int]bool, err
 
 // prune drops superseded and rejected versions, oldest first, then drafts and reviews
 // older than a script's newest version, until the record fits; the newest
-// version, approved ones and those a kept run ran stay, so a run's record
+// version (rejected or not), approved ones and those a kept run ran stay, so a run's record
 // can always show the text it ran.
 func prune(rec *scriptsRecord, limit int, used map[string]map[int]bool) {
 	size := func() int {
@@ -571,8 +605,10 @@ func prune(rec *scriptsRecord, limit int, used map[string]map[int]bool) {
 		return len(b)
 	}
 	for _, drop := range []func(Script, int) bool{
+		// Never the newest: the next version is numbered after it, and a
+		// number is never given twice.
 		func(s Script, i int) bool {
-			return (s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected) && !used[s.Name][s.Versions[i].N]
+			return (s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected) && i < len(s.Versions)-1 && !used[s.Name][s.Versions[i].N]
 		},
 		func(s Script, i int) bool {
 			st := s.Versions[i].State
@@ -698,6 +734,19 @@ func (st *Store) Revoke(ctx context.Context, name string, n int, who Who) (Scrip
 }
 
 func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *Version) error) (Script, error) {
+	// A ConfigMap's limit: what the edit adds (an approval, a revocation)
+	// drops old versions as a save does, never the one edited.
+	var used map[string]map[int]bool
+	if !st.inRows(ScriptsKey) {
+		var err error
+		if used, err = st.usedVersions(ctx); err != nil {
+			return Script{}, err
+		}
+		if used[name] == nil {
+			used[name] = map[int]bool{}
+		}
+		used[name][n] = true
+	}
 	var saved Script
 	err := change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
 		s, ok := rec.Scripts[name]
@@ -720,7 +769,10 @@ func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *
 		s.Versions[at] = v
 		s.Updated = st.now().UTC()
 		rec.Scripts[name] = s
-		saved = s
+		if used != nil {
+			prune(rec, maxScriptsBytes, used)
+		}
+		saved = rec.Scripts[name]
 		return nil
 	})
 	return saved, err

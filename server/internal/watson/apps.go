@@ -142,6 +142,24 @@ func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Comman
 	return ""
 }
 
+// mayManageApp says whether a person may manage applications in a
+// namespace: the role, and Kubernetes' answer when the API asks for one.
+func (s *Service) mayManageApp(ctx context.Context, cl Cluster, who Who, ns string) bool {
+	if !who.ManageApps {
+		return false
+	}
+	s.mu.Lock()
+	ask := s.opts.AppAccess
+	s.mu.Unlock()
+	if ask == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	may, err := ask(ctx, cl, who, ns)
+	return err == nil && may
+}
+
 // appChart fetches and loads the chart a command names, with the values
 // it asks for. The record, when the command uses one, supplies the
 // source, the credential, the values file and the parameters.
@@ -463,6 +481,11 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		// release is gone, is removed by forgetting its record (HA-08).
 		if errors.Is(err, driver.ErrReleaseNotFound) && !dry && t.Apps != nil {
 			if _, _, gerr := t.Apps.Get(ctx, t.Cluster, ns, name); gerr == nil {
+				// The record goes through the console's account: only someone
+				// who may remove applications there removes it (HA-02).
+				if !t.mayForget {
+					return fmt.Errorf("there is no release %q; removing the application's record needs an Admin or SuperAdmin whom Kubernetes lets manage applications in %s", name, ns)
+				}
 				if derr := t.Apps.Delete(ctx, t.Cluster, ns, name); derr != nil {
 					return fmt.Errorf("there is no release %q, and the application's record was not removed: %w", name, derr)
 				}
@@ -514,12 +537,21 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	vals := a.vals
 	desc := "221B: " + a.src.String() + " (" + short(a.co.Commit) + ")"
 	install := c.Name() == "helm install"
+	replace := false
 	if !install && c.Has("install") {
-		// helm upgrade --install: an install when there is no release yet.
+		// helm upgrade --install: an install when there is no release yet,
+		// or only the history an uninstall --keep-history kept, which the
+		// install replaces, as the helm CLI does.
 		h := action.NewHistory(cfg)
 		h.Max = 1
-		if _, err := h.Run(name); errors.Is(err, driver.ErrReleaseNotFound) {
+		versions, err := h.Run(name)
+		if errors.Is(err, driver.ErrReleaseNotFound) {
 			install = true
+		} else if rels, verr := v1List(versions); err == nil && verr == nil {
+			sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
+			if uninstalled(rels) {
+				install, replace = true, true
+			}
 		}
 	}
 	if dry {
@@ -529,6 +561,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	if install {
 		i := action.NewInstall(cfg)
 		i.ReleaseName, i.Namespace, i.CreateNamespace = name, ns, c.Has("create-namespace")
+		i.Replace = replace
 		i.Timeout, i.WaitStrategy, i.DisableHooks = timeout, wait, c.Has("no-hooks")
 		i.WaitOptions = append(i.WaitOptions, kube.WithStatusComputeWorkers(4))
 		// The API server validates what it is sent, and says what is wrong;
@@ -610,6 +643,9 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		if err != nil {
 			return nil, err
 		}
+		if err := damaged(rels); err != nil {
+			return nil, err
+		}
 		sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
 		return rels, nil
 	}
@@ -683,11 +719,14 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 	if a.src.FromRepository() {
 		from = fmt.Sprintf("%s, archive %s%s", a.src, short(a.co.Commit), when)
 	}
-	install := c.Name() == "helm install" || (c.Has("install") && cur == nil)
+	install := c.Name() == "helm install" || (c.Has("install") && (cur == nil || uninstalled(rels)))
 	switch {
 	case relErr != nil:
 		// What runs now is not known, so nothing is said about what changes.
 		impact = append(impact, fmt.Sprintf("Deploys chart %s %s (app %s) from %s.", ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from))
+	case install && cur != nil && c.Name() == "helm upgrade":
+		objs := objectNames(r.Manifest)
+		impact = append(impact, fmt.Sprintf("Release %s/%s was uninstalled with its history kept (revision %d): installs chart %s %s (app %s) from %s over it, as revision %d: creates %s: %s.", ns, name, cur.Version, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1, plural(len(objs), "object", "objects"), listText(objs, 8)))
 	case install && cur != nil:
 		impact = append(impact, fmt.Sprintf("Release %s/%s exists already (revision %d): helm will refuse. Upgrade it instead.", ns, name, cur.Version))
 	case install:
@@ -695,10 +734,35 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		impact = append(impact, fmt.Sprintf("Installs chart %s %s (app %s) from %s: creates %s: %s.", ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, plural(len(objs), "object", "objects"), listText(objs, 8)))
 	case cur == nil:
 		impact = append(impact, fmt.Sprintf("There is no release %s in %s: helm will refuse. Install it, or add --install.", name, ns))
+	case strings.HasPrefix(cur.Info.Status.String(), "pending"):
+		impact = append(impact, fmt.Sprintf("Release %s/%s is %s (revision %d): helm will refuse while another operation is in progress.", ns, name, cur.Info.Status, cur.Version))
+	case upgradeBase(rels) == nil:
+		impact = append(impact, fmt.Sprintf("Release %s/%s has no deployed revision to upgrade from (revision %d is %s): helm will refuse.", ns, name, cur.Version, cur.Info.Status))
 	default:
+		// Helm upgrades from the last deployed revision, not from a newer
+		// one that failed: what it changes, deletes and resets is against
+		// that one.
+		base := upgradeBase(rels)
+		vals := a.vals
+		if len(vals) == 0 && len(base.Config) > 0 {
+			// An upgrade given no values keeps the release's (Helm's
+			// reuseValues): the card renders with them and removes none.
+			vals = base.Config
+			if again, err := a.load(); err == nil {
+				if rr, err := apps.Render(ctx, again, vals, name, ns, ""); err == nil {
+					r = rr
+				}
+			}
+		}
 		impact = append(impact, fmt.Sprintf("Upgrades release %s/%s from %s %s (revision %d, %s) to %s %s (app %s) from %s. Helm records it as revision %d.",
-			ns, name, chartName(cur.Chart), cur.Chart.Metadata.Version, cur.Version, cur.Info.Status, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1))
-		changed, added, removed := manifestDiff(cur.Manifest, r.Manifest)
+			ns, name, chartName(base.Chart), base.Chart.Metadata.Version, base.Version, base.Info.Status, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1))
+		if base != cur {
+			impact = append(impact, fmt.Sprintf("The newest revision, %d, is %s: Helm upgrades from revision %d, the last deployed, and this card compares against it.", cur.Version, cur.Info.Status, base.Version))
+		}
+		if len(a.vals) == 0 && len(base.Config) > 0 {
+			impact = append(impact, "The line gives no values, so Helm keeps the values the release has (helm get values).")
+		}
+		changed, added, removed := manifestDiff(base.Manifest, r.Manifest)
 		if len(changed)+len(added)+len(removed) == 0 {
 			impact = append(impact, "The objects are the same as deployed: Helm applies them again and records the new revision.")
 		}
@@ -713,7 +777,7 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		}
 		// The release's values the deploy would remove or change: an
 		// upgrade takes only the values it is given.
-		gone, changedVals := apps.ValueChanges(cur.Config, a.vals)
+		gone, changedVals := apps.ValueChanges(base.Config, vals)
 		impact = append(impact, valueImpact(gone, changedVals)...)
 		if t.pin != nil {
 			t.pin.removed = len(gone)
@@ -731,6 +795,32 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		impact = append(impact, fmt.Sprintf("Runs %s: %s.", plural(len(names), "image", "images"), listText(names, 6)))
 	}
 	return targets, guards, impact
+}
+
+// uninstalled says whether the newest revision is one an uninstall
+// --keep-history kept: helm upgrade --install installs over it. rels are
+// newest first.
+func uninstalled(rels []*release.Release) bool {
+	return len(rels) > 0 && rels[0].Info != nil && rels[0].Info.Status.String() == "uninstalled"
+}
+
+// upgradeBase is the revision Helm upgrades from (prepareUpgrade): the
+// newest when it is deployed, else the last deployed one, else the newest
+// when it failed or was superseded with none deployed; nil when there is
+// none, and helm refuses. rels are newest first.
+func upgradeBase(rels []*release.Release) *release.Release {
+	if len(rels) == 0 {
+		return nil
+	}
+	for _, r := range rels {
+		if r.Info.Status.String() == "deployed" {
+			return r
+		}
+	}
+	if st := rels[0].Info.Status.String(); st == "failed" || st == "superseded" {
+		return rels[0]
+	}
+	return nil
 }
 
 // objectNames lists a manifest's objects as "Kind name".

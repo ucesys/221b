@@ -56,6 +56,22 @@ func (b *KubeBackend) Node(ctx context.Context, name string) (*corev1.Node, erro
 // answers the dry run, or the access review where a session has no dry
 // run (a shell, a command, a forward).
 func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube.Person, ownerName string) Plan {
+	p := m.planFor(ctx, cl, r, owner, ownerName)
+	// The object shows the deadline of a session its asker approves: the
+	// most Extend can reach. Approved by another person, the session gets
+	// the duration asked for and its pod that deadline, which the card
+	// cannot know yet, so it says so (the toolbox review's sweep).
+	switch r.Tool {
+	case toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
+		limit := m.opts.Config.Limit(minutes(r.Minutes))
+		if self, other := m.deadline(limit, ""), m.deadline(limit, "another"); p.Object != "" && self != other {
+			p.Impact = append(p.Impact, fmt.Sprintf("Its deadline is %d seconds as shown where the asker approves it; approved by another person, %d seconds, from the duration asked for.", seconds(self, 1), seconds(other, 1)))
+		}
+	}
+	return p
+}
+
+func (m *Manager) planFor(ctx context.Context, cl Cluster, r Request, owner kube.Person, ownerName string) Plan {
 	var p Plan
 	b, err := m.opts.Backend(cl, owner)
 	if err != nil {
@@ -145,13 +161,13 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
 			level = PodSecurity(ns)
 		}
-		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
+		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
 		}
 		ec.Name = strings.TrimSuffix(ec.Name, "plan") + "…"
-		p.Impact = []string{fmt.Sprintf("Adds debug container %s (%s) to pod %s; it sees the processes of %s.", ec.Name, ec.Image, r.Pod, ec.TargetContainerName), "It stays until the pod restarts and shares the pod's memory limit.", "Then opens a terminal in it. " + terms}
+		p.Impact = []string{fmt.Sprintf("Adds debug container %s (%s) to pod %s; it sees the processes of %s.", ec.Name, ec.Image, r.Pod, ec.TargetContainerName), "It stops when the session ends and stays in the pod, stopped, until the pod is replaced; it shares the pod's memory limit.", "Then opens a terminal in it. " + terms}
 		if len(ec.VolumeMounts) > 0 {
 			var names []string
 			for _, v := range ec.VolumeMounts {
@@ -160,7 +176,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			p.Impact = append(p.Impact, "Mounts "+strings.Join(names, ", ")+".")
 		}
 		p.Object = toYAML(ec)
-		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
+		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level, m.deadline(limit, ""))
 		err = b.AddEphemeral(ctx, pod, probe, true)
 		p.dry(err, "pod/"+r.Pod+" ephemeral container added (server dry run)")
 	case toolbox.ToolDebugPod:
@@ -191,6 +207,12 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			fmt.Sprintf("It never becomes Ready, so no Service sends it traffic; it is deleted when the session ends, at %s at the latest.", short(limit))}, notes...)
 		p.Impact = append(p.Impact, "Then opens a terminal in it. "+terms)
 		p.Object = toYAML(job)
+		// The terminal is an exec into the Job's pod: without pods/exec the
+		// Job would run and the session fail (TB-28, TB-50).
+		if why := execRefused(ctx, asker, who, r.Namespace); why != "" {
+			p.DryRun, p.DryRunExit = []string{why}, 1
+			return p
+		}
 		err = b.CreateJob(ctx, job, true)
 		p.dry(err, "job.batch/"+job.Name+" created (server dry run)")
 	case toolbox.ToolSSH:
@@ -228,6 +250,25 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		p.dry(err, "pod/"+pod.Name+" created (server dry run)")
 	}
 	return p
+}
+
+// execRefused says why a debug pod cannot open its terminal, or "": the
+// access review of create pods/exec in the namespace, as the person. With
+// no way to ask, or when the review itself fails, Kubernetes decides at
+// the exec.
+func execRefused(ctx context.Context, asker Asker, who, ns string) string {
+	if asker == nil {
+		return ""
+	}
+	ok, why, err := asker.Can(ctx, "create", "", "pods", "exec", ns, "")
+	if err != nil || ok {
+		return ""
+	}
+	msg := fmt.Sprintf("Kubernetes does not allow %s to create pods/exec in %s, and a debug pod opens its shell with it: nothing was created.", who, nsName(ns))
+	if why != "" {
+		msg += " " + why
+	}
+	return msg
 }
 
 func (p *Plan) dry(err error, ok string) {

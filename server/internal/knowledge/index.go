@@ -42,6 +42,16 @@ type Hit struct {
 	// Terms are the query's words the hit holds, as searched (lower
 	// case, stemmed), for the snippet to mark.
 	Terms []string `json:"terms,omitempty"`
+	// --- Knowledge at scale (phase-13.1-ai, part B) ---
+	// Reviewed says people approved it: a page is, an excerpt is not
+	// (KN-57). Trust is an excerpt's source's trust level, Heading a
+	// section's heading path, Product and ProductVersion what it is
+	// about (KN-56).
+	Reviewed       bool   `json:"reviewed,omitempty"`
+	Trust          string `json:"trust,omitempty"`
+	Heading        string `json:"heading,omitempty"`
+	Product        string `json:"product,omitempty"`
+	ProductVersion string `json:"productVersion,omitempty"`
 }
 
 type doc struct {
@@ -124,6 +134,12 @@ func paragraphs(text string) []string {
 // NewIndex builds the index of a local copy: its pages, with stale ones
 // marked from the manifest, and its excerpts.
 func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) *Index {
+	return newIndex(files, m, staleDays, now, true)
+}
+
+// newIndex builds the index of a local copy, its excerpts left out when
+// the database holds them (KN-53): each replica keeps the pages alone.
+func newIndex(files map[string]File, m *Manifest, staleDays int, now time.Time, excerpts bool) *Index {
 	idx := &Index{df: map[string]int{}}
 	if m == nil {
 		m = newManifest()
@@ -146,7 +162,7 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 			d.add(p.Title, 2)
 			d.add(p.Body, 1)
 			idx.docs = append(idx.docs, d)
-		case strings.HasPrefix(f.Path, ExcerptsDir):
+		case excerpts && strings.HasPrefix(f.Path, ExcerptsDir):
 			var e Excerpt
 			if json.Unmarshal(f.Body, &e) != nil {
 				continue

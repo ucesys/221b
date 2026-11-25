@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -402,15 +403,22 @@ func (s *Server) registerBackupParts() {
 		How: "is set here when this console has no SSH authority yet, so the pairings work again; an authority here stays",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			ca, ok := s.opts.SSH.(sshAuthorityBackup)
-			if !ok || s.opts.SSH.Fingerprint() == "" {
+			if !ok {
+				return nil, nil
+			}
+			// The key itself says whether there is an authority: a read
+			// that fails fails the backup, where an empty fingerprint
+			// could not tell it from none, and the key was left out.
+			pem, err := ca.AuthorityKey(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading the SSH authority's key: %w", err)
+			}
+			defer clear(pem)
+			if len(pem) == 0 {
 				return nil, nil
 			}
 			if !env.Sealing() {
 				return backup.Placeholder, nil
-			}
-			pem, err := ca.AuthorityKey(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("reading the SSH authority's key: %w", err)
 			}
 			return env.Seal(string(pem)), nil
 		},
@@ -1004,6 +1012,20 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 		}
 		return auth.SuperChange{Super: u.Super, Groups: u.Groups}
 	}
+	// An email in the deployment's admin list makes a SuperAdmin at once,
+	// which cannot wait for approval: where another SuperAdmin could
+	// approve, the backup's email is left out, as the Users page refuses it.
+	listed := func(before *auth.Account, u backupUser) bool {
+		tp := s.twoPersonAuth()
+		if tp == nil {
+			return false
+		}
+		held, _ := tp.ListMakesSuperAdmin(sess, before, auth.Account{Username: u.Username, Email: u.Email})
+		if held {
+			note("user %s: the email %s is in the deployment's admin list, which would make them a SuperAdmin without another SuperAdmin's approval; it is left out", u.Username, u.Email)
+		}
+		return held
+	}
 	acc := s.accounts()
 	if acc == nil || !acc.Persistent() {
 		note("users: this console keeps no local users of its own (sign-in is off, or they are not kept in a Secret)")
@@ -1018,6 +1040,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 		}
 		var c auth.SuperChange
 		if !exists {
+			if listed(nil, u) {
+				u.Email = ""
+			}
 			c = split(auth.Account{Username: u.Username, Email: u.Email}, u)
 			if _, err := acc.Create(ctx, auth.NewAccount{Username: u.Username, Name: u.Name, Email: u.Email, Password: randomPassword(), Groups: c.Groups}); err != nil {
 				note("user %s: %v", u.Username, err)
@@ -1041,6 +1066,9 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.E
 			}
 			cur, _ = acc.Find(u.Username)
 		} else {
+			if u.Email != "" && listed(&cur, u) {
+				u.Email = cur.Email
+			}
 			c = split(cur, u)
 			// A file with no name or email has nothing to say about them.
 			name, email, disabled := cmp.Or(u.Name, cur.Name), cmp.Or(u.Email, cur.Email), u.Disabled
@@ -1185,7 +1213,10 @@ func (s *Server) checkRestoredPairing(p nodessh.Pairing) error {
 }
 
 // restorePairings adds the file's valid pairings to those kept, by node,
-// and says which it left out and why.
+// and says which it left out and why. A node or host paired here keeps
+// its pairing, and a host's pairing comes back only for the host as it is
+// here, with that pinned key, port and login user: a pairing is no way to
+// pin another key or move a host (the review of November 24, 2026).
 func (s *Server) restorePairings(ctx context.Context, list map[string]nodessh.Pairing, note func(string, ...any)) (int, error) {
 	keys := make([]string, 0, len(list))
 	for k := range list {
@@ -1204,7 +1235,26 @@ func (s *Server) restorePairings(ctx context.Context, list map[string]nodessh.Pa
 	if len(add) == 0 {
 		return 0, nil
 	}
+	hosts := map[string]nodessh.Host{}
+	if s.opts.Hosts != nil {
+		seen := map[string]bool{}
+		for _, p := range add {
+			if seen[p.Cluster] {
+				continue
+			}
+			seen[p.Cluster] = true
+			list, err := s.opts.Hosts.Hosts(ctx, p.Cluster)
+			if err != nil {
+				return 0, err
+			}
+			for _, h := range list {
+				hosts[h.Cluster+"/"+h.Name] = h
+			}
+		}
+	}
+	var skipped []string
 	for try := 0; try < 8; try++ {
+		skipped = nil
 		have := map[string]nodessh.Pairing{}
 		b, version, err := s.opts.KV.LoadKey(ctx, nodessh.PairingsKey)
 		if err == nil {
@@ -1214,14 +1264,35 @@ func (s *Server) restorePairings(ctx context.Context, list map[string]nodessh.Pa
 		} else if !errors.Is(err, kv.ErrNotFound) {
 			return 0, err
 		}
-		for k, p := range add {
+		n := 0
+		for _, k := range slices.Sorted(maps.Keys(add)) {
+			p := add[k]
+			if _, ok := have[k]; ok {
+				skipped = append(skipped, fmt.Sprintf("SSH pairing of %s/%s is not restored: it is paired here, and keeps that pairing", p.Cluster, p.Node))
+				continue
+			}
+			if h, ok := hosts[k]; ok && (h.HostKey == "" || !slices.Contains(p.HostKeys, h.HostKey) || h.Port != p.Port || h.LoginUser != p.LoginUser) {
+				skipped = append(skipped, fmt.Sprintf("SSH pairing of host %s/%s is not restored: the host here has another pinned key, port or login user; pair it from the Nodes tab", p.Cluster, p.Node))
+				continue
+			}
 			have[k] = p
+			n++
+		}
+		if n == 0 {
+			for _, line := range skipped {
+				note("%s", line)
+			}
+			return 0, nil
 		}
 		out, _ := json.Marshal(have)
 		if _, err = s.opts.KV.SaveKey(ctx, nodessh.PairingsKey, out, version); errors.Is(err, kv.ErrConflict) {
+			skipped = nil
 			continue
 		}
-		return len(add), err
+		for _, line := range skipped {
+			note("%s", line)
+		}
+		return n, err
 	}
 	return 0, errors.New("the pairings kept changing; try again")
 }

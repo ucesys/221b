@@ -123,21 +123,27 @@ func (s secretBackend) SaveIf(ctx context.Context, b []byte, version string) err
 // document is the saved accounts with what this version does not know of
 // them, kept so that writing them back loses nothing (P7-03).
 type document struct {
-	format    int
-	users     map[string]*Account
+	format int
+	users  map[string]*Account
+	// ended is when each account's sessions were last ended (a reset, a
+	// disable, a delete, End sessions), by user name: a session signed in
+	// before that is refused on every replica, whether or not the session
+	// store could be told (Accounts.SessionsEnded).
+	ended     map[string]time.Time
 	extra     map[string]json.RawMessage
 	userExtra map[string]map[string]json.RawMessage
 }
 
 var (
-	documentFields = []string{"version", "users"}
-	accountFields  = []string{"username", "name", "email", "passwordHash", "groups", "super", "disabled", "created", "lastSignIn"}
+	documentFields = []string{"version", "users", "sessionsEnded"}
+	accountFields  = []string{"username", "name", "email", "passwordHash", "groups", "super", "disabled", "created", "lastSignIn", "installer"}
 )
 
 func parseDocument(b []byte) (document, error) {
 	var raw struct {
-		Version int               `json:"version"`
-		Users   []json.RawMessage `json:"users"`
+		Version int                  `json:"version"`
+		Users   []json.RawMessage    `json:"users"`
+		Ended   map[string]time.Time `json:"sessionsEnded"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return document{}, fmt.Errorf("the saved accounts are not valid JSON: %w", err)
@@ -146,7 +152,10 @@ func parseDocument(b []byte) (document, error) {
 	if err != nil {
 		return document{}, err
 	}
-	d := document{format: raw.Version, users: map[string]*Account{}, extra: extra, userExtra: map[string]map[string]json.RawMessage{}}
+	d := document{format: raw.Version, users: map[string]*Account{}, ended: raw.Ended, extra: extra, userExtra: map[string]map[string]json.RawMessage{}}
+	if d.ended == nil {
+		d.ended = map[string]time.Time{}
+	}
 	for _, ub := range raw.Users {
 		var u Account
 		if err := json.Unmarshal(ub, &u); err != nil {
@@ -179,9 +188,10 @@ func (d document) encode() ([]byte, error) {
 		users = append(users, b)
 	}
 	return mergeKnown(struct {
-		Version int               `json:"version"`
-		Users   []json.RawMessage `json:"users"`
-	}{accountsVersion, users}, d.extra)
+		Version int                  `json:"version"`
+		Users   []json.RawMessage    `json:"users"`
+		Ended   map[string]time.Time `json:"sessionsEnded,omitempty"`
+	}{accountsVersion, users, d.ended}, d.extra)
 }
 
 // load reads the saved accounts into memory. It is called without a.mu,
@@ -207,10 +217,10 @@ func (a *Accounts) load(ctx context.Context) error {
 			return err
 		}
 	} else {
-		d = document{users: map[string]*Account{}, userExtra: map[string]map[string]json.RawMessage{}}
+		d = document{users: map[string]*Account{}, ended: map[string]time.Time{}, userExtra: map[string]map[string]json.RawMessage{}}
 	}
 	a.mu.Lock()
-	a.stored, a.extra, a.userExtra = d.users, d.extra, d.userExtra
+	a.stored, a.ended, a.extra, a.userExtra = d.users, d.ended, d.extra, d.userExtra
 	a.newer = d.format > accountsVersion
 	a.version, a.loaded = version, true
 	a.mu.Unlock()
@@ -234,13 +244,14 @@ func (a *Accounts) change(ctx context.Context, fn func() error) error {
 			a.mu.Unlock()
 			return ErrNewerAccounts
 		}
-		before := maps.Clone(a.stored)
+		before, endedBefore := maps.Clone(a.stored), maps.Clone(a.ended)
 		if err := fn(); err != nil {
-			a.stored = before
+			a.stored, a.ended = before, endedBefore
 			a.mu.Unlock()
 			return err
 		}
-		b, err := document{users: a.stored, extra: a.extra, userExtra: a.userExtra}.encode()
+		a.pruneEnded()
+		b, err := document{users: a.stored, ended: a.ended, extra: a.extra, userExtra: a.userExtra}.encode()
 		version := a.version
 		a.mu.Unlock()
 		if err == nil {
@@ -254,11 +265,14 @@ func (a *Accounts) change(ctx context.Context, fn func() error) error {
 			a.mu.Unlock()
 			return nil
 		case errors.Is(err, ErrConflict):
-			a.stored, a.version = before, ""
+			a.stored, a.ended, a.version = before, endedBefore, ""
 			a.mu.Unlock()
 			continue
 		default:
-			a.stored = before
+			// A read made while the save waited may have put a newer
+			// version in place: what is held now is the old accounts, so
+			// they are read again next time, as after a conflict.
+			a.stored, a.ended, a.version = before, endedBefore, ""
 			a.mu.Unlock()
 			return err
 		}

@@ -192,6 +192,21 @@ type Options struct {
 	// settings name no Git repository or S3 bucket (DB-96); nil leaves it
 	// out (a test), and the wiki is kept nowhere until a store is chosen.
 	WikiStore *DBStore
+	// Database keeps the search index (KN-53), shared by every replica;
+	// nil keeps it in memory, built by each replica from its copy of the
+	// wiki (a test).
+	Database *db.DB
+	// Embedder embeds the passages and the queries with the embedding
+	// model chosen (KN-55); nil offers none.
+	Embedder Embedder
+	// ClusterVersions are the Kubernetes versions the clusters run
+	// (v1.33.5+rke2r1), for the sources that follow them (KN-56); nil is
+	// none known.
+	ClusterVersions func(context.Context) []string
+	// VolumeBytes is the size of the database's volume, as the chart
+	// says (database.bundled.storage.size, or database.external.volumeSize);
+	// 0 is not known. The index warns at 80 % of it (KN-58).
+	VolumeBytes int64
 	// Model is how Mycroft is asked; nil reads sources and keeps their
 	// excerpts, but writes no pages.
 	Model Completer
@@ -298,6 +313,20 @@ type Service struct {
 
 	// fixes are the console's fixes, from Options or SetFixes (KN-33).
 	fixes atomic.Pointer[Fixes]
+
+	// pg is the search index in the database (KN-53); nil searches the
+	// index in memory. indexMu guards indexRunning, a Sync of it under
+	// way, and indexDirty, another wanted after it. sourcesSaved says the
+	// default sources were written as rows.
+	pg           *PGIndex
+	indexMu      sync.Mutex
+	indexRunning bool
+	indexDirty   bool
+	sourcesSaved atomic.Bool
+	// docs is how many documents the copy of the wiki gives the search.
+	docs atomic.Int64
+	// embedded is the leader's last pass of embeddings (KN-55).
+	embedded embedState
 }
 
 // New builds the service; Start reads the local copy.
@@ -337,6 +366,9 @@ func New(o Options) *Service {
 	}
 	s := &Service{o: o, kv: o.Backend, limits: o.Limits.withDefaults(), files: map[string]File{}, manifest: newManifest(), index: NewIndex(nil, nil, 0, o.Now()), pending: map[string]pendingDoc{}}
 	s.dbStore = o.WikiStore
+	if o.Database != nil {
+		s.pg = NewPGIndex(o.Database, o.Logger)
+	}
 	s.SetFixes(o.Fixes)
 	// Runs are numbered from the clock, so a restart does not reuse one.
 	s.runSeq.Store(o.Now().Unix() % 100000)

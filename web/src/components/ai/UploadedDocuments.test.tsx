@@ -108,6 +108,31 @@ describe('Administration › AI › Knowledge › Uploaded documents', () => {
     expect(body('/api/v1/knowledge/add')[0]).toMatchObject({ kind: 'document', data: btoa('# a') })
   })
 
+  it('uploads with the trust a SuperAdmin chose, its source’s by default; an Admin chooses none (KN-61)', async () => {
+    stub({ add: () => ({ kind: 'document', items: [], model: true, text: '' }), uploads: () => view({ sourceTrust: 'high' }) })
+    render(<UploadedDocuments />)
+    fireEvent.click(await screen.findByTestId('uploads-tab-documents'))
+    const trust = screen.getByTestId('uploads-trust') as HTMLSelectElement
+    expect([...trust.options].map((o) => o.textContent)).toEqual(['Source’s (High)', 'High', 'Normal', 'Low'])
+    expect(trust.value).toBe('')
+    const input = screen.getByTestId('uploads-file') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['# a'], 'a.md')] } })
+    await waitFor(() => expect(body('/api/v1/knowledge/add')).toHaveLength(1))
+    expect(body('/api/v1/knowledge/add')[0]).toMatchObject({ name: 'a.md', trust: '' })
+    fireEvent.change(trust, { target: { value: 'low' } })
+    fireEvent.change(input, { target: { files: [new File(['# b'], 'b.md')] } })
+    await waitFor(() => expect(body('/api/v1/knowledge/add')).toHaveLength(2))
+    expect(body('/api/v1/knowledge/add')[1]).toMatchObject({ name: 'b.md', trust: 'low' })
+    cleanup()
+    stub({ add: () => ({ kind: 'document', items: [], model: true, text: '' }), uploads: () => view({ maySetup: false }) })
+    render(<UploadedDocuments />)
+    fireEvent.click(await screen.findByTestId('uploads-tab-documents'))
+    expect(screen.queryByTestId('uploads-trust')).toBeNull()
+    fireEvent.change(screen.getByTestId('uploads-file'), { target: { files: [new File(['# c'], 'c.md')] } })
+    await waitFor(() => expect(body('/api/v1/knowledge/add')).toHaveLength(1))
+    expect(body('/api/v1/knowledge/add')[0]).not.toHaveProperty('trust')
+  })
+
   it('removes an item: the dialog names the pages that drew on it, then offers Review those pages and Ask Mycroft to rewrite', async () => {
     stub({
       uploads: (_u, init) => (init?.method === 'DELETE' ? { removed: true, pages: [{ path: 'pages/practice/backup.md', title: 'Backup policy' }] } : view()),

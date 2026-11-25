@@ -50,6 +50,9 @@ func sensitiveFor(d *db.DB) SensitiveStore {
 func (st *Store) SensitiveInTables(d *db.DB, s SensitiveStore, log *slog.Logger) {
 	UseSensitive(d, s)
 	st.SetSensitive(s, true, log)
+	st.decideIn = func(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
+		return st.decideChangeTx(ctx, d, cluster, id, approve, comment, who)
+	}
 	st.collectIn = func(ctx context.Context, drop func(live map[string]map[string]bool) error) error {
 		return d.Tx(ctx, func(tx pgx.Tx) error {
 			if err := lockDocs(ctx, tx, VariablesKey, ChangesKey); err != nil {
@@ -158,7 +161,7 @@ func pastPlain(changes *changesRecord, runs *runsRecord, names func(cluster stri
 // caller holds the turn of the variables' writers; this takes the
 // changes' and the runs'.
 func sealPastTables(ctx context.Context, tx pgx.Tx, r *ring, s *sealing, only string) (int, error) {
-	if err := lockDocs(ctx, tx, ChangesKey, RunsKey); err != nil {
+	if err := lockDocs(ctx, tx, ChangesKey, runsTurn); err != nil {
 		return 0, err
 	}
 	all, err := namesIn(ctx, tx)
@@ -181,6 +184,13 @@ func sealPastTables(ctx context.Context, tx pgx.Tx, r *ring, s *sealing, only st
 	}
 	if only != "" {
 		pastPlain(&changes, &runs, names, only, s.plain)
+	} else {
+		// A save of the variables: the clusters on which a name became
+		// sensitive with it are looked through as the move does, so a value
+		// recorded under the name is found under any other name too.
+		for _, cluster := range sortedClusters(s.became) {
+			pastPlain(&changes, &runs, names, cluster, s.plain)
+		}
 	}
 	changed := 0
 	nextChanges := clone(changes)

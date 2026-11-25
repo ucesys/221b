@@ -146,3 +146,14 @@ func TestHelmAgainstTheSimulator(t *testing.T) {
 		t.Logf("$ %s  (exit %d)\n%s", line, code, out.String())
 	}
 }
+
+// kubectl auth can-i VERB TYPE NAME, as Watson's usage writes it, asks
+// about that object; kubectl itself takes TYPE/NAME (review of November
+// 24, 2026, nit: parse.go:148).
+func TestCanIOfANamedObject(t *testing.T) {
+	tg, _ := simTarget(t)
+	out, code := run(t, tg, "kubectl auth can-i get pods cache-0 -n web")
+	if code != 0 || !strings.Contains(out, "yes") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}

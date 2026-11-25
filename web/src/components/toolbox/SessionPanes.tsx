@@ -63,11 +63,16 @@ export function remaining(s: SessionView, now: number): { idle: number; limit: n
   return { idle, limit }
 }
 
+/** Seconds before the idle end that a session warns of it: 120, or half the idle limit when that is shorter. */
+export function idleWarning(s: SessionView): number {
+  return Math.min(120, s.idleSeconds / 2)
+}
+
 /** A session's state for its tab: live, idle (ending soon), starting, ended. */
 export function tabState(s: SessionView, now: number): 'live' | 'idle' | 'starting' | 'ended' {
   if (s.state === 'ended') return 'ended'
   if (s.state === 'starting') return 'starting'
-  return remaining(s, now).idle < 120 ? 'idle' : 'live'
+  return remaining(s, now).idle < idleWarning(s) ? 'idle' : 'live'
 }
 
 interface PaneProps {
@@ -178,7 +183,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
         {s.owner}’s session. {admin ? 'Watch shows it, read-only; they see that you watch.' : ''}
       </div>
     )
-  const showIdle = live && s.state === 'live' && s.mine && idle < 120
+  const showIdle = live && s.state === 'live' && s.mine && idle < idleWarning(s)
   return (
     <div className="tb-pane" data-testid="session-pane">
       {asking && <EndOther cluster={cluster} s={s} onDone={() => setAsking(false)} onToast={onToast} />}
@@ -281,7 +286,7 @@ function ForwardBody({ s, now }: { s: SessionView; now: number }) {
           <span className="tb-hint">
             Ends after {Math.round(s.idleSeconds / 60)} min without traffic: {clock(idle)} left
           </span>
-          <span className="tb-meter" data-tone={idle < 120 ? 'warn' : undefined}>
+          <span className="tb-meter" data-tone={idle < idleWarning(s) ? 'warn' : undefined}>
             <span style={{ width: `${pctIdle}%` }} />
           </span>
         </div>

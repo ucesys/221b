@@ -57,7 +57,7 @@ func (s *Service) MigrateWebItems(ctx context.Context) (int, error) {
 		return 0, errNotReadYet
 	}
 	var pages []*ItemState
-	for _, st := range m.bySource(AddedSourceID) {
+	for _, st := range m.documents(AddedSourceID) {
 		if !st.Gone && typeOf(SourceUpload, st) == TypeWebPage {
 			pages = append(pages, st)
 		}

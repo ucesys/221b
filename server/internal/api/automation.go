@@ -635,7 +635,7 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	}
 	before := automation.View(all, id, scope)
 	changed := automation.ChangedVariables(before, next)
-	impact, note := s.weighChange(r, list.Cluster, before, next, changed)
+	impact, note := s.weighChange(r, list.Cluster, list.Production, before, next, changed)
 	if automation.RebootChanged(before, next) {
 		changed = append(changed, "reboot timeout")
 	}
@@ -695,7 +695,10 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		answerJSON(w, r, variablesAnswer{Params: before, Change: &saved})
 		return
 	}
-	if err := s.opts.AutomationStore.SetVariablesFor(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, next, scope); err != nil {
+	// What this save changes, over the variables as they are now: one
+	// saved or approved since they were read (Sherlock may weigh this for
+	// 45 s) is never undone by it.
+	if err := s.opts.AutomationStore.SetVariablesFrom(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, before, next); err != nil {
 		s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeFailed, err.Error())
 		jsonError(w, automationStatus(err), err.Error())
 		return
@@ -970,8 +973,10 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	// Each node answers to all its fleets, not only the one picked: the
 	// strictest ceiling holds, and a change waiting on any of them holds
 	// the version (on production).
+	// A Kubernetes script reads the cluster's values (All nodes) too, and a
+	// change waiting there holds it as it holds a script on nodes.
 	var changes []automation.VariableChange
-	if !in.DryRun && !kube8s && list.Production {
+	if !in.DryRun && list.Production {
 		var err error
 		if changes, err = s.opts.AutomationStore.Changes(ctx, list.Cluster); err != nil {
 			jsonError(w, http.StatusInternalServerError, err.Error())
@@ -994,6 +999,8 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 			if ceiling, from := automation.NodeCeiling(layers); !(automation.FleetVariables{Ceiling: ceiling}).Allows(v.Header.Privilege) {
 				capped = append(capped, fmt.Sprintf("%s (ceiling %s, fleet %s)", n.Name, automation.PrivilegeName(ceiling), from))
 			}
+		}
+		if !in.DryRun {
 			for _, ly := range layers {
 				if id := automation.Suspended(changes, ly.ID, l.sc.Name, v.N); id != 0 {
 					held = append(held, fmt.Sprintf("%s (fleet %s: parameter change %d waits for approval)", n.Name, ly.Name, id))

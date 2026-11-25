@@ -56,6 +56,7 @@ import {
   caseStatusTone,
   checkDuplicate,
   closeCase,
+  mergeCase,
   closeException,
   closeKnown,
   discardCaseDraft,
@@ -238,7 +239,7 @@ const asDraft = (w: Writing): CaseDraft => ({
   rca: hasRCA(w.rca) ? { cause: w.rca.cause, prevention: w.rca.prevention, text: w.rca.text } : undefined,
 })
 
-type Panel = '' | 'close' | 'reopen' | 'skip'
+type Panel = '' | 'close' | 'reopen' | 'skip' | 'merge'
 
 interface Props {
   /** The case: "C-12", "12", or "new" for New Case. */
@@ -540,6 +541,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
           )}
           {panel === 'reopen' && <ReopenForm c={c} busy={busy} onCancel={back} act={act} err={actErr} onDone={() => setPanel('')} />}
           {panel === 'skip' && <SkipValidationForm c={c} busy={busy} onCancel={back} act={act} err={actErr} onDone={() => setPanel('')} />}
+          {panel === 'merge' && <MergeForm c={c} busy={busy} onCancel={back} act={act} err={actErr} onDone={() => setPanel('')} />}
           {panel === '' && (
             <CaseBody
               c={c}
@@ -704,7 +706,7 @@ function Links({ c }: { c: Case }) {
           The same problem as <CaseLink id={c.sameAs} />, kept apart.
         </span>
       )}
-      {c.duplicateOf && (
+      {c.duplicateOf && !c.mergedInto && (
         <span data-testid="case-duplicate-of">
           A duplicate of <CaseLink id={c.duplicateOf} />: follow that case.
         </span>
@@ -724,6 +726,29 @@ function Links({ c }: { c: Case }) {
   )
 }
 
+/** The alerts attached to the case as its evidence (CF-117): a pod's on the node it is about, a merged case's. */
+function Signals({ c }: { c: Case }) {
+  const list = c.signals ?? []
+  if (list.length === 0) return null
+  return (
+    <Sec title={`Alerts attached (${list.length})`} testId="case-signals">
+      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
+        {list.map((g) => (
+          <li key={`${g.cluster}/${g.key}`} data-testid="case-signal">
+            {g.name || g.key}
+            {g.object ? <span className="rk-mono"> ({g.object})</span> : null}
+            <span className="tb-sub">
+              {' '}
+              · {g.why || 'attached'}
+              {g.by ? ` · ${g.by}` : ''} · {fmtTs(g.at)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Sec>
+  )
+}
+
 /** How the case was closed: its outcome, the explanation, and what it points to. */
 function Closed({ c }: { c: Case }) {
   if (c.status !== 'closed') return null
@@ -736,6 +761,11 @@ function Closed({ c }: { c: Case }) {
       {c.explanation && (
         <span style={{ whiteSpace: 'pre-wrap' }} data-testid="case-reason">
           {c.explanation}
+        </span>
+      )}
+      {c.mergedInto && (
+        <span data-testid="case-merged-into">
+          Merged into <CaseLink id={c.mergedInto} />: its alerts are there now; follow that case. This case keeps its history and its conversation.
         </span>
       )}
       {c.outcome === 'knownIssue' && c.knownIssue && (
@@ -841,6 +871,31 @@ function CaseBody({
           {c.mayChange && allowed.has('exception') && (
             <button className="rk-btn" data-size="sm" disabled={busy} onClick={() => onCloseAs('exception')} data-testid="case-suggest-exception-open">
               Accept as exception…
+            </button>
+          )}
+        </div>
+      )}
+
+      {c.mergeSuggestion && open && (
+        // The analysis says it has the same cause as another open case (CF-118): one click merges it (CF-119).
+        <div className="rk-callout" data-testid="case-merge-suggestion" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: '1 1 300px' }}>
+            <strong>Same cause.</strong> The analysis says this case has the same cause as <CaseLink id={c.mergeSuggestion.id} /> {c.mergeSuggestion.title}. Merging closes this one and moves its alerts there.
+          </span>
+          {c.mayChange && allowed.has('duplicate') && (
+            <button
+              className="rk-btn"
+              data-size="sm"
+              disabled={busy}
+              onClick={() =>
+                void act(
+                  () => mergeCase(c.id, c.mergeSuggestion!.id),
+                  (v) => `${v.id} was merged into ${v.mergedInto ?? c.mergeSuggestion!.id}.`,
+                )
+              }
+              data-testid="case-merge-suggested"
+            >
+              Merge into {c.mergeSuggestion.id}
             </button>
           )}
         </div>
@@ -975,6 +1030,8 @@ function CaseBody({
       </Sec>
 
       <Links c={c} />
+
+      <Signals c={c} />
 
       {(c.detail || c.pruned || (edit && !report)) && (
         <Sec title={report ? 'In their words' : 'Detail'}>
@@ -1507,6 +1564,12 @@ function CaseFooter({ c, busy, panel, onPanel, onKeep, err }: { c: Case; busy: b
             {outcomes.length > 0 && (
               <button className="rk-btn" data-on disabled={off} onClick={() => onPanel('close')} title={`Close it: ${outcomes.map((o) => OUTCOMES[o].toLowerCase()).join(', ')}`} data-testid="case-close-open">
                 Close…
+              </button>
+            )}
+            {allowed.has('duplicate') && (
+              // One failure, one case (CF-119): whoever may close it may merge it.
+              <button className="rk-btn" disabled={off} onClick={() => onPanel('merge')} title="Close it into another open case with the same cause: its alerts move there" data-testid="case-merge-open">
+                Merge into case…
               </button>
             )}
             {outcomes.length === 0 && (
@@ -2088,6 +2151,45 @@ function SkipValidationForm({ c, busy, onCancel, act, err, onDone }: FormProps) 
 }
 
 /** Reopen: why, always. */
+/** Merge into case… (CF-119): the open case it goes into, the analysis's suggestion first, and why. */
+function MergeForm({ c, busy, onCancel, act, err, onDone }: FormProps) {
+  const [into, setInto] = useState(c.mergeSuggestion?.id ?? '')
+  const [why, setWhy] = useState('')
+  const target = into.trim().toUpperCase().replace(/^#/, '')
+  const id = /^\d+$/.test(target) ? `C-${target}` : target
+  const ready = /^C-\d+$/.test(id) && id !== c.id.toUpperCase()
+  return (
+    <Sec title={`Merge ${c.id} into another case`} testId="case-merge-form">
+      <label className="cs-lbl">
+        The open case with the same cause
+        <input className="cs-in" value={into} maxLength={20} onChange={(e) => setInto(e.target.value)} placeholder="C-13" data-testid="case-merge-into" />
+      </label>
+      <label className="cs-lbl">
+        Why (optional)
+        <textarea className="cs-ta" style={{ minHeight: 48 }} value={why} maxLength={1000} onChange={(e) => setWhy(e.target.value)} placeholder="Same node" data-testid="case-merge-why" />
+      </label>
+      <span className="tb-hint" style={{ fontSize: 12 }}>
+        {c.id} closes as merged into that case, and its alerts move there. Both cases keep their history; this one keeps its conversation. The Inbox and the SLA follow that case.
+      </span>
+      <FormButtons
+        busy={busy}
+        ready={ready}
+        label="Merge"
+        testId="case-merge-save"
+        onCancel={onCancel}
+        err={err}
+        onSave={() =>
+          void act(
+            () => mergeCase(c.id, id, why.trim() || undefined),
+            (v) => `${v.id} was merged into ${v.mergedInto ?? id}.`,
+            onDone,
+          )
+        }
+      />
+    </Sec>
+  )
+}
+
 function ReopenForm({ c, busy, onCancel, act, err, onDone }: FormProps) {
   const [reason, setReason] = useState('')
   return (

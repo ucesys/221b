@@ -210,6 +210,11 @@ export function TestDialog({ agentId, agentName, draftRev, onClose, onEnded }: P
             This run tested the instructions in force, not a draft.
           </p>
         )}
+        {run && run.model && (
+          <p className="rk-callout" data-tone="info" style={{ margin: 0, fontSize: 12.5 }} data-testid="test-dialog-measured">
+            This run measured {run.model} at {run.effort ? `effort ${run.effort}` : 'the model’s own effort'}, with Auto off: it is not kept as the draft’s test.
+          </p>
+        )}
         {run && state === 'stopped' && (
           <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="test-dialog-stopped">
             {run.stoppedAt ? `Stopped at case ${run.stoppedAt} of ${total}: the cases running then were cut short, and those still waiting did not run.` : 'Stopped while the real questions were replayed.'}

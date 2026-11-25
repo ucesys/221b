@@ -27,7 +27,7 @@ ARG GO_IMAGE=golang:1.26.9
 # index apko builds from apko.lock.json (hack/wolfi-postgres.sh pin writes
 # it here after a new lock; hack/check-base-images.sh checks its form).
 ARG WOLFI_BASE_REPO=127.0.0.1:5123/221b-postgres-base
-ARG WOLFI_BASE_DIGEST=sha256:df424eb18b20206a07a11c5f0326805cacb9883da1be28c7fa8bd967b6f1a508
+ARG WOLFI_BASE_DIGEST=sha256:7d55a1e1df6039501a6ae022dba099334b8f47e6b865d4f907e545e920186b96
 
 # WAL-G: WAL-G's own release. Wolfi's wal-g-pg is built
 # without libsodium, and the chart encrypts every backup with it
@@ -73,7 +73,7 @@ ENV LANG=C.UTF-8 \
     PGDATA=/var/lib/postgresql/data/pgdata
 
 # 221B's own, and WAL-G.
-COPY --chmod=0755 entrypoint.sh post-bootstrap.sh restore.sh /usr/local/bin/
+COPY --chmod=0755 entrypoint.sh post-bootstrap.sh extensions.sh restore.sh /usr/local/bin/
 COPY --from=backup --chmod=0755 /out/221b-backup /usr/local/bin/221b-backup
 COPY --from=walg /out/wal-g /usr/local/bin/wal-g
 
@@ -87,7 +87,7 @@ LABEL org.opencontainers.image.title="221b-postgres" \
       org.opencontainers.image.base.name="${WOLFI_BASE_REPO}" \
       org.opencontainers.image.base.digest="${WOLFI_BASE_DIGEST}" \
       dev.221b.base="Wolfi packages from packages.wolfi.dev, assembled with apko from deploy/postgres/apko.lock.json" \
-      dev.221b.added="221B's: /usr/local/bin/entrypoint.sh post-bootstrap.sh restore.sh 221b-backup; WAL-G's release: /usr/local/bin/wal-g"
+      dev.221b.added="221B's: /usr/local/bin/entrypoint.sh post-bootstrap.sh extensions.sh restore.sh 221b-backup; WAL-G's release: /usr/local/bin/wal-g"
 
 USER 999:999
 EXPOSE 5432 8008

@@ -2,22 +2,27 @@
 // roles and sources, the totals the Permissions page shows, and what a
 // person can do after joining a group.
 
-import type { Drift, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
+import type { Drift, DriftId, HeldRole, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
 
-export const ROLE_NAME: Record<RoleId, string> = {
+export const ROLE_NAME: Record<HeldRole, string> = {
   superAdmin: 'SuperAdmin',
   superViewer: 'SuperViewer',
   admin: 'Admin',
   viewer: 'Viewer',
+  reporter: 'Reporter',
 }
 
-/** Highest first: the role shown for a person who holds several (RB-21). */
-export const ROLE_ORDER: RoleId[] = ['superAdmin', 'superViewer', 'admin', 'viewer']
+/** The four Kubernetes roles, highest first (RB-01). */
+export const KUBE_ROLES: RoleId[] = ['superAdmin', 'superViewer', 'admin', 'viewer']
 
-export const SOURCE_NAME: Record<Source | 'other', string> = {
+/** Highest first: the role shown for a person who holds several (RB-21); Reporter, which reports problems alone (IS-20), last. */
+export const ROLE_ORDER: HeldRole[] = [...KUBE_ROLES, 'reporter']
+
+export const SOURCE_NAME: Record<Source | '221b' | 'other', string> = {
   local: 'Local',
   ldap: 'LDAP',
   oidc: 'OIDC',
+  '221b': '221B',
   other: 'Not managed by 221B',
 }
 
@@ -26,12 +31,12 @@ export const LOCAL_PREFIX = '221b-local:'
 export const LDAP_PREFIX = '221b-ldap:'
 
 /** Whether a role is bound per namespace (Admin and Viewer) or held for every namespace (RB-05, RB-06). */
-export function perNamespace(id: RoleId): boolean {
+export function perNamespace(id: HeldRole): boolean {
   return id === 'admin' || id === 'viewer'
 }
 
 /** The highest role a person holds, or null for none. */
-export function topRole(h: Holding[]): RoleId | null {
+export function topRole(h: Holding[]): HeldRole | null {
   for (const r of ROLE_ORDER) if (h.some((x) => x.role === r)) return r
   return null
 }
@@ -100,13 +105,18 @@ export function groupText(g: string): string {
   return g === '' ? 'core' : g
 }
 
+/** A compared role's name: the role's, or the nodes role's ClusterRole (RB-36). */
+export function driftName(id: DriftId): string {
+  return id === 'nodes' ? '221b-nodes' : (ROLE_NAME[id] ?? id)
+}
+
 /** What the Permissions page says about the live roles against the shipped ones (RB-36, RB-44). */
 export function driftText(d: Drift): { tone: 'ok' | 'warn' | 'muted'; text: string } {
   switch (d.state) {
     case 'match':
       return { tone: 'ok', text: 'The roles on this cluster match the definitions shipped with 221B.' }
     case 'differs': {
-      const names = d.roles.filter((r) => r.differences.length).map((r) => ROLE_NAME[r.id])
+      const names = d.roles.filter((r) => r.differences.length).map((r) => driftName(r.id))
       return { tone: 'warn', text: `Differs from the shipped definitions: ${names.join(', ')}.` }
     }
     case 'missing':
@@ -146,11 +156,18 @@ export function passwordProblem(password: string, username: string): string {
 
 const USERNAME = /^[a-z0-9._-]+$/
 
-/** Why a local user name is refused, or '' (RB-16, RB-17): lowercase letters, digits, dot, dash and underscore; nothing reserved. */
+/** The longest user name made in the console (roles.MaxUsername). */
+export const MAX_USERNAME = 64
+
+/** The rule of a user name made in the console, worded as the server's refusal (RB-16). */
+export const USERNAME_RULE = `Use lowercase letters, digits, dot, dash and underscore, at most ${MAX_USERNAME} characters (not . or .. alone).`
+
+/** Why a local user name is refused, or '' (RB-16, RB-17): lowercase letters, digits, dot, dash and underscore, at most 64 characters, not . or ..; nothing reserved. */
 export function usernameProblem(name: string): string {
   if (!name) return 'Enter a user name.'
   // A reserved name, system: or 221b:, has a colon, which the pattern refuses.
-  if (!USERNAME.test(name)) return name.includes(':') ? 'This name is reserved.' : 'Use lowercase letters, digits, dot, dash and underscore.'
+  if (!USERNAME.test(name)) return name.includes(':') ? 'This name is reserved.' : USERNAME_RULE
+  if (name.length > MAX_USERNAME || name === '.' || name === '..') return USERNAME_RULE
   return ''
 }
 

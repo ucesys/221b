@@ -1,6 +1,9 @@
 package roles
 
 import (
+	"encoding/json"
+	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -19,15 +22,22 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	tpl, o := Defaults(), Options{Secrets: true}
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	dep := shippedAll(tpl, o)
-	if d := Check(tpl, o, dep, at); d.State != "match" || len(d.Roles) != 0 || d.More {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" || len(d.Roles) != 0 || d.More {
 		t.Fatalf("shipped roles differ: %+v", d)
 	}
-	// Order inside a rule does not matter.
+	// Order does not matter: of the rules, and inside each rule.
 	rev := dep[Admin]
 	rev.Rules = slices.Clone(rev.Rules)
 	slices.Reverse(rev.Rules)
+	for i, r := range rev.Rules {
+		for _, l := range []*[]string{&r.APIGroups, &r.Resources, &r.ResourceNames, &r.NonResourceURLs, &r.Verbs} {
+			*l = slices.Clone(*l)
+			slices.Reverse(*l)
+		}
+		rev.Rules[i] = r
+	}
 	dep[Admin] = rev
-	if d := Check(tpl, o, dep, at); d.State != "match" {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "match" {
 		t.Fatalf("a reordered role differs: %+v", d)
 	}
 	// Someone adds delete on nodes to 221b-admin.
@@ -35,22 +45,22 @@ func TestCheckMatchesWhatShipsAndFindsWidening(t *testing.T) {
 	a := dep[Admin]
 	a.Rules = append(slices.Clone(a.Rules), Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
 	dep[Admin] = a
-	d := Check(tpl, o, dep, at)
+	d := Check(tpl, o, dep, shippedNodes, at)
 	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != Admin || !strings.Contains(d.Roles[0].Differences[0], "delete nodes") {
 		t.Fatalf("widened role: %+v", d)
 	}
 	// A role that is gone is missing, not wider.
 	dep = shippedAll(tpl, o)
 	dep[Viewer] = Deployed{}
-	if d := Check(tpl, o, dep, at); d.State != "differs" || d.More {
+	if d := Check(tpl, o, dep, shippedNodes, at); d.State != "differs" || d.More {
 		t.Fatalf("missing role: %+v", d)
 	}
-	if d := Check(tpl, o, map[ID]Deployed{}, at); d.State != "missing" {
+	if d := Check(tpl, o, map[ID]Deployed{}, shippedNodes, at); d.State != "missing" {
 		t.Fatalf("nothing deployed: %+v", d)
 	}
 	// A read-only deployment compared with the full definition is narrower, and still shown.
 	ro := Templates{Admin: ReadOnly, SuperAdmin: ReadOnly}
-	d = Check(tpl, o, shippedAll(ro, o), at)
+	d = Check(tpl, o, shippedAll(ro, o), shippedNodes, at)
 	if d.State != "differs" || d.More {
 		t.Fatalf("read-only against full: %+v", d)
 	}
@@ -63,23 +73,23 @@ func TestMonitorRefusesOnlyWhenStrictAndWider(t *testing.T) {
 	a := dep[Admin]
 	a.Rules = append(slices.Clone(a.Rules), Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
 	dep[Admin] = a
-	d := Check(tpl, o, dep, time.Now())
+	d := Check(tpl, o, dep, shippedNodes, time.Now())
 	if !m.Set("local", d) || m.Set("local", d) {
 		t.Fatal("Set must report a change once")
 	}
-	if m.Refusal("local", "off") != "" || m.Refusal("other", "off") != "" {
+	if m.Refusal("local", "", "off") != "" || m.Refusal("other", "", "off") != "" {
 		t.Error("refused when it should not")
 	}
 	// A cluster not compared yet: strict fails closed (RB-36).
-	if msg := m.Refusal("other", "strict"); !strings.Contains(msg, "until 221B has compared its roles") {
+	if msg := m.Refusal("other", "", "strict"); !strings.Contains(msg, "until 221B has compared its roles") {
 		t.Errorf("an unchecked cluster under strict: %q", msg)
 	}
-	msg := m.Refusal("local", "strict")
+	msg := m.Refusal("local", "", "strict")
 	if !strings.Contains(msg, "refused") || !strings.Contains(msg, "delete nodes") || !strings.Contains(msg, "Admin") {
 		t.Errorf("message: %s", msg)
 	}
-	m.Set("local", Check(tpl, o, shippedAll(tpl, o), time.Now()))
-	if m.Refusal("local", "strict") != "" {
+	m.Set("local", Check(tpl, o, shippedAll(tpl, o), shippedNodes, time.Now()))
+	if m.Refusal("local", "", "strict") != "" {
 		t.Error("still refusing after the roles match")
 	}
 }
@@ -90,11 +100,11 @@ func TestBuildRolesClassifiesSubjectsByPrefix(t *testing.T) {
 		Members: func(g string) int { return map[string]int{"checkout-ops": 2}[g] },
 		Exists:  func(u string) bool { return u != "ghost" },
 		Bindings: []Binding{
-			{Role: "221b-admin", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops"}, {"Group", "221b-local:checkout-ops"}}},
-			{Role: "221b-admin", Namespace: "api", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops"}}},
-			{Role: "221b-admin", Namespace: "web", Subjects: []BoundSubject{{"User", "carol"}, {"ServiceAccount", "ci-deployer"}, {"User", "221b-local:ghost"}, {"Group", "oidc:ops"}}},
-			{Role: "221b-viewer", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-local:web-readers"}}},
-			{Role: "somebody-elses-role", Namespace: "web", Subjects: []BoundSubject{{"Group", "x"}}},
+			{Role: "221b-admin", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops", ""}, {"Group", "221b-local:checkout-ops", ""}}},
+			{Role: "221b-admin", Namespace: "api", Managed: true, Subjects: []BoundSubject{{"Group", "221b-ldap:team-a-ops", ""}}},
+			{Role: "221b-admin", Namespace: "web", Subjects: []BoundSubject{{"User", "carol", ""}, {"ServiceAccount", "ci-deployer", ""}, {"User", "221b-local:ghost", ""}, {"Group", "oidc:ops", ""}}},
+			{Role: "221b-viewer", Namespace: "web", Managed: true, Subjects: []BoundSubject{{"Group", "221b-local:web-readers", ""}}},
+			{Role: "somebody-elses-role", Namespace: "web", Subjects: []BoundSubject{{"Group", "x", ""}}},
 		},
 	}
 	out := BuildRoles(in)
@@ -114,7 +124,7 @@ func TestBuildRolesClassifiesSubjectsByPrefix(t *testing.T) {
 	if s := got["Group/team-a-ops"]; s.Source != "ldap" || !slices.Equal(s.Namespaces, []string{"api", "web"}) || !s.Managed {
 		t.Errorf("ldap group: %+v", s)
 	}
-	if s := got["Group/checkout-ops"]; s.Source != "local" || s.Members != 2 {
+	if s := got["Group/checkout-ops"]; s.Source != "local" || s.Members == nil || *s.Members != 2 {
 		t.Errorf("local group: %+v", s)
 	}
 	if s := got["User/carol"]; s.Source != "other" || s.Managed {
@@ -212,5 +222,243 @@ func TestBuildPermissionsSplitsReadAndWriteAndScopes(t *testing.T) {
 	}
 	if out.Enforce != "off" {
 		t.Errorf("enforce = %q", out.Enforce)
+	}
+}
+
+var shippedNodes = Deployed{Present: true, Rules: Nodes().Rules}
+
+// Roles review, finding 3: the nodes role is compared too, and widening it
+// is allowing more.
+func TestCheckComparesTheNodesRole(t *testing.T) {
+	tpl, o := Defaults(), Options{}
+	at := time.Now()
+	wide := Deployed{Present: true, Rules: append(slices.Clone(Nodes().Rules), Rule{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}})}
+	d := Check(tpl, o, shippedAll(tpl, o), wide, at)
+	if d.State != "differs" || !d.More || len(d.Roles) != 1 || d.Roles[0].ID != NodesID {
+		t.Fatalf("widened nodes role: %+v", d)
+	}
+	var m Monitor
+	m.Set("c", d)
+	if why := m.Refusal("c", "", "strict"); !strings.Contains(why, "221b-nodes allows") {
+		t.Errorf("refusal: %q", why)
+	}
+	if d := Check(tpl, o, shippedAll(tpl, o), Deployed{}, at); d.State != "differs" || d.More || d.Roles[0].ID != NodesID {
+		t.Errorf("no nodes role: %+v", d)
+	}
+}
+
+// Roles review, finding 4: a verdict counts only for the connection it was
+// made through, and only while recent.
+func TestRefusalWantsACurrentVerdict(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	m := Monitor{Now: func() time.Time { return now }}
+	tpl, o := Defaults(), Options{}
+	d := Check(tpl, o, shippedAll(tpl, o), shippedNodes, now)
+	d.Of = "cluster-a"
+	m.Set("prod", d)
+	if why := m.Refusal("prod", "cluster-a", "strict"); why != "" {
+		t.Fatalf("a current match refused: %q", why)
+	}
+	// Re-pointed at cluster B: A's verdict is not B's.
+	if why := m.Refusal("prod", "cluster-b", "strict"); !strings.Contains(why, "until 221B has compared its roles") {
+		t.Errorf("another connection's verdict was used: %q", why)
+	}
+	// An old verdict, as when the roles can no longer be read, is none.
+	now = now.Add(MaxCheckAge + time.Second)
+	if why := m.Refusal("prod", "cluster-a", "strict"); !strings.Contains(why, "until 221B has compared its roles") {
+		t.Errorf("an old verdict was used: %q", why)
+	}
+	// A new fingerprint is a change, so it is audited.
+	d.Of = "cluster-b"
+	if !m.Set("prod", d) {
+		t.Error("a verdict of another connection is not a change")
+	}
+}
+
+// Roles review, finding 5: one deployed rule with a large cross product
+// was expanded grant by grant, enough to exhaust the console's memory.
+func TestCheckDoesNotExpandAnOversizedRule(t *testing.T) {
+	n := func(p string, k int) []string {
+		out := make([]string, k)
+		for i := range out {
+			out[i] = fmt.Sprintf("%s%d", p, i)
+		}
+		return out
+	}
+	big := Rule{APIGroups: n("g", 60), Resources: n("r", 60), ResourceNames: n("n", 60), Verbs: n("v", 10)}
+	tpl, o := Defaults(), Options{}
+	dep := shippedAll(tpl, o)
+	v := dep[Viewer]
+	v.Rules = append(slices.Clone(v.Rules), big)
+	dep[Viewer] = v
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	d := Check(tpl, o, dep, shippedNodes, time.Now())
+	runtime.ReadMemStats(&after)
+	if used := after.TotalAlloc - before.TotalAlloc; used > 64<<20 {
+		t.Errorf("the check allocated %d MiB for a 2,160,000-grant rule", used>>20)
+	}
+	if !d.More || d.State != "differs" || len(d.Roles) != 1 || d.Roles[0].ID != Viewer {
+		t.Fatalf("an oversized rule: %+v", d.State)
+	}
+	// The shipped grants the oversized rule covers are not reported missing.
+	cover := Rule{APIGroups: append(n("g", 60), ""), Resources: append(n("r", 70), "pods"), Verbs: []string{"get", "list", "watch", "x", "y", "z", "a", "b", "c", "d"}}
+	if Compare([]Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}}, []Rule{cover}).Missing != nil {
+		t.Error("a grant inside an oversized rule is reported missing")
+	}
+}
+
+func TestAnOversizedRuleUnderAWildcardIsNotExtra(t *testing.T) {
+	var groups []string
+	for i := range 5000 {
+		groups = append(groups, fmt.Sprintf("g%d.example", i))
+	}
+	big := Rule{APIGroups: groups, Resources: []string{"widgets"}, Verbs: []string{"get"}}
+	if d := Compare(Definition(SuperAdmin, Full, Options{}).Rules, []Rule{big}); len(d.Extra) != 0 {
+		t.Errorf("under the full SuperAdmin: %v", d.Extra)
+	}
+	d := Compare(Definition(Viewer, ReadOnly, Options{}).Rules, []Rule{big})
+	if len(d.Extra) != 1 || !strings.Contains(d.Lines()[0], "too large to compare") {
+		t.Errorf("against Viewer: %v", d.Extra)
+	}
+}
+
+// Roles review, finding 9: a super role with no rules marshalled
+// "rules": null, on which the Permissions page threw.
+func TestPermissionsNeverSendsNullRules(t *testing.T) {
+	dep := map[ID]Deployed{SuperViewer: {Present: true, Rules: []Rule{}}, SuperAdmin: {Present: true}}
+	p := BuildPermissions(Defaults(), dep, Deployed{}, "off", Drift{})
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"rules":null`) {
+		t.Errorf("null rules: %s", b)
+	}
+}
+
+// Roles review, finding 11: a rule's flags were stamped on every row of
+// the rule, so the read-only SuperAdmin's core get rule marked configmaps,
+// pods and 25 more as Secrets.
+func TestPermissionFlagsArePerRow(t *testing.T) {
+	rows := permRules(SuperAdmin, Definition(SuperAdmin, ReadOnly, Options{}).Rules)
+	flagged := map[string][]string{}
+	for _, r := range rows {
+		if r.Group == "" && slices.Equal(r.Verbs, []string{"get"}) {
+			flagged[r.Resource] = r.Flags
+		}
+	}
+	if f := flagged["configmaps"]; len(f) != 0 {
+		t.Errorf("configmaps flagged %v", f)
+	}
+	if f := flagged["secrets"]; !slices.Equal(f, []string{"Secrets"}) {
+		t.Errorf("secrets flagged %v", f)
+	}
+	if f := flagged["pods/ephemeralcontainers"]; !slices.Equal(f, []string{"pods/ephemeralcontainers"}) {
+		t.Errorf("pods/ephemeralcontainers flagged %v", f)
+	}
+}
+
+// Roles review, cut list: a deployed "*/scale" or URL "/*" covers what the
+// shipped role lists, so it is no "lacks" line; and resourceNames [""],
+// which allows only requests without a name, is narrower than any object.
+func TestCompareReadsRBACWildcardsAsTheAPIServerDoes(t *testing.T) {
+	shipped := []Rule{
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale"}, Verbs: []string{"update"}},
+		{NonResourceURLs: []string{"*"}, Verbs: []string{"get"}},
+	}
+	deployed := []Rule{
+		{APIGroups: []string{"apps"}, Resources: []string{"*/scale"}, Verbs: []string{"update"}},
+		{NonResourceURLs: []string{"/*"}, Verbs: []string{"get"}},
+	}
+	if d := Compare(shipped, deployed); len(d.Missing) != 0 {
+		t.Errorf("false lacks: %v", d.Missing)
+	}
+	if d := Compare(shipped, deployed); len(d.Extra) != 1 || !strings.Contains(d.Extra[0], "*/scale") {
+		t.Errorf("*/scale is wider than deployments/scale: %v", d.Extra)
+	}
+	pods := []Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}}
+	named := []Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, ResourceNames: []string{""}, Verbs: []string{"get"}}}
+	if d := Compare(pods, named); len(d.Missing) != 1 || len(d.Extra) != 0 {
+		t.Errorf("resourceNames [\"\"] against any pod: %+v", d)
+	}
+}
+
+// Roles review, cut list: the reserved groups, and OIDC groups under the
+// default empty prefix, were classed "other", so the chart's own bindings
+// read "Not managed by 221B" beside the Helm tag.
+func TestTheChartsOwnSubjectsHaveASource(t *testing.T) {
+	in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Bindings: []Binding{
+		{Role: SuperAdmin.ClusterRole(), Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: GroupSuperAdmins}}},
+		{Role: Admin.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "devs"}}},
+		{Role: Admin.ClusterRole(), Namespace: "web", Subjects: []BoundSubject{{Kind: "Group", Name: "by-hand"}}},
+	}}
+	src := map[string]string{}
+	for _, r := range BuildRoles(in).Roles {
+		for _, s := range r.Subjects {
+			src[s.Name] = s.Source
+		}
+	}
+	if src[GroupSuperAdmins] != "221b" || src["devs"] != "oidc" || src["by-hand"] != "other" {
+		t.Errorf("sources: %v", src)
+	}
+}
+
+// Roles review, cut list: a local group of no members said nothing
+// (members was left out at 0), and a person who is not a SuperAdmin was
+// told the super roles had "0 groups" when the count is simply not theirs.
+func TestRolesPageZeroCounts(t *testing.T) {
+	in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Members: func(string) int { return 0 },
+		Bindings: []Binding{{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-local:empty"}}}}}
+	b, _ := json.Marshal(BuildRoles(in))
+	if !strings.Contains(string(b), `"members":0`) {
+		t.Errorf("no member count for an empty group: %s", b)
+	}
+	if strings.Contains(string(b), `"holders"`) {
+		t.Errorf("holders sent to a person who is not a SuperAdmin: %s", b)
+	}
+	in.Holders = map[ID]Holders{SuperAdmin: {Groups: 0, Users: 2}}
+	b, _ = json.Marshal(BuildRoles(in))
+	if !strings.Contains(string(b), `"holders":{"groups":0,"users":2}`) {
+		t.Errorf("a SuperAdmin's holders: %s", b)
+	}
+}
+
+// Roles review, cut list: a local and a directory group of one name tied
+// on kind and name, so their order followed the bindings' and changed
+// between polls.
+func TestSubjectsHaveOneOrder(t *testing.T) {
+	a := Binding{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-local:ops"}}}
+	b := Binding{Role: Viewer.ClusterRole(), Namespace: "web", Managed: true, Subjects: []BoundSubject{{Kind: "Group", Name: "221b-ldap:ops"}}}
+	order := func(bs ...Binding) string {
+		in := RolesInput{Prefixes: DefaultPrefixes(), Visible: true, Bindings: bs}
+		var out []string
+		for _, s := range in.subjects(Viewer) {
+			out = append(out, s.Source)
+		}
+		return strings.Join(out, ",")
+	}
+	if x, y := order(a, b), order(b, a); x != y {
+		t.Errorf("order follows the bindings: %s against %s", x, y)
+	}
+}
+
+// Roles review, cut list: nodes/status and other subresources of
+// cluster-scoped kinds were shown as "All namespaces".
+func TestSubresourcesOfClusterKindsAreClusterScoped(t *testing.T) {
+	scope := map[string]string{}
+	for _, r := range permRules(SuperAdmin, Definition(SuperAdmin, ReadOnly, Options{}).Rules) {
+		if r.Group == "" {
+			scope[r.Resource] = r.Scope
+		}
+	}
+	for _, res := range []string{"nodes/status", "namespaces/status", "persistentvolumes/status", "componentstatuses", "nodes"} {
+		if scope[res] != "cluster" {
+			t.Errorf("%s: scope %q", res, scope[res])
+		}
+	}
+	if scope["pods/log"] != "all" {
+		t.Errorf("pods/log: scope %q", scope["pods/log"])
 	}
 }

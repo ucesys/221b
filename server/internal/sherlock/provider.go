@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -261,11 +262,59 @@ type Client struct {
 	Now func() time.Time
 	// Ambient finds the pod's AWS or Google identity; tests replace it.
 	Ambient *Ambient
+	// Logger is told, at Debug, each request's agent, model, effort and
+	// betas as sent (F8, AI-55); nil is slog's default.
+	Logger *slog.Logger
 
 	mu      sync.Mutex
 	clients map[string]*http.Client
 	aws     *awsCreds
 	google  *googleToken
+}
+
+func (c *Client) logger() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
+}
+
+// sentEffort says what effort a request's body carries, as sent: the
+// top-level output_config.effort, the effort messages' (in order), an
+// OpenAI-compatible server's enable_thinking, or "none".
+func sentEffort(body []byte) string {
+	var b struct {
+		OutputConfig *struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+		Messages []struct {
+			OutputConfig *struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		} `json:"messages"`
+		Kwargs *struct {
+			EnableThinking *bool `json:"enable_thinking"`
+		} `json:"chat_template_kwargs"`
+	}
+	if json.Unmarshal(body, &b) != nil {
+		return "unknown"
+	}
+	var parts []string
+	if b.OutputConfig != nil && b.OutputConfig.Effort != "" {
+		parts = append(parts, b.OutputConfig.Effort+" (top level)")
+	}
+	for _, m := range b.Messages {
+		if m.OutputConfig != nil && m.OutputConfig.Effort != "" {
+			parts = append(parts, m.OutputConfig.Effort+" (message)")
+		}
+	}
+	if b.Kwargs != nil && b.Kwargs.EnableThinking != nil {
+		parts = append(parts, fmt.Sprintf("enable_thinking %v", *b.Kwargs.EnableThinking))
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (c *Client) now() time.Time {
@@ -378,9 +427,14 @@ func (c *Client) once(ctx context.Context, p Provider, req Request, onDelta func
 	} else {
 		hr.Header.Set("Accept", "text/event-stream")
 	}
+	betas := ""
 	if p.Kind == KindAnthropic {
 		hr.Header.Set("anthropic-version", APIVersion)
+		if betas = betasOf(req); betas != "" {
+			hr.Header.Set("anthropic-beta", betas)
+		}
 	}
+	c.logger().Debug("a request to the model's API", "agent", req.Agent, "provider", p.Name(), "kind", string(p.Kind), "model", req.Model, "effort", sentEffort(body), "betas", betas)
 	for k, v := range p.Headers {
 		hr.Header.Set(k, v)
 	}
@@ -462,6 +516,7 @@ func regionOf(host string) string {
 // to the endpoint itself when it already ends in /messages.
 func buildAnthropic(p Provider, req Request) (string, []byte, reader, error) {
 	req.Stream = true
+	req = claudeEffort(req, true)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return "", nil, nil, err
@@ -487,6 +542,9 @@ func buildVertex(p Provider, req Request) (string, []byte, reader, error) {
 		return buildOpenAI(p, base+"/endpoints/openapi", req)
 	}
 	req.Stream = true
+	// Vertex is sent the effort in force at the top level: the change of
+	// effort mid-conversation is the Claude API's beta.
+	req = claudeEffort(req, false)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return "", nil, nil, err

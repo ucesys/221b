@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,11 +28,18 @@ type fakeHost struct {
 const fakeSSHD = `#!/bin/sh
 cfg="$ROOT/etc/ssh/sshd_config"
 if [ "$1" = -t ]; then
+  # SLOW_T stops here a while, saying so, for a test to signal the script.
+  if [ -n "$SLOW_T" ]; then touch "$ROOT/at-t"; sleep 1; fi
   if [ -n "$NO_INCLUDE" ] && grep -q '^Include' "$cfg"; then echo "Bad configuration option: Include"; exit 255; fi
   [ -d "$ROOT/run/sshd" ] || { echo "Missing privilege separation directory"; exit 255; }
   exit 0
 fi
+# SSHD_SET is settings sshd shows whoever asks; SSHD_MATCH those it shows
+# only with -C for the user SSHD_MATCH_USER, as a Match User block.
+[ -n "$SSHD_SET" ] && printf '%s\n' "$SSHD_SET"
+case " $* " in *" -C user=$SSHD_MATCH_USER"*) [ -n "$SSHD_MATCH_USER" ] && printf '%s\n' "$SSHD_MATCH" ;; esac
 echo "port ${SSHD_PORT:-22}"
+for a in $LISTEN; do echo "listenaddress $a"; done
 if [ -n "$OTHER_CA" ]; then echo "trustedusercakeys $OTHER_CA"; echo "authorizedprincipalsfile none"; exit 0; fi
 if [ -f "$ROOT/etc/ssh/sshd_config.d/221b.conf" ] && { [ ! -f "$cfg" ] || head -1 "$cfg" | grep -q '^Include'; }; then
   echo "trustedusercakeys $ROOT/etc/ssh/221b/ca.pub"; echo "authorizedprincipalsfile $ROOT/etc/ssh/221b/principals-%u"
@@ -526,5 +534,281 @@ func TestNoSshdOnTheNode(t *testing.T) {
 	}
 	if out, ok := h.run(script(UnpairScript(testCA, testConsole)), noSbin); !ok || !strings.Contains(out, markUnpaired) {
 		t.Fatalf("the unpairing failed:\n%s", out)
+	}
+}
+
+// fullCp stands for cp on a node whose disk is full: the copy of
+// sshd_config comes out empty and cp says so.
+const fullCp = `#!/bin/sh
+if [ -n "$FULL" ] && [ "$1" = -p ] && [ "$2" = "$ROOT/etc/ssh/sshd_config" ]; then : > "$3"; echo "cp: error writing '$3': No space left on device" >&2; exit 1; fi
+exec /bin/cp "$@"
+`
+
+// A copy that cannot be kept stops the pairing before anything changed:
+// sshd_config is never rebuilt from an empty copy (finding 1 of the
+// review of November 24, 2026: it was left holding the Include alone, and
+// the pairing said it worked).
+func TestAPairingThatCannotKeepACopyChangesNothing(t *testing.T) {
+	h := newHost(t)
+	if err := os.WriteFile(filepath.Join(h.bin, "cp"), []byte(fullCp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := h.read("etc/ssh/sshd_config")
+	out, ok := h.run(PairScript(testCA, testConsole, user(t), 22), "FULL=1")
+	if ok || strings.Contains(out, markPaired) || !strings.Contains(out, "nothing was changed") {
+		t.Fatalf("the pairing went on:\n%s", out)
+	}
+	if h.read("etc/ssh/sshd_config") != before || h.exists("etc/ssh/sshd_config.d/221b.conf") || h.exists("etc/ssh/221b") || h.exists("etc/ssh/221b.lock") {
+		t.Fatalf("the node was changed: sshd_config is now %q", h.read("etc/ssh/sshd_config"))
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.root, "etc/ssh/221b.undo.*")); len(left) != 0 {
+		t.Fatalf("the copies stayed: %v", left)
+	}
+	// Paired as it should be, sshd_config is the Include and all it held.
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22)); !ok || h.read("etc/ssh/sshd_config") != "Include "+h.root+"/etc/ssh/sshd_config.d/221b.conf\n"+before {
+		t.Fatalf("the pairing:\n%s\nsshd_config:\n%s", out, h.read("etc/ssh/sshd_config"))
+	}
+}
+
+// Under a hardened umask the directory is still one the login user reads
+// (finding 3 of the review of November 24, 2026: it was 0750 under umask
+// 027, which hid principals-<user> from sshd reading it as that user),
+// and pairing again mends one made so.
+func TestTheConsolesDirectoryIsReadableUnderAnyUmask(t *testing.T) {
+	h := newHost(t)
+	mode := func() os.FileMode {
+		st, err := os.Stat(filepath.Join(h.root, "etc/ssh/221b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Mode().Perm()
+	}
+	h.mustRun("umask 077\n" + PairScript(testCA, testConsole, user(t), 22))
+	if m := mode(); m != 0o755 {
+		t.Fatalf("under umask 077 the directory is %o", m)
+	}
+	if err := os.Chmod(filepath.Join(h.root, "etc/ssh/221b"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	h.mustRun("umask 027\n" + PairScript(testCA, testConsole, user(t), 22))
+	if m := mode(); m != 0o755 {
+		t.Fatalf("paired again, the directory is %o", m)
+	}
+}
+
+// madeUser stands for the tools that make and change a user: id knows a
+// user once useradd or adduser made it, and every call is kept.
+const madeUser = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$ROOT/calls"
+case "$(basename "$0")" in
+id) [ "$1" = -u ] && { [ -f "$ROOT/made-$2" ] && echo 1000 || exit 1; }; [ "$1" = -Gn ] && echo "$2"; exit 0 ;;
+useradd) for a; do u=$a; done; touch "$ROOT/made-$u" ;;
+adduser) for a; do u=$a; done; touch "$ROOT/made-$u" ;;
+chpasswd) cat >> "$ROOT/calls" ;;
+esac
+`
+
+// A login user the setup makes is not left locked (finding 4 of the
+// review of November 24, 2026): useradd and busybox adduser leave a
+// password of !, which an sshd without PAM refuses for every login,
+// certificates too; it is given *, no password and no lock.
+func TestALoginUserTheSetupMakesIsNotLocked(t *testing.T) {
+	for _, c := range []struct {
+		name, tools, path, want string
+	}{
+		{"useradd", "id useradd usermod", "", "usermod -p * ops"},
+		{"busybox adduser", "id adduser chpasswd", "/usr/bin:/bin", "chpasswd -e\nops:*"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHost(t)
+			for _, tool := range strings.Fields(c.tools) {
+				if err := os.WriteFile(filepath.Join(h.bin, tool), []byte(madeUser), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var env []string
+			if c.path != "" {
+				env = append(env, "PATH="+h.bin+":"+c.path)
+			}
+			out, ok := h.run(strings.ReplaceAll(HostSetupScript(testCA, testConsole, "ops"), "/usr/sbin/sshd", h.bin+"/sshd"), env...)
+			if !ok || !strings.Contains(out, "created the login user ops") {
+				t.Fatalf("the setup:\n%s", out)
+			}
+			if calls := h.read("calls"); !strings.Contains(calls, c.want) {
+				t.Fatalf("the account was left locked; the calls were:\n%s", calls)
+			}
+		})
+	}
+}
+
+// The port sshd listens on is the one of its listen addresses, which win
+// over Port (finding 5 of the review of November 24, 2026: ListenAddress
+// 0.0.0.0:2222 with no Port prints port 22, and the pairing was refused).
+func TestAPairingFindsThePortOfAListenAddress(t *testing.T) {
+	h := newHost(t)
+	listen := "LISTEN=0.0.0.0:2222 [::]:2222"
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 2222), listen); !ok {
+		t.Fatalf("a pairing on the port of the listen addresses:\n%s", out)
+	}
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22), listen); ok || !strings.Contains(out, "listens on port 2222 and not on 22") {
+		t.Fatalf("a pairing on the port of Port alone:\n%s", out)
+	}
+}
+
+// A login user sshd would not let in with a certificate is refused before
+// anything changes (finding 6 of the review of November 24, 2026: a node
+// with PermitRootLogin no was paired as root, and every session failed
+// with "unable to authenticate"); settings that let it in pair.
+func TestAPairingRefusesALoginUserSshdKeepsOut(t *testing.T) {
+	login := user(t)
+	groups, _ := exec.Command("id", "-Gn", login).Output()
+	group := strings.Fields(string(groups))[0]
+	set := func(lines ...string) string { return "SSHD_SET=" + strings.Join(lines, "\n") }
+	refused := map[string][]string{
+		"public keys off":              {set("pubkeyauthentication no")},
+		"public keys off for the user": {"SSHD_MATCH_USER=" + login, "SSHD_MATCH=pubkeyauthentication no"},
+		"a second method":              {set("authenticationmethods publickey,password")},
+		"a forced command":             {set("forcecommand internal-sftp")},
+		"AllowUsers without the user":  {set("allowusers ops", "allowusers admin@10.0.0.1")},
+		"DenyUsers by a pattern":       {set("denyusers " + login[:1] + "*")},
+		"DenyGroups":                   {set("denygroups " + group)},
+		"AllowGroups without a group":  {set("allowgroups no-such-group")},
+	}
+	if login == "root" {
+		refused["PermitRootLogin no"] = []string{set("permitrootlogin no")}
+		refused["forced commands only"] = []string{set("permitrootlogin forced-commands-only")}
+	}
+	for name, env := range refused {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			before := h.read("etc/ssh/sshd_config")
+			out, ok := h.run(PairScript(testCA, testConsole, login, 22), env...)
+			if ok || strings.Contains(out, markPaired) || !strings.Contains(out, "would not let "+login+" in with a certificate") || !strings.Contains(out, "nothing was changed") {
+				t.Fatalf("the pairing went on:\n%s", out)
+			}
+			if h.read("etc/ssh/sshd_config") != before || h.exists("etc/ssh/221b") || h.exists("etc/ssh/sshd_config.d/221b.conf") || h.exists("etc/ssh/221b.lock") {
+				t.Fatal("the node was changed")
+			}
+		})
+	}
+	for name, env := range map[string][]string{
+		"a key or a key and a password": {set("authenticationmethods publickey,password publickey")},
+		"AllowUsers naming the user":    {set("allowusers ops", "allowusers "+login+"@10.0.0.1")},
+		"DenyUsers at another host":     {set("denyusers " + login + "@10.0.0.9")},
+		"AllowGroups naming a group":    {set("allowgroups " + group)},
+		"no forced command":             {set("forcecommand none", "permitrootlogin prohibit-password")},
+		"Match User of another user":    {"SSHD_MATCH_USER=someone-else", "SSHD_MATCH=pubkeyauthentication no"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			if out, ok := h.run(PairScript(testCA, testConsole, login, 22), env...); !ok || !strings.Contains(out, markPaired) {
+				t.Fatalf("the pairing:\n%s", out)
+			}
+		})
+	}
+}
+
+// The Include a pairing adds reads the console's drop-in alone, and the
+// last unpairing takes it away (finding 7 of the review of November 24,
+// 2026: an Include of every drop-in turned on old ones that loosened sshd,
+// ahead of sshd_config's own settings, and stayed after unpairing). An
+// Include of every drop-in the system had already is left as it is.
+func TestTheIncludeReadsTheConsolesDropInAlone(t *testing.T) {
+	h := newHost(t)
+	before := h.read("etc/ssh/sshd_config")
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	want := "Include " + h.root + "/etc/ssh/sshd_config.d/221b.conf\n" + before
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("sshd_config:\n%s", got)
+	}
+	// Paired again, by this console or another: one Include.
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	b := newConsole(t, "ns.b")
+	h.mustRun(b.pair(user(t), 22))
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("paired again, sshd_config:\n%s", got)
+	}
+	h.mustRun(b.unpair())
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("with another console's key left, sshd_config:\n%s", got)
+	}
+	h.mustRun(UnpairScript(testCA, testConsole))
+	if got := h.read("etc/ssh/sshd_config"); got != before {
+		t.Fatalf("unpaired, sshd_config:\n%s", got)
+	}
+	// The system's own Include of every drop-in stays, and none is added.
+	own := "Include " + h.root + "/etc/ssh/sshd_config.d/*.conf\n" + before
+	h.write("etc/ssh/sshd_config", own)
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	h.mustRun(UnpairScript(testCA, testConsole))
+	if got := h.read("etc/ssh/sshd_config"); got != own {
+		t.Fatalf("the system's Include, sshd_config:\n%s", got)
+	}
+}
+
+// A pairing stopped by a signal mid-way puts the files back and lets the
+// lock go, under every shell a node may have (finding 12 of the review of
+// November 24, 2026: dash and busybox sh, killed by TERM or PIPE, ran no
+// rollback and left the lock, and bash ran it with status 0, which
+// restored nothing). The console sends TERM when it gives up; a closed
+// connection is HUP or PIPE.
+func TestAPairingStoppedBySignalPutsTheNodeBack(t *testing.T) {
+	var shells [][]string
+	for _, sh := range [][]string{{"sh"}, {"dash"}, {"bash"}, {"busybox", "sh"}} {
+		if _, err := exec.LookPath(sh[0]); err == nil {
+			shells = append(shells, sh)
+		}
+	}
+	for _, sh := range shells {
+		for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGPIPE} {
+			t.Run(strings.Join(sh, " ")+" "+sig.String(), func(t *testing.T) {
+				h := newHost(t)
+				a := newConsole(t, "ns.a")
+				h.mustRun(a.pair(user(t), 22))
+				before := map[string]string{}
+				for _, f := range []string{"etc/ssh/sshd_config", "etc/ssh/sshd_config.d/221b.conf", "etc/ssh/221b/ca.pub", "etc/ssh/221b/principals-" + user(t)} {
+					before[f] = h.read(f)
+				}
+				script := PairScript(testCA, testConsole, user(t), 22)
+				script = strings.ReplaceAll(script, "/etc/ssh", h.root+"/etc/ssh")
+				script = strings.ReplaceAll(script, "/run/sshd", h.root+"/run/sshd")
+				cmd := exec.Command(sh[0], append(sh[1:], "-c", script)...)
+				cmd.Env = append(append([]string{}, h.env...), "SLOW_T=1")
+				var out bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &out, &out
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; !h.exists("at-t"); i++ {
+					if i > 500 {
+						t.Fatalf("the script never reached sshd -t:\n%s", out.String())
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if err := cmd.Process.Signal(sig); err != nil {
+					t.Fatal(err)
+				}
+				if err := cmd.Wait(); err == nil {
+					t.Fatalf("the script ended well after %s:\n%s", sig, out.String())
+				}
+				for f, want := range before {
+					if got := h.read(f); got != want {
+						t.Errorf("%s is now:\n%s\nwas:\n%s", f, got, want)
+					}
+				}
+				if h.exists("etc/ssh/221b.lock") {
+					t.Error("the lock stayed")
+				}
+				if left, _ := filepath.Glob(filepath.Join(h.root, "etc/ssh/221b.undo.*")); len(left) != 0 {
+					t.Errorf("the copies stayed: %v", left)
+				}
+				if !h.admits(a.own(), user(t)) {
+					t.Error("the earlier pairing was lost")
+				}
+				if t.Failed() {
+					t.Logf("the script said:\n%s", out.String())
+				}
+			})
+		}
 	}
 }

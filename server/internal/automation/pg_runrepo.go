@@ -26,12 +26,18 @@ import (
 // the liveness of the values a waiting request keeps there (DB-71). An
 // operation takes the turn of that document's writers (db.LockDoc), so
 // a whole read and an operation never write over each other: the runs'
-// document for a run, the changes' document for a request.
+// turn (runsTurn) for a run, the changes' document for a request.
 //
 // A sensitive value is hidden as the documents hid it: a run's own value,
 // what each node got and what each fleet had are their digests, and what
 // a waiting request would use waits in the Secret, written before the
 // commit (row, then Secret, then commit).
+
+// runsTurn is the name of the turn Automation's writers of runs take
+// (db.LockDoc). The jobs keep a document called runs.json too, and its
+// writers take the turn of that name: Automation's runs take their own, so
+// neither waits for the other (the review of November 24, 2026).
+const runsTurn = "automation/" + RunsKey
 
 // RunRepo keeps the runs and the requests for a run (DB-87).
 type RunRepo interface {
@@ -83,7 +89,7 @@ func sameAs(name, user string, n int) string {
 func (p *pgRuns) NewRun(ctx context.Context, r Run, now time.Time) (Run, error) {
 	var same Run
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		if r.Request != "" {
@@ -144,9 +150,12 @@ func (p *pgRuns) NewRun(ctx context.Context, r Run, now time.Time) (Run, error) 
 		if err := writeRun(ctx, tx, Run{}, kept, false); err != nil {
 			return err
 		}
-		// The newest MaxRuns are kept, as Run History lists them.
-		if _, err := tx.Exec(ctx, `DELETE FROM script_runs WHERE run_number IS NOT NULL AND run_number NOT IN (
-				SELECT run_number FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number DESC LIMIT $1)`, MaxRuns); err != nil {
+		// The newest MaxRuns are kept, as Run History lists them, and an
+		// older one that is still running, or whose row is a request's that
+		// is still kept (the requests' own count drops that part first).
+		if _, err := tx.Exec(ctx, `DELETE FROM script_runs WHERE run_number IS NOT NULL AND request_number IS NULL
+				AND NOT (state = $2 AND heartbeat_at > $3) AND run_number NOT IN (
+				SELECT run_number FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number DESC LIMIT $1)`, MaxRuns, RunRunning, now.Add(-staleAfter)); err != nil {
 			return err
 		}
 		return p.d.Notify(ctx, tx, "doc/"+RunsKey)
@@ -176,7 +185,7 @@ func (p *pgRuns) PutRun(ctx context.Context, r Run) (bool, error) {
 	cancel := false
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
 		cancel = false
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		was, err := readRunsWhere(ctx, tx, false, "run_number = $1", r.ID)
@@ -220,24 +229,44 @@ func keptOutput(s string) (string, bool) {
 	if len(s) > OutputBytes {
 		s, cut = last(s, OutputBytes), true
 	}
-	return strings.ToValidUTF8(s, ""), cut
+	return pgText(strings.ToValidUTF8(s, "")), cut
+}
+
+// pgText is text as a PostgreSQL text column takes it, as the audit log
+// writes it (audit.pgText): valid UTF-8 with no zero byte, each byte it
+// would refuse replaced. A script's output may hold one (cat
+// /proc/1/cmdline, find -print0), and a row refused would fail every
+// later save of its run.
+func pgText(s string) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	return strings.ReplaceAll(s, "\x00", "\uFFFD")
 }
 
 func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output string) error {
 	text, cut := keptOutput(output)
 	return p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
-		var host string
-		err := tx.QueryRow(ctx, `SELECT h.script_run_host_id::text FROM script_run_hosts h JOIN script_runs x USING (script_run_id)
-			WHERE x.run_number = $1 AND h.host_name = $2`, id, n.Node).Scan(&host)
+		var host, cluster string
+		err := tx.QueryRow(ctx, `SELECT h.script_run_host_id::text, x.cluster_id FROM script_run_hosts h JOIN script_runs x USING (script_run_id)
+			WHERE x.run_number = $1 AND h.host_name = $2`, id, n.Node).Scan(&host, &cluster)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: run %d has no node %s", ErrNotFound, id, n.Node)
 		}
 		if err != nil {
 			return err
 		}
+		// A value the node got in clear under a name marked sensitive since
+		// the run started is blanked in what is kept of it (DB-71).
+		names, err := namesIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if seen := runPlain(Run{Nodes: []NodeResult{n}}, names(cluster)); len(seen) > 0 {
+			text, n.Tail, n.Msg, n.Error = maskPlain(text, seen), maskPlain(n.Tail, seen), maskPlain(n.Msg, seen), maskPlain(n.Error, seen)
+		}
+		n.Tail, n.Msg, n.Error = pgText(n.Tail), pgText(n.Msg), pgText(n.Error)
 		var started, ended *time.Time
 		if n.Started != nil {
 			started = timeOrNil(*n.Started)
@@ -261,7 +290,7 @@ func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output strin
 func (p *pgRuns) AskCancel(ctx context.Context, id int, now time.Time) (bool, error) {
 	found := false
 	err := p.d.Tx(ctx, func(tx pgx.Tx) error {
-		if err := db.LockDoc(ctx, tx, RunsKey); err != nil {
+		if err := db.LockDoc(ctx, tx, runsTurn); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, "UPDATE script_runs SET is_cancel_asked = true WHERE run_number = $1 AND state = $2 AND heartbeat_at > $3", id, RunRunning, now.Add(-staleAfter))

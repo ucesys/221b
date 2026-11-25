@@ -26,6 +26,6 @@ pin() {
   pin POSTGRES_IMAGE "$(sed -n 's/^POSTGRES_IMAGE ?= //p' Makefile)"
 } > hack/base-images.env
 postgres=$(sed -n 's/^POSTGRES_IMAGE=//p' hack/base-images.env)
-sed -i -E "s|^( +image: )postgres:[^ ]+$|\1$postgres|" .github/workflows/*.yml
+sed -i -E "s|^( +image: )(postgres|pgvector/pgvector):[^ ]+$|\1$postgres|" .github/workflows/*.yml
 cat hack/base-images.env
 hack/check-base-images.sh

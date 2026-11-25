@@ -365,7 +365,7 @@ func (s *Service) emptyExcluded(ctx context.Context, x Source, e Exclusion) (int
 	var drawn []string
 	n := 0
 	for _, st := range m.bySource(x.ID) {
-		if st.Gone || !e.matches(x.Kind, st.ID, ancestorsOf(st.ID, parents)) {
+		if st.Gone || !e.matches(x.Kind, st.docID(), ancestorsOf(st.docID(), parents)) {
 			continue
 		}
 		st.Gone = true
@@ -377,7 +377,9 @@ func (s *Service) emptyExcluded(ctx context.Context, x Source, e Exclusion) (int
 			// A record of an item never read holds no excerpt.
 			continue
 		}
-		n++
+		if st.Of == "" {
+			n++
+		}
 		key := itemKey(x.ID, st.ID)
 		b, _ := json.Marshal(Excerpt{Key: key, Chunks: []string{}})
 		writes = append(writes, Change{Path: excerptPath(key), Body: b})
@@ -413,7 +415,7 @@ func keepExcluded(set Settings, m *Manifest, writes []Change, had func(path stri
 		}
 		parents := parentsOf(m, x.ID, nil)
 		for _, st := range m.bySource(x.ID) {
-			if _, ok := matchExclusion(x.Kind, x.Excluded, st.ID, ancestorsOf(st.ID, parents)); !ok {
+			if _, ok := matchExclusion(x.Kind, x.Excluded, st.docID(), ancestorsOf(st.docID(), parents)); !ok {
 				continue
 			}
 			key := itemKey(x.ID, st.ID)

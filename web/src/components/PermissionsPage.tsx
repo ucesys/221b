@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { fetchPermissions, fetchRoles, useAdmin, type PermRole, type RoleId, type RoleRow } from '../api/admin'
 import { MATRIX_COLUMNS, matrixTerms } from '../columns/admin'
-import { driftText, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
+import { driftName, driftText, KUBE_ROLES, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
 import { fmtClock } from '../lib/format'
 import { navigate, authHref } from '../lib/router'
 import { useTable } from '../lib/useTable'
@@ -125,7 +125,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   // A role's See every permission opens the page on that role (?role=).
   const [role, setRole] = useState<RoleId | null>(() => {
     const r = route.params.get('role')
-    return r && r in ROLE_NAME ? (r as RoleId) : null
+    return r && (KUBE_ROLES as string[]).includes(r) ? (r as RoleId) : null
   })
   const [sensitive, setSensitive] = useState(false)
   const all = useMemo(() => (data ? matrixOf(data.roles) : []), [data])
@@ -174,7 +174,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
         {differing.length > 0 && (
           <>
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="drift-details">
-              {differing.flatMap((r) => r.differences.map((d) => <li key={`${r.id}:${d}`}>{`${ROLE_NAME[r.id]}: ${d}`}</li>))}
+              {differing.flatMap((r) => r.differences.map((d) => <li key={`${r.id}:${d}`}>{`${driftName(r.id)}: ${d}`}</li>))}
             </ul>
             <div style={{ fontSize: 12.5 }}>
               <a className="rk-link" href="/api/v1/admin/roles/manifest" download="221b-roles.yaml" data-testid="roles-yaml">

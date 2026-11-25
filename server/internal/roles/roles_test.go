@@ -303,3 +303,41 @@ func TestCompare(t *testing.T) {
 		t.Errorf("lines = %v", lines)
 	}
 }
+
+// Roles review, finding 7 (the owner, November 23): a Helm rollback as the
+// person prunes the oldest release record past its history limit, a DELETE
+// of a Secret, so the full Admin with Secrets holds delete on them; the
+// Secret page's Delete then works for Admins too.
+func TestTheFullAdminDeletesHelmRecords(t *testing.T) {
+	del := Grant{Verb: "delete", Resource: "secrets"}
+	if !covered(Grants(Definition(Admin, Full, Options{Secrets: true}).Rules), del) {
+		t.Error("the full Admin cannot delete a Secret: Helm's rollback fails past 10 revisions")
+	}
+	for _, r := range []Role{Definition(Admin, Full, Options{}), Definition(Admin, ReadOnly, Options{Secrets: true}), Definition(Viewer, ReadOnly, Options{Secrets: true})} {
+		if covered(Grants(r.Rules), del) {
+			t.Errorf("%s %s deletes Secrets", r.ID, r.Template)
+		}
+	}
+}
+
+// Roles review, cut list: Flags matched literally, so "*/exec", "*/proxy"
+// and a URL "/*" were neither sensitive nor a wildcard, and vanished under
+// "Sensitive only".
+func TestFlagsSeeSubresourceAndURLWildcards(t *testing.T) {
+	cases := []struct {
+		r    Rule
+		want []string
+	}{
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/exec"}, Verbs: []string{"create"}}, []string{"wildcard", "pods/exec"}},
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/proxy"}, Verbs: []string{"get"}}, []string{"wildcard", "nodes/proxy"}},
+		{Rule{APIGroups: []string{""}, Resources: []string{"*/token"}, Verbs: []string{"create"}}, []string{"wildcard", "serviceaccounts/token"}},
+		{Rule{NonResourceURLs: []string{"/*"}, Verbs: []string{"get"}}, []string{"wildcard"}},
+		{Rule{NonResourceURLs: []string{"/healthz"}, Verbs: []string{"get"}}, nil},
+		{Rule{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale"}, Verbs: []string{"get"}}, nil},
+	}
+	for _, c := range cases {
+		if got := c.r.Flags(); !slices.Equal(got, c.want) {
+			t.Errorf("%+v: flags %v, want %v", c.r, got, c.want)
+		}
+	}
+}

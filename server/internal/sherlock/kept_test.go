@@ -74,7 +74,8 @@ func TestACaseConversationIsSharedAttributedAndKeptCF47(t *testing.T) {
 	reqs := fake.Requests()
 	var first Request
 	_ = json.Unmarshal(reqs[0], &first)
-	if len(first.Messages) != 1 || len(first.Messages[0].Content) != 2 || first.Messages[0].Content[0].Text != ctxText || first.Messages[0].Content[1].Text != "Why is web/api-0 failing?" {
+	// The context, the question, then the time (AI-50).
+	if len(first.Messages) != 1 || len(first.Messages[0].Content) != 3 || first.Messages[0].Content[0].Text != ctxText || first.Messages[0].Content[1].Text != "Why is web/api-0 failing?" || !strings.HasPrefix(first.Messages[0].Content[2].Text, "It is ") {
 		t.Fatalf("the first question: %+v", first.Messages)
 	}
 	// Ann, another person, asks into the same conversation.

@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,6 +281,12 @@ func (s *Server) getProposal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postProposalApprove(w http.ResponseWriter, r *http.Request) {
+	// A change is approved with the groups the directory gives now, as in
+	// Watson's panel (RB-23, RB-37).
+	r, ok := s.rereadSession(w, r)
+	if !ok {
+		return
+	}
 	if !s.mayApproveCards(r) {
 		jsonError(w, http.StatusForbidden, "Approving proposed changes needs the approval permission (cases.approverRoles).")
 		return
@@ -584,7 +592,10 @@ func (a watsonAction) runner(by cards.Approver) (watson.Who, context.Context) {
 		}
 		return x.who, ctx
 	case cards.Standing:
-		who := watson.Who{Name: by.Name, User: x.By.Key, Person: kube.Person{User: x.RunAs.User, Groups: x.RunAs.Groups}, Audit: audit.Who{Subject: x.By.Key, Name: by.Name}}
+		// A standing approval is a SuperAdmin's to set: its runner manages
+		// applications as they do, and Kubernetes is asked, as the identity
+		// it runs as, whether that holds in the namespace.
+		who := watson.Who{Name: by.Name, User: x.By.Key, Person: kube.Person{User: x.RunAs.User, Groups: x.RunAs.Groups}, Audit: audit.Who{Subject: x.By.Key, Name: by.Name}, ManageApps: true}
 		return who, ctx
 	}
 	return watson.Who{Name: by.Name, User: by.Key}, ctx
@@ -602,7 +613,9 @@ func (a watsonAction) Apply(ctx context.Context, c cards.Card, i int, by cards.A
 	}
 	var plan *watson.Inspection
 	if i < len(c.Plans) {
-		plan = &watson.Inspection{Line: line, Targets: c.Plans[i].Targets, Impact: c.Plans[i].Impact}
+		// Its fingerprint too: Watson runs the change only if what it acts
+		// on, and a deploy's commit and values, are still as proposed.
+		plan = &watson.Inspection{Line: line, Targets: c.Plans[i].Targets, Impact: c.Plans[i].Impact, Fingerprint: c.Plans[i].Fingerprint}
 	}
 	// Run from the proposal (CF-62): its output shows in the drawer's
 	// Watson, and the proposal logs it.
@@ -628,6 +641,12 @@ func (a watsonAction) Apply(ctx context.Context, c cards.Card, i int, by cards.A
 	return r, nil
 }
 
+// lineDigest stands for a command line where only its sameness counts.
+func lineDigest(line string) string {
+	sum := sha256.Sum256([]byte(line))
+	return hex.EncodeToString(sum[:16])
+}
+
 // watsonEnded tells the cards how a chat's command ended in the Watson
 // panel.
 func (s *Server) watsonEnded(it watson.Item) {
@@ -640,7 +659,16 @@ func (s *Server) watsonEnded(it watson.Item) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	s.opts.Cards.WatsonEnded(ctx, it.ID, it.Status, by, it.Exit)
+	s.opts.Cards.WatsonEnded(ctx, it.ID, watsonEndOf(it), by, it.Exit)
+}
+
+// watsonEndOf is how a chat's Watson command ended, for its card: one
+// stopped before it started, or refused when it was to start, never ran.
+func watsonEndOf(it watson.Item) string {
+	if (it.Status == watson.StatusStopped || it.Status == watson.StatusRefused) && it.Started.IsZero() {
+		return cards.WatsonUnrun
+	}
+	return it.Status
 }
 
 // proposeFromChat keeps the changes a person sent to Watson from an
@@ -660,13 +688,17 @@ func (s *Server) proposeFromChat(r *http.Request, c watson.Cluster, who watson.W
 			continue
 		}
 		p := cards.Proposal{
-			Agent:     "sherlock",
-			Source:    cards.Source{Kind: cards.SourceChat, Label: "Asked by " + who.Name + " in a chat on " + c.Name, SetBy: who.Name},
-			Cluster:   c.ID,
-			Title:     it.Line,
+			Agent:   "sherlock",
+			Source:  cards.Source{Kind: cards.SourceChat, Label: "Asked by " + who.Name + " in a chat on " + c.Name, SetBy: who.Name},
+			Cluster: c.ID,
+			// The title is recorded and sent to the notification channels:
+			// the line's parameters are hidden there (DB-74). The action keeps
+			// the line whole, to run; the key that tells the same line again
+			// is a digest of it.
+			Title:     watson.MaskLine(it.Line),
 			Reasoning: why,
 			Actions:   []cards.Action{{Kind: tool, Args: map[string]any{"command": it.Line}}},
-			DedupKey:  "chat:" + c.ID + ":" + it.Line,
+			DedupKey:  "chat:" + c.ID + ":" + lineDigest(it.Line),
 		}
 		if _, err := s.opts.Cards.ProposeFor(r.Context(), p, s.cardPerson(r), it.ID); err != nil {
 			s.opts.Logger.Warn("a chat's change was not kept as a proposal", "cluster", c.ID, "err", err)

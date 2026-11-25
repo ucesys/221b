@@ -119,7 +119,7 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 					}
 					return automation.NodeState{}, false
 				}
-				st := automation.NodeState{}
+				st := automation.NodeState{BootID: n.Status.NodeInfo.BootID}
 				_, st.ControlPlane = n.Labels["node-role.kubernetes.io/control-plane"]
 				if _, master := n.Labels["node-role.kubernetes.io/master"]; master {
 					st.ControlPlane = true
@@ -138,7 +138,11 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 			OutputDir:   outDir,
 			OnCommand: func(r automation.Run, node, what, outcome string) {
 				o := audit.OutcomeOK
-				if outcome != "ok" {
+				switch outcome {
+				case "ok":
+				case "stopped":
+					o = audit.OutcomeStopped
+				default:
 					o = audit.OutcomeFailed
 				}
 				w.auditLog.Record(audit.Event{Action: audit.ActionAutomationCommand, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: node, Outcome: o,

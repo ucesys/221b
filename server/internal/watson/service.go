@@ -88,8 +88,12 @@ type Who struct {
 	// a record with the console's account, so the role is checked here,
 	// and Options.AppAccess asks about the namespace.
 	ManageApps bool
-	Audit      audit.Who
-	From       string
+	// ViewOnly is a person whose roles change nothing (a Viewer or a
+	// SuperViewer): a change approved by them runs as them and fails, so
+	// they hold no standing approval (R2-04).
+	ViewOnly bool
+	Audit    audit.Who
+	From     string
 }
 
 // Line is one line of output.
@@ -237,6 +241,12 @@ type Options struct {
 	// LapseWaiting is how long a card waiting for a second person stays
 	// valid (TB-38): 30 minutes.
 	LapseWaiting time.Duration
+	// Rules reads a cluster's rules as they are now (read-only, locked,
+	// its name, environment and connection), for what runs after the
+	// request that asked for it: a queued change when it starts, a card
+	// approved under a standing approval. Nil keeps the cluster as the
+	// request saw it.
+	Rules func(id string) (Cluster, bool)
 }
 
 // Service keeps the commands.
@@ -403,11 +413,25 @@ func (s *Service) Submit(ctx context.Context, cl Cluster, who Who, text, from, w
 		lines = []string{strings.TrimSpace(text)}
 	}
 	var out []*Item
-	for _, line := range lines {
+	for i, line := range lines {
+		if i == MaxCommands {
+			// One request makes a bounded number of cards: each plans
+			// against the cluster and holds memory until it ends.
+			now := s.opts.Now()
+			it := &Item{ID: newID(), Cluster: cl.ID, Line: fmt.Sprintf("(%d more commands)", len(lines)-i), From: from, Why: why, Requester: who, Created: now, Exit: -1,
+				Status: StatusRefused, Rule: "too many", Reason: fmt.Sprintf("Watson takes at most %d commands at once; the other %d were not run. Send them again.", MaxCommands, len(lines)-i)}
+			s.add(it)
+			s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
+			out = append(out, it)
+			break
+		}
 		out = append(out, s.submitOne(ctx, cl, who, line, from, why, run))
 	}
 	return out
 }
+
+// MaxCommands bounds the commands one request sends.
+const MaxCommands = 20
 
 func (s *Service) submitOne(ctx context.Context, cl Cluster, who Who, line, from, why string, run bool) *Item {
 	now := s.opts.Now()
@@ -509,15 +533,8 @@ func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
 // TB-37): a Watson command runs as its approver, which bounds it; a
 // session does not.
 func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, session, needsTwo bool) *Refusal {
-	if cl.Locked != "" {
-		return refuse("roles", "Refused: %s", cl.Locked)
-	}
-	if cl.ReadOnly {
-		how := cl.ReadOnlyHow
-		if how == "" {
-			how = "An administrator can allow changes in the connection's settings."
-		}
-		return refuse("read-only cluster", "Refused: %s is connected read-only, so Watson changes nothing there. %s", cl.Name, how)
+	if r := connRefusal(cl); r != nil {
+		return r
 	}
 	if s.opts.TwoPerson(cl) {
 		if requester.User == "" {
@@ -542,6 +559,64 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, session, 
 		}
 	}
 	return nil
+}
+
+// connRefusal says why the connection takes no change: it is locked by
+// the role check, or read-only (P6-05, RB-36).
+func connRefusal(cl Cluster) *Refusal {
+	if cl.Locked != "" {
+		return refuse("roles", "Refused: %s", cl.Locked)
+	}
+	if cl.ReadOnly {
+		how := cl.ReadOnlyHow
+		if how == "" {
+			how = "An administrator can allow changes in the connection's settings."
+		}
+		return refuse("read-only cluster", "Refused: %s is connected read-only, so Watson changes nothing there. %s", cl.Name, how)
+	}
+	return nil
+}
+
+// SetRules sets how a cluster's rules are read again: the API sets it once
+// it is built, before any request.
+func (s *Service) SetRules(f func(id string) (Cluster, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.Rules = f
+}
+
+// current is a cluster with its rules as they are now: what a request saw
+// can only be made stricter (read-only, locked), since the person's own
+// part of it (an anonymous Viewer makes no change) does not change; the
+// name, environment and connection are taken as they are now. It is
+// called without the lock.
+func (s *Service) current(cl Cluster) Cluster {
+	s.mu.Lock()
+	rules := s.opts.Rules
+	s.mu.Unlock()
+	if rules == nil {
+		return cl
+	}
+	now, ok := rules(cl.ID)
+	if !ok {
+		return cl
+	}
+	if now.ReadOnly {
+		cl.ReadOnly, cl.ReadOnlyHow = true, now.ReadOnlyHow
+	}
+	if now.Locked != "" {
+		cl.Locked = now.Locked
+	}
+	if now.Name != "" {
+		cl.Name = now.Name
+	}
+	if now.Env != "" {
+		cl.Env = now.Env
+	}
+	if now.Config != nil {
+		cl.Config = now.Config
+	}
+	return cl
 }
 
 // Refusal says why a change from this person could not run here at all
@@ -581,6 +656,8 @@ func (s *Service) SetReread(f func(Who) (Who, bool)) {
 type Grant struct {
 	Who   Who
 	Until time.Time
+	// Given is when it was given: the settings' limit counts from then.
+	Given time.Time
 }
 
 func grantKey(cluster, session string) string { return cluster + "\x00" + session }
@@ -602,10 +679,13 @@ func (s *Service) ApproveAll(cl Cluster, who Who, d time.Duration) (Grant, error
 		return Grant{}, fmt.Errorf("%w: %s is connected read-only", ErrGrant, cl.Name)
 	case who.Session == "":
 		return Grant{}, fmt.Errorf("%w: no session", ErrGrant)
+	case who.ViewOnly:
+		return Grant{}, fmt.Errorf("%w: your roles change nothing on %s, so a change you approved would fail", ErrGrant, cl.Name)
 	case d < time.Minute || d > max:
 		return Grant{}, fmt.Errorf("%w: between 1 and %s", ErrGrant, minutes(max))
 	}
-	g := Grant{Who: who, Until: s.opts.Now().Add(d)}
+	now := s.opts.Now()
+	g := Grant{Who: who, Until: now.Add(d), Given: now}
 	s.mu.Lock()
 	if s.grants == nil {
 		s.grants = map[string]Grant{}
@@ -636,12 +716,51 @@ func (s *Service) Revoke(cl Cluster, who Who) {
 // Standing returns a person's standing approval on a cluster, if it holds.
 func (s *Service) Standing(cl Cluster, who Who) (Grant, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	g, ok := s.grants[grantKey(cl.ID, who.Session)]
-	if !ok || !g.Until.After(s.opts.Now()) {
+	var ended []Grant
+	if ok {
+		g, ok = s.holdsLocked(cl, grantKey(cl.ID, who.Session), g, s.opts.Now(), &ended)
+	}
+	s.mu.Unlock()
+	s.recordEnded(cl, ended)
+	if !ok {
 		return Grant{}, false
 	}
 	return g, true
+}
+
+// holdsLocked says whether a grant holds now under the settings as they
+// are now (R2-04): standing approvals turned off end it, and a lower limit
+// shortens it to that long from when it was given. A grant the settings
+// end is removed and added to ended, for the audit log.
+func (s *Service) holdsLocked(cl Cluster, key string, g Grant, now time.Time, ended *[]Grant) (Grant, bool) {
+	max := time.Duration(0)
+	if s.opts.ApproveAllMax != nil {
+		max = s.opts.ApproveAllMax(cl)
+	}
+	if max <= 0 {
+		delete(s.grants, key)
+		*ended = append(*ended, g)
+		return g, false
+	}
+	if g.Given.IsZero() {
+		g.Given = now
+	}
+	if limit := g.Given.Add(max); limit.Before(g.Until) {
+		g.Until = limit
+		s.grants[key] = g
+	}
+	return g, g.Until.After(now)
+}
+
+// recordEnded audits the grants the settings ended.
+func (s *Service) recordEnded(cl Cluster, ended []Grant) {
+	if s.opts.Audit == nil {
+		return
+	}
+	for _, g := range ended {
+		s.opts.Audit.Record(audit.Event{Time: s.opts.Now(), Action: ActionApproveAll, Who: g.Who.Audit, From: g.Who.From, Cluster: cl.ID, Outcome: audit.OutcomeOK, Detail: "ended reason=\"standing approvals are off in Settings\""})
+	}
 }
 
 // readyLocked lists the cluster's pending cards whose plan is ready.
@@ -659,6 +778,10 @@ func (s *Service) readyLocked(cl Cluster) []string {
 // requester's own, or, where a second person is needed, another holder's.
 // Approve applies every rule a click would (P6-04, P6-07, TB-32).
 func (s *Service) autoApprove(cl Cluster, id string) {
+	defer s.recoverIn("approving a card under a standing approval")
+	// The card was planned with the cluster its request saw; it is
+	// approved under the rules as they are now (P6-05).
+	cl = s.current(cl)
 	s.mu.Lock()
 	it := s.items[id]
 	if it == nil || it.Status != StatusPending || it.Plan == nil || !it.Plan.Ready || !it.Change {
@@ -667,19 +790,26 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 	}
 	now := s.opts.Now()
 	var holders []Who
-	if g, ok := s.grants[grantKey(cl.ID, it.Requester.Session)]; ok && g.Until.After(now) {
-		holders = append(holders, g.Who)
+	var ended []Grant
+	if g, ok := s.grants[grantKey(cl.ID, it.Requester.Session)]; ok {
+		if g, ok = s.holdsLocked(cl, grantKey(cl.ID, it.Requester.Session), g, now, &ended); ok {
+			holders = append(holders, g.Who)
+		}
 	}
 	if s.needsTwo(cl, it) {
 		holders = holders[:0]
 		for k, g := range s.grants {
-			if strings.HasPrefix(k, cl.ID+"\x00") && g.Until.After(now) && g.Who.User != "" && g.Who.User != it.Requester.User {
+			if !strings.HasPrefix(k, cl.ID+"\x00") {
+				continue
+			}
+			if g, ok := s.holdsLocked(cl, k, g, now, &ended); ok && g.Who.User != "" && g.Who.User != it.Requester.User {
 				holders = append(holders, g.Who)
 			}
 		}
 	}
 	reread := s.opts.Reread
 	s.mu.Unlock()
+	s.recordEnded(cl, ended)
 	if len(holders) == 0 {
 		return
 	}
@@ -694,9 +824,24 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 			}
 			w = fresh
 		}
+		if w.ViewOnly {
+			// Their roles change nothing any more: what they approve would
+			// run as them and fail.
+			s.Revoke(cl, w)
+			continue
+		}
 		if _, err := s.Approve(ctx, cl, w, id); err == nil {
 			return
 		}
+	}
+}
+
+// recoverIn logs a panic of a goroutine of the service instead of ending
+// the process: a damaged record read for one card must not take the
+// console down for everyone.
+func (s *Service) recoverIn(what string) {
+	if r := recover(); r != nil {
+		s.opts.Logger.Error(what+" failed", "panic", fmt.Sprint(r))
 	}
 }
 
@@ -805,6 +950,10 @@ func (s *Service) startSession(cl Cluster, it *Item, approver Who) {
 func (s *Service) add(it *Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if finished(it.Status) && it.Finished.IsZero() {
+		// Refused as it came: it ended then, and is kept as long as others.
+		it.Finished = it.Created
+	}
 	s.items[it.ID] = it
 	s.trimLocked(it.Requester.Session, it.Cluster)
 	s.changedLocked(it)
@@ -818,7 +967,11 @@ func (s *Service) trimLocked(session, cluster string) {
 		if it.Requester.Session == session && it.Cluster == cluster {
 			mine = append(mine, it)
 		}
-		if finished(it.Status) && !it.Finished.IsZero() && it.Finished.Before(cutoff) {
+		switch {
+		case finished(it.Status) && !it.Finished.IsZero() && it.Finished.Before(cutoff):
+			delete(s.items, it.ID)
+		case it.Status == StatusPending && !it.Change && it.Created.Before(cutoff):
+			// A read never run: nothing waits on it.
 			delete(s.items, it.ID)
 		}
 	}
@@ -850,6 +1003,20 @@ func (s *Service) plan(cl Cluster, id string) {
 	if it == nil {
 		return
 	}
+	// A card that cannot be worked out is never approved, and a panic
+	// working it out must not end the console for everyone.
+	defer func() {
+		if r := recover(); r != nil {
+			s.opts.Logger.Error("working out a card failed", "command", MaskLine(it.Line), "panic", fmt.Sprint(r))
+			s.mu.Lock()
+			if it.Status == StatusPending {
+				it.Plan = &Plan{Ready: true, Impact: []string{fmt.Sprintf("Watson failed working out this card (%v): it cannot be approved. Send the command again for a fresh card.", r)},
+					guards: []guard{unreadable("the objects this command acts on", fmt.Errorf("%v", r))}}
+				s.changedLocked(it)
+			}
+			s.mu.Unlock()
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	p := &Plan{pin: &appPin{}}
@@ -888,7 +1055,7 @@ func (s *Service) plan(cl Cluster, id string) {
 		extra = append(extra, "--timeout=12s")
 		p.DryRunNote = "The dry run gives up after 12 seconds; the drain itself waits as long as --timeout says."
 	}
-	p.DryRunExit = s.opts.Run(ctx, it.cmd, asker, &buf.out, &buf.err, extra...)
+	p.DryRunExit = s.opts.Run(ctx, it.cmd, asker, buf.writer(&buf.out), buf.writer(&buf.err), extra...)
 	p.DryRun = buf.lines()
 	p.Ready = true
 	s.mu.Lock()
@@ -976,7 +1143,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		return it, r
 	}
 	if s.opts.Now().After(it.Expires) {
-		s.lapseLocked(it, fmt.Sprintf("The approval lapsed: cards are good for %s. Send the command again for a fresh card.", minutes(s.opts.Lapse)))
+		s.lapseLocked(it, lapsedText(it))
 		s.mu.Unlock()
 		return it, fmt.Errorf("%w: %s", ErrState, it.Reason)
 	}
@@ -1021,6 +1188,12 @@ func decidedText(it *Item) string {
 		return fmt.Sprintf("already approved by %s at %s; it is %s", name, it.Approved.UTC().Format("2006-01-02 15:04:05 UTC"), it.Status)
 	}
 	return "it is " + it.Status
+}
+
+// lapsedText says a card's time is up, with how long it was good for: a
+// card waiting for a second person is good for longer (TB-38).
+func lapsedText(it *Item) string {
+	return fmt.Sprintf("The approval lapsed: this card was good for %s. Send the command again for a fresh card.", minutes(it.Expires.Sub(it.Created)))
 }
 
 func minutes(d time.Duration) string {
@@ -1286,7 +1459,12 @@ func (s *Service) Drain(ctx context.Context, settle time.Duration) {
 
 func (s *Service) work(cl Cluster, key string, q *runQueue) {
 	defer s.workers.Done()
+	approvedOn := cl
 	for {
+		// Each change starts under the cluster's rules as they are then,
+		// not as they were when the queue's first change was approved: a
+		// connection made read-only or locked meanwhile runs none of them.
+		cl := s.current(approvedOn)
 		s.mu.Lock()
 		if len(q.ids) == 0 {
 			q.running = false
@@ -1298,6 +1476,13 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 		q.ids = q.ids[1:]
 		it := s.items[id]
 		if it == nil || it.Status != StatusQueued {
+			s.mu.Unlock()
+			continue
+		}
+		if r := connRefusal(cl); r != nil && it.Change {
+			it.Status, it.Reason, it.Rule, it.Finished = StatusRefused, r.Message, r.Rule, s.opts.Now()
+			s.changedLocked(it)
+			go s.record(ActionRefuse, it, *it.Approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 			s.mu.Unlock()
 			continue
 		}
@@ -1349,12 +1534,24 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 	if c.Tool != "kubectl" {
 		return 1, fmt.Errorf("a script runs kubectl lines only")
 	}
-	if c.Change {
+	if c.Change && dryRun {
+		// The dry run is added to the parsed command, not to the text: a
+		// comment at the end of the line would swallow it there, and the
+		// line would make the real change (asked November 24, 2026).
+		asked := c.DryRun()
+		c = asDryRun(c)
+		if !c.DryRun() {
+			return 1, fmt.Errorf("refused: Watson could not make %s a dry run, so it ran nothing", c.Name())
+		}
+		if !asked && c.Name() == "kubectl drain" && !c.Has("timeout") {
+			// As a card's dry run: a budget that allows no eviction would
+			// hold the dry run as it holds the drain.
+			c.Flags["timeout"] = []string{"12s"}
+			c.Args = append(c.Args, "--timeout=12s")
+		}
+	}
+	if c.Change && !c.DryRun() {
 		switch {
-		case dryRun && !c.DryRun():
-			if c, err = Parse(line + " --dry-run=server"); err != nil {
-				return 1, err
-			}
 		case cl.ReadOnly:
 			return 1, fmt.Errorf("this connection is read-only")
 		case cl.Locked != "":
@@ -1366,6 +1563,24 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 		return 1, fmt.Errorf("cannot reach the cluster: %w", err)
 	}
 	return s.opts.Run(ctx, c, Target{Config: cl.Config, Person: p, Cluster: cl.ID, Discovery: d}, out, out), nil
+}
+
+// asDryRun is a change as a server-side dry run: a copy of the parsed
+// command with --dry-run=server after its own arguments, which kubectl
+// takes over an earlier --dry-run. A command that is a dry run already
+// comes back as it is.
+func asDryRun(c *Command) *Command {
+	if c.DryRun() {
+		return c
+	}
+	cp := *c
+	cp.Flags = make(map[string][]string, len(c.Flags)+1)
+	for k, v := range c.Flags {
+		cp.Flags[k] = v
+	}
+	cp.Flags["dry-run"] = append(append([]string(nil), c.Flags["dry-run"]...), "server")
+	cp.Args = append(append([]string(nil), c.Args...), "--dry-run=server")
+	return &cp
 }
 
 // execute runs one command as the person who approved it.
@@ -1385,6 +1600,9 @@ func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who)
 		fmt.Fprintf(errOut, "Error: %s\n", why)
 	} else {
 		t.Discovery = d
+		if it.cmd != nil && it.cmd.Name() == "helm uninstall" {
+			t.mayForget = s.mayManageApp(ctx, cl, runner, helmNamespace(it.cmd))
+		}
 		code = s.opts.Run(ctx, it.cmd, t, out, errOut)
 	}
 	out.flush()
@@ -1459,10 +1677,35 @@ func (w *itemWriter) push(lines []Line) {
 	w.s.changedLocked(w.it)
 }
 
-// lineBuffer collects output for a card's dry run.
+// lineBuffer collects output for a card's dry run, max bytes of it.
 type lineBuffer struct {
+	mu       sync.Mutex
 	out, err bytes.Buffer
 	max      int
+	cut      bool
+}
+
+// writer writes to one of the buffers, up to the bound both share.
+func (b *lineBuffer) writer(to *bytes.Buffer) io.Writer { return boundWriter{b: b, to: to} }
+
+type boundWriter struct {
+	b  *lineBuffer
+	to *bytes.Buffer
+}
+
+func (w boundWriter) Write(p []byte) (int, error) {
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	room := w.b.max - w.b.out.Len() - w.b.err.Len()
+	if w.b.max > 0 && len(p) > room {
+		w.b.cut = true
+		if room > 0 {
+			w.to.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	w.to.Write(p)
+	return len(p), nil
 }
 
 func (b *lineBuffer) lines() []Line {
@@ -1476,6 +1719,9 @@ func (b *lineBuffer) lines() []Line {
 	}
 	add("out", &b.out)
 	add("err", &b.err)
+	if b.cut {
+		out = append(out, Line{K: "info", T: fmt.Sprintf("# watson: the dry run's output was cut at %d KB", b.max>>10)})
+	}
 	if len(out) > 200 {
 		n := len(out)
 		out = append(out[:200], Line{K: "info", T: fmt.Sprintf("# … and %d more lines", n-200)})
@@ -1506,7 +1752,7 @@ func (s *Service) Watch(ctx context.Context, clusterOf func(id string) (Cluster,
 				continue
 			}
 			if now.After(it.Expires) {
-				s.lapseLocked(it, fmt.Sprintf("The approval lapsed: cards are good for %s. Send the command again for a fresh card.", minutes(s.opts.Lapse)))
+				s.lapseLocked(it, lapsedText(it))
 				continue
 			}
 			if it.Plan != nil && it.Plan.Ready && len(it.Plan.guards) > 0 {

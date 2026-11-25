@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/auth"
 )
 
 // Several replicas (P7-02): one, the leader, reads the clusters and runs
@@ -29,9 +31,12 @@ type Leader interface {
 
 const (
 	// clientHeader carries the address a forwarded request came from;
-	// proxyHeader proves another replica sent it.
-	clientHeader = "X-221B-Client"
-	proxyHeader  = "X-221B-Proxy"
+	// proxyHeader proves another replica sent it; sessionHeader carries
+	// the session that replica checked, which the leader takes for one it
+	// cannot ask the session store about (auth.VouchFor).
+	clientHeader  = "X-221B-Client"
+	proxyHeader   = "X-221B-Proxy"
+	sessionHeader = "X-221B-Session"
 )
 
 // leaderChecks is how often a forwarded stream checks that the leader it
@@ -63,24 +68,31 @@ func leaderOnly(path string) bool {
 	return true
 }
 
-// trustForwarded takes the client's address from a request another
-// replica forwarded, and drops the headers from any other request, so no
-// browser can claim an address. It reports whether a replica sent it.
-func (s *Server) trustForwarded(r *http.Request) bool {
+// trustForwarded takes the client's address, and the session the
+// forwarding replica vouches for, from a request another replica
+// forwarded, and drops the headers from any other request, so no browser
+// can claim an address or a session. It returns the request, and reports
+// whether a replica sent it.
+func (s *Server) trustForwarded(r *http.Request) (*http.Request, bool) {
 	client := r.Header.Get(clientHeader)
 	token := r.Header.Get(proxyHeader)
+	vouch := r.Header.Get(sessionHeader)
 	r.Header.Del(clientHeader)
 	r.Header.Del(proxyHeader)
+	r.Header.Del(sessionHeader)
 	if client == "" || s.opts.ProxyToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.opts.ProxyToken)) != 1 {
-		return false
+		return r, false
 	}
 	if net.ParseIP(client) == nil {
-		return false
+		return r, false
 	}
 	// Everything after this reads the address from RemoteAddr: the audit
 	// log, the sign-in limits.
 	r.RemoteAddr = net.JoinHostPort(client, "0")
-	return true
+	if vouch != "" {
+		r = auth.WithVouch(r, vouch)
+	}
+	return r, true
 }
 
 // forwardToLeader sends a request for the leader on to it and says
@@ -156,6 +168,15 @@ func (s *Server) proxyFor(addr string) *httputil.ReverseProxy {
 			}
 			pr.Out.Header.Set(clientHeader, fromAddr(pr.In))
 			pr.Out.Header.Set(proxyHeader, s.opts.ProxyToken)
+			// The session this replica checked, so a leader that cannot
+			// ask the session store about it does not send the person to
+			// sign in while this replica sends them back (DB-65).
+			pr.Out.Header.Del(sessionHeader)
+			if sess, ok := auth.SessionFrom(pr.In.Context()); ok && s.opts.ProxyToken != "" {
+				if v := auth.VouchFor(sess); v != "" {
+					pr.Out.Header.Set(sessionHeader, v)
+				}
+			}
 		},
 		// Event streams pass every event on as it comes.
 		FlushInterval: -1,

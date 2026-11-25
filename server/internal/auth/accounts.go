@@ -26,6 +26,10 @@ var (
 	ErrNotFound = errors.New("no such user")
 	// ErrFirstRunClosed says the first administrator exists already (RB-26).
 	ErrFirstRunClosed = errors.New("the first administrator exists already")
+	// ErrPasswordChanged refuses a password change checked against a hash
+	// that is no longer the saved one: the password was changed meanwhile,
+	// on this replica or another.
+	ErrPasswordChanged = errors.New("the password was changed meanwhile")
 	// ErrUnavailable says the accounts could not be read, so nothing is
 	// allowed to change them or to open the first-run page.
 	ErrUnavailable = errors.New("the accounts could not be read; check the console's log")
@@ -77,6 +81,10 @@ type Account struct {
 	Disabled     bool       `json:"disabled,omitempty"`
 	Created      time.Time  `json:"created"`
 	LastSignIn   time.Time  `json:"lastSignIn,omitzero"`
+	// Installer marks the account the first-run page created: whoever
+	// installed the console, asked to star 221B on GitHub as the
+	// SuperAdmins the values name are (CU-21). Only Setup sets it.
+	Installer bool `json:"installer,omitempty"`
 	// Managed accounts come from the deployment's values, and are never
 	// changed or kept here.
 	Managed bool `json:"-"`
@@ -117,7 +125,11 @@ type Accounts struct {
 	managed    map[string]*Account
 	stored     map[string]*Account
 	groups     map[string]LocalGroup
-	loaded     bool
+	// ended is when each account's sessions were last ended (document), and
+	// endedKept how long an ending is kept: as long as a session can live.
+	ended     map[string]time.Time
+	endedKept time.Duration
+	loaded    bool
 	// version is the backend's version of what is in memory, "" when it
 	// must be read again; extra and userExtra are the saved fields this
 	// version does not know; newer says a newer console saved them, so
@@ -139,7 +151,7 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 		now = time.Now
 	}
 	_, memory := backend.(*MemoryBackend)
-	a := &Accounts{backend: versioned(backend), persistent: !memory, managed: map[string]*Account{}, stored: map[string]*Account{}, groups: map[string]LocalGroup{}, external: external, now: now}
+	a := &Accounts{backend: versioned(backend), persistent: !memory, managed: map[string]*Account{}, stored: map[string]*Account{}, ended: map[string]time.Time{}, endedKept: defaultEndedKept, groups: map[string]LocalGroup{}, external: external, now: now}
 	for i := range managed {
 		m := managed[i]
 		m.Managed = true
@@ -149,6 +161,56 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 		a.groups[g.Name] = g
 	}
 	return a
+}
+
+// defaultEndedKept is how long the ending of an account's sessions is kept
+// when the sessions' maximum life is not given: the default maximum.
+const defaultEndedKept = 7 * 24 * time.Hour
+
+// KeepEndings sets how long the ending of an account's sessions is kept:
+// the longest a session can live, after which no session from before it
+// is left to refuse.
+func (a *Accounts) KeepEndings(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if d > 0 {
+		a.endedKept = d
+	}
+}
+
+// pruneEnded forgets endings no session can be older than. Callers hold
+// the lock.
+func (a *Accounts) pruneEnded() {
+	cut := a.now().Add(-a.endedKept)
+	for name, t := range a.ended {
+		if t.Before(cut) {
+			delete(a.ended, name)
+		}
+	}
+}
+
+// SessionsEnded is when an account's sessions were last ended, as this
+// replica last read the accounts: a session signed in before then is
+// refused (RB-46).
+func (a *Accounts) SessionsEnded(username string) (time.Time, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	t, ok := a.ended[username]
+	return t, ok
+}
+
+// EndSessions notes that an account's sessions end now, so every replica
+// refuses those signed in before, also ones the session store could not
+// be asked to end. An account of the deployment's values has its ending
+// noted too.
+func (a *Accounts) EndSessions(ctx context.Context, username string) error {
+	return a.change(ctx, func() error {
+		if a.get(username) == nil {
+			return ErrNotFound
+		}
+		a.ended[username] = a.now()
+		return nil
+	})
 }
 
 // Persistent says whether accounts created here survive a restart.
@@ -180,20 +242,61 @@ func (a *Accounts) Find(login string) (Account, bool) {
 		return Account{}, false
 	}
 	var found *Account
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			if strings.EqualFold(u.Email, login) {
-				if found != nil {
-					return Account{}, false
-				}
-				found = u
-			}
+	twice := false
+	a.each(func(_ string, u *Account) {
+		if strings.EqualFold(u.Email, login) {
+			twice = twice || found != nil
+			found = u
 		}
-	}
-	if found == nil {
+	})
+	if found == nil || twice {
 		return Account{}, false
 	}
 	return *found, true
+}
+
+// FindRead is Find for an account this replica's copy may not hold yet: a
+// replica reads the saved accounts again every few seconds, so one created
+// on another replica may be missing here. On a miss it reads them again,
+// once, and looks again. sure says whether a miss can be trusted: it
+// cannot when the saved accounts could not be read.
+//
+// It looks the account up by its user name alone, as a session names it:
+// never by email, which would let a session go on as another account
+// whose email is that name.
+func (a *Accounts) FindRead(ctx context.Context, username string) (acct Account, ok, sure bool) {
+	if u, found := a.byName(username); found {
+		return u, true, true
+	}
+	if err := a.load(ctx); err != nil {
+		return Account{}, false, false
+	}
+	u, found := a.byName(username)
+	return u, found, true
+}
+
+// byName finds an account by its user name exactly.
+func (a *Accounts) byName(username string) (Account, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if u := a.get(username); u != nil {
+		return *u, true
+	}
+	return Account{}, false
+}
+
+// Current reads the saved accounts again and returns the account as saved
+// now, for a password check that must not take a hash another replica
+// has replaced (a reset). When they cannot be read, this replica's copy
+// stands, as it does for every other check.
+func (a *Accounts) Current(ctx context.Context, username string) (Account, bool) {
+	_ = a.load(ctx)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if u := a.get(username); u != nil {
+		return *u, true
+	}
+	return Account{}, false
 }
 
 // List returns every account, by user name.
@@ -201,11 +304,7 @@ func (a *Accounts) List() []Account {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var out []Account
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			out = append(out, *u)
-		}
-	}
+	a.each(func(_ string, u *Account) { out = append(out, *u) })
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out
 }
@@ -233,13 +332,11 @@ func (a *Accounts) Members(group string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	n := 0
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for _, u := range set {
-			if slices.Contains(u.Groups, group) {
-				n++
-			}
+	a.each(func(_ string, u *Account) {
+		if slices.Contains(u.Groups, group) {
+			n++
 		}
-	}
+	})
 	return n
 }
 
@@ -269,7 +366,7 @@ type NewAccount struct {
 
 func (a *Accounts) validate(n NewAccount) error {
 	if !roles.ValidUsername(n.Username, true) {
-		return errors.New("use lowercase letters, digits, dot, dash and underscore for the user name")
+		return errors.New("use " + consoleUserRule + " for the user name")
 	}
 	if err := CheckPasswordRules(n.Username, n.Password); err != nil {
 		return err
@@ -304,7 +401,7 @@ func (a *Accounts) Setup(ctx context.Context, n NewAccount) (Account, error) {
 		if len(a.managed) > 0 || len(a.stored) > 0 {
 			return ErrFirstRunClosed
 		}
-		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Created: a.now()}
+		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Installer: true, Created: a.now()}
 		a.stored[u.Username] = u
 		out = *u
 		return nil
@@ -341,6 +438,9 @@ type Change struct {
 	Email    *string
 	Password *string
 	Disabled *bool
+	// IfHash, with Password, makes the change only while the saved hash is
+	// this one: the one the current password was checked against.
+	IfHash *string
 }
 
 // edit applies fn to a copy of a stored account, as saved now, and saves
@@ -377,17 +477,30 @@ func (a *Accounts) edit(ctx context.Context, username string, fn func(u *Account
 // `as`. Callers hold the lock.
 func (a *Accounts) superAdmins(name string, as *Account) int {
 	n := 0
-	for _, set := range []map[string]*Account{a.managed, a.stored} {
-		for k, u := range set {
-			if k == name && as != nil {
-				u = as
-			}
-			if !u.Disabled && slices.Contains(u.Super, roles.SuperAdmin) {
-				n++
-			}
+	a.each(func(k string, u *Account) {
+		if k == name && as != nil {
+			u = as
+		}
+		if !u.Disabled && slices.Contains(u.Super, roles.SuperAdmin) {
+			n++
+		}
+	})
+	return n
+}
+
+// each calls fn for every account as the console sees it: those of the
+// values, and the console's own but one that an account of the values of
+// the same name hides, which neither signs in, nor is listed, nor counts.
+// Callers hold the lock.
+func (a *Accounts) each(fn func(name string, u *Account)) {
+	for k, u := range a.managed {
+		fn(k, u)
+	}
+	for k, u := range a.stored {
+		if _, hidden := a.managed[k]; !hidden {
+			fn(k, u)
 		}
 	}
-	return n
 }
 
 // Update changes a local user's details, password or whether they may sign
@@ -417,6 +530,9 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 			u.Email = strings.ToLower(strings.TrimSpace(*c.Email))
 		}
 		if c.Password != nil {
+			if c.IfHash != nil && u.PasswordHash != *c.IfHash {
+				return ErrPasswordChanged
+			}
 			u.PasswordHash = hash
 			end = true
 		}
@@ -425,6 +541,9 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 				end = true
 			}
 			u.Disabled = *c.Disabled
+		}
+		if end {
+			a.ended[username] = a.now()
 		}
 		return nil
 	})
@@ -461,6 +580,9 @@ func (a *Accounts) Delete(ctx context.Context, username string) error {
 		}
 		delete(a.stored, username)
 		delete(a.userExtra, username)
+		// A user made again with the name later does not take up the
+		// sessions of this one.
+		a.ended[username] = a.now()
 		return nil
 	})
 }

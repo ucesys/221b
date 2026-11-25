@@ -359,11 +359,20 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 		}
 		sort.Strings(out.became[cluster])
 		known := map[string]bool{}
-		_ = eachValue(was, func(_ place, v string) (string, error) {
+		_ = eachValue(was, func(p place, v string) (string, error) {
 			known[v] = true
+			// A name that becomes sensitive with this save: what it held in
+			// clear is looked for in the past, whatever stands there now (an
+			// approved change that marked it brings its value as a digest).
+			if names[p.name] && !before[p.name] {
+				out.saw(cluster, plainOf(v))
+			}
 			return v, nil
 		})
-		var check, back []string
+		var check, back, fresh []string
+		// unmarked are the digests given under a name this save unmarks.
+		type named struct{ name, digest string }
+		var unmarked []named
 		err := eachValue(fleets, func(p place, v string) (string, error) {
 			switch {
 			case v == Unmoved:
@@ -381,12 +390,24 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 			case names[p.name]:
 				if !known[v] {
 					check = append(check, v)
+					if !before[p.name] {
+						fresh = append(fresh, v)
+					}
 				}
 			case IsHidden(v):
-				if o, had := p.of(was); !had || o != v {
-					return "", fmt.Errorf("%w: %s holds a hidden value, which stays under a sensitive name: type a value, or mark %s sensitive", ErrInvalid, p, p.name)
+				if o, had := p.of(was); had && o == v {
+					back = append(back, v)
+					break
 				}
-				back = append(back, v)
+				// A new value of a name whose mark this save takes off (an
+				// approved change that unmarks it and sets it): shown, as
+				// the mark's taking off shows the name's values, once the
+				// Secret's value is the name's own.
+				if before[p.name] {
+					unmarked = append(unmarked, named{name: p.name, digest: v})
+					break
+				}
+				return "", fmt.Errorf("%w: %s holds a hidden value, which stays under a sensitive name: type a value, or mark %s sensitive", ErrInvalid, p, p.name)
 			}
 			return v, nil
 		})
@@ -402,6 +423,32 @@ func sealVariables(r *ring, old, next *variablesRecord) (*sealing, error) {
 				if _, added := out.add[cluster][d]; !added && !hasKey(kept, d) {
 					return nil, fmt.Errorf("%w: a sensitive value given by its hidden form is not one the console keeps: type the value", ErrInvalid)
 				}
+			}
+			// The value a name that becomes sensitive is set to may have
+			// been in clear before too (in a run of another name's).
+			for _, d := range fresh {
+				out.saw(cluster, kept[d])
+			}
+		}
+		if len(unmarked) > 0 {
+			digests := make([]string, 0, len(unmarked))
+			for _, u := range unmarked {
+				digests = append(digests, u.digest)
+			}
+			kept, err := r.get(cluster, digests)
+			if err != nil {
+				return nil, err
+			}
+			for _, u := range unmarked {
+				plain, ok := kept[u.digest]
+				d, err := r.digest(cluster, u.name, plain)
+				if err != nil {
+					return nil, err
+				}
+				if !ok || d != u.digest {
+					return nil, fmt.Errorf("%w: %s holds a hidden value that is not its own: type a value", ErrInvalid, u.name)
+				}
+				back = append(back, u.digest)
 			}
 		}
 		if len(back) > 0 {
@@ -557,7 +604,14 @@ func hidePlain(r *ring, cluster string, plain map[string]bool, maps ...map[strin
 func sealRuns(r *ring, next *runsRecord, names func(cluster string) map[string]bool, plain map[string]map[string]bool) error {
 	for i := range next.Runs {
 		run := &next.Runs[i]
-		sens, seen := names(run.Cluster), plain[run.Cluster]
+		sens := names(run.Cluster)
+		// What the run used in clear under a name that is sensitive now (a
+		// mark put on while it ran) is blanked wherever its texts quote it,
+		// as the values marked with the save are.
+		seen := runPlain(*run, sens)
+		for v := range plain[run.Cluster] {
+			seen[v] = true
+		}
 		if len(sens) == 0 && len(seen) == 0 {
 			continue
 		}
@@ -599,6 +653,38 @@ func sealRuns(r *ring, next *runsRecord, names func(cluster string) map[string]b
 		}
 	}
 	return nil
+}
+
+// runPlain are the values a run holds in clear under a name sensitive
+// now, sens: its own, what each node got and what each fleet had. A run
+// started before the name was marked holds them so, and its output and
+// tails may quote them.
+func runPlain(run Run, sens map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	if len(sens) == 0 {
+		return out
+	}
+	note := func(name, v string) {
+		if sens[name] && v != "" && !IsHidden(v) {
+			out[v] = true
+		}
+	}
+	for name, v := range run.Overrides {
+		if _, bound := Bound(v); !bound {
+			note(name, Constant(v))
+		}
+	}
+	for _, n := range run.Nodes {
+		for name, v := range n.Values {
+			note(name, v)
+		}
+	}
+	for _, f := range run.Fleets {
+		for name, v := range f.Values {
+			note(name, v)
+		}
+	}
+	return out
 }
 
 // minMasked is the shortest value looked for in a text of the past: a
@@ -686,6 +772,15 @@ func gone(old, next map[string]map[string]bool) map[string][]string {
 	return out
 }
 
+// plainOf is a value as a text could quote it: "" for a digest, which
+// stands for one.
+func plainOf(v string) string {
+	if IsHidden(v) {
+		return ""
+	}
+	return v
+}
+
 func hasKey(m map[string]string, k string) bool {
 	_, ok := m[k]
 	return ok
@@ -761,6 +856,19 @@ func (st *Store) sealPast(ctx context.Context, s *sealing) error {
 	names, err := st.namesNow(ctx)
 	if err != nil {
 		return err
+	}
+	// The values recorded under a name sensitive now are looked for under
+	// any other name too, as MoveSensitive does (pastPlain).
+	var changes changesRecord
+	var runs runsRecord
+	if _, err := st.load(ctx, ChangesKey, &changes); err != nil {
+		return err
+	}
+	if _, err := st.load(ctx, RunsKey, &runs); err != nil {
+		return err
+	}
+	for _, cluster := range sortedClusters(s.became) {
+		pastPlain(&changes, &runs, names, cluster, s.plain)
 	}
 	r := newRing(ctx, st.sens)
 	if err := resave(ctx, st, ChangesKey, func(rec *changesRecord) (*sealing, error) { return sealChanges(r, rec, names, s.plain) }); err != nil {
@@ -867,6 +975,12 @@ func (st *Store) HideRunValues(ctx context.Context, cluster string, params map[s
 	hidden, typed = map[string]string{}, map[string]string{}
 	for name, v := range params {
 		hidden[name] = v
+		if IsHidden(v) && !sens[name] {
+			// A digest stands for a sensitive value, and stays under a
+			// sensitive name: given under another, the run would hand the
+			// value to a parameter nobody weighed as sensitive (FU-05).
+			return nil, nil, fmt.Errorf("%w: %s is given a hidden value, which stays under a sensitive name: type a value, or bind %s to the variable (var:NAME)", ErrInvalid, name, name)
+		}
 		if _, bound := Bound(v); bound || IsHidden(v) || !sens[name] {
 			continue
 		}

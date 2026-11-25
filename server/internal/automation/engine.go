@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,7 +37,8 @@ type Options struct {
 	// OnEnd is called once a run has ended, for the audit log.
 	OnEnd func(Run)
 	// OnCommand is called for every command a run gives, in Watson's
-	// words, for the audit log. Outcome is ok, failed or stopped.
+	// words, for the audit log, the reboot of a node included. Outcome is
+	// ok, failed or stopped (cancelled).
 	OnCommand func(r Run, node, what, outcome string)
 	// Kube runs the kubectl lines of Kubernetes scripts and hooks.
 	Kube KubeRunner
@@ -50,7 +52,18 @@ type Options struct {
 	Node func(cluster, node string) (NodeState, bool)
 	// MaxParallel bounds the nodes a batch runs at once.
 	MaxParallel int
+	// RecheckRetry is how long a production run waits before it reads the
+	// scripts again, when they could not be read at a batch's check, and
+	// the first wait before the save of a run's end is tried again.
+	RecheckRetry time.Duration
+	// HookTimeout bounds the hooks on each side of a node's script; 0
+	// takes the run's timeout a node.
+	HookTimeout time.Duration
 }
+
+// recheckTries is how often a batch's check reads the scripts before the
+// run stops for want of them.
+const recheckTries = 3
 
 // NodeState is what the engine needs to know of a node from Kubernetes.
 // Host is a machine outside Kubernetes (Phase 12): reached by SSH alone,
@@ -60,6 +73,10 @@ type NodeState struct {
 	Ready        bool
 	ControlPlane bool
 	Host         bool
+	// BootID is the boot the kubelet last reported
+	// (status.nodeInfo.bootID): a rebooted node is back once Kubernetes
+	// reports it Ready from the new boot, not from the one before.
+	BootID string
 }
 
 // isHost says whether a target is a host outside Kubernetes.
@@ -79,7 +96,10 @@ type Engine struct {
 	// output of the newest runs, by run and node.
 	active  map[int]*activeRun
 	outputs map[int]map[string]string
-	order   []int
+	// used are the values the nodes of those runs got, which their
+	// output may quote: a name marked sensitive since is blanked in it.
+	used  map[int]map[string]map[string]string
+	order []int
 	// controlPlane lets one control-plane node of a cluster at a time be
 	// worked on, across runs, so the cluster keeps its quorum.
 	controlPlane map[string]chan struct{}
@@ -128,10 +148,13 @@ func NewEngine(o Options) *Engine {
 	if o.BeatEvery <= 0 {
 		o.BeatEvery = defaultBeatEvery
 	}
+	if o.RecheckRetry <= 0 {
+		o.RecheckRetry = time.Second
+	}
 	if o.MaxParallel <= 0 || o.MaxParallel > MaxParallel {
 		o.MaxParallel = MaxParallel
 	}
-	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}, controlPlane: map[string]chan struct{}{}}
+	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}, used: map[int]map[string]map[string]string{}, controlPlane: map[string]chan struct{}{}}
 }
 
 // Spec is a run to start: the version, the targets with each node's
@@ -309,39 +332,78 @@ func (e *Engine) Runs(ctx context.Context) ([]Run, error) {
 func (e *Engine) Get(ctx context.Context, id int) (Run, map[string]string, bool, error) {
 	e.mu.Lock()
 	a, ok := e.active[id]
-	kept := e.outputs[id]
+	kept, used := e.outputs[id], e.used[id]
 	e.mu.Unlock()
 	if ok {
 		a.mu.Lock()
-		defer a.mu.Unlock()
 		out := map[string]string{}
 		for n, t := range a.out {
 			out[n] = t.String()
 		}
-		return a.run.Copy(), out, true, nil
+		r := a.run.Copy()
+		a.mu.Unlock()
+		return e.masked(ctx, r, out, nil)
 	}
 	r, found, err := e.opts.Store.Run(ctx, id)
 	if err != nil || !found {
 		return Run{}, nil, false, err
 	}
-	out := map[string]string{}
-	for n, s := range kept {
-		out[n] = s
+	// What the store keeps first: it is masked as it is kept, by the marks
+	// of the moment (DB-71); this console's own copy is the fallback.
+	out, err := e.opts.Store.Outputs(ctx, id)
+	if err != nil {
+		return Run{}, nil, false, err
 	}
 	if len(out) == 0 {
-		if out, err = e.opts.Store.Outputs(ctx, id); err != nil {
-			return Run{}, nil, false, err
+		for n, s := range kept {
+			out[n] = s
 		}
 	}
 	if len(out) == 0 && e.opts.OutputDir != "" {
 		out = readOutputs(e.opts.OutputDir, id)
 	}
-	return r, out, true, nil
+	return e.masked(ctx, r, out, used)
+}
+
+// masked is a run and its output as a page may read them: a value the run
+// used in clear under a name that is sensitive now (marked while it ran,
+// or since) is its digest in the run and blanked in its texts (DB-71).
+// used are the values this console gave the run's nodes, which its own
+// copy of the output may quote.
+func (e *Engine) masked(ctx context.Context, r Run, out map[string]string, used map[string]map[string]string) (Run, map[string]string, bool, error) {
+	names, err := e.opts.Store.namesNow(ctx)
+	if err != nil {
+		return Run{}, nil, false, err
+	}
+	sens := names(r.Cluster)
+	if len(sens) == 0 {
+		return r, out, true, nil
+	}
+	plain := runPlain(r, sens)
+	for _, m := range used {
+		for name, v := range m {
+			if sens[name] && v != "" && !IsHidden(v) {
+				plain[v] = true
+			}
+		}
+	}
+	if len(plain) == 0 {
+		return r, out, true, nil
+	}
+	// A copy: the run's maps are the engine's own while it runs.
+	rec := runsRecord{Runs: []Run{clone(r)}}
+	if err := sealRuns(newRing(ctx, e.opts.Store.sens), &rec, names, map[string]map[string]bool{r.Cluster: plain}); err != nil {
+		return Run{}, nil, false, err
+	}
+	for n, s := range out {
+		out[n] = maskPlain(s, plain)
+	}
+	return rec.Runs[0], out, true, nil
 }
 
 // save writes the run's state; a failure is logged, the run goes on. A
 // cancel asked for through the record cancels the run.
-func (e *Engine) save(a *activeRun) {
+func (e *Engine) save(a *activeRun) error {
 	a.mu.Lock()
 	r := a.run.Copy()
 	a.saved = e.opts.Now()
@@ -355,7 +417,12 @@ func (e *Engine) save(a *activeRun) {
 	if asked && r.State == RunRunning {
 		a.cancel()
 	}
+	return err
 }
+
+// endTries is how often the save of a run's end is tried: no later beat
+// writes it, and a run whose end is not kept reads as interrupted.
+const endTries = 5
 
 // saveEvery is the most often a node's progress is written: the page
 // reads a running run from memory, and the beat writes the rest.
@@ -371,7 +438,7 @@ func (e *Engine) setNode(a *activeRun, node string, f func(*NodeResult)) {
 	due := e.opts.Now().Sub(a.saved) >= saveEvery
 	a.mu.Unlock()
 	if due {
-		e.save(a)
+		_ = e.save(a)
 	}
 }
 
@@ -400,21 +467,51 @@ func (e *Engine) claimControlPlane(ctx context.Context, r Run, node string) (fun
 	}
 }
 
-// stillApproved says why the run's version may not go on: changed, or no
-// longer approved, since the run started.
-func (e *Engine) stillApproved(ctx context.Context, r Run) string {
-	sc, ok, err := e.opts.Store.Script(ctx, r.Script)
-	if err != nil {
-		return ""
+// stillApproved says why the run may not go on: its version, or the
+// version of a script it runs as a hook, changed or is no longer approved
+// since the run started. When the scripts cannot be read after a few
+// tries the run stops too: on production nothing runs that is not known
+// to be approved still.
+func (e *Engine) stillApproved(ctx context.Context, r Run, hooks []Hook) string {
+	type version struct {
+		script, hash, what string
+		n                  int
 	}
-	v, found := sc.Version(r.Version)
-	switch {
-	case !ok || !found:
-		return fmt.Sprintf("stopped: %s v%d is gone", r.Script, r.Version)
-	case v.Hash != r.Hash || Hash(v.Text) != r.Hash:
-		return fmt.Sprintf("stopped: %s v%d's text is not the one the run started with", r.Script, r.Version)
-	case v.State != StateApproved:
-		return fmt.Sprintf("stopped: %s v%d is %s now, no longer approved", r.Script, r.Version, v.State)
+	check := []version{{script: r.Script, n: r.Version, hash: r.Hash, what: fmt.Sprintf("%s v%d", r.Script, r.Version)}}
+	for _, h := range hooks {
+		if h.Script != "" {
+			check = append(check, version{script: h.Script, n: h.Version, hash: h.Hash, what: fmt.Sprintf("the hook %s v%d", h.Script, h.Version)})
+		}
+	}
+	for _, c := range check {
+		var sc Script
+		var ok bool
+		var err error
+		for try := 0; try < recheckTries; try++ {
+			if try > 0 {
+				select {
+				case <-time.After(e.opts.RecheckRetry):
+				case <-ctx.Done():
+					return ""
+				}
+			}
+			if sc, ok, err = e.opts.Store.Script(ctx, c.script); err == nil {
+				break
+			}
+		}
+		if err != nil {
+			e.opts.Logger.Warn("a production run is stopped: whether what it runs is still approved could not be read", "run", r.ID, "script", c.script, "version", c.n, "err", err)
+			return fmt.Sprintf("stopped: whether %s is still approved could not be read (%v), so no further batch ran", c.what, err)
+		}
+		v, found := sc.Version(c.n)
+		switch {
+		case !ok || !found:
+			return fmt.Sprintf("stopped: %s is gone", c.what)
+		case v.Hash != c.hash || Hash(v.Text) != c.hash:
+			return fmt.Sprintf("stopped: %s's text is not the one the run started with", c.what)
+		case v.State != StateApproved:
+			return fmt.Sprintf("stopped: %s is %s now, no longer approved", c.what, v.State)
+		}
 	}
 	return ""
 }
@@ -434,7 +531,7 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 				a.mu.Lock()
 				a.run.Beat = e.opts.Now().UTC()
 				a.mu.Unlock()
-				e.save(a)
+				_ = e.save(a)
 			case <-stopBeat:
 				return
 			}
@@ -466,7 +563,7 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 			a.mu.Lock()
 			r := a.run.Copy()
 			a.mu.Unlock()
-			if note = e.stillApproved(ctx, r); note != "" {
+			if note = e.stillApproved(ctx, r, append(append([]Hook(nil), a.before...), a.after...)); note != "" {
 				break
 			}
 		}
@@ -477,6 +574,12 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 				break
 			}
 			sem <- struct{}{}
+			// A node that ended while this one waited for its turn may have
+			// reached the limit: then this one does not start.
+			if ctx.Err() != nil || (ro.StopAfter > 0 && failures() >= ro.StopAfter) {
+				<-sem
+				break
+			}
 			wg.Add(1)
 			go func(node string) {
 				defer wg.Done()
@@ -530,18 +633,28 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 		outs[n] = t.String()
 	}
 	a.mu.Unlock()
-	e.save(a)
+	for try := 1; e.save(a) != nil && try < endTries; try++ {
+		time.Sleep(time.Duration(try) * e.opts.RecheckRetry)
+	}
 	e.mu.Lock()
 	delete(e.active, r.ID)
 	e.outputs[r.ID] = outs
+	e.used[r.ID] = a.values
 	e.order = append(e.order, r.ID)
 	for len(e.order) > defaultKeepOutputs {
 		delete(e.outputs, e.order[0])
+		delete(e.used, e.order[0])
 		e.order = e.order[1:]
 	}
 	e.mu.Unlock()
 	if e.opts.OutputDir != "" {
-		writeOutputs(e.opts.OutputDir, r.ID, outs, e.opts.Logger)
+		// The database keeps each host's whole output (DB-87): a file
+		// beside the transcripts would only fill their volume. A store of
+		// documents keeps none, so there the file is the output.
+		if !e.opts.Store.KeepsOutputs() {
+			writeOutputs(e.opts.OutputDir, r.ID, outs, e.opts.Logger)
+		}
+		e.pruneOutputs()
 	}
 	if e.opts.OnEnd != nil {
 		e.opts.OnEnd(r)
@@ -611,7 +724,7 @@ func outcomeOf(failed bool) string {
 // kube runs kubectl lines, each checked against what the header declares,
 // and stops at the first that fails. It says whether any line ran that can
 // change something.
-func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity string, h Header, lines []string, env map[string]string, out io.Writer) (bool, error) {
+func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity string, h Header, lines []string, env map[string]string, out io.Writer, cordoned *bool) (bool, error) {
 	if e.opts.Kube == nil {
 		return false, errors.New("this console cannot run Kubernetes commands")
 	}
@@ -630,10 +743,16 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 			a.mu.Unlock()
 		}
 		if err == nil {
-			var action KubeAction
-			if action, err = KubeActionOf(line); err == nil && !h.Allowed(action) {
-				err = fmt.Errorf("Watson refused %q: the script does not declare %s %s", line, action.Verb, action.Resource)
-			} else if err == nil && !readOnlyVerb(action.Verb) {
+			var actions []KubeAction
+			if actions, err = KubeActionsOf(line); err == nil {
+				for _, action := range actions {
+					if !h.Allowed(action) {
+						err = fmt.Errorf("Watson refused %q: the script does not declare %s %s", line, action.Verb, action.Resource)
+						break
+					}
+				}
+			}
+			if err == nil && !readOnlyVerb(actions[0].Verb) {
 				changed = true
 			}
 		}
@@ -647,12 +766,42 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 		if err == nil && code != 0 {
 			err = fmt.Errorf("%q exited with %d", line, code)
 		}
+		e.noteCordon(a, r, node, line, err == nil, cordoned)
 		e.command(r, node, line, outcomeOf(err != nil))
 		if err != nil {
 			return changed, err
 		}
 	}
 	return changed, nil
+}
+
+// noteCordon records what a hook's line did to the node's scheduling, as
+// soon as it ran outside a dry run: a cordon or a drain of the node leaves
+// it cordoned whatever comes after (a drain cordons first, and one that
+// fails stays so), an uncordon that worked undoes it. cordoned is nil for
+// a line that is no hook's.
+func (e *Engine) noteCordon(a *activeRun, r Run, node, line string, ok bool, cordoned *bool) {
+	if cordoned == nil || r.DryRun {
+		return
+	}
+	words := strings.Fields(line)
+	if !slices.Contains(words, node) {
+		return
+	}
+	actions, err := KubeActionsOf(line)
+	if err != nil {
+		return
+	}
+	switch verb := actions[0].Verb; {
+	case verb == "cordon" || verb == "drain":
+		*cordoned = true
+	case verb == "uncordon" && ok:
+		*cordoned = false
+	default:
+		return
+	}
+	state := *cordoned
+	e.setNode(a, node, func(n *NodeResult) { n.Cordoned = state })
 }
 
 func readOnlyVerb(v string) bool {
@@ -663,18 +812,38 @@ func readOnlyVerb(v string) bool {
 	return false
 }
 
-func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer) error {
+func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer, cordoned *bool) error {
 	for _, h := range list {
 		fmt.Fprintf(out, "[221B] %s on %s\n", h.Label, node)
 		identity := h.Identity
 		if identity == "" {
 			identity = r.Identity
 		}
-		if _, err := e.kube(ctx, r, a, node, identity, h.Header, h.Lines, env, out); err != nil {
+		if _, err := e.kube(ctx, r, a, node, identity, h.Header, h.Lines, env, out, cordoned); err != nil {
 			return fmt.Errorf("%s: %w", h.Label, err)
 		}
 	}
 	return nil
+}
+
+// timedHooks runs hooks within the run's time a node (HookTimeout when
+// set): a hook that hangs (a kubectl that never answers) ends, and the
+// node with it, rather than hold the run for good.
+func (e *Engine) timedHooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer, cordoned *bool, ro Rollout) error {
+	if len(list) == 0 {
+		return nil
+	}
+	limit := e.opts.HookTimeout
+	if limit <= 0 {
+		limit = time.Duration(max(ro.TimeoutMinutes, 1)) * time.Minute
+	}
+	hctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	err := e.hooks(hctx, r, a, node, list, env, out, cordoned)
+	if err != nil && ctx.Err() == nil && errors.Is(hctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("the hooks timed out after %s: %w", limit, err)
+	}
+	return err
 }
 
 // node runs the script on one node (AU-08, AU-09), or a Kubernetes script
@@ -729,12 +898,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 		fmt.Fprintf(out, "[221B] %s is a host outside Kubernetes: the hooks around each node do not run on it\n", node)
 		before, after = nil, nil
 	}
-	hookErr := e.hooks(ctx, r, a, node, before, env, out)
-	// Drained, the node stays cordoned until the hooks after uncordon it.
-	cordoned := hookErr == nil && !r.DryRun && len(before) > 0 && len(after) > 0
-	if cordoned {
-		e.setNode(a, node, func(n *NodeResult) { n.Cordoned = true })
-	}
+	// Cordoned, by a hook's cordon or drain of the node, it stays so until
+	// a hook's uncordon works: whatever fails in between, the record says
+	// so (LeftCordoned).
+	cordoned := false
+	hookErr := e.timedHooks(ctx, r, a, node, before, env, out, &cordoned, ro)
 	var result Result
 	hasResult := false
 	if hookErr != nil {
@@ -747,7 +915,7 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			}
 		}
 		tctx, cancel := context.WithTimeout(ctx, time.Duration(ro.TimeoutMinutes)*time.Minute)
-		changed, err := e.kube(tctx, r, a, node, r.Identity, header, lines, env, out)
+		changed, err := e.kube(tctx, r, a, node, r.Identity, header, lines, env, out, nil)
 		cancel()
 		switch {
 		case ctx.Err() != nil:
@@ -763,7 +931,9 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 		asNobody := r.DryRun || r.Privilege == PrivilegeNobody
 		if len(header.Facts) > 0 {
 			f := e.askFacts(ctx, r.Cluster, node, KeyID(r))
-			_ = e.opts.Store.saveFacts(context.WithoutCancel(ctx), []NodeFacts{f})
+			if ctx.Err() == nil || f.Error == "" {
+				_ = e.opts.Store.saveFacts(context.WithoutCancel(ctx), []NodeFacts{f})
+			}
 			e.command(r, node, "facts", outcomeOf(f.Error != ""))
 			for _, k := range header.Facts {
 				if v, ok := f.Facts[k]; ok {
@@ -794,7 +964,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			x := exit
 			res.Exit = &x
 		}
-		e.command(r, node, fmt.Sprintf("script sha256 %.12s", r.Hash), outcomeOf(res.State == NodeFailed || res.State == NodeUnreachable))
+		outcome := outcomeOf(res.State == NodeFailed || res.State == NodeUnreachable)
+		if res.State == NodeCancelled {
+			outcome = "stopped"
+		}
+		e.command(r, node, fmt.Sprintf("script sha256 %.12s", r.Hash), outcome)
 		out.Flush()
 		result, hasResult = ParseResult(store.String())
 		if hasResult {
@@ -804,29 +978,36 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			}
 		}
 		switch {
-		case res.State != NodeChanged || !hasResult || !result.Reboot || r.DryRun:
+		// A result that asks for a reboot gets one, whatever it says of
+		// changed: the reboot is a change of its own.
+		case (res.State != NodeChanged && res.State != NodeNoChange) || !hasResult || !result.Reboot || r.DryRun:
 		case asNobody:
 			// Rebooting takes more than nobody may do: the script's privilege
 			// is what the reboot runs with, so a nobody script cannot ask for one.
 			res.State, res.Error = NodeFailed, "the script asked for a reboot, but it runs as nobody, which cannot reboot; declare privilege full to reboot"
 			fmt.Fprintf(out, "\n[221B] %s\n", res.Error)
 		default:
+			res.State = NodeChanged
 			e.setNode(a, node, func(n *NodeResult) { n.State, n.Msg = NodeRebooting, result.Msg })
-			if rerr := e.reboot(ctx, r, node, wait, out); rerr != nil {
+			rerr := e.reboot(ctx, r, node, wait, out)
+			if rerr != nil {
 				res.State, res.Error = NodeFailed, rerr.Error()
 				if ctx.Err() != nil {
 					res.State, res.Error = NodeCancelled, "cancelled while the node rebooted"
 				}
 			}
+			outcome := outcomeOf(rerr != nil)
+			if res.State == NodeCancelled {
+				outcome = "stopped"
+			}
+			e.command(r, node, "reboot", outcome)
 		}
 	}
 	healthy := res.State == NodeChanged || res.State == NodeNoChange
 	switch {
 	case healthy:
-		if err := e.hooks(ctx, r, a, node, after, env, out); err != nil {
+		if err := e.timedHooks(ctx, r, a, node, after, env, out, &cordoned, ro); err != nil {
 			res.State, res.Error = NodeFailed, "after the script: "+err.Error()
-		} else {
-			cordoned = false
 		}
 	case cordoned:
 		res.Error = strings.TrimPrefix(res.Error+"; the node stays cordoned: nothing ran after the script", "; ")
@@ -935,29 +1116,45 @@ func (m *mask) Write(p []byte) (int, error) {
 }
 
 // drain writes all it can: what could still turn out to be the start of a
-// value stays held, unless this is the end.
+// value stays held, unless this is the end. What to hold is decided on the
+// text as written, before anything is replaced: it is held from the first
+// place where the rest is the start of a value, so a value that begins
+// with, or holds, a shorter one is still caught whole when its end comes
+// in the next write. Each place takes the longest value that starts there.
 func (m *mask) drain(final bool) error {
-	s := string(m.buf)
+	b := string(m.buf)
+	longest := 0
 	for _, v := range m.values {
-		s = strings.ReplaceAll(s, v, maskText)
+		longest = max(longest, len(v))
 	}
-	n := len(s)
-	if !final {
-		for _, v := range m.values {
-			for l := min(len(v)-1, len(s)); l > 0; l-- {
-				if strings.HasSuffix(s, v[:l]) {
-					n = min(n, len(s)-l)
-					break
+	var out strings.Builder
+	i := 0
+scan:
+	for i < len(b) {
+		rest := b[i:]
+		if !final && len(rest) < longest {
+			for _, v := range m.values {
+				if len(rest) < len(v) && strings.HasPrefix(v, rest) {
+					break scan
 				}
 			}
 		}
+		for _, v := range m.values {
+			if strings.HasPrefix(rest, v) {
+				out.WriteString(maskText)
+				i += len(v)
+				continue scan
+			}
+		}
+		out.WriteByte(b[i])
+		i++
 	}
-	if n > 0 {
-		if err := m.sink.write([]byte(s[:n])); err != nil {
+	if out.Len() > 0 {
+		if err := m.sink.write([]byte(out.String())); err != nil {
 			return err
 		}
 	}
-	m.buf = append(m.buf[:0], s[n:]...)
+	m.buf = append(m.buf[:0], b[i:]...)
 	return nil
 }
 
@@ -1018,7 +1215,7 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 		return fmt.Errorf("the reboot command exited with %d, so the node did not reboot", code)
 	}
 	// A lost connection is what a reboot looks like from here.
-	back, said := false, false
+	back, said, now := false, false, ""
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -1037,14 +1234,17 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 				}
 				continue
 			}
-			back = true
+			back, now = true, id
 			fmt.Fprintf(out, "[221B] %s answers again, from a new boot\n", node)
 		}
 		if e.opts.Node == nil {
 			return nil
 		}
+		// Ready as Kubernetes last heard it may still be the boot before:
+		// the node controller marks a node Unknown only after 40 s or so,
+		// and the new kubelet may not have reported yet.
 		st, known := e.opts.Node(r.Cluster, node)
-		if !known || st.Ready || st.Host {
+		if !known || st.Host || st.Ready && (st.BootID == "" || st.BootID == now) {
 			fmt.Fprintf(out, "[221B] %s is back\n", node)
 			return nil
 		}
@@ -1052,7 +1252,7 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 	m := int(wait / time.Minute)
 	switch {
 	case back:
-		return fmt.Errorf("the node came back from its reboot, but Kubernetes did not report it Ready within %d minutes", m)
+		return fmt.Errorf("the node came back from its reboot, but Kubernetes did not report it Ready from its new boot within %d minutes", m)
 	case said:
 		return fmt.Errorf("the node kept answering from the same boot for %d minutes: it did not reboot", m)
 	}
@@ -1072,6 +1272,43 @@ func writeOutputs(dir string, id int, outs map[string]string, log *slog.Logger) 
 	for node, s := range outs {
 		if err := os.WriteFile(filepath.Join(p, filepath.Base(node)+".log"), []byte(s), 0o640); err != nil {
 			log.Warn("keeping an automation run's output failed", "run", id, "node", node, "err", err)
+		}
+	}
+}
+
+// pruneOutputs removes the output files of the runs the store no longer
+// keeps (it keeps the newest MaxRuns), which nothing could read or clean
+// any more, and which would fill the transcripts' volume: the console's
+// own sessions are then recorded nowhere. A failure is logged.
+func (e *Engine) pruneOutputs() {
+	root := filepath.Join(e.opts.OutputDir, "automation")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runs, err := e.opts.Store.Runs(ctx)
+	if err != nil {
+		e.opts.Logger.Warn("the output files of old automation runs were not looked at", "err", err)
+		return
+	}
+	kept := map[int]bool{}
+	for _, r := range runs {
+		kept[r.ID] = true
+	}
+	e.mu.Lock()
+	for id := range e.active {
+		kept[id] = true
+	}
+	e.mu.Unlock()
+	for _, en := range entries {
+		id, err := strconv.Atoi(en.Name())
+		if err != nil || !en.IsDir() || kept[id] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, en.Name())); err != nil {
+			e.opts.Logger.Warn("removing an old automation run's output files failed", "run", id, "err", err)
 		}
 	}
 }

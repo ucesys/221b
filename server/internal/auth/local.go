@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -135,6 +136,20 @@ func CheckPassword(hash, password string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
+// localUserRule says what a local user's name from values or a file may
+// be (roles.ValidUsername, not strict): the user name, or the email when
+// there is none, read in lowercase.
+var localUserRule = fmt.Sprintf("the user name, or the email when there is none, may have letters (read in lowercase), digits, dot, dash, underscore, @ and +, at most %d characters, and may not be . or ..", roles.MaxEmailUsername)
+
+// consoleUserRule says what the name of a user made in the console, on
+// the first-run page or the Users page, may be (roles.ValidUsername,
+// strict).
+var consoleUserRule = fmt.Sprintf("lowercase letters, digits, dot, dash and underscore, at most %d characters (not . or .. alone)", roles.MaxUsername)
+
+// localGroupRule says what a local group's name may be
+// (roles.ValidGroupName).
+var localGroupRule = fmt.Sprintf("a name of lowercase letters, digits, dot, dash and underscore, at most %d characters, not . or ..", roles.MaxUsername)
+
 // ValidateLocalUsers checks the accounts a file or the chart provides.
 func ValidateLocalUsers(users []LocalUser) error {
 	seen := map[string]bool{}
@@ -144,7 +159,7 @@ func ValidateLocalUsers(users []LocalUser) error {
 			return fmt.Errorf("local user %d: a username or an email address is needed", i+1)
 		}
 		if !roles.ValidUsername(name, false) {
-			return fmt.Errorf("local user %s: use lowercase letters, digits, dot, dash, underscore and @", name)
+			return fmt.Errorf("local user %s: %s", name, localUserRule)
 		}
 		if seen[name] {
 			return fmt.Errorf("local user %s appears twice", name)
@@ -163,26 +178,67 @@ func ValidateLocalUsers(users []LocalUser) error {
 }
 
 // ReadLocalUsers reads the accounts from a JSON or YAML file: a list of
-// users, or an object with a users list.
+// users, or an object with a users list and nothing else. A file of any
+// other shape is an error, not "no accounts": with local sign-in that
+// would open the first-run page to whoever comes first. No accounts is
+// written as an empty list ([], users: [] or null, as the chart writes
+// it); an empty file is an error too.
 func ReadLocalUsers(path string) ([]LocalUser, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var list []LocalUser
-	if err := yaml.Unmarshal(b, &list); err != nil {
-		var obj struct {
-			Users []LocalUser `json:"users"`
-		}
-		if err2 := yaml.Unmarshal(b, &obj); err2 != nil {
-			return nil, fmt.Errorf("reading %s: %w", path, err)
-		}
-		list = obj.Users
+	list, err := parseLocalUsers(b)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	if err := ValidateLocalUsers(list); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return list, nil
+}
+
+func parseLocalUsers(b []byte) ([]LocalUser, error) {
+	var doc any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	switch d := doc.(type) {
+	case nil:
+		if !hasContent(b) {
+			return nil, errors.New("the file is empty; write [] for no accounts")
+		}
+		return nil, nil
+	case []any:
+		var list []LocalUser
+		if err := yaml.Unmarshal(b, &list); err != nil {
+			return nil, err
+		}
+		return list, nil
+	case map[string]any:
+		if _, ok := d["users"]; !ok || len(d) != 1 {
+			return nil, errors.New("an object must hold a users list and nothing else; one account is a list of one, written with a leading \"- \"")
+		}
+		var obj struct {
+			Users []LocalUser `json:"users"`
+		}
+		if err := yaml.Unmarshal(b, &obj); err != nil {
+			return nil, err
+		}
+		return obj.Users, nil
+	}
+	return nil, errors.New("the file is not a list of accounts")
+}
+
+// hasContent says whether a YAML file holds anything but blank lines and
+// comments.
+func hasContent(b []byte) bool {
+	for _, line := range strings.Split(string(b), "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "#") {
+			return true
+		}
+	}
+	return false
 }
 
 // limiterKeys is how many keys a limiter remembers.
@@ -230,11 +286,14 @@ func (l *limiter) allow(key string) bool {
 
 // evict forgets the keys whose attempts have aged out and, when they are
 // not enough, the oldest of the rest, down to nine tenths of the bound so
-// that the next few attempts need no sweep. The caller holds the lock.
+// that the next few attempts need no sweep. A key at its limit is
+// forgotten last: filling the limiter with other keys must not let one it
+// refuses start again. The caller holds the lock.
 func (l *limiter) evict(now time.Time) {
 	type last struct {
-		key [sha256.Size]byte
-		at  time.Time
+		key     [sha256.Size]byte
+		at      time.Time
+		refuses bool
 	}
 	var live []last
 	for k, ts := range l.hits {
@@ -242,13 +301,18 @@ func (l *limiter) evict(now time.Time) {
 			delete(l.hits, k)
 			continue
 		}
-		live = append(live, last{k, ts[len(ts)-1]})
+		live = append(live, last{k, ts[len(ts)-1], len(ts) >= l.limit})
 	}
 	over := len(live) - (l.keys - l.keys/10)
 	if over <= 0 {
 		return
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].at.Before(live[j].at) })
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].refuses != live[j].refuses {
+			return !live[i].refuses
+		}
+		return live[i].at.Before(live[j].at)
+	})
 	for _, e := range live[:over] {
 		delete(l.hits, e.key)
 	}

@@ -54,19 +54,29 @@ func hostKeyChanged(name string) error {
 
 // hostKeyMismatch marks a host whose key changed, so every connection is
 // refused until it is trusted again, and the page says so.
-func (s *Service) hostKeyMismatch(cluster, name string, key ssh.PublicKey) {
+//
+// The mark is saved in the background, against the key pinned when the
+// connection compared (pinned): one that lands after the key was trusted
+// again, or for the key pinned since, is dropped.
+func (s *Service) hostKeyMismatch(cluster, name string, key ssh.PublicKey, pinned string) {
 	fp := ssh.FingerprintSHA256(key)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if _, err := s.opts.Hosts.update(ctx, cluster, name, func(h *Host) error {
+			if h.HostKey != pinned || h.Fingerprint == fp {
+				return errStale
+			}
 			h.Mismatch = fp
 			return nil
-		}); err != nil {
+		}); err != nil && !errors.Is(err, errStale) {
 			s.opts.Logger.Warn("marking a host's changed key failed", "host", name, "err", err)
 		}
 	}()
 }
+
+// errStale ends an edit that no longer applies, saving nothing.
+var errStale = errors.New("no longer applies")
 
 // AddHost registers a host, pending until it is paired.
 func (s *Service) AddHost(ctx context.Context, h Host, by string) (Host, error) {
@@ -74,6 +84,9 @@ func (s *Service) AddHost(ctx context.Context, h Host, by string) (Host, error) 
 		return Host{}, errors.New("this console keeps no hosts")
 	}
 	h.AddedBy, h.AddedAt = by, time.Now().UTC()
+	if err := s.notAPairedNode(ctx, h.Cluster, h.Name); err != nil {
+		return Host{}, err
+	}
 	return s.opts.Hosts.Add(ctx, h, s.opts.IsNode)
 }
 
@@ -82,7 +95,30 @@ func (s *Service) RestoreHost(ctx context.Context, h Host) (Host, error) {
 	if s.opts.Hosts == nil {
 		return Host{}, errors.New("this console keeps no hosts")
 	}
+	if err := s.notAPairedNode(ctx, h.Cluster, h.Name); err != nil {
+		return Host{}, err
+	}
 	return s.opts.Hosts.Restore(ctx, h, s.opts.IsNode)
+}
+
+// notAPairedNode refuses a host the name of a node paired for SSH: a
+// pairing with no host of that name is a node's. IsNode alone does not
+// know a node until its cluster's node list has loaded, after a restart,
+// and a host of that name would take the node's row and break its
+// pairing.
+func (s *Service) notAPairedNode(ctx context.Context, cluster, name string) error {
+	name = strings.TrimSpace(name)
+	if _, ok, err := s.opts.Pairings.Get(ctx, cluster, name); err != nil {
+		return fmt.Errorf("reading the pairings: %w", err)
+	} else if !ok {
+		return nil
+	}
+	if _, ok, err := s.opts.Hosts.Get(ctx, cluster, name); err != nil {
+		return fmt.Errorf("reading the hosts: %w", err)
+	} else if ok {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is the name of a Kubernetes node of this cluster paired for SSH", ErrConflict, name)
 }
 
 // Hosts lists a cluster's hosts.
@@ -212,12 +248,16 @@ func (s *Service) TrustHost(ctx context.Context, cluster, name, fingerprint, by 
 	if err != nil {
 		return Host{}, false, err
 	}
+	// The pin is saved: from here the host is trusted, and the answer says
+	// so, for the audit record. The pairing's copy of the key follows as
+	// it can; a host is reached with the key pinned on the host itself
+	// (connect), so a copy left behind changes nothing.
 	if p, ok, err := s.opts.Pairings.Get(ctx, cluster, name); err != nil {
-		return h, again, err
+		s.opts.Logger.Warn("the pairing of a host trusted again was not updated", "host", name, "err", err)
 	} else if ok {
 		p.HostKeys = []string{h.HostKey}
 		if err := s.opts.Pairings.Set(ctx, p); err != nil {
-			return h, again, err
+			s.opts.Logger.Warn("the pairing of a host trusted again was not updated", "host", name, "err", err)
 		}
 	}
 	return h, again, nil
@@ -270,6 +310,12 @@ func (c Credential) auth() ([]ssh.AuthMethod, *bool, error) {
 		var err error
 		if c.Passphrase != "" {
 			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(c.Passphrase))
+			if err != nil && !errors.Is(err, x509.IncorrectPasswordError) {
+				// A key with no passphrase, given one: it opens without.
+				if plain, perr := ssh.ParsePrivateKey(key); perr == nil {
+					signer, err = plain, nil
+				}
+			}
 		} else {
 			signer, err = ssh.ParsePrivateKey(key)
 		}
@@ -309,16 +355,22 @@ func (c Credential) auth() ([]ssh.AuthMethod, *bool, error) {
 }
 
 // HostSetupScript is what pairs a host: the login user made when missing,
-// then the pairing script nodes run (PairScript), as root.
-func HostSetupScript(caPublicKey, console, loginUser string, port int) string {
+// then the pairing script nodes run (PairScript), as root, with no port
+// check: the console has just reached sshd at the host's address and port,
+// which a NAT or a port forward may map to another port on the host.
+func HostSetupScript(caPublicKey, console, loginUser string) string {
 	return strings.Join([]string{
 		"set -e",
 		"u=" + shellQuote(loginUser),
 		`if ! id -u "$u" >/dev/null 2>&1; then`,
 		`  if command -v useradd >/dev/null 2>&1; then useradd -m -s /bin/sh "$u"; else adduser -D -s /bin/sh "$u"; fi`,
+		// Both leave the account locked (a password of !), and an sshd
+		// without PAM (Alpine's, or UsePAM no) refuses a locked account
+		// every login, certificates too: * is no password and no lock.
+		`  if command -v usermod >/dev/null 2>&1; then usermod -p '*' "$u"; else echo "$u:*" | chpasswd -e 2>/dev/null; fi || { echo "221B: the login user $u was made, but its account could not be unlocked"; exit 3; }`,
 		`  echo "221B: created the login user $u"`,
 		`fi`,
-		PairScript(caPublicKey, console, loginUser, port),
+		PairScript(caPublicKey, console, loginUser, 0),
 	}, "\n")
 }
 
@@ -337,7 +389,7 @@ func (s *Service) SetupCommand(ctx context.Context, cluster, name string) (strin
 	if err := s.opts.CA.Load(ctx); err != nil {
 		return "", err
 	}
-	return asRoot(HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser, h.Port), "221B-SETUP"), nil
+	return asRoot(HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser), "221B-SETUP"), nil
 }
 
 // PairHost pairs a host with a credential given once: one session, the
@@ -379,7 +431,7 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 				return nil
 			}
 			s.opts.Logger.Warn("SSH host key mismatch", "host", name, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "pinned", h.Fingerprint)
-			s.hostKeyMismatch(cluster, name, key)
+			s.hostKeyMismatch(cluster, name, key, h.HostKey)
 			mismatch = hostKeyChanged(name)
 			return mismatch
 		},
@@ -395,7 +447,9 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 			return Host{}, nil, err
 		case ctx.Err() != nil:
 			return Host{}, nil, ctx.Err()
-		case cred.Password != "" && !*asked:
+		case cred.Password != "" && !*asked && strings.Contains(err.Error(), "unable to authenticate"):
+			// The sign-in was refused and no password was asked for: only
+			// then does the host take none.
 			return Host{}, nil, fmt.Errorf("%s takes no password to sign in (PasswordAuthentication no): give a private key instead, or run the setup command yourself", hostPort)
 		case strings.Contains(err.Error(), "unable to authenticate"):
 			what := "password"
@@ -407,12 +461,19 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 		return Host{}, nil, fmt.Errorf("SSH to %s as %s: %w", hostPort, cred.User, err)
 	}
 	defer c.Close()
+	// Until the setup has started, the context closes the connection: the
+	// channel's replies are waited for with no deadline.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
 	sess, err := c.NewSession()
 	if err != nil {
+		if ctx.Err() != nil {
+			return Host{}, nil, fmt.Errorf("the setup on %s did not start in time: %w", hostPort, ctx.Err())
+		}
 		return Host{}, nil, fmt.Errorf("SSH to %s as %s: %w", hostPort, cred.User, err)
 	}
 	defer sess.Close()
-	script := HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser, h.Port)
+	script := HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser)
 	command, stdin := "sh -c "+shellQuote(script), ""
 	if cred.User != "root" {
 		sudoPW := cred.SudoPassword
@@ -428,19 +489,27 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 			stdin = sudoPW + "\n"
 		}
 	}
-	var buf syncBuffer
+	// buf is what the page may see, masked; raw is what the setup
+	// printed, read for its host keys alone: a short secret masked inside
+	// a key's text would make the key unreadable.
+	var buf, raw syncBuffer
 	secrets := cred.Secrets()
 	var out io.Writer = &buf
 	if s.opts.Mask != nil {
 		out = s.opts.Mask(&buf, secrets)
 	}
 	sess.Stdin = strings.NewReader(stdin)
-	sess.Stdout, sess.Stderr = Streams(out)
+	stdout, stderr := Streams(out)
+	sess.Stdout, sess.Stderr = io.MultiWriter(&raw, stdout), io.MultiWriter(&raw, stderr)
 	exit := 0
 	done := make(chan error, 1)
 	if err := sess.Start(command); err != nil {
+		if ctx.Err() != nil {
+			return Host{}, nil, fmt.Errorf("the setup on %s did not start in time: %w", hostPort, ctx.Err())
+		}
 		return Host{}, nil, fmt.Errorf("the setup did not start on %s: %w", hostPort, err)
 	}
+	stop()
 	go func() { done <- sess.Wait() }()
 	select {
 	case <-ctx.Done():
@@ -465,9 +534,9 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 	if exit != 0 {
 		return Host{}, steps(output), setupFailed(output, exit, cred.User)
 	}
-	keys, _, err := ParsePairOutput(output)
+	keys, _, err := ParsePairOutput(raw.String())
 	if err != nil {
-		return Host{}, steps(output), err
+		return Host{}, steps(output), errors.New(masked(err.Error(), secrets))
 	}
 	found := false
 	for _, k := range keys {
@@ -591,7 +660,7 @@ func (s *Service) verifyHost(ctx context.Context, h Host, by string) (Host, erro
 	}
 	// The host's own name comes back with the login, for a host named
 	// after its address.
-	var named syncBuffer
+	var named stdoutOnly
 	code, err := s.Exec(ctx, h.Cluster, h.Name, by+" via 221B host check", "uname -n", false, strings.NewReader(""), &named)
 	if err == nil && code != 0 {
 		err = fmt.Errorf("uname -n exited with %d", code)
@@ -606,7 +675,13 @@ func (s *Service) verifyHost(ctx context.Context, h Host, by string) (Host, erro
 		if strings.Contains(err.Error(), "unable to authenticate") {
 			return Host{}, fmt.Errorf("%s did not take the console's certificate for %s: run the setup command on it as root, then check again", h.Name, h.LoginUser)
 		}
-		return Host{}, fmt.Errorf("the console could not log in to %s with its certificate: %s", h.Name, strings.TrimPrefix(err.Error(), ErrUnreachable.Error()+": "))
+		why := cause{text: strings.TrimPrefix(err.Error(), ErrUnreachable.Error()+": "), errs: []error{err}}
+		if ctx.Err() != nil {
+			// A dial cut short says "i/o timeout"; the caller asks for
+			// the context's own error (504 for a deadline).
+			why.errs = append(why.errs, ctx.Err())
+		}
+		return Host{}, fmt.Errorf("the console could not log in to %s with its certificate: %w", h.Name, why)
 	}
 	x, err := s.opts.Hosts.update(ctx, h.Cluster, h.Name, func(x *Host) error {
 		x.State, x.PairedBy, x.PairedAt = HostPaired, by, &now
@@ -645,15 +720,25 @@ func (s *Service) takeHostname(ctx context.Context, h Host, hostname string) Hos
 	case s.opts.IsNode != nil && s.opts.IsNode(h.Cluster, name):
 		return keep("a node has its hostname")
 	}
+	// The pairing is read before the rename and set under the new name
+	// after it: in the database a row may have the new name already (a
+	// fleet's list names it), and the host takes that row over while its
+	// old one goes, with the pairing it held.
+	before, had, err := s.opts.Pairings.Get(ctx, h.Cluster, h.Name)
+	if err != nil {
+		return keep("its pairing could not be read: " + err.Error())
+	}
 	x, err := s.opts.Hosts.rename(ctx, h.Cluster, h.Name, name)
 	if err != nil {
 		return keep(err.Error())
 	}
-	if p, ok, err := s.opts.Pairings.Get(ctx, h.Cluster, h.Name); err == nil && ok {
+	if had {
+		p := before
 		p.Node = name
 		if err := s.opts.Pairings.Set(ctx, p); err != nil {
-			// Its pairing could not follow: back to its address.
-			if _, err := s.opts.Hosts.rename(ctx, h.Cluster, name, h.Name); err == nil {
+			// Its pairing could not follow: back to its address, with it.
+			if _, back := s.opts.Hosts.rename(ctx, h.Cluster, name, h.Name); back == nil {
+				_ = s.opts.Pairings.Set(ctx, before)
 				return keep("its pairing could not be moved: " + err.Error())
 			}
 			return x
@@ -696,6 +781,22 @@ func (s *Service) RemoveHost(ctx context.Context, cluster, name string) (Host, s
 	}
 	return h, s.cleanup(ctx), nil
 }
+
+// stdoutOnly keeps a command's standard output and drops its errors
+// (Streams): what a login prints there is no part of the answer.
+type stdoutOnly struct{ syncBuffer }
+
+func (*stdoutOnly) Stderr() io.Writer { return io.Discard }
+
+// cause is an error said in other words that still wraps what is behind
+// it, for errors.Is.
+type cause struct {
+	text string
+	errs []error
+}
+
+func (c cause) Error() string   { return c.text }
+func (c cause) Unwrap() []error { return c.errs }
 
 // syncBuffer takes the two streams of a session at once.
 type syncBuffer struct {

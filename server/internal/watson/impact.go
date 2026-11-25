@@ -3,6 +3,7 @@ package watson
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	release "helm.sh/helm/v4/pkg/release/v1"
+
+	"github.com/ucesys/221b/server/internal/kube"
 )
 
 // What an approval card says a change does (P6-04), worked out from the
@@ -67,6 +70,12 @@ type guard struct {
 // a reason, an object could not be read. That proves nothing either way, so
 // the card stands but is not approved.
 func checkGuards(ctx context.Context, cs *clients, guards []guard) (why string, changed bool) {
+	// A guard that panics proves nothing: the card is not approved.
+	defer func() {
+		if r := recover(); r != nil {
+			why, changed = uncheckedText("the objects this command acts on", fmt.Errorf("%v", r)), false
+		}
+	}()
 	if len(guards) == 0 {
 		return "", false
 	}
@@ -246,6 +255,9 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			var names []string
 			for i := range list.Items {
 				o := &list.Items[i]
+				if gvr.Group == "" && gvr.Resource == "secrets" {
+					withoutValues(o)
+				}
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: o.GetName(), obj: o})
 				names = append(names, o.GetName())
 			}
@@ -256,6 +268,9 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name})
+				// The card says it is not there: one made before the approval
+				// voids it, as a change to an object would.
+				sets = append(sets, absentGuard(gvr, kind, tns, p.name))
 				continue
 			}
 			return out, sets, notRead{couldNotRead(target{kind: kind, ns: tns, name: p.name}.String(), err), err}
@@ -295,9 +310,28 @@ func selectorGuard(gvr schema.GroupVersionResource, ns, sel string, names []stri
 	}}
 }
 
+// absentGuard voids a card when an object it found absent appears.
+func absentGuard(gvr schema.GroupVersionResource, kind, ns, name string) guard {
+	return guard{what: target{kind: kind, ns: ns, name: name}.String(), want: "absent", read: func(ctx context.Context, cs *clients) (string, error) {
+		var ri dynamic.ResourceInterface = cs.dyn.Resource(gvr)
+		if ns != "" {
+			ri = cs.dyn.Resource(gvr).Namespace(ns)
+		}
+		o, err := ri.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return "absent", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return "present " + string(o.GetUID()), nil
+	}}
+}
+
 // objectGuard voids a card when the parts of an object a command depends
 // on change.
 func objectGuard(t target, parts func(o *unstructured.Unstructured) any) guard {
+	secret := t.gvr.Group == "" && t.gvr.Resource == "secrets"
 	read := func(ctx context.Context, cs *clients) (string, error) {
 		var ri dynamic.ResourceInterface = cs.dyn.Resource(t.gvr)
 		if t.ns != "" {
@@ -307,7 +341,17 @@ func objectGuard(t target, parts func(o *unstructured.Unstructured) any) guard {
 		if err != nil {
 			return "", err
 		}
+		if secret {
+			// Compared as the card read it, values hidden: the guard holds no
+			// value, and the parts must match what the card showed.
+			withoutValues(o)
+			return digest(o.GetUID(), o.GetResourceVersion(), parts(o)), nil
+		}
 		return digest(o.GetUID(), parts(o)), nil
+	}
+	if secret {
+		// What withoutValues hides changes the Secret's version.
+		return guard{what: t.String(), want: digest(t.obj.GetUID(), t.obj.GetResourceVersion(), parts(t.obj)), read: read}
 	}
 	return guard{what: t.String(), want: digest(t.obj.GetUID(), parts(t.obj)), read: read}
 }
@@ -341,6 +385,27 @@ func joinAnd(xs []string) string {
 		return xs[0]
 	}
 	return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
+}
+
+func plural64(n int64, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.FormatInt(n, 10) + " " + many
+}
+
+// ordinalsDown names the pods a StatefulSet scaled from cur to want
+// removes, highest number first: the first max of them by name, and how
+// many more, without making a name for each (a count can be huge).
+func ordinalsDown(name string, cur, want int64, max int) string {
+	var names []string
+	for i := cur - 1; i >= want && len(names) < max; i-- {
+		names = append(names, fmt.Sprintf("%s-%d", name, i))
+	}
+	if n := cur - want; n > int64(len(names)) {
+		return strings.Join(names, ", ") + fmt.Sprintf(" and %d more", n-int64(len(names)))
+	}
+	return joinAnd(names)
 }
 
 func plural(n int, one, many string) string {
@@ -440,7 +505,7 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			add("%v", err)
 			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
 		}
-		want, _ := strconv.Atoi(c.Flag("replicas"))
+		want, _ := replicasOf(c)
 		for _, t := range ts {
 			targets = append(targets, t.String())
 			if t.obj == nil {
@@ -452,27 +517,23 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			if v, ok, _ := unstructured.NestedInt64(t.obj.Object, "spec", "replicas"); ok {
 				cur = v
 			}
-			if cur == int64(want) {
+			if cur == want {
 				add("%s already has %d replicas; nothing changes.", t.title(), want)
 				continue
 			}
 			add("%s: %d → %d replicas.", t.title(), cur, want)
-			if int64(want) < cur {
-				n := int(cur) - want
+			if want < cur {
+				n := cur - want
 				if t.kind == "StatefulSet" {
-					var gone []string
-					for i := int(cur) - 1; i >= want; i-- {
-						gone = append(gone, fmt.Sprintf("%s-%d", t.name, i))
-					}
-					add("Removes %s, highest number first: %s. Their volume claims stay.", plural(n, "pod", "pods"), listText(gone, 4))
+					add("Removes %s, highest number first: %s. Their volume claims stay.", plural64(n, "pod", "pods"), ordinalsDown(t.name, cur, want, 4))
 				} else {
-					add("Removes %s.", plural(n, "pod", "pods"))
+					add("Removes %s.", plural64(n, "pod", "pods"))
 				}
 				if want == 0 {
 					add("With no replicas, nothing serves the %s's traffic until it is scaled up again.", strings.ToLower(t.kind))
 				}
 			} else {
-				add("Starts %s, where the scheduler finds room.", plural(want-int(cur), "pod", "pods"))
+				add("Starts %s, where the scheduler finds room.", plural64(want-cur, "pod", "pods"))
 			}
 			if c.Has("current-replicas") {
 				add("kubectl changes it only if it still has %s replicas.", c.Flag("current-replicas"))
@@ -525,6 +586,11 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 					return []any{field(o, "status", "phase"), o.GetDeletionTimestamp() != nil}
 				}))
 				impact = append(impact, namespaceDeleteImpact(ctx, cs, t.name)...)
+				if g, err := namespaceContentsGuard(ctx, cs, t.name); err == nil {
+					guards = append(guards, g)
+				} else {
+					guards = append(guards, unreadableUnlessHidden("what is in namespace "+t.name, err)...)
+				}
 				continue
 			}
 			if t.kind == "Secret" {
@@ -770,10 +836,11 @@ func images(spec corev1.PodSpec) string {
 }
 
 func undoImpact(ctx context.Context, cs *clients, c *Command, t target) []string {
+	want64, _ := toRevision(c)
 	if t.kind != "Deployment" {
 		rev := "the previous revision"
-		if v := c.Flag("to-revision"); v != "" && v != "0" {
-			rev = "revision " + v
+		if want64 > 0 {
+			rev = fmt.Sprintf("revision %d", want64)
 		}
 		return []string{fmt.Sprintf("Rolls %s back to %s; its pods are replaced as in a rollout.", t.title(), rev)}
 	}
@@ -804,7 +871,7 @@ func undoImpact(ctx context.Context, cs *clients, c *Command, t target) []string
 	}
 	cur := revs[0]
 	var to *rev
-	want, _ := strconv.Atoi(c.Flag("to-revision"))
+	want := int(want64)
 	for i := range revs {
 		if (want > 0 && revs[i].n == want) || (want == 0 && i == 1) {
 			to = &revs[i]
@@ -833,9 +900,12 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 	if _, mirror := p.Annotations[corev1.MirrorPodAnnotationKey]; mirror {
 		return fmt.Sprintf("Pod %s mirrors a static pod: the kubelet on %s recreates it at once.", id, p.Spec.NodeName)
 	}
+	if why := deleteFlagsRefused(c); why != "" {
+		return fmt.Sprintf("Pod %s is not deleted: kubectl will refuse: %s.", id, why)
+	}
 	ref := metav1.GetControllerOf(p)
 	tail := ""
-	if c.Has("force") && (c.Flag("grace-period") == "0" || c.Has("now")) {
+	if forceDeletes(c) {
 		tail = " It is removed at once, without waiting for its containers to stop: they may keep running on the node for a while."
 	}
 	if ref == nil {
@@ -850,6 +920,41 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 		return fmt.Sprintf("Pod %s is deleted; Job %s starts another if it has completions left.%s", id, ref.Name, tail)
 	}
 	return fmt.Sprintf("Pod %s is deleted; %s %s creates a replacement, which the scheduler may place on another node.%s", id, ref.Kind, ref.Name, tail)
+}
+
+// gracePeriod is --grace-period as kubectl reads it, -1 when not given.
+func gracePeriod(c *Command) int {
+	if !c.Has("grace-period") {
+		return -1
+	}
+	n, err := strconv.Atoi(c.Flag("grace-period"))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// deleteFlagsRefused says why kubectl refuses a delete's flags, as its
+// Complete and Validate do: --now with --grace-period, and --force with a
+// grace period above 0 (which --now is).
+func deleteFlagsRefused(c *Command) string {
+	grace := gracePeriod(c)
+	if c.Has("now") {
+		if grace != -1 {
+			return "--now and --grace-period cannot be specified together"
+		}
+		grace = 1
+	}
+	if c.Has("force") && grace > 0 {
+		return "--force and --grace-period greater than 0 cannot be specified together"
+	}
+	return ""
+}
+
+// forceDeletes says whether kubectl removes the object at once: --force
+// with no grace period, or with 0.
+func forceDeletes(c *Command) bool {
+	return c.Has("force") && !c.Has("now") && gracePeriod(c) <= 0
 }
 
 const psaPrefix = "pod-security.kubernetes.io/"
@@ -1028,11 +1133,13 @@ func taintImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node, c
 			}
 		}
 		switch {
+		case same != nil && !c.Has("overwrite"):
+			// kubectl refuses a taint whose key and effect the node has,
+			// whatever its value, without --overwrite.
+			diffs = append(diffs, fmt.Sprintf("it has %s, and --overwrite is false: kubectl will refuse", taintText(*same)))
+			continue
 		case same != nil && same.Value == want.Value:
 			diffs = append(diffs, taintText(want)+" is already there")
-			continue
-		case same != nil && !c.Has("overwrite"):
-			diffs = append(diffs, fmt.Sprintf("it has %s, and --overwrite is false: kubectl will refuse", taintText(*same)))
 			continue
 		case same != nil:
 			diffs = append(diffs, fmt.Sprintf("%s → %s", taintText(*same), taintText(want)))
@@ -1224,6 +1331,9 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 		if err != nil {
 			return nil, err
 		}
+		if err := damaged(rels); err != nil {
+			return nil, err
+		}
 		sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
 		return rels, nil
 	}
@@ -1240,7 +1350,13 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 	cur := rels[0]
 	want := cur.Version - 1
 	if len(c.Positionals) > 1 {
-		if v, err := strconv.Atoi(c.Positionals[1]); err == nil && v > 0 {
+		v, err := strconv.Atoi(c.Positionals[1])
+		switch {
+		case err != nil:
+			return targets, nil, []string{fmt.Sprintf("%q is not a revision number: helm will refuse.", c.Positionals[1])}
+		case v < 0:
+			return targets, nil, []string{fmt.Sprintf("Revision %d is not one: helm will refuse (0, or none, is the previous revision).", v)}
+		case v > 0:
 			want = v
 		}
 	}
@@ -1279,6 +1395,23 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 		impact = append(impact, fmt.Sprintf("Deletes %s that revision %d does not have: %s.", plural(len(removed), "object", "objects"), to.Version, listText(removed, 6)))
 	}
 	return targets, guards, impact
+}
+
+// damaged says which of a release's records Watson cannot read, or nil:
+// Helm's storage decodes a record without checking it, and anyone who may
+// write Secrets in the namespace can make one without its info or chart.
+func damaged(rels []*release.Release) error {
+	for _, r := range rels {
+		switch {
+		case r == nil:
+			return errors.New("a record of the release is empty")
+		case r.Info == nil:
+			return fmt.Errorf("revision %d of release %s has no info in its record", r.Version, r.Name)
+		case r.Chart == nil || r.Chart.Metadata == nil:
+			return fmt.Errorf("revision %d of release %s has no chart in its record", r.Version, r.Name)
+		}
+	}
+	return nil
 }
 
 // manifestDiff compares two rendered manifests object by object.
@@ -1322,22 +1455,35 @@ func manifestDiff(from, to string) (changed, added, removed []string) {
 // (NS-02): its pods, its claims and their volumes' fate, and the
 // Secrets and ConfigMaps in it.
 // withoutValues blanks a Secret's values as soon as it is read, so a card
-// holds its key names and never a value (X-01).
+// holds its key names and never a value (X-01). An annotation that can
+// carry one, last-applied-configuration or any that holds a value of the
+// Secret, is hidden as the Secret's page hides it (kube.HideSecretValues):
+// a card may still say that it is there and that it goes.
 func withoutValues(o *unstructured.Unstructured) {
+	var values [][]byte
 	for _, f := range []string{"data", "stringData"} {
 		m, ok, _ := unstructured.NestedMap(o.Object, f)
 		if !ok {
 			continue
 		}
-		for k := range m {
+		for k, v := range m {
+			if s, ok := v.(string); ok && s != "" {
+				if f == "data" {
+					// Raw and base64, the forms an annotation may carry it in.
+					if b, err := base64.StdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+						values = append(values, b, []byte(s))
+					}
+				} else {
+					values = append(values, []byte(s), []byte(base64.StdEncoding.EncodeToString([]byte(s))))
+				}
+			}
 			m[k] = ""
 		}
 		_ = unstructured.SetNestedMap(o.Object, m, f)
 	}
 	unstructured.RemoveNestedField(o.Object, "metadata", "managedFields")
 	if a := o.GetAnnotations(); a != nil {
-		delete(a, "kubectl.kubernetes.io/last-applied-configuration")
-		o.SetAnnotations(a)
+		o.SetAnnotations(kube.HideSecretValues(a, values))
 	}
 }
 
@@ -1425,6 +1571,49 @@ func podReadsSecret(p *corev1.PodSpec, name string) bool {
 		}
 	}
 	return false
+}
+
+// namespaceContentsGuard holds a namespace's delete to what its card
+// counted: the pods, claims, Secrets and ConfigMaps in it, by name.
+func namespaceContentsGuard(ctx context.Context, cs *clients, name string) (guard, error) {
+	read := func(ctx context.Context, cs *clients) (string, error) {
+		var names []string
+		pods, err := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range pods.Items {
+			names = append(names, "pod/"+o.Name)
+		}
+		claims, err := cs.cs.CoreV1().PersistentVolumeClaims(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range claims.Items {
+			names = append(names, "pvc/"+o.Name)
+		}
+		secrets, err := cs.cs.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range secrets.Items {
+			names = append(names, "secret/"+o.Name)
+		}
+		cms, err := cs.cs.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range cms.Items {
+			names = append(names, "configmap/"+o.Name)
+		}
+		sort.Strings(names)
+		return digest(names), nil
+	}
+	want, err := read(ctx, cs)
+	if err != nil {
+		return guard{}, err
+	}
+	return guard{what: "what is in namespace " + name, want: want, read: read}, nil
 }
 
 func namespaceDeleteImpact(ctx context.Context, cs *clients, name string) []string {

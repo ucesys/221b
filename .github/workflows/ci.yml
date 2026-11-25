@@ -44,14 +44,16 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 0.13.2's race-detector suite takes about 26 minutes and the API's
+    # tests over the database about 20: 45 cancelled the job.
+    timeout-minutes: 75
     # The repositories' tests run against a PostgreSQL (Phase 13, DB-16);
     # without TEST_DATABASE they are skipped, as on a laptop. A service
     # cannot read hack/base-images.env, so the pin is written here, and
     # hack/check-base-images.sh checks it is POSTGRES_IMAGE.
     services:
       postgres:
-        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+        image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:ab49524d18df7200b74ac9a475e1db6297fc1eb57da4c214c63d10ecc4b754fa
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -145,7 +147,7 @@ jobs:
     # the Go job's and is up before the first step.
     services:
       postgres:
-        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+        image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:ab49524d18df7200b74ac9a475e1db6297fc1eb57da4c214c63d10ecc4b754fa
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:

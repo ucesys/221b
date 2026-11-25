@@ -20,10 +20,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/twoperson"
+	"github.com/ucesys/221b/server/internal/version"
 	"golang.org/x/oauth2"
 )
 
@@ -130,6 +133,10 @@ type Service struct {
 	// Proxies.Resolve works it out, and no header widens its limit.
 	perAccount *limiter
 	perAddress *limiter
+	// refusals lets one record of "too many attempts" through a minute for
+	// each thing that refused (an address, an account), so a flood of
+	// refused requests does not flood the audit log.
+	refusals *limiter
 	// anonymous is everyone's session with sign-in off.
 	anonymous Session
 	audit     *audit.Log
@@ -177,7 +184,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.ProxyWatch == nil {
 		cfg.ProxyWatch = NewProxyWatch(log, now)
 	}
-	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
+	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now), refusals: newLimiter(1, time.Minute, now)}
 	if cfg.SessionStore != nil {
 		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
 	}
@@ -213,8 +220,11 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 			s.people = newPeople(cfg.Directory.URL(), now)
 		}
 		for _, g := range cfg.LocalGroups {
-			if !roles.ValidGroupName(g.Name) || (g.Role != roles.Viewer && g.Role != roles.Admin && g.Role != roles.Reporter) {
-				return nil, fmt.Errorf("local group %q: a name of lowercase letters, digits, dot, dash and underscore, and the role viewer, admin or reporter", g.Name)
+			if !roles.ValidGroupName(g.Name) {
+				return nil, fmt.Errorf("local group %q: %s", g.Name, localGroupRule)
+			}
+			if g.Role != roles.Viewer && g.Role != roles.Admin && g.Role != roles.Reporter {
+				return nil, fmt.Errorf("local group %q: the role %q is not one: use viewer, admin or reporter", g.Name, g.Role)
 			}
 		}
 		var managed []Account
@@ -227,6 +237,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 		}
 		external := len(cfg.Admins) > 0 || len(cfg.AdminGroups) > 0 || len(cfg.Lists[roles.SuperAdmin]) > 0
 		s.accounts = NewAccounts(backend, managed, cfg.LocalGroups, external, now)
+		s.accounts.KeepEndings(max(cfg.SessionMax, longestOutage))
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := s.accounts.Load(ctx); err != nil {
 			s.log.Error("reading the saved accounts failed; the first-run page stays closed and accounts cannot change until they can be read", "err", err)
@@ -272,10 +283,33 @@ func (s *Service) RunAccounts(ctx context.Context, every time.Duration) {
 	})
 }
 
+// asciiFold says whether two names are the same but for ASCII case. Not
+// strings.EqualFold, whose Unicode folding takes the Kelvin sign for k and
+// the long s for s: a name a provider lets someone choose must not match a
+// listed administrator's by such a character.
+func asciiFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 // isAdmin says whether a person manages the console.
 func (s *Service) isAdmin(u User) bool {
 	for _, a := range s.cfg.Admins {
-		if a != "" && (strings.EqualFold(a, u.Username) || a == u.Subject || (u.Email != "" && strings.EqualFold(a, u.Email))) {
+		if a != "" && (asciiFold(a, u.Username) || a == u.Subject || (u.Email != "" && asciiFold(a, u.Email))) {
 			return true
 		}
 	}
@@ -336,6 +370,13 @@ func openPath(p string) bool {
 	return false
 }
 
+// staticPath says whether a path is one of the static files, the same for
+// everyone and answered as publicly cacheable: no cookie is set on them,
+// since a shared cache could keep it and hand it to others.
+func staticPath(p string) bool {
+	return strings.HasPrefix(p, "/assets/") || p == "/favicon.svg" || p == "/favicon.ico" || p == "/manifest.webmanifest" || p == "/signin.css" || p == "/signin.js"
+}
+
 // Gate checks the session. It returns the request with the session in its
 // context, or nil after answering: a 401 for the API, the sign-in page for
 // a page.
@@ -346,21 +387,29 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	if sess, ok := s.sessionOf(r); ok {
 		// A session made while the session store was away becomes a stored
 		// one at its first request after the store is back (DB-65). Not on
-		// a stream: its answer may carry no cookie, and it stays open.
+		// a stream: its answer may carry no cookie, and it stays open. Not
+		// on a static file, whose answer a shared cache may keep.
 		// The stored session ends when the signed one would have: the
 		// exchange gives no more than the signed session had.
 		ended := false
-		if sess.Signed && !streams(r) {
+		if sess.Signed && !streams(r) && !staticPath(r.URL.Path) {
 			if stored, made, ok := s.sessions.Exchange(sess); ok {
-				s.setSession(w, r, stored)
-				// What handles the request from here on, the leader it may
-				// be forwarded to as well, finds the stored session.
-				carry(r, stored.ID)
-				if made {
-					s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
-						"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+				// The stored session holds the roles of its exchange, which
+				// may have been taken away since: the person is what they are
+				// now, as for any session, or is refused.
+				if now, alive := s.live(*stored); !alive {
+					ended = true
+				} else {
+					s.setSession(w, r, stored)
+					// What handles the request from here on, the leader it
+					// may be forwarded to as well, finds the stored session.
+					carry(r, stored.ID)
+					if made {
+						s.record(r, audit.ActionSessionExchange, stored.User, audit.OutcomeOK,
+							"a session made while the session store was unavailable, kept in its cookie, was exchanged for a stored one now that the store is back; it ends when the first would have, at "+stored.Expires.UTC().Format("15:04 UTC"))
+					}
+					sess = now
 				}
-				sess = *stored
 			} else if s.sessions.Revoked(sess) {
 				// The store holds the ending of this session: it was signed
 				// out, or ended by an administrator, where this replica did
@@ -435,7 +484,16 @@ func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	}
 	sess, ok := find(c.Value)
 	if !ok {
-		return Session{}, false
+		// A request another replica forwarded, for a session that replica
+		// holds and this one cannot ask about (vouch.go).
+		v, vouched := vouchedFor(r, c.Value)
+		if !vouched {
+			return Session{}, false
+		}
+		if sess, ok = s.sessions.takeVouched(c.Value, v); !ok {
+			return Session{}, false
+		}
+		return s.liveVouched(sess)
 	}
 	return s.live(sess)
 }
@@ -552,8 +610,11 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		d.Provider = s.provider.Name()
 	}
 	if r.Method == http.MethodPost {
-		d.Email = audit.Clip(r.PostFormValue("email"), maxLogin)
-		d.Next = safeNext(r.PostFormValue("next"))
+		// What the handler parsed, within the form's limit: the page is
+		// also the answer to a POST nobody signed in to make, whose body
+		// is not read here (r.PostForm is nil then).
+		d.Email = audit.Clip(r.PostForm.Get("email"), maxLogin)
+		d.Next = safeNext(r.PostForm.Get("next"))
 	} else if r.URL.Query().Get("changed") == "1" && msg == "" {
 		d.Notice = "Your password is changed. Sign in with the new one."
 	}
@@ -561,8 +622,8 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		// A fresh token for the form, in the page and in a cookie only this
 		// site's pages send (SameSite=Strict): a form posted from elsewhere
 		// cannot carry both.
-		d.Form = randomID()
-		http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
+		d.Form = formTokenOf(r)
+		http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: formLife})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -681,6 +742,17 @@ func from(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// addressKey is what the limits per address count by: an IPv4 address, or
+// an IPv6 address's /64, which one client has to itself and can change
+// its address within at will.
+func addressKey(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.To4() != nil {
+		return addr
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // maxDetail bounds the detail of a record the sign-in pages write: some of
 // it comes from a request nobody has signed in to make.
 const maxDetail = 1024
@@ -701,14 +773,29 @@ const (
 	maxFormBody = 64 << 10
 )
 
-// formLogin reads the user name of a form, and says whether it is short
-// enough to be one. One that is not comes back cut to maxLogin.
+// formLogin reads the user name of a form, and says whether it can be one:
+// short enough, and without a control character (a zero byte, a line
+// break). One that cannot comes back cut to maxLogin, its control
+// characters and any text that is not UTF-8 replaced, so what the audit
+// record keeps of it is plain text.
 func formLogin(s string) (string, bool) {
 	login := Login(s)
-	if len(login) > maxLogin {
-		return audit.Clip(login, maxLogin), false
+	clean := plainText(login)
+	if len(login) > maxLogin || clean != login {
+		return audit.Clip(clean, maxLogin), false
 	}
 	return login, true
+}
+
+// plainText replaces in text a request sent the control characters and
+// what is not UTF-8, for a record or a page.
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return utf8.RuneError
+		}
+		return r
+	}, strings.ToValidUTF8(s, string(utf8.RuneError)))
 }
 
 // attempt counts a password attempt and says whether it may proceed:
@@ -716,13 +803,40 @@ func formLogin(s string) (string, bool) {
 // carries. Attempts wait for a hashing slot, so past a queue they are
 // refused here, before they cost anything.
 func (s *Service) attempt(r *http.Request, login string) bool {
+	ok, _ := s.attemptBy(r, login)
+	return ok
+}
+
+// attemptBy is attempt that also says what refused: the hashing queue, the
+// address or the account.
+func (s *Service) attemptBy(r *http.Request, login string) (ok bool, refusedBy string) {
 	if hashingFull() {
-		return false
+		return false, "the hashing queue"
 	}
-	if !s.perAddress.allow(from(r)) {
-		return false
+	if !s.perAddress.allow(addressKey(from(r))) {
+		return false, "address " + addressKey(from(r))
 	}
-	return s.perAccount.allow(login)
+	// An account is one bucket, whether its user name or its email was
+	// typed.
+	key := login
+	if s.accounts != nil {
+		if a, ok := s.accounts.Find(login); ok {
+			key = a.Username
+		}
+	}
+	if !s.perAccount.allow(key) {
+		return false, "account " + key
+	}
+	return true, ""
+}
+
+// recordRefusal writes the audit record of a request refused for too many
+// attempts, once a minute for each action and what refused it: the
+// refusals after it in that minute are of the same flood.
+func (s *Service) recordRefusal(r *http.Request, action string, who User, refusedBy string) {
+	if s.refusals.allow(action + "\x00" + refusedBy) {
+		s.record(r, action, who, audit.OutcomeDenied, "too many attempts; more in the next minute are not recorded")
+	}
 }
 
 // refusedText is what a person is told when they cannot sign in, whatever
@@ -751,8 +865,8 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	login, fits := formLogin(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if !s.attempt(r, login) {
-		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeDenied, "too many attempts")
+	if ok, by := s.attemptBy(r, login); !ok {
+		s.recordRefusal(r, audit.ActionSignInFailed, User{Username: login, Email: login}, by)
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
@@ -761,11 +875,15 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, refusedText, http.StatusUnauthorized)
 	}
 	if !fits {
-		refuse("the user name is too long")
+		refuse("the user name is too long or holds a control character")
 		return
 	}
 	acct, local := s.accounts.Find(login)
 	if !local && s.dir != nil {
+		// A password check on the dummy hash first, as a local account's
+		// wrong password costs one before the directory is asked: how long
+		// the answer takes does not tell local account names from others.
+		CheckPassword(dummyHash, password)
 		s.signInDirectory(w, r, login, password, refuse, false)
 		return
 	}
@@ -785,6 +903,20 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		refuse("wrong user name or password")
 		return
 	}
+	// The hash checked is this replica's copy, which may be seconds older
+	// than a reset made on another: the account as saved decides.
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	now, still := s.accounts.Current(ctx, acct.Username)
+	cancel()
+	if !still || (now.PasswordHash != acct.PasswordHash && !CheckPassword(now.PasswordHash, password)) {
+		if s.dir != nil {
+			s.signInDirectory(w, r, login, password, refuse, true)
+			return
+		}
+		refuse("wrong user name or password: the password was changed meanwhile")
+		return
+	}
+	acct = now
 	if acct.Disabled {
 		if s.dir != nil {
 			s.signInDirectory(w, r, login, password, refuse, true)
@@ -831,7 +963,7 @@ func (s *Service) signInDirectory(w http.ResponseWriter, r *http.Request, login,
 		refuse("wrong password for the local account, and the directory cannot be reached: " + cleanErr(err))
 		return
 	case errors.Is(err, ErrDirectoryDown):
-		s.record(r, audit.ActionSignInFailed, User{Username: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
+		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
 		s.renderSignIn(w, r, "The directory cannot be reached, so nobody can sign in just now. People already signed in can keep working. Try again in a minute.", http.StatusServiceUnavailable)
 		return
 	case err != nil:
@@ -889,7 +1021,12 @@ func (s *Service) startOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	next := r.URL.Query().Get("next")
 	if r.Method == http.MethodPost {
-		next = r.PostFormValue("next")
+		r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+		if err := r.ParseForm(); err != nil {
+			s.renderSignIn(w, r, "The form could not be read.", http.StatusBadRequest)
+			return
+		}
+		next = r.PostForm.Get("next")
 	}
 	st := signInState{State: randomID(), Nonce: randomID(), Verifier: oauth2.GenerateVerifier(), Next: safeNext(next), At: s.now().Unix()}
 	authURL, err := s.provider.AuthURL(r.Context(), s.redirectURL(r), st.State, st.Nonce, st.Verifier)
@@ -907,6 +1044,14 @@ func (s *Service) startOIDC(w http.ResponseWriter, r *http.Request) {
 func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	if s.provider == nil {
 		http.Error(w, "OIDC sign-in is off", http.StatusNotFound)
+		return
+	}
+	// Anyone can come here with a state cookie of their own making, so the
+	// callback counts against the per-address limit before it records
+	// anything or asks the provider.
+	if !s.perAddress.allow(addressKey(from(r))) {
+		s.recordRefusal(r, audit.ActionSignInFailed, User{}, "address "+addressKey(from(r)))
+		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
 	c, err := r.Cookie(cookieSignIn)
@@ -937,7 +1082,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		if d := q.Get("error_description"); d != "" {
 			msg += ": " + d
 		}
-		msg = audit.Clip(msg, maxDetail)
+		msg = audit.Clip(plainText(msg), maxDetail)
 		s.record(r, audit.ActionSignInFailed, User{}, audit.OutcomeFailed, "the provider refused: "+msg)
 		s.renderSignIn(w, r, "The provider did not sign you in ("+msg+").", http.StatusUnauthorized)
 		return
@@ -982,6 +1127,11 @@ func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		s.sessions.Delete(sess.ID)
 		s.record(r, audit.ActionSignOut, sess.User, audit.OutcomeOK, "")
+	} else if c, err := r.Cookie(cookieSession); err == nil && (plausibleID(c.Value) || signedShape(c.Value)) && s.cfg.Mode != ModeNone {
+		// This replica cannot look the session up (the store away, and it
+		// never held it): it is ended all the same, refused here and the
+		// store told when it can be, so the sign-out holds everywhere.
+		s.sessions.Delete(c.Value)
 	}
 	// The gate may have started, for this very request, a stored session
 	// in place of one made while the session store was away: that one ends
@@ -1015,6 +1165,13 @@ type Me struct {
 	// a forwarding header without being listed under auth.trustedProxies
 	// (SEC-30).
 	UntrustedProxy string `json:"untrustedProxy,omitempty"`
+	// Version is the console's version (the chart's) and Build the short
+	// commit of a build that is not a release, for the account menu's last
+	// line (RB-58). Given to people signed in only: never with sign-in
+	// off, where nobody is, nor on the sign-in page, since an exact build
+	// helps an attacker match known flaws.
+	Version string `json:"version,omitempty"`
+	Build   string `json:"build,omitempty"`
 }
 
 // ProxyWatch is what notices a proxy that is not trusted (SEC-30).
@@ -1034,6 +1191,9 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess.Admin {
 		me.UntrustedProxy = s.cfg.ProxyWatch.Peer()
+	}
+	if s.cfg.Mode != ModeNone {
+		me.Version, me.Build = version.Console(), version.Build()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1069,6 +1229,21 @@ func sameSiteHeaders(r *http.Request, nullOrigin bool) bool {
 	}
 	u, err := url.Parse(origin)
 	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+// formLife is how long a form's token cookie lives: a day, so a sign-in
+// page left open over lunch, or overnight, still signs in.
+const formLife = 24 * 3600
+
+// formTokenOf is the token for a form: the one the browser's cookie holds
+// already, while it lives, so a page opened in a second tab does not make
+// the first one's form refused; a fresh one otherwise. A successful
+// sign-in clears it.
+func formTokenOf(r *http.Request) string {
+	if c, err := r.Cookie(cookieForm); err == nil && plausibleID(c.Value) {
+		return c.Value
+	}
+	return randomID()
 }
 
 // formToken says whether a posted sign-in form carries the token of the

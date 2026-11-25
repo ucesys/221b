@@ -10,7 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -301,7 +304,12 @@ func Parse(line string) (*Command, error) {
 	if sp == nil {
 		sub := ""
 		if len(args) > 0 {
+			// A word with a value in it (k=v) is not quoted back: it may be
+			// a parameter's, and a refusal is recorded and shown.
 			sub = " " + args[0]
+			if strings.Contains(args[0], "=") {
+				sub = " " + maskOne(args[0])
+			}
 		}
 		return nil, refuse("not supported", "Watson does not run %s%s. It runs %s, and changes with %s.", tool, sub, strings.Join(Supported(false), ", "), strings.Join(Supported(true), ", "))
 	}
@@ -325,7 +333,9 @@ func Parse(line string) (*Command, error) {
 // verb, written apart from it (-n web); the rest are taken to stand alone.
 var valueFlags = map[string]bool{"n": true, "namespace": true, "context": true, "kubeconfig": true, "cluster": true, "user": true, "server": true, "s": true,
 	"token": true, "as": true, "as-group": true, "as-uid": true, "kube-context": true, "kube-apiserver": true, "kube-token": true, "kube-as-user": true,
-	"kube-as-group": true, "kube-ca-file": true, "request-timeout": true, "username": true, "password": true}
+	"kube-as-group": true, "kube-ca-file": true, "request-timeout": true, "username": true, "password": true,
+	// helm's parameters: their value is a key=value, never a verb.
+	"set": true, "set-string": true, "set-json": true, "set-literal": true, "set-file": true, "from-literal": true}
 
 // leadingFlags splits the flags before the verb from the words after them.
 func leadingFlags(words []string) (rest, lead []string) {
@@ -392,6 +402,17 @@ var blocked = map[string]string{
 	"profile": "Watson does not profile commands.", "cache-dir": "Watson does not use a cache directory.", "template": "Watson does not run templates.",
 }
 
+// blockedWhy says why a command may not take a flag: -f is kubectl logs'
+// --follow, and for every other command a file (kubectl's --filename,
+// helm's --values).
+func blockedWhy(c *Command, name string) (string, bool) {
+	if name == "f" && c.Name() != "kubectl logs" {
+		return "Watson does not read files.", true
+	}
+	why, ok := blocked[name]
+	return why, ok
+}
+
 // parseArgs reads flags and positional arguments the way kubectl and helm
 // (pflag) do, refusing any flag the command does not take.
 func (c *Command) parseArgs(words []string) error {
@@ -405,7 +426,7 @@ func (c *Command) parseArgs(words []string) error {
 	add := func(name, value, typed string) error {
 		f, ok := sp.flags[name]
 		if !ok {
-			if why, b := blocked[name]; b {
+			if why, b := blockedWhy(c, name); b {
 				return refuse("flag", "%s does not take %s here: %s", c.Name(), typed, why)
 			}
 			return refuse("flag", "%s does not take %s here. Usage: %s", c.Name(), typed, sp.usage)
@@ -473,7 +494,7 @@ func (c *Command) parseArgs(words []string) error {
 				sh := string(body[j])
 				name, known := byShort[sh]
 				if !known {
-					if why, b := blocked[sh]; b {
+					if why, b := blockedWhy(c, sh); b {
 						return refuse("flag", "%s does not take -%s here: %s", c.Name(), sh, why)
 					}
 					return refuse("flag", "%s does not take -%s here. Usage: %s", c.Name(), sh, sp.usage)
@@ -814,6 +835,9 @@ func checkScale(c *Command) *Refusal {
 	if !c.Has("replicas") {
 		return refuse("usage", "Say how many replicas with --replicas=N.")
 	}
+	if _, err := replicasOf(c); err != nil {
+		return refuse("usage", "%v", err)
+	}
 	types, names := targets(c.Positionals)
 	if len(names) == 0 {
 		return refuse("usage", "Usage: %s", c.spec.usage)
@@ -826,7 +850,42 @@ func checkScale(c *Command) *Refusal {
 	return nil
 }
 
+// replicasOf reads --replicas as kubectl does (pflag's int: base 0, so
+// 010 is 8 and 0x10 is 16), and refuses what kubectl or the API server
+// would: a count that is not a whole number, below 0, or above what a
+// workload's replicas hold.
+func replicasOf(c *Command) (int64, error) {
+	v := c.Flag("replicas")
+	n, err := strconv.ParseInt(v, 0, 64)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("--replicas takes a whole number of replicas, not %q.", v)
+	case n < 0:
+		return 0, fmt.Errorf("--replicas must be 0 or more, not %d.", n)
+	case n > math.MaxInt32:
+		return 0, fmt.Errorf("--replicas must be at most %d, not %d.", math.MaxInt32, n)
+	}
+	return n, nil
+}
+
+// toRevision reads rollout undo's --to-revision as kubectl does (pflag's
+// int64: base 0, so 010 is 8); 0, or none, is the previous revision.
+func toRevision(c *Command) (int64, error) {
+	if !c.Has("to-revision") {
+		return 0, nil
+	}
+	v := c.Flag("to-revision")
+	n, err := strconv.ParseInt(v, 0, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("--to-revision takes a revision number, not %q.", v)
+	}
+	return n, nil
+}
+
 func checkRollout(c *Command) *Refusal {
+	if _, err := toRevision(c); err != nil {
+		return refuse("usage", "%v", err)
+	}
 	types, names := targets(c.Positionals)
 	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Usage: %s", c.spec.usage)
@@ -920,13 +979,33 @@ func only(v any, keys ...string) any {
 }
 
 func checkLabel(c *Command) *Refusal {
+	var objs []string
+	for _, p := range c.Positionals {
+		if !isChange(p) {
+			objs = append(objs, p)
+		}
+	}
+	types, _ := targets(objs)
+	// A Secret's annotations can hold its data: kubectl.kubernetes.io/
+	// last-applied-configuration holds all of it. --list prints them, and
+	// without --overwrite kubectl's refusal quotes the value an annotation
+	// has, in the card's dry run and in the output (X-01).
+	if c.Verb[0] == "annotate" && slices.Contains(types, "secrets") {
+		if c.Has("list") {
+			return refuse("secret values", "Watson does not list a Secret's annotations: they can hold its values. kubectl describe secret shows its keys and sizes.")
+		}
+		for _, p := range c.Positionals {
+			if isChange(p) && !strings.HasSuffix(p, "-") && !c.Has("overwrite") {
+				return refuse("secret values", "Annotate a Secret with --overwrite: without it, kubectl's refusal of an annotation the Secret has quotes its value, which can hold the Secret's data.")
+			}
+		}
+	}
 	if c.Has("list") {
 		return nil
 	}
 	// The access rules are written by the chart, and by a person who holds
 	// that right; Watson never changes them, whatever the person's role
 	// would let (RB-52).
-	types, _ := targets(c.Positionals)
 	for _, t := range types {
 		if isAccessRule(t) {
 			return refuse("access rules", "Watson does not change roles or bindings: they are set by the chart's values, and 221B never writes them.")

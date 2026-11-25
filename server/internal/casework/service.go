@@ -430,6 +430,10 @@ type Brief struct {
 	// reported, filed, opened, follow, closed it, it is assigned to them,
 	// they wrote in its conversation or approved a change that fixed it.
 	Involved bool `json:"involved,omitempty"`
+	// MergedInto is the case it was merged into ("C-13", CF-119);
+	// SignalCount how many alerts are attached to it (CF-117).
+	MergedInto  string `json:"mergedInto,omitempty"`
+	SignalCount int    `json:"signalCount,omitempty"`
 }
 
 // ParseObject reads a Kubernetes object from what a case is about:
@@ -512,7 +516,8 @@ func brief(v issues.ReportView, analyzing bool, nofix noFixCounts, change string
 		SLAApplies: r.SLAFrom != nil, Service: r.Service, Analyzing: analyzing, FixProposed: r.FixProposed,
 		RegressionOf: idOf(r.RegressionOf), PossibleDuplicateOf: idOf(r.PossibleDuplicateOf), SameAs: idOf(r.SameAs), DuplicateOf: idOf(r.DuplicateOf),
 		KnownIssue: r.KnownIssue, Exception: r.Exception, RCA: r.RCA, RCACause: r.RCACause, Explanation: r.Explanation, ClosedAt: r.Closed, Verified: r.Verified,
-		SuggestException: nofix.suggest(&r), AskedReporter: r.Waiting != nil && r.Status.Open(), Verification: r.Verification}
+		SuggestException: nofix.suggest(&r), AskedReporter: r.Waiting != nil && r.Status.Open(), Verification: r.Verification,
+		MergedInto: idOf(r.MergedInto), SignalCount: len(r.Signals)}
 	if r.AgentFound() {
 		b.Source = Source{Kind: SourceFinding, Finding: r.Finding, Run: r.Run, Job: r.Job, Severity: r.Severity}
 		if r.Key != nil {
@@ -725,6 +730,13 @@ type View struct {
 	// (CF-49).
 	Commands    []Command `json:"commands"`
 	FixCommands []string  `json:"fixCommands"`
+	// Signals are the alerts attached to it as its evidence, and
+	// CorrelationKey what they are grouped under (CF-117);
+	// MergeSuggestion the open case its analysis says shares its cause,
+	// which "Merge into" applies (CF-118, CF-119).
+	Signals         []issues.Signal `json:"signals"`
+	CorrelationKey  string          `json:"correlationKey,omitempty"`
+	MergeSuggestion *CaseRef        `json:"mergeSuggestion,omitempty"`
 }
 
 // Open says whether the case is still worked on.
@@ -780,6 +792,11 @@ func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Wor
 		out.VerifyJob = &JobRef{ID: r.Job, Label: s.jobLabel(ctx, r)}
 	}
 	out.VerifiedBy, out.VerifyWait = r.VerifiedBy, verifyWait(r)
+	out.Signals, out.CorrelationKey = r.Signals, r.CorrelationKey
+	if out.Signals == nil {
+		out.Signals = []issues.Signal{}
+	}
+	out.MergeSuggestion = mergeSuggestion(r, w.Analysis, lines)
 	return out
 }
 

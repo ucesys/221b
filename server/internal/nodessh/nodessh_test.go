@@ -197,6 +197,9 @@ type fakeNode struct {
 	mu        sync.Mutex
 	received  []byte
 	commands  []string
+	// stall takes the login and then answers no channel, as an sshd
+	// stuck in PAM's session setup does.
+	stall atomic.Bool
 }
 
 func startNode(t *testing.T, caPub ssh.PublicKey, user string) *fakeNode {
@@ -249,6 +252,10 @@ func (n *fakeNode) serve(c net.Conn, cfg *ssh.ServerConfig) {
 		return
 	}
 	go ssh.DiscardRequests(reqs)
+	if n.stall.Load() {
+		_ = conn.Wait()
+		return
+	}
 	for nc := range chans {
 		ch, creqs, err := nc.Accept()
 		if err != nil {
@@ -514,4 +521,49 @@ func (s *safeBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// A node that takes the login and then opens no channel holds a command
+// or a terminal no longer than its context (finding 10 of the review of
+// November 24, 2026: past the handshake nothing followed the context, and
+// NewSession waited for good).
+func TestACommandAndATerminalFollowTheContextPastTheHandshake(t *testing.T) {
+	ca := NewCA(nil)
+	if err := ca.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	caPub, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(ca.PublicKey()))
+	node := startNode(t, caPub, "ops")
+	node.stall.Store(true)
+	svc := New(Options{CA: ca, Pairings: NewPairings(&kv.Memory{}), NodeAddr: func(string, string) (string, error) { return "127.0.0.1", nil }, CertTTL: time.Minute})
+	req := sessions.Request{Tool: toolbox.ToolSSHPair, Node: "worker-1", LoginUser: "ops", Port: node.ln.Addr().(*net.TCPAddr).Port}
+	if err := svc.Done(context.Background(), "local", req, "221B-HOSTKEY "+node.hostKeyLine()+"\n221B-PAIRED ops\n", "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	within := func(what string, f func(ctx context.Context) error) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- f(ctx) }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s outlasted its context", what)
+		}
+	}
+	within("a command", func(ctx context.Context) error {
+		_, err := svc.Exec(ctx, "local", "worker-1", "k", "true", false, strings.NewReader(""), io.Discard)
+		return err
+	})
+	term, _, err := svc.Dial(context.Background(), "local", "worker-1", sessions.Who{Name: "Pat"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	within("a terminal", func(ctx context.Context) error {
+		return term.Run(ctx, strings.NewReader(""), io.Discard, make(chan sessions.Size))
+	})
 }

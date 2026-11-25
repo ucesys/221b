@@ -67,8 +67,13 @@ func (s *Service) allowed() map[roles.Source][]string {
 	case ModeLDAP:
 		out[roles.LDAP] = listed
 	case ModeOIDC:
+		// The listed groups only, as for LDAP: the chart lets the console
+		// impersonate those (b221.assertedGroups) and Kubernetes refuses a
+		// request that impersonates any other. A SuperAdmin by
+		// auth.adminGroups has the clusters' rights through the reserved
+		// group, 221b:superadmins.
 		if !s.cfg.Lists.Empty() {
-			out[roles.OIDC] = append(listed, s.cfg.AdminGroups...)
+			out[roles.OIDC] = listed
 		}
 	}
 	return out

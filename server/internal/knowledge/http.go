@@ -53,6 +53,10 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	}
 	route("GET settings", h.getSettings)
 	route("PUT settings", h.putSettings)
+	route("PUT embeddings", h.putEmbeddings)
+	route("PUT sources/{id}/index", h.putSourceIndex)
+	route("POST items/page", h.postItemPage)
+	route("POST evaluate", h.postEvaluate)
 	route("POST sources", h.postSource)
 	route("PUT sources/{id}", h.putSource)
 	route("DELETE sources/{id}", h.deleteSource)
@@ -62,6 +66,8 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("POST sources/test", h.postSourceTestTyped)
 	route("POST sources/{id}/documents", h.postDocument)
 	route("DELETE sources/{id}/documents/{name}", h.deleteDocument)
+	// An uploaded document's own trust (0.13.2, KN-61).
+	route("PUT sources/{id}/documents/{name}/trust", h.putDocumentTrust)
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)
 	route("POST store/move", h.postStoreMove)
@@ -82,6 +88,8 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	// What Mycroft draws on (0.12.1, KN-45, KN-47, MY-12 to MY-14).
 	route("GET uploads", h.getUploads)
 	route("DELETE uploads/{source}/{name}", h.deleteUpload)
+	// One row a source, with its last sync (phase-13.1-ai, KN-50).
+	route("GET sources", h.getSources)
 	route("GET items", h.getItems)
 	route("GET items/detail", h.getItem)
 	route("POST sources/{id}/exclusions", h.postExclusion)
@@ -170,6 +178,66 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 		return
 	}
 	h.getSettings(w, r, c)
+}
+
+// putEmbeddings chooses the embedding model of the search (KN-55).
+func (h *handler) putEmbeddings(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in EmbeddingSettings
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	if err := h.s.SetEmbeddings(r.Context(), c, in); err != nil {
+		fail(w, err)
+		return
+	}
+	h.getSettings(w, r, c)
+}
+
+// putSourceIndex sets a source's trust and what it is about (KN-56, KN-57).
+func (h *handler) putSourceIndex(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in SourceIndex
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	x, err := h.s.SetSourceIndex(r.Context(), c, r.PathValue("id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, x)
+}
+
+// postItemPage has Mycroft write pages from an item (KN-59).
+func (h *handler) postItemPage(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Source string `json:"source"`
+		ID     string `json:"id"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	res, err := h.s.WritePage(r.Context(), c, in.Source, in.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// postEvaluate measures the search with questions (KN-60).
+func (h *handler) postEvaluate(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Questions []EvalQuestion `json:"questions"`
+	}
+	if !decode(w, r, 1<<20, &in) {
+		return
+	}
+	rep, err := h.s.Evaluate(r.Context(), c, in.Questions)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // sourceInput is a source as its dialog sends it: it names its
@@ -296,8 +364,9 @@ func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c 
 
 func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller) {
 	var in struct {
-		Name string `json:"name"`
-		Data string `json:"data"`
+		Name  string  `json:"name"`
+		Data  string  `json:"data"`
+		Trust *string `json:"trust"`
 	}
 	if !decode(w, r, maxUpload, &in) {
 		return
@@ -307,12 +376,29 @@ func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller)
 		writeError(w, http.StatusBadRequest, "the document is not base64")
 		return
 	}
-	v, err := h.s.Upload(r.Context(), c, r.PathValue("id"), in.Name, body)
+	v, err := h.s.UploadWith(r.Context(), c, r.PathValue("id"), in.Name, body, in.Trust)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"version": v})
+}
+
+// putDocumentTrust sets an uploaded document's own trust (KN-61): trust
+// "" is its source's.
+func (h *handler) putDocumentTrust(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Trust string `json:"trust"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	v, err := h.s.SetDocumentTrust(r.Context(), c, r.PathValue("id"), r.PathValue("name"), in.Trust)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *handler) deleteDocument(w http.ResponseWriter, r *http.Request, c Caller) {
@@ -536,6 +622,15 @@ func (h *handler) getItems(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) getSources(w http.ResponseWriter, r *http.Request, c Caller) {
+	v, err := h.s.SourceSummaries(r.Context(), c)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *handler) getItem(w http.ResponseWriter, r *http.Request, c Caller) {

@@ -83,13 +83,32 @@ func (s *Server) weighRun(r *http.Request, list automationFleets, sc automation.
 			changed = append(changed, name)
 		}
 	}
+	// A parameter that gets a sensitive value is weighed as sensitive,
+	// whatever its own name: one bound to a sensitive variable, or given a
+	// digest, would otherwise hand that value to any parameter of the
+	// script with no second admin (FU-05).
+	for name, val := range run {
+		if p, declared := v.Header.Param(name); !declared || p.Secret {
+			continue
+		}
+		hidden := automation.IsHidden(val)
+		if bound, ok := automation.Bound(val); ok && slices.Contains(sensitive, bound) {
+			hidden = true
+		}
+		for _, n := range targets {
+			hidden = hidden || automation.IsHidden(values[n][name])
+		}
+		if hidden && !slices.Contains(sensitive, name) {
+			sensitive = append(sensitive, name)
+		}
+	}
 	sort.Strings(changed)
 	out := runWeight{Changed: changed, Impact: []automation.ImpactItem{}}
 	if len(changed) == 0 {
 		return out
 	}
 	one := automation.Script{Name: sc.Name, Group: sc.Group, Versions: []automation.Version{v}}
-	items, note := s.weighScripts(r, list.Cluster, []automation.Script{one}, sensitive, changed, sherlock)
+	items, note := s.weighScripts(r, list.Cluster, list.Production, []automation.Script{one}, sensitive, changed, sherlock)
 	if items != nil {
 		out.Impact = items
 	}
@@ -211,8 +230,9 @@ func (s *Server) getWaitingRuns(w http.ResponseWriter, r *http.Request) {
 	answerJSON(w, r, map[string]any{"waiting": list})
 }
 
-// waitingRunMu orders approvals of waiting runs from the check to the
-// record, as the twoperson store does: writes are the leader's (ADR-70).
+// waitingRunMu orders the decisions on waiting runs, an approval from the
+// check to the record and a rejection with them, as the twoperson store
+// does: writes are the leader's (ADR-70).
 // The run's request name stops a second start in any case.
 var waitingRunMu sync.Mutex
 
@@ -240,6 +260,11 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 	st := s.opts.AutomationStore
 	target := fmt.Sprintf("run request %d", id)
 	s.expireWaitingRuns(r)
+	// A decision is one critical section: a rejection waits for an
+	// approval that is between its check and its record (the run started),
+	// and then finds the request approved, and the other way round.
+	waitingRunMu.Lock()
+	defer waitingRunMu.Unlock()
 	if decision == "reject" {
 		wr, err := st.DecideWaitingRun(ctx, cluster, id, false, in.Comment, me, 0)
 		if err != nil {
@@ -251,8 +276,6 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 		answerJSON(w, r, map[string]any{"waiting": wr})
 		return
 	}
-	waitingRunMu.Lock()
-	defer waitingRunMu.Unlock()
 	wr, err := st.WaitingRunFor(ctx, cluster, id, me)
 	if err != nil {
 		s.recordAutomation(r, audit.ActionAutomationRun, cluster, target, audit.OutcomeDenied, fmt.Sprintf("not approved: %v", err))

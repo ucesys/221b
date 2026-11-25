@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
@@ -118,6 +119,11 @@ type Line struct {
 	RegressionOf int      `json:"regressionOf,omitempty"`
 	SameAs       int      `json:"sameAs,omitempty"`
 	PossibleDup  int      `json:"possibleDuplicateOf,omitempty"`
+	// CorrelationKey, MergedInto and the alerts attached, as cluster/key
+	// (CF-117, CF-119): what the safety net and the lists read.
+	CorrelationKey string   `json:"correlationKey,omitempty"`
+	MergedInto     int      `json:"mergedInto,omitempty"`
+	Signals        []string `json:"signals,omitempty"`
 	// Explanation is the close's, cut short; ClosedBy who closed it.
 	Explanation   string     `json:"explanation,omitempty"`
 	ClosedBy      string     `json:"closedBy,omitempty"`
@@ -175,6 +181,10 @@ func lineOf(r *Case) Line {
 	for _, w := range r.Watchers {
 		l.Watchers = append(l.Watchers, w.ID)
 	}
+	l.CorrelationKey, l.MergedInto = r.CorrelationKey, r.MergedInto
+	for _, g := range r.Signals {
+		l.Signals = append(l.Signals, g.ID())
+	}
 	l.Involved = involvedIDs(r, &l)
 	return l
 }
@@ -212,6 +222,11 @@ func (l Line) lite() Case {
 	}
 	for _, w := range l.Watchers {
 		r.Watchers = append(r.Watchers, Person{ID: w})
+	}
+	r.CorrelationKey, r.MergedInto = l.CorrelationKey, l.MergedInto
+	for _, id := range l.Signals {
+		cluster, key, _ := strings.Cut(id, "/")
+		r.Signals = append(r.Signals, Signal{Cluster: cluster, Key: key})
 	}
 	return r
 }
@@ -355,6 +370,10 @@ func (st *state) touch(r *Case, now time.Time, fn func() error) error {
 
 // add keeps a new case, numbered next.
 func (st *state) add(r Case) *Case {
+	// A number whose object a failed save could not delete is skipped.
+	if st.svc != nil && st.index.Next < st.svc.skipTo {
+		st.index.Next = st.svc.skipTo
+	}
 	r.Number = st.index.Next
 	st.index.Next++
 	if st.cases == nil {
@@ -657,6 +676,23 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 			return err
 		}
 	}
+	// The objects made here, until the index that numbers them is saved:
+	// a save that fails after them (another writer saved the index first)
+	// deletes them, so that the retry, which numbers its cases from the
+	// index again, does not find its own object there and fail on it.
+	var made []int
+	saved := false
+	defer func() {
+		if saved {
+			return
+		}
+		for _, n := range made {
+			if err := s.cases.Delete(ctx, caseName(n)); err != nil {
+				s.log.Warn("a case made by a save that failed could not be deleted: its number is skipped", "case", n, "err", err)
+				s.skipTo = max(s.skipTo, n+1)
+			}
+		}
+	}()
 	for _, w := range creates {
 		if st.cases[w.n].dropped {
 			continue
@@ -665,7 +701,8 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 		if err != nil {
 			return err
 		}
-		w.l.version, w.l.was, w.l.created = v, w.b, false
+		made = append(made, w.n)
+		w.l.version, w.l.was = v, w.b
 	}
 	type part struct {
 		bit int
@@ -687,6 +724,10 @@ func (s *Service) save(ctx context.Context, st *state, parts int) error {
 			return err
 		}
 		st.version = next
+	}
+	saved = true
+	for _, w := range creates {
+		w.l.created = false
 	}
 	for _, w := range changes {
 		v, err := s.cases.Save(ctx, caseName(w.n), CaseKey, w.b, w.l.version)

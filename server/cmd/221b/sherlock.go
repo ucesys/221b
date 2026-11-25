@@ -132,7 +132,7 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 		},
 		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Commands:  watson.Commands(),
-		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: w.keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
+		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: w.keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second, Logger: log.With("component", "sherlock"),
 			Provider: func() sherlock.Provider {
 				if p := w.shared.Current().SherlockOrDefault().Provider; p != nil && !cfg.SherlockLockProvider {
 					return *p

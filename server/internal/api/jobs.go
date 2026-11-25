@@ -158,15 +158,3 @@ func (s *Server) ReaderBlind(ctx context.Context, cluster string, sess *auth.Ses
 	}
 	return true, nil
 }
-
-// JobsClusters are the clusters a job may cover.
-func (s *Server) JobsClusters() []jobs.Cluster {
-	if s.opts.Clusters == nil {
-		return []jobs.Cluster{{ID: clusters.LocalID, Name: clusters.LocalID}}
-	}
-	var out []jobs.Cluster
-	for _, c := range s.opts.Clusters.List() {
-		out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name})
-	}
-	return out
-}

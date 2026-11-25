@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -188,7 +189,8 @@ func (s *Service) defaultProvider(snap snapshot) Provider {
 	if name == "" {
 		name = KindLabel(p.Normalized(s.opts.DefaultURL).Kind)
 	}
-	return Provider{ID: DefaultProvider, Name: name, Provider: p, Model: sh.Model, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut, ContextWindow: snap.providers.DefaultWindow, Tested: snap.providers.DefaultTested}
+	return Provider{ID: DefaultProvider, Name: name, Provider: p, Model: sh.Model, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut, ContextWindow: snap.providers.DefaultWindow, Tested: snap.providers.DefaultTested,
+		Offered: snap.providers.DefaultOffered, OfferedChosen: snap.providers.DefaultOfferedChosen}
 }
 
 // defaultID is the provider agents that name none use: the one made the
@@ -294,7 +296,7 @@ func (s *Service) Client(id string) *sherlock.Client {
 	if c := s.clients[id]; c != nil {
 		return c
 	}
-	c := &sherlock.Client{BaseURL: s.opts.DefaultURL, Key: keys.Key, HTTP: s.opts.HTTP, Retries: 2, Backoff: 2 * time.Second,
+	c := &sherlock.Client{BaseURL: s.opts.DefaultURL, Key: keys.Key, HTTP: s.opts.HTTP, Retries: 2, Backoff: 2 * time.Second, Logger: s.opts.Logger,
 		Provider: func() sherlock.Provider {
 			p, _ := s.provider(s.cached(), id)
 			return p.Provider
@@ -484,6 +486,9 @@ type draftText struct {
 	notes      map[string]string
 	parts      map[string]string
 	partsGiven bool
+	// inForce says they are the instructions in force, as a test with
+	// live runs them: its records say so, not "draft" (F7, AI-54).
+	inForce bool
 }
 
 // Preview is an agent as it would answer on a cluster with the house
@@ -526,19 +531,54 @@ const CompactShare = 0.5
 // windowOf is the context window of an agent's model on its provider, in
 // tokens, and where it was found: the agent's own (for a model of its
 // own), the provider's (for its default model), or a Claude model's.
-// 0 is not known.
+// 0 is not known. A model left to Auto is judged by the models Auto may
+// put it on (autoWindow), never by the word "auto".
 func windowOf(set AgentSettings, p Provider, model string) (int, string) {
 	switch {
+	case set.Model == auto.Auto:
+		return autoWindow(set, p, model)
 	case set.Model != "" && set.ContextWindow > 0:
 		return set.ContextWindow, "agent"
-	case (set.Model == "" || set.Model == p.Model) && p.ContextWindow > 0:
+	}
+	return modelWindow(p, model, set.Model == "")
+}
+
+// modelWindow is the context window of a model on a provider, for an
+// agent that gives none of its own: the provider's for its default model
+// (providerDefault: the agent names none), a Claude model's, or 0.
+func modelWindow(p Provider, model string, providerDefault bool) (int, string) {
+	switch {
+	case (providerDefault || model == p.Model) && p.ContextWindow > 0:
 		return p.ContextWindow, "provider"
-	case p.Provider.Kind == "" || p.Provider.Kind == sherlock.KindAnthropic || strings.HasPrefix(model, "claude"):
+	case anthropicKind(p) || strings.HasPrefix(model, "claude"):
 		if _, ok := sherlock.ModelOf(model); ok {
 			return sherlock.ClaudeContext, "model"
 		}
 	}
 	return 0, ""
+}
+
+// autoWindow is the context window of an agent whose model Auto picks:
+// the smallest known of the model it starts on and of every tiered model
+// it may move to (from its floor up), so that its reply bound and
+// Sherlock's form hold on whichever model Auto puts it on, a model changed
+// in the middle of a conversation or a job's run too. The agent's own
+// context window is not used: it is that of a model of its own, and the
+// drawer clears it under Auto.
+func autoWindow(set AgentSettings, p Provider, model string) (int, string) {
+	w, from := modelWindow(p, model, false)
+	ladder := ladderOf(p)
+	floor := ladder.Rank(set.FloorModel)
+	for _, o := range ladder {
+		r := auto.TierRank(o.Tier)
+		if r < 0 || floor >= 0 && r < floor {
+			continue
+		}
+		if x, f := modelWindow(p, o.Model, false); x > 0 && (w == 0 || x < w) {
+			w, from = x, f
+		}
+	}
+	return w, from
 }
 
 // replyBound bounds one reply on a model whose context is known: a
@@ -557,23 +597,23 @@ func replyBound(window int) int {
 func (s *Service) resolve(snap snapshot, id, cluster string, names []string, over *draftText, setup func(context.Context) string, cases bool) (sherlock.Agent, error) {
 	info, ok := InfoOf(id)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("there is no agent %q", id)
+		return sherlock.Agent{}, kindError{fmt.Sprintf("there is no agent %q", id), ErrNotFound}
 	}
 	if id != Sherlock && !s.on(snap, info, "") {
-		return sherlock.Agent{}, fmt.Errorf("the %s is off", info.Name)
+		return sherlock.Agent{}, unavailable("the " + info.Name + " is off")
 	}
 	if id != Sherlock && cluster != "" && !s.settingsOf(snap, id).worksOn(cluster) {
-		return sherlock.Agent{}, fmt.Errorf("the %s does not work on this cluster", info.Name)
+		return sherlock.Agent{}, unavailable("the " + info.Name + " does not work on this cluster")
 	}
 	set := s.settingsOf(snap, id)
 	p, ok := s.provider(snap, set.Provider)
 	if !ok {
-		return sherlock.Agent{}, fmt.Errorf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider)
+		return sherlock.Agent{}, kindError{fmt.Sprintf("the %s's provider %q is gone; pick another in Administration › AI › Agents", info.Name, set.Provider), ErrUnusable}
 	}
 	if why := s.usable(p); why != "" {
-		return sherlock.Agent{}, errors.New(why)
+		return sherlock.Agent{}, kindError{why, ErrUnusable}
 	}
-	model := modelOf(set, p)
+	model := modelOfAuto(set, p)
 	baseline := s.Baseline(id)
 	ap := snap.prompts.Agents[id]
 	version := "live"
@@ -595,6 +635,9 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	}
 	if over != nil && over.notes != nil {
 		notes = over.notes
+	}
+	if over != nil && over.inForce {
+		version = "in force"
 	}
 	view := id == Sherlock && s.sherlockSettings().ChangesView()
 	roster := s.roster(snap, id, cluster)
@@ -635,6 +678,15 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 		Version:      version,
 		Setup:        setup,
 		MaxTokens:    replyBound(window),
+	}
+	// Effort and Auto (AI-43, AI-44): a fixed effort is sent as it is set;
+	// what is left to Auto is picked message by message, or by a job's
+	// rules before the agent runs (PickRun).
+	if set.Effort != auto.Auto {
+		a.Effort = set.Effort
+	}
+	if set.usesAuto() {
+		a.Auto = &chooser{s: s, settings: autoSettings(set, p, model), provider: p}
 	}
 	if id == Sherlock && s.compact(set, window, a, view) {
 		a = compactForm(a, set, info, parts, text)
@@ -691,6 +743,73 @@ func (s *Service) Usable(id, cluster string) string {
 	return ""
 }
 
+// Available says whether an agent can answer at all, on no cluster in
+// particular (JB-25): nil; an error that is ErrUnavailable when it is off;
+// another when its provider cannot.
+func (s *Service) Available(ctx context.Context, id string) error {
+	_, err := s.resolve(s.read(ctx), id, "", nil, nil, nil, false)
+	return err
+}
+
+// Setup is an agent's model and effort as set now, for the jobs it runs
+// (AIOps › Jobs › Schedule): Model is the model in force, auto.Auto when
+// Auto picks it, then from AutoFrom to AutoTo (its floor model on); Effort
+// is "" (the model's default), a level or auto, then at least FloorEffort.
+type Setup struct {
+	Model        string
+	DefaultModel bool
+	AutoFrom     string
+	AutoTo       string
+	Provider     string
+	Effort       string
+	FloorEffort  string
+}
+
+// SetupOf is an agent's model and effort as set now; false for no agent.
+func (s *Service) SetupOf(ctx context.Context, id string) (Setup, bool) {
+	if _, ok := InfoOf(id); !ok {
+		return Setup{}, false
+	}
+	snap := s.read(ctx)
+	set := s.settingsOf(snap, id)
+	out := Setup{Effort: set.Effort}
+	if set.Effort == auto.Auto {
+		out.FloorEffort = set.FloorEffort
+	}
+	pid := set.Provider
+	if pid == "" {
+		pid = s.defaultID(snap)
+	}
+	p, ok := s.provider(snap, pid)
+	if !ok {
+		return out, true
+	}
+	out.Provider = p.Name
+	out.Model, out.DefaultModel = modelOf(set, p), set.Model == ""
+	if set.Model == auto.Auto {
+		out.Model, out.DefaultModel = auto.Auto, false
+		l := ladderOf(p)
+		low := 0
+		if set.FloorModel != "" {
+			low = max(l.Rank(set.FloorModel), 0)
+		}
+		lo, hi := -1, -1
+		for _, o := range l {
+			r := auto.TierRank(o.Tier)
+			if r < low {
+				continue
+			}
+			if lo < 0 || r < lo {
+				lo, out.AutoFrom = r, o.Model
+			}
+			if r > hi {
+				hi, out.AutoTo = r, o.Model
+			}
+		}
+	}
+	return out, true
+}
+
 // ---------- the administrators' view ----------
 
 // ProviderView is a provider as Administration › AI › Providers shows it.
@@ -712,6 +831,11 @@ type ProviderView struct {
 	// on it (Phase 12.1, AI-36).
 	Limit sherlock.Caps       `json:"limit"`
 	Spend sherlock.AgentSpend `json:"spend"`
+	// Offers are the models it offers its agents in force, with their
+	// tiers, and OffersAll says it offers every model it lists, none
+	// having been chosen yet (A9): Offers are then the tiers Auto uses.
+	Offers    []auto.Offered `json:"offers"`
+	OffersAll bool           `json:"offersAll"`
 }
 
 // AgentView is an agent as Administration › AI › Agents shows it.
@@ -744,6 +868,12 @@ type AgentView struct {
 	// Footprint is what its instructions and tools take of its model's
 	// context; nil when it cannot answer now (Phase 12, wave 5).
 	Footprint *AgentFootprint `json:"footprint,omitempty"`
+	// NotOffered says its model is one its provider no longer offers: it
+	// keeps answering on it until changed (A9). AutoNoTier says its model
+	// is left to Auto on a provider none of whose offered models has a
+	// tier: it answers on the provider's default model.
+	NotOffered bool `json:"notOffered,omitempty"`
+	AutoNoTier bool `json:"autoNoTier,omitempty"`
 }
 
 // AgentFootprint is what an agent's instructions and tools take of its
@@ -807,6 +937,10 @@ type Overview struct {
 	Spend          sherlock.Spend `json:"spend"`
 	SingleProvider bool           `json:"singleProvider"`
 	ViewControl    bool           `json:"viewControl"`
+	// Classifier is the provider Auto's classifier asks, "" for none, and
+	// ClassifierOff why it is not used when one is chosen (AI-45).
+	Classifier    string `json:"classifier"`
+	ClassifierOff string `json:"classifierOff,omitempty"`
 }
 
 // View is the overview.
@@ -817,7 +951,11 @@ func (s *Service) View(ctx context.Context) Overview {
 	if s.engine != nil {
 		spend = s.engine.Ledger().Now(ctx)
 	}
-	o := Overview{Models: sherlock.Models, DefaultModel: sh.Model, DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD, Spend: spend, SingleProvider: snap.agents.SingleProvider, ViewControl: sh.ChangesView()}
+	o := Overview{Models: sherlock.Models, DefaultModel: sh.Model, DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD, Spend: spend, SingleProvider: snap.agents.SingleProvider, ViewControl: sh.ChangesView(),
+		Classifier: snap.providers.ClassifierID}
+	if o.Classifier != "" {
+		_, _, o.ClassifierOff = s.classifier(snap)
+	}
 	used := map[string][]string{}
 	for _, info := range Catalog {
 		set := s.settingsOf(snap, info.ID)
@@ -841,6 +979,11 @@ func (s *Service) View(ctx context.Context) Overview {
 		}
 		if ok {
 			v.Model, v.DefaultModel = modelOf(set, p), set.Model == ""
+			if set.Model == auto.Auto {
+				v.Model = auto.Auto
+				v.AutoNoTier = ladderOf(p).Empty()
+			}
+			v.NotOffered = set.Model != "" && set.Model != auto.Auto && !offers(p, set.Model)
 			if v.Enabled {
 				used[pid] = append(used[pid], info.Name)
 			}
@@ -871,10 +1014,33 @@ func (s *Service) View(ctx context.Context) Overview {
 	for _, p := range list {
 		k := s.KeysFor(p.ID)
 		r := p.Provider.Normalized(s.opts.DefaultURL)
-		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)})
+		v := ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)}
+		v.Offers, v.OffersAll = offerOf(p)
+		if v.Offers == nil {
+			v.Offers = []auto.Offered{}
+		}
+		o.Providers = append(o.Providers, v)
 	}
 	return o
 }
+
+// unavailableError is ErrUnavailable in its own words.
+type unavailableError string
+
+func (e unavailableError) Error() string        { return string(e) }
+func (e unavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+func unavailable(why string) error { return unavailableError(why) }
+
+// kindError is an error of a kind (ErrNotFound, ErrUnusable) in its own
+// words.
+type kindError struct {
+	why  string
+	kind error
+}
+
+func (e kindError) Error() string        { return e.why }
+func (e kindError) Is(target error) bool { return target == e.kind }
 
 // ---------- changes ----------
 
@@ -882,6 +1048,14 @@ func (s *Service) View(ctx context.Context) Overview {
 var (
 	ErrInvalid  = errors.New("not valid")
 	ErrNotFound = errors.New("not found")
+	// ErrUnavailable is an agent asked for while it is off, or on a
+	// cluster it does not work on: the error says which (F4, AI-54).
+	ErrUnavailable = errors.New("the agent is not available")
+	// ErrUnusable is an agent asked for whose provider cannot answer now:
+	// gone, or without the credential it needs; the error says which.
+	// The agent is on, so it is not ErrUnavailable, which a job's run
+	// reads as the agent turned off (JB-25).
+	ErrUnusable = errors.New("the agent's provider cannot answer now")
 	// ErrSameProvider is the Script reviewer put on the Automation
 	// author's provider without the single-provider confirmation.
 	ErrSameProvider = errors.New("the Script reviewer is on the same provider as the Automation author: an independent second opinion needs another provider. Pick another, or confirm this console has only one")
@@ -897,6 +1071,10 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 		}
 		if s.read(ctx).providers.DefaultRemoved {
 			return ErrNotFound
+		}
+		// What it offers is checked before anything of it is saved (A9).
+		if err := checkOffered(p); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		sh := s.sherlockSettings()
 		before := s.defaultProvider(s.read(ctx))
@@ -931,6 +1109,10 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 			}
 			ps.DefaultName = name
 			ps.DefaultWindow = p.ContextWindow
+			ps.DefaultOffered, ps.DefaultOfferedChosen = p.Offered, p.OfferedChosen
+			if !p.OfferedChosen {
+				ps.DefaultOffered = nil
+			}
 			return nil
 		})
 		return err
@@ -940,6 +1122,9 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 	}
 	// The last test is the console's own record, never the request's.
 	p.Tested = nil
+	if !p.OfferedChosen {
+		p.Offered = nil
+	}
 	_, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
 		i := slices.IndexFunc(ps.List, func(x Provider) bool { return x.ID == p.ID })
 		switch {
@@ -997,30 +1182,42 @@ func (s *Service) usersOf(snap snapshot, id string) []string {
 // credential (KI-2). The default stays until another is made the
 // default; one the chart fixes, or whose key the chart sets, stays.
 func (s *Service) DeleteProvider(ctx context.Context, id string) error {
+	_, err := s.RemoveProvider(ctx, id)
+	return err
+}
+
+// RemoveProvider is DeleteProvider saying whether it turned Auto's
+// classifier off, which asked the provider removed (AI-45): for the audit
+// record.
+func (s *Service) RemoveProvider(ctx context.Context, id string) (classifierOff bool, err error) {
 	defer s.forget()
 	snap := s.read(ctx)
 	p, ok := s.provider(snap, id)
 	if id == "" || !ok {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
 	if id == DefaultProvider && s.opts.ProviderLocked {
-		return refusal(fmt.Sprintf("%s stays: the chart fixes it (sherlock.lockProvider).", p.Name))
+		return false, refusal(fmt.Sprintf("%s stays: the chart fixes it (sherlock.lockProvider).", p.Name))
 	}
 	if users := s.usersOf(snap, id); len(users) > 0 {
 		verb, them := "use", "them"
 		if len(users) == 1 {
 			verb, them = "uses", "it"
 		}
-		return refusal(fmt.Sprintf("%s cannot be removed: %s %s it. Move %s to another provider first.", p.Name, joinAnd(users), verb, them))
+		return false, refusal(fmt.Sprintf("%s cannot be removed: %s %s it. Move %s to another provider first.", p.Name, joinAnd(users), verb, them))
 	}
 	if id == s.defaultID(snap) {
-		return refusal(fmt.Sprintf("%s cannot be removed: it is the default. Make another provider the default first.", p.Name))
+		return false, refusal(fmt.Sprintf("%s cannot be removed: it is the default. Make another provider the default first.", p.Name))
 	}
 	if id == DefaultProvider && s.opts.Keys.Fixed() {
-		return refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
+		return false, refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
 	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
 		delete(ps.Limits, id)
+		classifierOff = ps.ClassifierID == id
+		if classifierOff {
+			ps.ClassifierID = ""
+		}
 		if id == DefaultProvider {
 			ps.DefaultRemoved, ps.DefaultTested = true, nil
 			return nil
@@ -1032,10 +1229,10 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 		ps.List = slices.Delete(ps.List, i, i+1)
 		return nil
 	}); err != nil {
-		return err
+		return false, err
 	}
 	if err := s.KeysFor(id).Delete(ctx); err != nil && !errors.Is(err, sherlock.ErrNoKey) {
-		return err
+		return classifierOff, err
 	}
 	s.mu.Lock()
 	if id != DefaultProvider {
@@ -1043,7 +1240,7 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 	}
 	delete(s.clients, id)
 	s.mu.Unlock()
-	return nil
+	return classifierOff, nil
 }
 
 // MakeDefault makes a provider the one agents that name none use (KI-2):
@@ -1101,18 +1298,45 @@ type AgentChange struct {
 
 // SaveAgent changes an agent's settings.
 func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) error {
+	_, err := s.ChangeAgent(ctx, id, in)
+	return err
+}
+
+// ChangeAgent is SaveAgent saying the settings the save replaced, read in
+// the same read-modify-write as the save: for the audit record's "was",
+// which a read before the save could take from another save that came
+// between (AI-47).
+func (s *Service) ChangeAgent(ctx context.Context, id string, in AgentChange) (was AgentSettings, err error) {
 	defer s.forget()
 	info, ok := InfoOf(id)
 	if !ok {
-		return ErrNotFound
+		return was, ErrNotFound
 	}
 	set := in.AgentSettings
 	if err := set.Validate(info); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return was, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	snap := s.read(ctx)
-	if _, ok := s.provider(snap, set.Provider); !ok {
-		return fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
+	prov, ok := s.provider(snap, set.Provider)
+	if !ok {
+		return was, fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
+	}
+	// The models its provider offers (A9). A model or floor set before
+	// that its provider no longer offers may stay as it is, so that the
+	// agent's other settings can be saved; a new one must be offered. So
+	// may Auto's model on a provider that lost its last tier (it answers
+	// on the default model, AutoNoTier): the agent can still be turned
+	// off or its caps lowered.
+	before := snap.agents.Agents[id]
+	kept := cmp.Or(before.Provider, s.defaultID(snap)) == cmp.Or(set.Provider, s.defaultID(snap))
+	ladder := ladderOf(prov)
+	switch {
+	case set.Model == auto.Auto && ladder.Empty() && !(kept && before.Model == auto.Auto):
+		return was, fmt.Errorf("%w: Auto picks among the models %s offers by their tiers, and none has a tier: give its models tiers in Administration › AI › Providers, or pick its model", ErrInvalid, prov.Name)
+	case set.Model != "" && set.Model != auto.Auto && !offers(prov, set.Model) && !(kept && set.Model == before.Model):
+		return was, fmt.Errorf("%w: %s does not offer %s to the agents: pick one of the models it offers, or offer it in Administration › AI › Providers", ErrInvalid, prov.Name, set.Model)
+	case set.FloorModel != "" && ladder.Rank(set.FloorModel) < 0 && !(kept && set.FloorModel == before.FloorModel):
+		return was, fmt.Errorf("%w: the lowest model Auto may pick is one of the models %s offers with a tier, not %s", ErrInvalid, prov.Name, set.FloorModel)
 	}
 	if set.Provider == s.defaultID(snap) {
 		set.Provider = ""
@@ -1132,13 +1356,15 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 			sh.ViewControl = in.ViewControl
 		}
 		if _, err := s.opts.Settings.UpdateSherlock(ctx, sh); err != nil {
-			return err
+			return was, err
 		}
 	}
-	_, err := change(ctx, s.opts.Backend, AgentsKey, func(a *Agents) error {
+	_, err = change(ctx, s.opts.Backend, AgentsKey, func(a *Agents) error {
 		if a.Agents == nil {
 			a.Agents = map[string]AgentSettings{}
 		}
+		// Each try reads what it replaces: the last is the one saved.
+		was = a.Agents[id]
 		next := cloneAgents(a.Agents)
 		next[id] = set
 		author, reviewer := cmp.Or(next[AutomationAuthor].Provider, s.defaultID(snap)), cmp.Or(next[ScriptReviewer].Provider, s.defaultID(snap))
@@ -1153,7 +1379,10 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 		a.Agents = next
 		return nil
 	})
-	return err
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	return was, nil
 }
 
 func cloneAgents(m map[string]AgentSettings) map[string]AgentSettings {

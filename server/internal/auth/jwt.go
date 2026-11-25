@@ -114,6 +114,11 @@ type jwsHeader struct {
 // usually means the provider rotated its keys.
 var ErrNoKey = errors.New("no key in the set signs this token")
 
+// ErrBadSignature says no key of the set that may have signed a token
+// verifies it: the provider may have rotated its key under the same kid,
+// or publishes none.
+var ErrBadSignature = errors.New("the signature does not verify")
+
 // verifyJWS checks a compact JWS against the keys and returns its payload.
 func verifyJWS(token string, keys []JWK) ([]byte, error) {
 	parts := strings.Split(token, ".")
@@ -194,7 +199,7 @@ func verifyJWS(token string, keys []JWK) ([]byte, error) {
 			}
 		}
 	}
-	return nil, errors.New("the signature does not verify")
+	return nil, ErrBadSignature
 }
 
 func hashOf(h crypto.Hash, b []byte) []byte {
@@ -286,15 +291,21 @@ func nestedClaim(all map[string]any, name string) string {
 }
 
 // stringsClaim reads a claim as a list of strings; a single string counts
-// as a list of one, and nested claims use dots ("realm_access.roles").
+// as a list of one. A claim of that name is read first, as nestedClaim
+// does, since a namespaced claim's name has dots
+// ("https://corp.example/groups"); without one, dots are a path into
+// nested claims ("realm_access.roles").
 func stringsClaim(all map[string]any, name string) []string {
-	var v any = all
-	for _, part := range strings.Split(name, ".") {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return nil
+	v, ok := all[name]
+	if !ok {
+		v = any(all)
+		for _, part := range strings.Split(name, ".") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil
+			}
+			v = m[part]
 		}
-		v = m[part]
 	}
 	switch x := v.(type) {
 	case string:

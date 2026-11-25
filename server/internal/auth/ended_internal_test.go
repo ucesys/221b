@@ -89,7 +89,7 @@ func TestTheEndingOfASignedSessionIsKeptInTheSharedStore(t *testing.T) {
 			if n := len(s.Live()); n != 0 {
 				t.Fatalf("%s lists %d sessions", name, n)
 			}
-			if n := s.DeleteWhere(func(Session) bool { return true }); n != 0 {
+			if n, _ := s.DeleteWhere(func(Session) bool { return true }); n != 0 {
 				t.Fatalf("%s ended %d sessions where there is none", name, n)
 			}
 		}

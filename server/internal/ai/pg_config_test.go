@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -43,10 +44,16 @@ func TestProvidersInTheDatabase(t *testing.T) {
 			{ID: "gateway", Name: "Gateway", Provider: sherlock.Provider{Kind: sherlock.KindOpenAI, Endpoint: "https://gateway.example/v1", Auth: sherlock.AuthHeader, AuthHeaderName: "X-Key",
 				AuthPrefix: "Token ", Headers: map[string]string{"X-Team": "platform", "X-Empty": ""}, Query: "api-version=2026-01-01", Region: "eu-west-1", Project: "p-1", CACert: "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n"},
 				Model: "gpt-5", PriceIn: 1.25, PriceOut: 10.5, ContextWindow: 128000,
-				Tested: &ProviderTest{At: at.Add(time.Minute), OK: false, Model: "gpt-5", Keyless: true, Conn: "c1", Error: "401 from the endpoint"}},
+				Tested: &ProviderTest{At: at.Add(time.Minute), OK: false, Model: "gpt-5", Keyless: true, Conn: "c1", Error: "401 from the endpoint"},
+				// The models it offers (step 0054).
+				Offered: []auto.Offered{{Model: "gpt-5-mini", Tier: auto.Light}, {Model: "gpt-5", Tier: auto.Standard}, {Model: "text-embed"}}, OfferedChosen: true},
 			{ID: "local", Name: "Local", Provider: sherlock.Provider{Kind: sherlock.KindOpenAI, Endpoint: "http://ollama.ai.svc:11434/v1"}, Model: "llama"},
 		},
 		Limits: map[string]sherlock.Caps{"gateway": {DailyUSD: 5, MonthlyUSD: 50.5}, DefaultProvider: {MonthlyUSD: 100}},
+		// Auto's classifier (step 0052).
+		ClassifierID: "local",
+		// The default provider's offered models (step 0054).
+		DefaultOffered: []auto.Offered{{Model: "claude-sonnet-5-5", Tier: auto.Standard}}, DefaultOfferedChosen: true,
 	}
 	save := func() {
 		t.Helper()
@@ -75,6 +82,14 @@ func TestProvidersInTheDatabase(t *testing.T) {
 	if rows != 3 || headers != 2 || prefix != "Token " || conn != "c1" || daily != 5 {
 		t.Fatalf("rows %d, headers %d, prefix %q, conn %q, daily %v", rows, headers, prefix, conn, daily)
 	}
+	var models int
+	var tier string
+	if err := d.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM ai_provider_models), tier FROM ai_provider_models WHERE ai_provider_id = 'gateway' AND position = 1 AND model = 'gpt-5'`).Scan(&models, &tier); err != nil || models != 4 || tier != auto.Standard {
+		t.Fatalf("offered models %d, gpt-5's tier %q: %v", models, tier, err)
+	}
+	// The offered models change: one goes, the order and a tier change.
+	ps.List[0].Offered = []auto.Offered{{Model: "gpt-5", Tier: auto.Strong}, {Model: "gpt-5-mini", Tier: auto.Light}}
+	save()
 	// The order changes, a header goes, and the default is the built-in again.
 	ps.List[0], ps.List[1] = ps.List[1], ps.List[0]
 	ps.List[1].Headers = map[string]string{"X-Team": "data"}
@@ -93,7 +108,7 @@ func TestProvidersInTheDatabase(t *testing.T) {
 		t.Fatalf("after a provider went: rows %d, headers %d", rows, headers)
 	}
 	// Nothing kept of the default provider: its row goes too.
-	ps.DefaultName, ps.DefaultWindow, ps.DefaultRemoved, ps.Limits = "", 0, false, nil
+	ps.DefaultName, ps.DefaultWindow, ps.DefaultRemoved, ps.Limits, ps.DefaultOffered, ps.DefaultOfferedChosen = "", 0, false, nil, nil, false
 	save()
 	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM ai_providers").Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("rows %d: %v", rows, err)
@@ -111,7 +126,10 @@ func TestAgentsInTheDatabase(t *testing.T) {
 		Agents: map[string]AgentSettings{
 			Auditor:        {On: &on, Provider: "gateway", Model: "gpt-5", DailyUSD: 2.5, MonthlyUSD: 20, Clusters: []string{"prod", "dev"}, Tools: []string{"review_cluster"}, ContextWindow: 64000, Compact: "auto"},
 			Troubleshooter: {On: &off},
-			ChangePlanner:  {Model: "claude-haiku-5-5"},
+			ChangePlanner:  {Model: "claude-haiku-5-5", Effort: "high"},
+			// Effort and Auto (step 0052): an agent with only these chosen
+			// is in the document.
+			Summarizer: {Effort: "auto", FloorEffort: "medium", FloorModel: "claude-sonnet-5-5"},
 		},
 		SingleProvider: true, Migrated: true,
 		BaselineTested: map[string]string{Auditor: "h1", Sherlock: "h2"},
@@ -147,7 +165,7 @@ func TestAgentsInTheDatabase(t *testing.T) {
 	delete(a.BaselineTested, Sherlock)
 	save()
 	var rows int
-	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM agents").Scan(&rows); err != nil || rows != 4 {
+	if err := d.Pool().QueryRow(ctx, "SELECT count(*) FROM agents").Scan(&rows); err != nil || rows != 5 {
 		t.Fatalf("rows %d: %v", rows, err)
 	}
 	// A row made for what points at an agent says nothing of its settings.

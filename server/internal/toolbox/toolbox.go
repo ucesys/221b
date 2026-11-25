@@ -5,15 +5,21 @@
 package toolbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/tunnel"
 )
 
 // The tools, as the menus, the dialogs and the API name them.
@@ -55,13 +61,25 @@ type Image struct {
 // Duration is a time.Duration that reads "10m" in JSON.
 type Duration time.Duration
 
-// UnmarshalJSON reads "10m", "400d", or a number of seconds.
+// maxDays is the most days a time.Duration holds.
+const maxDays = math.MaxInt64 / int64(24*time.Hour)
+
+// UnmarshalJSON reads "10m", "400d", or a number of seconds; null keeps
+// what is there, as encoding/json does for its own types. A duration too
+// long for a time.Duration is refused, never wrapped (the toolbox review,
+// finding 10).
 func (d *Duration) UnmarshalJSON(b []byte) error {
+	if string(bytes.TrimSpace(b)) == "null" {
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
 		if n, ok := strings.CutSuffix(s, "d"); ok {
 			// Days, which Go's durations lack: retention: 400d.
-			if days, err := strconv.Atoi(n); err == nil && days >= 0 {
+			if days, err := strconv.ParseInt(n, 10, 64); err == nil && days >= 0 {
+				if days > maxDays {
+					return fmt.Errorf("%s is longer than a duration may be (%dd at most)", s, maxDays)
+				}
 				*d = Duration(time.Duration(days) * 24 * time.Hour)
 				return nil
 			}
@@ -75,14 +93,37 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	}
 	var n float64
 	if err := json.Unmarshal(b, &n); err != nil {
-		return errors.New("a duration is a string such as 10m")
+		return errors.New("a duration is a string such as 10m, or a number of seconds")
 	}
-	*d = Duration(time.Duration(n * float64(time.Second)))
+	// Converting a float out of int64's range is left to the platform
+	// (amd64 and arm64 differ), so it is refused before.
+	ns := n * float64(time.Second)
+	if math.IsNaN(ns) || ns >= math.MaxInt64 || ns <= math.MinInt64 {
+		return fmt.Errorf("%s seconds is longer than a duration may be (%dd at most)", bytes.TrimSpace(b), maxDays)
+	}
+	*d = Duration(time.Duration(ns))
 	return nil
 }
 
-// MarshalJSON writes "10m0s".
-func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Duration(d).String()) }
+// MarshalJSON writes the duration as the values write it, which
+// UnmarshalJSON reads back: whole days as 400d, else 10m, 1h, 1h30m.
+func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+
+// String is the duration as the values write it.
+func (d Duration) String() string {
+	v := time.Duration(d)
+	if day := 24 * time.Hour; v > 0 && v%day == 0 {
+		return strconv.FormatInt(int64(v/day), 10) + "d"
+	}
+	s := v.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
 
 // D is the time.Duration.
 func (d Duration) D() time.Duration { return time.Duration(d) }
@@ -107,29 +148,31 @@ type Config struct {
 		Enabled       bool     `json:"enabled"`
 		OneCommand    bool     `json:"oneCommand"`
 		FileTransfer  bool     `json:"fileTransfer"`
-		QuickCommands []string `json:"quickCommands,omitempty"`
+		QuickCommands []string `json:"quickCommands"`
 	} `json:"shell"`
 	PortForward struct {
 		Enabled       bool   `json:"enabled"`
-		CLIMinVersion string `json:"cliMinVersion,omitempty"`
+		CLIMinVersion string `json:"cliMinVersion"`
 	} `json:"portForward"`
+	// The lists are written even when empty, so Administration ›
+	// Toolbox shows an emptied one as it is.
 	DebugContainer struct {
 		Enabled      bool     `json:"enabled"`
 		MountVolumes bool     `json:"mountVolumes"`
-		Images       []string `json:"images,omitempty"`
+		Images       []string `json:"images"`
 	} `json:"debugContainer"`
 	DebugPod struct {
 		Enabled          bool     `json:"enabled"`
 		TTLAfterFinished Duration `json:"ttlAfterFinished"`
-		Profiles         []string `json:"profiles,omitempty"`
+		Profiles         []string `json:"profiles"`
 	} `json:"debugPod"`
 	NodeShell struct {
 		Enabled       bool     `json:"enabled"`
 		Namespace     string   `json:"namespace"`
 		Image         string   `json:"image"`
-		Profiles      []string `json:"profiles,omitempty"`
+		Profiles      []string `json:"profiles"`
 		Approval      string   `json:"approval"`
-		QuickCommands []string `json:"quickCommands,omitempty"`
+		QuickCommands []string `json:"quickCommands"`
 	} `json:"nodeShell"`
 	// SSH is toolbox.ssh (Phase 11, ADR-72): SSH sessions to paired nodes.
 	SSH struct {
@@ -140,7 +183,7 @@ type Config struct {
 		// node; it must exist on the node.
 		LoginUser string `json:"loginUser"`
 	} `json:"ssh"`
-	Images map[string]Image `json:"images,omitempty"`
+	Images map[string]Image `json:"images"`
 	// AdminExec is rbac.roles.admin.exec: the full Admin role may open
 	// shells in its namespaces (TB-50). The roles decide; the console only
 	// shows it.
@@ -214,16 +257,136 @@ func Read(path string) (Config, error) {
 // Parse reads the values over the defaults, so a value left out keeps its
 // default, and checks them.
 func Parse(b []byte) (Config, error) {
-	c := Default()
-	// Lists and the image map are replaced, not merged, when given.
-	c.Images = nil
-	if err := json.Unmarshal(b, &c); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return Config{}, fmt.Errorf("the toolbox values are not valid: %w", err)
 	}
+	c, def := Default(), Default()
+	// Lists and the image map are replaced, not merged, when given, so
+	// they are decoded over nothing: decoded over the defaults, a null item
+	// kept the default's item at its index (a commented-out netadmin came
+	// back), where now it is an empty name that Check refuses.
+	lists := []struct {
+		v    *[]string
+		def  []string
+		path []string
+	}{
+		{&c.Shell.QuickCommands, def.Shell.QuickCommands, []string{"shell", "quickCommands"}},
+		{&c.DebugContainer.Images, def.DebugContainer.Images, []string{"debugContainer", "images"}},
+		{&c.DebugPod.Profiles, def.DebugPod.Profiles, []string{"debugPod", "profiles"}},
+		{&c.NodeShell.Profiles, def.NodeShell.Profiles, []string{"nodeShell", "profiles"}},
+		{&c.NodeShell.QuickCommands, def.NodeShell.QuickCommands, []string{"nodeShell", "quickCommands"}},
+	}
+	for _, l := range lists {
+		*l.v = nil
+	}
+	c.Images = nil
+	// A key the console does not know, or one in another case, is
+	// refused: encoding/json alone drops the first and matches the second
+	// whatever its case, so nodeShell.aproval: always was never applied.
+	var tree any
+	_ = json.Unmarshal(b, &tree)
+	if bad := unknownKeys(tree, reflect.TypeOf(c), "toolbox"); len(bad) > 0 {
+		sort.Strings(bad)
+		return Config{}, fmt.Errorf("the toolbox values are not valid: %s", strings.Join(bad, "; "))
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return Config{}, fmt.Errorf("the toolbox values are not valid: %w", err)
+	}
+	// A list given as null (or empty) is none; one left out is the
+	// default.
+	for _, l := range lists {
+		if *l.v == nil {
+			if given(raw, l.path...) {
+				*l.v = []string{}
+			} else {
+				*l.v = l.def
+			}
+		}
+	}
+	// The toolbox off turns SSH off too: Automation, the hosts and the
+	// host cards read toolbox.ssh.enabled, not On.
+	if !c.Enabled {
+		c.SSH.Enabled = false
+	}
 	if c.Images == nil {
-		c.Images = Default().Images
+		if given(raw, "images") {
+			c.Images = map[string]Image{}
+		} else {
+			c.Images = def.Images
+		}
 	}
 	return c, c.Check()
+}
+
+// unknownKeys lists the keys of v that t does not name exactly, by their
+// path: t's fields by their json names, a map's values by its element type.
+func unknownKeys(v any, t reflect.Type, path string) []string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var bad []string
+	switch t.Kind() {
+	case reflect.Map:
+		for k, x := range m {
+			bad = append(bad, unknownKeys(x, t.Elem(), path+"."+k)...)
+		}
+	case reflect.Struct:
+		fields := map[string]reflect.Type{}
+		var names []string
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "" || name == "-" {
+				continue
+			}
+			fields[name] = f.Type
+			names = append(names, name)
+		}
+		for k, x := range m {
+			ft, ok := fields[k]
+			if !ok {
+				bad = append(bad, fmt.Sprintf("%s.%s is not a toolbox value (%s takes %s)", path, k, path, strings.Join(names, ", ")))
+				continue
+			}
+			// A duration is read here first, so its error names its key.
+			if ft == durationType {
+				if b, err := json.Marshal(x); err == nil {
+					var d Duration
+					if err := d.UnmarshalJSON(b); err != nil {
+						bad = append(bad, fmt.Sprintf("%s.%s: %v", path, k, err))
+					}
+				}
+				continue
+			}
+			bad = append(bad, unknownKeys(x, ft, path+"."+k)...)
+		}
+	}
+	return bad
+}
+
+var durationType = reflect.TypeOf(Duration(0))
+
+// given says whether the values name a key, null included: path is the
+// keys from the top.
+func given(raw map[string]json.RawMessage, path ...string) bool {
+	for i, k := range path {
+		v, ok := raw[k]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return true
+		}
+		raw = nil
+		if json.Unmarshal(v, &raw) != nil || raw == nil {
+			return false
+		}
+	}
+	return false
 }
 
 // Check reports values that cannot work.
@@ -235,18 +398,83 @@ func (c Config) Check() error {
 	if c.MaxDuration.D() < c.IdleTimeout.D() {
 		errs = append(errs, "toolbox.maxDuration must be at least toolbox.idleTimeout")
 	}
+	// A node pod's deadline is maxDuration and the time to start, in a
+	// pod's int32 seconds: a year leaves room, and no session is longer.
+	// A minimum the tunnel cannot read refuses no CLI, while
+	// Administration › Toolbox shows it enforced.
+	if v := c.PortForward.CLIMinVersion; v != "" && !tunnel.ValidVersion(v) {
+		errs = append(errs, fmt.Sprintf("toolbox.portForward.cliMinVersion is a version such as 0.11.1, not %q", v))
+	}
+	// Kept for Administration › Sessions, newest first: 0 and below
+	// meant every record, listed whole.
+	if c.History.Keep < 1 || c.History.Keep > 100000 {
+		errs = append(errs, fmt.Sprintf("toolbox.history.keep is 1 to 100000 ended sessions, not %d", c.History.Keep))
+	}
+	if c.MaxDuration.D() > MaxSession {
+		errs = append(errs, "toolbox.maxDuration must be at most 365d")
+	}
+	if ttl := c.DebugPod.TTLAfterFinished.D(); ttl < 0 || ttl > math.MaxInt32*time.Second {
+		errs = append(errs, fmt.Sprintf("toolbox.debugPod.ttlAfterFinished must be 0 to 24855d, as a Job takes it, not %s", ttl))
+	}
 	switch c.Transcripts {
 	case TranscriptsNone, "":
 	case TranscriptsPVC:
 		if c.TranscriptDir == "" {
 			errs = append(errs, "toolbox.transcripts pvc needs the directory it is mounted at")
 		}
+		// The prune runs hourly and takes every transcript not written
+		// for the retention, a live session's too: a bare number is
+		// seconds, and retention: 400 (meant as days) pruned them all
+		// within the hour.
+		switch {
+		case c.Retention.D() < 24*time.Hour:
+			errs = append(errs, fmt.Sprintf("toolbox.retention must be at least 1d with transcripts kept, not %s (a bare number is seconds: write days as 400d)", c.Retention.D()))
+		case c.Retention.D() < c.MaxDuration.D():
+			errs = append(errs, "toolbox.retention must be at least toolbox.maxDuration, or a live session's transcript is pruned")
+		}
 	default:
 		errs = append(errs, fmt.Sprintf("toolbox.transcripts is none or pvc, not %q", c.Transcripts))
 	}
+	for _, l := range []struct {
+		key  string
+		list []string
+	}{{"shell.quickCommands", c.Shell.QuickCommands}, {"nodeShell.quickCommands", c.NodeShell.QuickCommands}} {
+		for _, q := range l.list {
+			if strings.TrimSpace(q) == "" {
+				errs = append(errs, fmt.Sprintf("toolbox.%s has an empty entry (a commented-out item is null: remove the line)", l.key))
+				break
+			}
+		}
+	}
+	for name, im := range c.Images {
+		for _, cp := range im.Caps {
+			if !capRE.MatchString(cp) {
+				errs = append(errs, fmt.Sprintf("toolbox.images.%s.caps: %q is not a capability such as NET_ADMIN", name, cp))
+			}
+		}
+	}
+	used := map[string]bool{}
 	for _, name := range c.DebugContainer.Images {
+		used[name] = true
 		if _, ok := c.Images[name]; !ok {
 			errs = append(errs, fmt.Sprintf("toolbox.debugContainer.images names %q, which toolbox.images does not define", name))
+			continue
+		}
+		// The debug container is named 221b-<name>-<4 hex>, a DNS label
+		// of 63 characters at most.
+		if !labelRE.MatchString(name) || len(name) > 53 {
+			errs = append(errs, fmt.Sprintf("toolbox.debugContainer.images: %q names debug containers, so it must be lowercase letters, digits and dashes, 53 at most", name))
+		}
+	}
+	for _, name := range c.DebugPod.Profiles {
+		used[name] = true
+	}
+	if c.NodeShell.Enabled {
+		used[c.NodeShell.Image] = true
+	}
+	for name := range used {
+		if im, ok := c.Images[name]; ok && strings.TrimSpace(im.Image) == "" {
+			errs = append(errs, fmt.Sprintf("toolbox.images.%s.image is empty: give the reference to run, such as busybox:1.37@sha256:…", name))
 		}
 	}
 	for _, name := range c.DebugPod.Profiles {
@@ -266,9 +494,11 @@ func (c Config) Check() error {
 				errs = append(errs, fmt.Sprintf("toolbox.nodeShell.profiles: %q is not general, netadmin or sysadmin", p))
 			}
 		}
-		if c.NodeShell.Approval != ApprovalAlways && c.NodeShell.Approval != ApprovalCluster {
-			errs = append(errs, "toolbox.nodeShell.approval is always or cluster")
-		}
+	}
+	// The approval rule governs SSH sessions too, which work with node
+	// shells off: a typo there dropped SSH's second SuperAdmin.
+	if c.NodeShell.Approval != ApprovalAlways && c.NodeShell.Approval != ApprovalCluster {
+		errs = append(errs, fmt.Sprintf("toolbox.nodeShell.approval is always or cluster, not %q (it applies to SSH sessions too)", c.NodeShell.Approval))
 	}
 	if c.SSH.Enabled {
 		if c.SSH.Port < 1 || c.SSH.Port > 65535 {
@@ -283,6 +513,15 @@ func (c Config) Check() error {
 	}
 	return nil
 }
+
+// labelRE is a DNS label, as a container's name must be.
+var labelRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// capRE is a Linux capability's name, as a container adds it.
+var capRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// MaxSession is the longest toolbox.maxDuration.
+const MaxSession = 365 * 24 * time.Hour
 
 // LoginUserRE is what a Unix user name looks like, as useradd takes it.
 var LoginUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -303,20 +542,32 @@ func (c Config) On(tool string) bool {
 		return c.DebugContainer.Enabled && len(c.DebugContainer.Images) > 0
 	case ToolDebugPod:
 		return c.DebugPod.Enabled && len(c.DebugPod.Profiles) > 0
-	case ToolNodeShell, ToolNodeCommand:
-		return c.NodeShell.Enabled
+	// A node tool is on only where a request for it can pass: a node shell
+	// needs a profile, and a node command and a pairing run with the
+	// general one (sessions' Request.Validate).
+	case ToolNodeShell:
+		return c.NodeShell.Enabled && len(c.NodeShell.Profiles) > 0
+	case ToolNodeCommand:
+		return c.NodeShell.Enabled && slices.Contains(c.NodeShell.Profiles, ProfileGeneral)
 	case ToolSSH:
 		return c.SSH.Enabled
-	case ToolSSHPair, ToolSSHUnpair:
+	case ToolSSHPair:
 		// Pairing runs a command on the node through a node pod.
-		return c.SSH.Enabled && c.NodeShell.Enabled
+		return c.SSH.Enabled && c.NodeShell.Enabled && slices.Contains(c.NodeShell.Profiles, ProfileGeneral)
+	case ToolSSHUnpair:
+		// Unpairing too, with the console's own script; it is not held to
+		// the profiles, so a node paired before they changed can still be
+		// unpaired, nor to toolbox.ssh, so one paired before SSH was
+		// turned off can stop trusting the console's authority.
+		return c.NodeShell.Enabled
 	}
 	return false
 }
 
-// ImageNames are the images a tool may use, sorted.
+// ImageNames are the images a tool may use, sorted: never nil, so an
+// emptied list reaches the page as [], not null.
 func (c Config) ImageNames(tool string) []string {
-	var names []string
+	names := []string{}
 	switch tool {
 	case ToolDebugContainer:
 		names = append(names, c.DebugContainer.Images...)

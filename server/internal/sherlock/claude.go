@@ -74,6 +74,9 @@ type CacheControl struct {
 type Message struct {
 	Role    string  `json:"role"`
 	Content []Block `json:"content"`
+	// OutputConfig is an empty system message's change of effort for the
+	// turns after it (EffortMessage, AI-44).
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
 }
 
 // ToolDef describes a tool to the model.
@@ -92,6 +95,14 @@ type Request struct {
 	Messages  []Message `json:"messages"`
 	Tools     []ToolDef `json:"tools,omitempty"`
 	Stream    bool      `json:"stream"`
+	// OutputConfig carries the effort (AI-43); nil sends none.
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
+	// Betas are the Messages API betas the request needs, sent as the
+	// anthropic-beta header.
+	Betas []string `json:"-"`
+	// Agent names the agent that sends it, for the log (AI-55); never
+	// sent.
+	Agent string `json:"-"`
 }
 
 // Usage is what one request used.

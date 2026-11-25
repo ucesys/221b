@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deleteSecretCommand, saveProblem, SecretData, SecretDelete } from './SecretData'
 import { WatsonContext } from './Watson'
-import { SecretsError, updateSecret } from '../api/secrets'
+import { fetchSecretsConfig, SecretsError, updateSecret } from '../api/secrets'
 
 vi.mock('../api/secrets', async (original) => ({
   ...(await original<typeof import('../api/secrets')>()),
@@ -124,5 +124,50 @@ describe('Delete', () => {
 
   it('names the Secret and its namespace in the command', () => {
     expect(deleteSecretCommand('db', 'creds')).toBe('kubectl delete secret creds -n db')
+  })
+})
+
+// RB-36: on a read-only connection the edits are hidden and the keys stay;
+// where strict refuses the cluster, Edit is off and says why.
+describe('SecretData on a cluster that takes no change', () => {
+  afterEach(cleanup)
+  const readOnly = 'Here is connected read-only, so the console changes nothing there. To allow changes there, install the chart with localCluster.mode=write.'
+  const strict = 'Changes are refused on this cluster because rbac.enforce is strict and its roles grant more than the templates.'
+
+  it('hides Edit, and so Add key and Remove, on a read-only connection, and keeps the keys', async () => {
+    vi.mocked(fetchSecretsConfig).mockResolvedValueOnce({ read: true, reveal: false, edit: true, readOnly: true, refused: readOnly })
+    render(<SecretData namespace="web" name="db" keys={keys} resourceVersion="7" onToast={vi.fn()} />)
+    expect((await screen.findByTestId('secret-edit-off')).textContent).toContain('connected read-only')
+    expect(screen.queryByTestId('secret-edit')).toBeNull()
+    expect(screen.queryByTestId('secret-add-key')).toBeNull()
+    expect(screen.queryByTestId('secret-remove-password')).toBeNull()
+    expect(screen.getByTestId('secret-key-password')).toBeTruthy()
+    expect(screen.getByTestId('keys-note').textContent).not.toContain('Edits are written as you')
+  })
+
+  it('turns Edit off with the reason where strict refuses the cluster', async () => {
+    vi.mocked(fetchSecretsConfig).mockResolvedValueOnce({ read: true, reveal: false, edit: true, refused: strict })
+    render(<SecretData namespace="web" name="db" keys={keys} resourceVersion="7" onToast={vi.fn()} />)
+    expect((await screen.findByTestId('secret-edit-off')).textContent).toBe(strict)
+    const edit = screen.getByTestId('secret-edit') as HTMLButtonElement
+    expect(edit.disabled).toBe(true)
+    expect(edit.title).toBe(strict)
+    fireEvent.click(edit)
+    expect(screen.queryByTestId('secret-add-key')).toBeNull()
+  })
+
+  it('offers Edit, Add key and Remove on a connection that takes changes', async () => {
+    render(<SecretData namespace="web" name="db" keys={keys} resourceVersion="7" onToast={vi.fn()} />)
+    const edit = (await screen.findByTestId('secret-edit')) as HTMLButtonElement
+    expect(edit.disabled).toBe(false)
+    expect(screen.queryByTestId('secret-edit-off')).toBeNull()
+    fireEvent.click(edit)
+    expect(screen.getByTestId('secret-add-key')).toBeTruthy()
+    expect(screen.getByTestId('secret-remove-password')).toBeTruthy()
+  })
+
+  it('words the server’s refusal as it is, not as a Secret changed since', () => {
+    const msg = `Refused: ${readOnly}`
+    expect(saveProblem(new SecretsError(msg, 409))).toBe(msg)
   })
 })

@@ -16,6 +16,9 @@ const (
 	nodeDir  = "/etc/ssh/221b"
 	nodeConf = "/etc/ssh/sshd_config.d/221b.conf"
 	nodeLock = "/etc/ssh/221b.lock"
+	// undoDir starts the name of the directory a pairing keeps its copies
+	// in until it is done.
+	undoDir = "/etc/ssh/221b.undo"
 )
 
 // consoleTag starts the comment that names a console's line in ca.pub.
@@ -29,14 +32,16 @@ const (
 )
 
 // PairScript is the shell script that pairs a node. It refuses, changing
-// nothing, when the login user or sshd is not there, or when sshd already
-// trusts an authority outside our file. It then replaces this console's
+// nothing, when the login user or sshd is not there, when sshd would not
+// let the login user in with a certificate (canLogIn), or when sshd
+// already trusts an authority outside our file. It then replaces this console's
 // lines: its key in ca.pub, and its principal in the principals file of
 // that user alone; other consoles' lines stay. It writes the drop-in,
 // checks that sshd accepts all that and really uses it on that port,
 // reloads sshd, and prints the node's host keys. Any failure puts the
 // files back as they were.
-// It runs as root with the node's root at / (chroot /host, TB-31).
+// It runs as root with the node's root at / (chroot /host, TB-31). A port
+// of 0 leaves out the port check (portCheck).
 func PairScript(caPublicKey, console, loginUser string, port int) string {
 	return strings.Join([]string{
 		"set -e",
@@ -48,30 +53,55 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`set -- /etc/ssh/ssh_host_*_key.pub`,
 		`if [ ! -r "$1" ]; then echo "221B: this node has no /etc/ssh/ssh_host_*_key.pub to pin"; exit 5; fi`,
 		runDir,
-		`value() { "$sshd_bin" -T 2>/dev/null | awk -v k="$1" '$1==k{print $2}'; }`,
+		// sshd's settings as they apply to the login user: Match User and
+		// Group blocks included. An sshd too old to test a user alone
+		// wants a host and an address as well.
+		`spec="user=$u"`,
+		`"$sshd_bin" -T -C "$spec" >/dev/null 2>&1 || spec="user=$u,host=localhost,addr=127.0.0.1"`,
+		`value() { "$sshd_bin" -T -C "$spec" 2>/dev/null | awk -v k="$1" '$1==k{print $2}'; }`,
+		`values() { "$sshd_bin" -T -C "$spec" 2>/dev/null | awk -v k="$1" '$1==k{$1=""; print substr($0, 2)}'; }`,
+		canLogIn,
 		lockNode,
 		`cur=$(value trustedusercakeys)`,
 		`case "$cur" in ""|none|"$d/ca.pub") ;; *) echo "221B: sshd on this node already trusts another SSH authority ($cur); pairing would replace it, so nothing was changed"; exit 5;; esac`,
-		`b=$(mktemp -d)`,
-		`cp -p /etc/ssh/sshd_config "$b/sshd_config" 2>/dev/null || true`,
-		`cp -p ` + nodeConf + ` "$b/221b.conf" 2>/dev/null || true`,
-		`cp -Rp "$d" "$b/dir" 2>/dev/null || true`,
+		// The copies to put back sit beside the files, under /etc/ssh: a
+		// full /tmp then cannot lose one, and putting one back is a
+		// rename, which needs no room. A copy that fails stops the pairing
+		// before anything changed.
+		`nospace() { echo "221B: no copy of the node's SSH files could be kept under /etc/ssh (is it full?); nothing was changed"; exit 5; }`,
+		`b=$(mktemp -d ` + undoDir + `.XXXXXX) || nospace`,
+		// The rollback runs unless the pairing got to its end: on a
+		// failure, and on a signal (signalTraps), whatever exit code a
+		// shell gives its EXIT trap then; once begun, no signal stops it.
+		`saved= reloaded= finished=`,
 		`undo() {`,
 		`  code=$?`,
 		`  trap - EXIT`,
+		`  trap '' HUP INT PIPE TERM`,
 		`  set +e`,
-		`  if [ "$code" -ne 0 ]; then`,
-		`    if [ -f "$b/sshd_config" ]; then cp -p "$b/sshd_config" /etc/ssh/sshd_config; fi`,
-		`    rm -f ` + nodeConf + `; if [ -f "$b/221b.conf" ]; then cp -p "$b/221b.conf" ` + nodeConf + `; fi`,
-		`    rm -rf "$d"; if [ -d "$b/dir" ]; then cp -Rp "$b/dir" "$d"; fi`,
-		`    echo "221B: the pairing did not finish; the node's SSH configuration is as it was"`,
+		`  if [ -z "$finished" ]; then [ "$code" -ne 0 ] || code=1; fi`,
+		`  if [ -z "$finished" ] && [ -n "$saved" ]; then`,
+		`    r=0`,
+		`    if [ -f "$b/sshd_config" ]; then mv -f "$b/sshd_config" /etc/ssh/sshd_config || r=1; fi`,
+		`    rm -f ` + nodeConf + `; if [ -f "$b/221b.conf" ]; then mv -f "$b/221b.conf" ` + nodeConf + ` || r=1; fi`,
+		`    rm -rf "$d"; if [ -d "$b/dir" ]; then mv "$b/dir" "$d" || r=1; fi`,
+		`    if [ "$r" -eq 0 ] && [ -n "$reloaded" ]; then reload_sshd >/dev/null 2>&1; fi`,
+		`    if [ "$r" -eq 0 ]; then echo "221B: the pairing did not finish; the node's SSH configuration is as it was"`,
+		`    else echo "221B: the pairing did not finish, and putting the node's SSH files back failed: check /etc/ssh/sshd_config, ` + nodeConf + ` and $d by hand; the copies are in $b"; b=; fi`,
 		`  fi`,
-		`  rm -rf "$b"`,
+		`  if [ -n "$b" ]; then rm -rf "$b"; fi`,
 		`  rmdir "$lock"`,
 		`  exit "$code"`,
 		`}`,
 		`trap undo EXIT`,
+		`if [ -f /etc/ssh/sshd_config ]; then cp -p /etc/ssh/sshd_config "$b/sshd_config" || nospace; fi`,
+		`if [ -f ` + nodeConf + ` ]; then cp -p ` + nodeConf + ` "$b/221b.conf" || nospace; fi`,
+		`if [ -d "$d" ]; then cp -Rp "$d" "$b/dir" || nospace; fi`,
+		`saved=1`,
 		`mkdir -p "$d" /etc/ssh/sshd_config.d`,
+		// sshd reads the principals file as the login user: under a
+		// umask of 027 or 077 a root-only directory would hide it.
+		`chmod 755 "$d"`,
 		dropConsole,
 		`drop_console`,
 		`printf '%s\n' "$k $t" >> "$d/ca.pub"`,
@@ -80,23 +110,35 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`printf '%s\n' '# Written by 221B: SSH sessions from the console (ADR-72). Unpair from the console to remove.' 'TrustedUserCAKeys ` + nodeDir + `/ca.pub' 'AuthorizedPrincipalsFile ` + nodeDir + `/principals-%u' > ` + nodeConf,
 		`chmod 644 ` + nodeConf,
 		// At the top: sshd takes a setting's first value, and an Include
-		// at the end could land inside a Match block. A system with no
-		// /etc/ssh/sshd_config keeps a vendor file that reads the
-		// drop-ins by itself, and an /etc file would replace it.
-		`if [ -f /etc/ssh/sshd_config ] && ! grep -qs '^Include /etc/ssh/sshd_config.d/' /etc/ssh/sshd_config; then { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$b/sshd_config"; } > /etc/ssh/sshd_config; fi`,
+		// at the end could land inside a Match block. It names the
+		// console's file alone: one of every drop-in would turn on old
+		// ones that sshd_config had left out, ahead of its own settings.
+		// A system with no /etc/ssh/sshd_config keeps a vendor file that
+		// reads the drop-ins by itself, and an /etc file would replace it.
+		// The new file is written beside the old one, checked whole, and
+		// renamed over it: sshd_config is never left part-written.
+		`if [ -f /etc/ssh/sshd_config ] && ! grep -qsiE '` + includesOurs + `' /etc/ssh/sshd_config; then`,
+		`  cp -p "$b/sshd_config" "$b/new"`,
+		`  { printf '%s\n' '` + includeLine + `'; cat "$b/sshd_config"; } > "$b/new"`,
+		`  if [ "$(tail -n +2 "$b/new" | wc -c)" -ne "$(wc -c < "$b/sshd_config")" ]; then echo "221B: the new sshd_config could not be written whole (is /etc full?)"; exit 5; fi`,
+		`  mv -f "$b/new" /etc/ssh/sshd_config`,
+		`fi`,
 		`"$sshd_bin" -t`,
 		`if [ "$(value trustedusercakeys)" != "$d/ca.pub" ] || [ "$(value authorizedprincipalsfile)" != "$d/principals-%u" ]; then echo "221B: sshd on this node does not use the drop-in: another setting comes first, or the Include sits under a Match block"; exit 6; fi`,
-		fmt.Sprintf(`if ! value port | grep -qx %d; then echo "221B: sshd on this node listens on port $(value port | tr '\n' ' ')and not on %d"; exit 6; fi`, port, port),
+		portCheck(port),
 		reloadSSHD,
+		`reloaded=1`,
 		`reload_sshd`,
 		`for f in /etc/ssh/ssh_host_*_key.pub; do [ -r "$f" ] && echo "` + markHostKey + `$(cut -d' ' -f1,2 "$f")"; done`,
 		`echo "` + markPaired + `$u"`,
+		`finished=1`,
 	}, "\n")
 }
 
 // UnpairScript takes this console's lines off the node and reloads sshd,
 // when the node has one: a node whose sshd has gone can still be unpaired.
-// The drop-in and the directory go with the last console's key. caPublicKey
+// The drop-in, the directory and the Include of the drop-in go with the
+// last console's key. caPublicKey
 // is empty when the console has no key any more: its lines then go by name.
 func UnpairScript(caPublicKey, console string) string {
 	return strings.Join([]string{
@@ -104,13 +146,30 @@ func UnpairScript(caPublicKey, console string) string {
 		consoleVars(caPublicKey, console),
 		lockNode,
 		dropConsole,
+		dropInclude,
 		`drop_console`,
-		`if grep -qs '^[^#[:space:]]' "$d/ca.pub"; then echo "221B: another console's key stays on this node, with the drop-in"; else rm -f ` + nodeConf + `; rm -rf "$d"; fi`,
+		`if grep -qs '^[^#[:space:]]' "$d/ca.pub"; then echo "221B: another console's key stays on this node, with the drop-in"; else rm -f ` + nodeConf + `; rm -rf "$d"; drop_include; fi`,
 		sshdBin,
 		runDir,
 		reloadSSHD,
 		`if [ -x "$sshd_bin" ]; then "$sshd_bin" -t; reload_sshd; fi`,
 		`echo "` + markUnpaired + `"`,
+	}, "\n")
+}
+
+// portCheck checks that sshd listens on the port the console dials a node
+// at: the ports of its listen addresses, which sshd -T always lists and
+// which win over Port, or its Port lines where it lists none (ListenAddress
+// 0.0.0.0:2222 with no Port still prints port 22). Port 0 checks nothing: a
+// host was just reached on its port, which a NAT or a port forward may
+// map to another one on the host.
+func portCheck(port int) string {
+	if port <= 0 {
+		return ""
+	}
+	return strings.Join([]string{
+		`ports() { a=$(value listenaddress | sed 's/.*://'); if [ -n "$a" ]; then echo "$a"; else value port; fi | sort -u; }`,
+		fmt.Sprintf(`if ! ports | grep -qx %d; then echo "221B: sshd on this node listens on port $(ports | tr '\n' ' ')and not on %d"; exit 6; fi`, port, port),
 	}, "\n")
 }
 
@@ -129,16 +188,80 @@ func consoleVars(caPublicKey, console string) string {
 	}, "\n")
 }
 
+// includeLine is the Include a pairing adds to sshd_config: of the
+// console's drop-in alone. includesOurs matches a line that already reads
+// it: this one, or one of every drop-in that a system had before.
 const (
+	includeLine  = "Include " + nodeConf
+	includesOurs = `^[[:space:]]*Include[[:space:]]+(/etc/ssh/)?sshd_config\.d/(\*|221b)\.conf([[:space:]]|$)`
+)
+
+const (
+	// dropInclude takes the Include a pairing added out of sshd_config,
+	// the file swapped whole; an Include of every drop-in, which may be
+	// the system's own, stays.
+	dropInclude = `drop_include() {
+  f=/etc/ssh/sshd_config
+  if [ -f "$f" ] && grep -qxF '` + includeLine + `' "$f"; then
+    cp -p "$f" "$f.221b-new"
+    grep -vxF '` + includeLine + `' "$f" > "$f.221b-new" || [ $? -eq 1 ]
+    mv -f "$f.221b-new" "$f"
+  fi
+}`
 	sshdBin = `sshd_bin=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)`
 	// runDir is what sshd -t asks for: under socket activation nothing
 	// has made it before the first connection since boot.
 	runDir = `mkdir -p /run/sshd`
+	// canLogIn refuses, before anything changes, a login user sshd would
+	// not let in with a certificate: public keys off, root refused, a
+	// second method asked for, a command forced in place of every one, an
+	// Allow or Deny list that keeps the user out, or an account locked
+	// where sshd has no PAM to ask. Otherwise the node would be recorded
+	// as paired and every session refused. A list entry for a user at a
+	// host is taken as letting in (Allow) and not keeping out (Deny): the
+	// console's address is not known here.
+	canLogIn = `refuse() { echo "221B: sshd on this node would not let $u in with a certificate: $1; nothing was changed"; exit 5; }
+listed() {
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    who=${pat%%@*}
+    if [ "$who" != "$pat" ] && [ "$3" = strict ]; then continue; fi
+    for n in $2; do
+      case "$n" in $who) return 0 ;; esac
+    done
+  done
+  return 1
+}
+set -f
+[ "$(value pubkeyauthentication)" != no ] || refuse "PubkeyAuthentication is no"
+if [ "$u" = root ]; then case "$(value permitrootlogin)" in no|forced-commands-only) refuse "PermitRootLogin is $(value permitrootlogin)" ;; esac; fi
+am=$(values authenticationmethods)
+case " $am " in "  "|*" any "*|*" publickey "*) ;; *) refuse "AuthenticationMethods $am asks for more than a key" ;; esac
+fc=$(values forcecommand)
+case "$fc" in ""|none) ;; *) refuse "ForceCommand $fc runs in place of every command" ;; esac
+g=$(id -Gn "$u" 2>/dev/null || true)
+if value denyusers | listed x "$u" strict; then refuse "DenyUsers keeps $u out"; fi
+if [ -n "$(value allowusers)" ] && ! value allowusers | listed x "$u"; then refuse "AllowUsers does not name $u"; fi
+if value denygroups | listed x "$g"; then refuse "DenyGroups keeps a group of $u out"; fi
+if [ -n "$(value allowgroups)" ] && ! value allowgroups | listed x "$g"; then refuse "AllowGroups names no group of $u"; fi
+if [ "$(value usepam)" != yes ]; then case "$(awk -F: -v u="$u" '$1==u{print $2}' /etc/shadow 2>/dev/null)" in '!'*) refuse "the account is locked (its password in /etc/shadow starts with !), and an sshd without PAM refuses a locked account; unlock it, for instance with usermod -p '*' $u" ;; esac; fi
+set +f`
+	// signalTraps turn the signals a script is stopped with into an exit,
+	// which runs its EXIT trap: dash and busybox sh run none when killed
+	// by one, and bash runs it with the status of the last command. A
+	// pairing ended from the console gets TERM, a closed connection HUP
+	// or PIPE.
+	signalTraps = `trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 141' PIPE
+trap 'exit 143' TERM`
 	// lockNode lets one script at a time near the files the consoles
 	// share: each rewrites them, and a rollback puts back what was there
 	// when it began, so two at once could lose the other's line. The lock
-	// is released on exit; one left by a killed script is broken once old.
-	lockNode = `lock=` + nodeLock + `
+	// is released on exit, a signal's too; one left by a script killed
+	// outright is broken once old.
+	lockNode = signalTraps + `
+lock=` + nodeLock + `
 tries=0
 until mkdir "$lock" 2>/dev/null; do
   if [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then rmdir "$lock" 2>/dev/null || true; fi

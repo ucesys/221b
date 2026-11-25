@@ -486,6 +486,13 @@ func TestAChatsCardFollowsItsWatsonCard(t *testing.T) {
 	if c, _ := w.st.Get(ctx, waits.ID); c.State != Queued || c.WatsonItem != "" {
 		t.Fatalf("lapsed in Watson: %+v", c)
 	}
+	// Stopped before it started, it never ran: the card waits on (review
+	// of November 24, 2026, sweep).
+	unrun, _ := w.st.ProposeFor(ctx, p, pat, "item-4")
+	w.st.WatsonEnded(ctx, "item-4", WatsonUnrun, pat, -1)
+	if c, _ := w.st.Get(ctx, unrun.ID); c.State != Queued || c.WatsonItem != "" {
+		t.Fatalf("stopped before it ran: %+v", c)
+	}
 }
 
 // Two people approve the same card at once: one approval counts and the

@@ -1,0 +1,380 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/ucesys/221b/server/internal/db"
+)
+
+// The findings of the review of the auth package (2026-11-23) that are
+// best seen from inside it.
+
+// slowSaves is a versioned backend with resource versions, as the Secret
+// has, whose next save can be held and then fail as a timeout does.
+type slowSaves struct {
+	mu      sync.Mutex
+	b       []byte
+	rv      int
+	hold    bool
+	held    chan struct{}
+	release chan struct{}
+}
+
+func (s *slowSaves) Load(ctx context.Context) ([]byte, error) {
+	b, _, err := s.LoadVersion(ctx)
+	return b, err
+}
+
+func (s *slowSaves) Save(context.Context, []byte) error { panic("not used") }
+
+func (s *slowSaves) LoadVersion(context.Context) ([]byte, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := "rv:" + strconv.Itoa(100+s.rv)
+	if s.b == nil {
+		return nil, v, ErrNoAccounts
+	}
+	return append([]byte(nil), s.b...), v, nil
+}
+
+func (s *slowSaves) SaveIf(_ context.Context, b []byte, version string) error {
+	s.mu.Lock()
+	if s.hold {
+		s.hold = false
+		s.mu.Unlock()
+		close(s.held)
+		<-s.release
+		return context.DeadlineExceeded
+	}
+	defer s.mu.Unlock()
+	if version != "rv:"+strconv.Itoa(100+s.rv) {
+		return ErrConflict
+	}
+	s.b, s.rv = append([]byte(nil), b...), s.rv+1
+	return nil
+}
+
+// Finding 6: a save that fails with anything but a conflict while the
+// accounts were read again meanwhile leaves the replica reading them
+// again, not holding the old ones under the new version and writing them
+// over a newer change.
+func TestAFailedSaveDoesNotKeepOldAccountsUnderANewVersion(t *testing.T) {
+	ctx := context.Background()
+	backend := &slowSaves{}
+	a := NewAccounts(backend, nil, nil, false, nil)
+	other := NewAccounts(backend, nil, nil, false, nil)
+	if _, err := a.Create(ctx, NewAccount{Username: "mallory", Password: "correct horse battery staple"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	backend.hold, backend.held, backend.release = true, make(chan struct{}), make(chan struct{})
+	backend.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.SignedIn("mallory", time.Now())
+	}()
+	<-backend.held
+	disabled := true
+	if _, _, err := other.Update(ctx, "mallory", Change{Disabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	// a's reading every few seconds, while its save waits.
+	if err := a.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(backend.release)
+	<-done
+	if err := a.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := a.Find("mallory"); !u.Disabled {
+		t.Fatal("after the failed save the replica holds mallory enabled")
+	}
+	a.SignedIn("mallory", time.Now())
+	if err := other.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := other.Find("mallory"); !u.Disabled {
+		t.Fatal("the replica's next save enabled mallory again")
+	}
+}
+
+// Finding 7: a session ended on one replica, whose ending the store keeps
+// as a marker, is dropped from another replica's memory by its sweep, so
+// that replica does not serve it from memory when the store later cannot
+// be asked.
+func TestAnEndedSessionIsNotServedFromMemoryInALaterOutage(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	store := NewOutageStore()
+	on := func() *Sessions {
+		s := NewSessions(8*time.Hour, 12*time.Hour, clock)
+		s.Share(store, nil)
+		return s
+	}
+	a, b := on(), on()
+	sess := a.Create(User{Subject: "local:ann", Username: "ann"}, false, "local")
+	if _, ok := b.Get(sess.ID); !ok {
+		t.Fatal("the other replica does not find the session")
+	}
+	a.Delete(sess.ID)
+	now = now.Add(time.Minute)
+	b.Sweep()
+	now = now.Add(3 * time.Hour)
+	store.Fail(fmt.Errorf("reading the session: %w", db.ErrUnavailable))
+	if _, ok := b.Get(sess.ID); ok {
+		t.Fatal("the ended session is served from memory while the store cannot be asked")
+	}
+}
+
+// Finding 15: a groups claim whose name has a dot, as a namespaced claim
+// has, is read by its name first, and as a path only when there is no
+// such claim.
+func TestAGroupsClaimNamedWithADotIsReadByItsName(t *testing.T) {
+	all := map[string]any{
+		"https://corp.example/groups": []any{"devs", "ops"},
+		"realm_access":                map[string]any{"roles": []any{"r1"}},
+	}
+	if got := stringsClaim(all, "https://corp.example/groups"); len(got) != 2 || got[0] != "devs" {
+		t.Fatalf("the namespaced claim: %v", got)
+	}
+	if got := stringsClaim(all, "realm_access.roles"); len(got) != 1 || got[0] != "r1" {
+		t.Fatalf("the path: %v", got)
+	}
+}
+
+// Cut by the review's cap: cleanErr cuts a long message on a character,
+// never inside one, so what it gives is valid UTF-8.
+func TestCleanErrCutsOnACharacter(t *testing.T) {
+	msg := cleanErr(errors.New("a" + strings.Repeat("é", 400)))
+	if !utf8.ValidString(msg) || !strings.HasSuffix(msg, "…") || utf8.RuneCountInString(msg) > 301 {
+		t.Fatalf("%q", msg)
+	}
+}
+
+// Cut by the review's cap (local.go:247-254): filling the limiter with
+// other keys does not forget a key that is at its limit, and the limit
+// per address holds for a whole IPv6 /64, which one client has to itself.
+func TestTheLimiterKeepsWhatItRefusesAndCountsAnIPv6Network(t *testing.T) {
+	l := newLimiter(2, time.Minute, time.Now)
+	l.keys = 10
+	for range 3 {
+		l.allow("victim")
+	}
+	for i := range 50 {
+		l.allow(fmt.Sprintf("other%d", i))
+	}
+	if l.allow("victim") {
+		t.Fatal("other keys made the limiter forget one at its limit")
+	}
+	s := &Service{perAddress: newLimiter(3, time.Minute, time.Now), perAccount: newLimiter(100, time.Minute, time.Now)}
+	got := 0
+	for i := range 10 {
+		if s.attempt(httptestRequest(fmt.Sprintf("[2001:db8:1:2::%x]:4000", i+1)), fmt.Sprintf("user%d", i)) {
+			got++
+		}
+	}
+	if got != 3 {
+		t.Fatalf("%d attempts from one /64 passed, want 3", got)
+	}
+}
+
+func httptestRequest(peer string) *http.Request {
+	r, _ := http.NewRequest(http.MethodPost, "/signin", nil)
+	r.RemoteAddr = peer
+	return r
+}
+
+// Cut by the review's cap (signed.go:216, session.go:925): a session made
+// while the store is away lasts no longer than the idle limit or the
+// maximum lifetime when either is shorter than auth.outageSession.
+func TestASignedSessionKeepsToShorterLimits(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	for _, tc := range []struct {
+		idle, max, want time.Duration
+	}{
+		{10 * time.Minute, 7 * 24 * time.Hour, 10 * time.Minute},
+		{8 * time.Hour, 20 * time.Minute, 20 * time.Minute},
+		{8 * time.Hour, 7 * 24 * time.Hour, 30 * time.Minute},
+	} {
+		store := NewOutageStore()
+		store.Fail(fmt.Errorf("writing the session: %w", db.ErrUnavailable))
+		s := NewSessions(tc.idle, tc.max, clock)
+		s.Share(store, nil)
+		key := NewSessionKey(&MemoryKeys{}, clock)
+		if err := key.Ensure(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		s.Outage(key, 0)
+		sess, err := s.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+		if err != nil || !sess.Signed {
+			t.Fatalf("no signed session: %v", err)
+		}
+		if got := sess.Expires.Sub(now); got != tc.want || s.OutageLasts() != tc.want {
+			t.Errorf("idle %s, max %s: the signed session lasts %s (said %s), want %s", tc.idle, tc.max, got, s.OutageLasts(), tc.want)
+		}
+	}
+}
+
+// Cut by the review's cap (session.go:838-840): a replica that finds a
+// session idle by the last activity stored does not delete it for every
+// replica while another may hold activity not written back yet (it is
+// written every 5 minutes): the session goes on where it was used.
+func TestAnotherReplicaDoesNotEndASessionOnStaleActivity(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	store := NewOutageStore()
+	on := func() *Sessions {
+		s := NewSessions(time.Hour, 7*24*time.Hour, clock)
+		s.Share(store, nil)
+		return s
+	}
+	a, b := on(), on()
+	sess := a.Create(User{Subject: "local:ann", Username: "ann"}, false, "local")
+	now = now.Add(4 * time.Minute)
+	if _, ok := a.Get(sess.ID); !ok {
+		t.Fatal("the session on its replica")
+	}
+	now = now.Add(time.Hour - 2*time.Minute)
+	// By the stored activity, 62 minutes ago, it is idle; by a's, 58.
+	b.Get(sess.ID)
+	if _, ok := a.Get(sess.ID); !ok {
+		t.Fatal("the other replica ended a session used 58 minutes ago, within the idle hour")
+	}
+	// Idle by any count, it ends.
+	now = now.Add(2 * time.Hour)
+	if _, ok := b.Get(sess.ID); ok {
+		t.Fatal("an idle session was taken")
+	}
+	if _, ok := a.Get(sess.ID); ok {
+		t.Fatal("an idle session was taken on its replica")
+	}
+}
+
+// refusingPuts is a shared store that answers and refuses every write, as
+// one over its quota does.
+type refusingPuts struct{ *OutageStore }
+
+func (refusingPuts) Put(context.Context, string, []byte, func([]byte) bool) (bool, error) {
+	return false, errors.New("secrets is forbidden: exceeded quota")
+}
+
+// Cut by the review's cap (session.go:435-436): a sign-in whose record the
+// store refuses to write (it answered, so no signed session is made) is
+// this replica's own, as the sign-in says, and is not lost at the next
+// request because the store has no record of it.
+func TestASessionTheStoreRefusedIsKeptOnItsReplica(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	s := NewSessions(time.Hour, 7*24*time.Hour, clock)
+	s.Share(refusingPuts{NewOutageStore()}, nil)
+	sess, err := s.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+	if err != nil || sess.Signed {
+		t.Fatalf("the sign-in: %+v %v", sess, err)
+	}
+	now = now.Add(time.Minute)
+	if _, ok := s.Get(sess.ID); !ok {
+		t.Fatal("the session is lost at the next request")
+	}
+	s.Sweep()
+	if _, ok := s.Get(sess.ID); !ok {
+		t.Fatal("the sweep dropped the session")
+	}
+	if n := len(s.Live()); n != 1 {
+		t.Fatalf("%d sessions live", n)
+	}
+	s.Delete(sess.ID)
+	if _, ok := s.Get(sess.ID); ok {
+		t.Fatal("the session outlived its sign-out")
+	}
+	now = now.Add(2 * time.Hour)
+	other, _ := s.Open(Session{User: User{Subject: "local:bo", Username: "bo"}, Method: "local"})
+	now = now.Add(2 * time.Hour)
+	s.Sweep()
+	if _, ok := s.Get(other.ID); ok {
+		t.Fatal("an idle session was kept")
+	}
+}
+
+// Cut by the review's cap (signed.go:302-306): once a replica has the key
+// put back by hand, it refuses what the old key signed, also the cookies
+// it had already taken and holds in memory.
+func TestAReplacedKeyEndsTheSignedSessionsAReplicaHolds(t *testing.T) {
+	c, _, keys, a, b := signedPair(t)
+	first, _ := a.Open(Session{User: User{Subject: "local:ann", Username: "ann"}, Method: "local"})
+	if _, ok := b.Get(first.ID); !ok {
+		t.Fatal("not taken")
+	}
+	keys.Set(strings.Repeat("0123456789abcdef", 4))
+	c.add(keyReread + time.Second)
+	second, _ := a.Open(Session{User: User{Subject: "local:bob", Username: "bob"}, Method: "local"})
+	if _, ok := b.Get(second.ID); !ok {
+		t.Fatal("a session signed with the new key was refused")
+	}
+	for name, s := range map[string]*Sessions{"the replica that signed it": a, "the other": b} {
+		if _, ok := s.Get(first.ID); ok {
+			t.Errorf("%s still takes a session the replaced key signed", name)
+		}
+	}
+}
+
+// refusingDirectory refuses every sign-in at once.
+type refusingDirectory struct{}
+
+func (refusingDirectory) Authenticate(context.Context, string, string) (Person, error) {
+	return Person{}, ErrBadCredentials
+}
+func (refusingDirectory) Groups(context.Context, string) ([]string, error)    { return nil, nil }
+func (refusingDirectory) Members(context.Context, []string) ([]Person, error) { return nil, nil }
+func (refusingDirectory) URL() string                                         { return "ldaps://ldap.example:636" }
+
+// Cut by the review's cap (auth.go:769-772): with LDAP, a name that is no
+// local account costs a password check too, as a local account's wrong
+// password does, so how long the answer takes does not tell local
+// account names from others.
+func TestALDAPSignInOfAnyNameCostsAPasswordCheck(t *testing.T) {
+	s, err := New(Config{Mode: ModeLDAP, Directory: refusingDirectory{}, Lists: RoleLists{"viewer": {"devs"}}}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range cap(hashSlots) {
+		hashSlots <- struct{}{}
+	}
+	done := make(chan int, 1)
+	go func() {
+		form := url.Values{"email": {"nobody-local"}, "password": {"a guess"}, "form": {"tok"}}
+		r := httptest.NewRequest(http.MethodPost, "/signin", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: cookieForm, Value: "tok"})
+		w := httptest.NewRecorder()
+		s.postSignIn(w, r)
+		done <- w.Code
+	}()
+	select {
+	case code := <-done:
+		t.Fatalf("the sign-in of a name with no local account was answered (%d) without a password check", code)
+	case <-time.After(200 * time.Millisecond):
+	}
+	for range cap(hashSlots) {
+		<-hashSlots
+	}
+	if code := <-done; code != http.StatusUnauthorized {
+		t.Fatalf("the sign-in: %d", code)
+	}
+}

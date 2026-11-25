@@ -111,3 +111,27 @@ func mustParse(t *testing.T, line string) *Command {
 	}
 	return c
 }
+
+// A durable card's run works out the card again, and refuses an upgrade
+// that removes values from the console's own release even when its caller
+// hands it an inspection without the refusal, as the Inbox did (review of
+// November 24, 2026, finding 7).
+func TestADurableCardFindsTheOwnReleaseRefusalItself(t *testing.T) {
+	svc, cl, _ := pinSetup(t, Options{Self: apps.SelfRelease{Cluster: "local", Namespace: "web", Name: "shop"}})
+	repo := gitChart(t)
+	line := "helm upgrade shop --git " + repo + " --path charts/web --ref master -n web --set replicas=3"
+	in, err := svc.Inspect(context.Background(), cl, line, nil)
+	if err != nil || in.Refusal == "" {
+		t.Fatalf("inspected %+v %v", in, err)
+	}
+	// What the Inbox keeps of a card: its targets and impact, no refusal.
+	kept := Inspection{Line: in.Line, Targets: in.Targets, Impact: in.Impact, Fingerprint: in.Fingerprint}
+	it, err := svc.RunApproved(cl, manager(alice()), in.Line, "Agent proposal", "test", &kept)
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != "own release" || it == nil || it.Status != StatusRefused {
+		t.Fatalf("a durable card ran: %v %+v", err, it)
+	}
+	if _, err := svc.RunApproved(cl, manager(alice()), in.Line, "Agent proposal", "test", nil); !errors.As(err, &r) || r.Rule != "own release" {
+		t.Fatalf("without an inspection: %v", err)
+	}
+}

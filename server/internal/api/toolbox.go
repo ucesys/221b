@@ -127,10 +127,15 @@ type toolboxView struct {
 	// SSH is the SSH tools' state (Phase 11): the authority and the
 	// cluster's pairings, by node.
 	SSH *sshView `json:"ssh,omitempty"`
+	// Warnings are what Administration › Toolbox says first.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type sshView struct {
-	Enabled     bool                   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Off says the chart turned SSH off while nodes are still paired: the
+	// menu offers Unpair alone (the toolbox review, finding 4).
+	Off         bool                   `json:"off,omitempty"`
 	Port        int                    `json:"port"`
 	LoginUser   string                 `json:"loginUser"`
 	Principal   string                 `json:"principal"`
@@ -187,10 +192,13 @@ func (c *toolCache) put(key string, nt namespaceTools, now time.Time) {
 }
 
 const (
-	whyRole     = "your role does not allow it here"
-	whyReadOnly = "off: this connection is read-only"
-	whyChart    = "off on this console"
-	whySuper    = "only a SuperAdmin may"
+	whyRole = "your role does not allow it here"
+	// whyDebugExec: a Debug pod's terminal is opened with pods/exec, which
+	// the Admin role holds only with rbac.roles.admin.exec (TB-50).
+	whyDebugExec = "a debug pod opens its shell with pods/exec, which your role does not allow here"
+	whyReadOnly  = "off: this connection is read-only"
+	whyChart     = "off on this console"
+	whySuper     = "only a SuperAdmin may"
 )
 
 func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +214,7 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	v := toolboxView{Enabled: cfg.Enabled, ReadOnly: c.ReadOnly || c.Locked != "", Production: c.Env == clusters.EnvProduction, TwoPerson: s.watsonTwoPerson(c), SignedIn: who.User != "", Admin: who.Admin, Me: who.Name,
 		Off: map[string]string{}, IdleSeconds: int(cfg.IdleTimeout.D() / time.Second), MaxMinutes: int(cfg.MaxDuration.D() / time.Minute), Transcripts: cfg.Transcripts, NodeApproval: cfg.NodeShell.Approval, NodeNamespace: cfg.NodeShell.Namespace,
 		MountVolumes: cfg.DebugContainer.MountVolumes, FileTransfer: cfg.Shell.FileTransfer, CLIMinVersion: cfg.PortForward.CLIMinVersion,
-		ContainerImgs: cfg.ImageNames(tb.ToolDebugContainer), PodProfiles: cfg.ImageNames(tb.ToolDebugPod), NodeProfiles: cfg.NodeShell.Profiles,
+		ContainerImgs: cfg.ImageNames(tb.ToolDebugContainer), PodProfiles: cfg.ImageNames(tb.ToolDebugPod), NodeProfiles: append([]string{}, cfg.NodeShell.Profiles...),
 		PodCommands: cfg.Shell.QuickCommands, NodeCommands: cfg.NodeShell.QuickCommands, Namespaces: map[string]namespaceTools{}, Nodes: map[string]string{}, Values: cfg}
 	if v.Transcripts == "" {
 		v.Transcripts = tb.TranscriptsNone
@@ -227,6 +235,22 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		v.SSH = sv
+	} else if s.opts.SSH != nil && r.URL.Query().Get("nodes") != "" {
+		// SSH is off, but the nodes paired before still trust the
+		// console's authority, whose key is kept: they are listed, so the
+		// menu offers Unpair, and the page says so.
+		sv := &sshView{Enabled: true, Off: true, Port: cfg.SSH.Port, LoginUser: cfg.SSH.LoginUser, Principal: s.opts.SSH.Principal(), Fingerprint: s.opts.SSH.Fingerprint(), Pairings: map[string]pairingView{}}
+		if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil && len(list) > 0 {
+			for _, p := range list {
+				sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, Principal: p.Principal, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && sv.Fingerprint != "" && p.CAFinger != sv.Fingerprint}
+			}
+			v.SSH = sv
+			how := "unpair them from each node's Tools menu (Unpair from SSH…)"
+			if !cfg.On(tb.ToolSSHUnpair) {
+				how = "turn node shells on (toolbox.nodeShell.enabled, with rbac.roles.superAdmin.template full) to unpair them"
+			}
+			v.Warnings = append(v.Warnings, fmt.Sprintf("SSH is off on this console, but %d node(s) of this cluster are still paired with its SSH authority, whose key is kept in the Secret <release>-ssh-ca: whoever can read it can still sign certificates they accept. %s.", len(list), strings.ToUpper(how[:1])+how[1:]))
+		}
 	}
 	names := make([]string, 0, len(cfg.Images))
 	for n := range cfg.Images {
@@ -267,13 +291,17 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			nsList = append(nsList, ns)
 		}
 	}
-	type nsTool struct{ tool, verb, group, resource, sub string }
+	// What each tool needs in a namespace; a tool with several needs is
+	// off at the first one refused. A Debug pod creates its Job and then
+	// opens its terminal with pods/exec, so it needs both (TB-28, TB-50).
+	type nsTool struct{ tool, verb, group, resource, sub, why string }
 	checks := []nsTool{
-		{tb.ToolShell, "create", "", "pods", "exec"},
-		{tb.ToolCommand, "create", "", "pods", "exec"},
-		{tb.ToolForward, "create", "", "pods", "portforward"},
-		{tb.ToolDebugContainer, "patch", "", "pods", "ephemeralcontainers"},
-		{tb.ToolDebugPod, "create", "batch", "jobs", ""},
+		{tb.ToolShell, "create", "", "pods", "exec", whyRole},
+		{tb.ToolCommand, "create", "", "pods", "exec", whyRole},
+		{tb.ToolForward, "create", "", "pods", "portforward", whyRole},
+		{tb.ToolDebugContainer, "patch", "", "pods", "ephemeralcontainers", whyRole},
+		{tb.ToolDebugPod, "create", "batch", "jobs", "", whyRole},
+		{tb.ToolDebugPod, "create", "", "pods", "exec", whyDebugExec},
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -294,20 +322,22 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			if n, err := console.Namespace(ctx, ns); err == nil {
 				nt.Level = sessions.PodSecurity(n)
 			}
-			answers := map[string]string{}
+			answers := map[string]bool{}
 			for _, ck := range checks {
-				k := ck.verb + ck.resource + ck.sub
-				if why, done := answers[k]; done {
-					nt.Tools[ck.tool] = why
+				if nt.Tools[ck.tool] != "" {
 					continue
 				}
-				ok, _, err := asPerson.Can(ctx, ck.verb, ck.group, ck.resource, ck.sub, ns, "")
-				why := ""
-				if err != nil || !ok {
-					why = whyRole
+				k := ck.verb + ck.resource + ck.sub
+				allowed, done := answers[k]
+				if !done {
+					ok, _, err := asPerson.Can(ctx, ck.verb, ck.group, ck.resource, ck.sub, ns, "")
+					allowed = err == nil && ok
+					answers[k] = allowed
 				}
-				answers[k] = why
-				nt.Tools[ck.tool] = why
+				nt.Tools[ck.tool] = ""
+				if !allowed {
+					nt.Tools[ck.tool] = ck.why
+				}
 			}
 			mu.Lock()
 			v.Namespaces[ns] = nt

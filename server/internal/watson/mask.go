@@ -1,6 +1,7 @@
 package watson
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -30,17 +31,37 @@ var secretFlags = map[string]bool{"--password": true, "--token": true, "--kube-t
 // A line with nothing to hide is returned as it is; one that cannot be
 // read as words (a quote not closed) is cut before its first such flag.
 func MaskLine(line string) string {
+	// A comment is not part of the command, and can follow a flag whose
+	// value it swallowed (--token #value): its text is hidden.
+	if bare := stripComment(line); bare != line {
+		if strings.TrimSpace(bare) == "" {
+			return "# " + Hidden
+		}
+		return strings.TrimRight(MaskLine(bare), " ") + " # " + Hidden
+	}
 	words, err := split(line)
 	if err != nil {
 		return cutAtParams(line)
 	}
 	changed := false
 	plain := make([]bool, len(words))
+	// kubectl patch's patch can hold anything it sets, a Secret's data
+	// included: hidden, unless it is the claim size Watson patches.
+	patchLine := words[0] == "kubectl" && slices.Contains(words, "patch")
 	for i := 0; i < len(words); i++ {
 		w := words[i]
 		name, value, joined := strings.Cut(w, "=")
 		literal, param := paramFlags[name]
 		secret := secretFlags[name]
+		if patchLine && (name == "--patch" || name == "-p") {
+			v := value
+			if !joined && i+1 < len(words) {
+				v = words[i+1]
+			}
+			if _, err := ClaimSize(v); err != nil && v != Hidden {
+				secret = true
+			}
+		}
 		if !param && !secret {
 			continue
 		}

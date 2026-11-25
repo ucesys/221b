@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,6 +130,15 @@ func (s *PGStore) Flush(ctx context.Context) error {
 	return err
 }
 
+// pgText is text as PostgreSQL takes it: valid UTF-8 without a zero byte,
+// each byte it would refuse replaced. A record can carry text nobody
+// signed in sent (a typed user name, a provider's error), and one refused
+// would hold up the whole queue, which is sent in one statement.
+func pgText(s string) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	return strings.ReplaceAll(s, "\x00", "\uFFFD")
+}
+
 // insertEvents adds the events in one statement. An event whose key is
 // already there is left alone: a statement that was sent, and whose answer
 // was lost with the connection, is sent again.
@@ -138,8 +148,8 @@ func insertEvents(ctx context.Context, q db.Querier, list []pgEvent) error {
 	action, cluster, target, outcome, detail, from := make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
 	restored := make([]*time.Time, n)
 	for i, e := range list {
-		ids[i], at[i], actor[i], subject[i], email[i] = e.id, e.Time.UTC(), e.Who.Name, e.Who.Subject, e.Who.Email
-		action[i], cluster[i], target[i], outcome[i], detail[i], from[i] = e.Action, e.Cluster, e.Target, e.Outcome, e.Detail, e.From
+		ids[i], at[i], actor[i], subject[i], email[i] = e.id, e.Time.UTC(), pgText(e.Who.Name), pgText(e.Who.Subject), pgText(e.Who.Email)
+		action[i], cluster[i], target[i], outcome[i], detail[i], from[i] = pgText(e.Action), pgText(e.Cluster), pgText(e.Target), pgText(e.Outcome), pgText(e.Detail), pgText(e.From)
 		if t, err := time.Parse(time.RFC3339, e.Restored); err == nil {
 			restored[i] = &t
 		}

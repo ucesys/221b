@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -172,6 +173,9 @@ type Session struct {
 	fwd     Forwarder
 	cast    *transcript
 	lastRev time.Time
+	// debug is the debug container the session attached, which its end
+	// stops (the toolbox review, finding 13).
+	debug string
 }
 
 // Manager keeps the sessions. They live in memory on the replica that
@@ -381,6 +385,10 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 				fail(errors.New(why))
 				return
 			}
+			if why := m.othersDebug(s, pod, container); why != "" {
+				fail(errors.New(why))
+				return
+			}
 		}
 		m.located(s, pod, container)
 		switch r.Tool {
@@ -401,7 +409,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
 			level = PodSecurity(ns)
 		}
-		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod, level)
+		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod, level, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
@@ -410,7 +418,10 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
-		m.note(s, fmt.Sprintf("Debug container %s attached to pod %s: it stays until the pod restarts.", ec.Name, r.Pod))
+		m.mu.Lock()
+		s.debug = ec.Name
+		m.mu.Unlock()
+		m.note(s, fmt.Sprintf("Debug container %s attached to pod %s: it stops when the session ends, and stays in the pod, stopped, until the pod is replaced.", ec.Name, r.Pod))
 		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, r.Namespace, r.Pod) }, ec.Name, m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -435,6 +446,11 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		job, notes, err := DebugJob(m.opts.Config, s.ID, s.Owner.Name, r, level, copied, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
+			return
+		}
+		asker, _ := b.(Asker)
+		if why := execRefused(ctx, asker, s.Owner.Name, r.Namespace); why != "" {
+			fail(errors.New(why))
 			return
 		}
 		for _, n := range notes {
@@ -515,6 +531,32 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 	default:
 		fail(fmt.Errorf("unknown tool %q", r.Tool))
 	}
+}
+
+// othersDebug says why a shell or a command may not open in a container,
+// or "": a debug container the console attached (221b-…, ephemeral) is
+// used through its own session, by its owner, never by another person
+// with pods/exec, nor once its session has ended (the toolbox review,
+// finding 13; one left running by an older console is refused too).
+func (m *Manager) othersDebug(s *Session, pod *corev1.Pod, container string) string {
+	if !strings.HasPrefix(container, "221b-") {
+		return ""
+	}
+	ephemeral := false
+	for _, c := range pod.Spec.EphemeralContainers {
+		ephemeral = ephemeral || c.Name == container
+	}
+	if !ephemeral {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, o := range m.all {
+		if o != s && o.State != StateEnded && o.Req.Tool == toolbox.ToolDebugContainer && o.debug == container && o.Req.Namespace == pod.Namespace && o.Req.Pod == pod.Name && o.Owner.same(s.Owner) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("container %s is a debug container of another person's session, or of one that has ended: it is used through its own session", container)
 }
 
 func (m *Manager) located(s *Session, pod *corev1.Pod, container string) {
@@ -615,27 +657,48 @@ func (m *Manager) deadline(limit time.Duration, approver string) time.Duration {
 	return limit + m.opts.StartWithin
 }
 
-// live marks a session started: its hard limit counts from now.
+// live marks a session started: its hard limit counts from now. Where
+// transcripts are kept, a terminal opens only with one: one that cannot
+// be made fails the session, and one that can no longer be written ends
+// it, rather than run unrecorded while it says Recorded (the toolbox
+// review, finding 14).
 func (m *Manager) live(s *Session) bool {
+	now := m.opts.Now()
+	var cast *transcript
+	if m.opts.Config.Transcripts == toolbox.TranscriptsPVC && Interactive(s.Req.Tool) {
+		// Made outside the lock: a stalled volume must not freeze every
+		// session's terminal.
+		t, err := newTranscript(m.opts.Config.TranscriptDir, s, now)
+		if err != nil {
+			m.opts.Logger.Warn("transcript not kept: the session is not opened", "session", s.ID, "err", err)
+			m.end(s, EndFailed, fmt.Sprintf("The transcript could not be kept (%v), and this console records every terminal: the session was not opened unrecorded.", err), Who{})
+			return false
+		}
+		t.onFail = func(err error) {
+			m.opts.Logger.Warn("the transcript could not be written: the session ends", "session", s.ID, "err", err)
+			m.end(s, EndFailed, fmt.Sprintf("The transcript could not be written (%v): the session ended, so that nothing runs unrecorded.", err), Who{})
+		}
+		cast = t
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.State != StateStarting {
+		if cast != nil {
+			// Ended meanwhile: the empty transcript goes, off the lock.
+			go func() {
+				cast.close()
+				_ = os.Remove(TranscriptPath(m.opts.Config.TranscriptDir, s.Cluster, s.ID))
+			}()
+		}
 		return false
 	}
-	now := m.opts.Now()
 	s.State, s.Started, s.LastActive, s.Ends = StateLive, now, now, now.Add(s.limit)
 	s.MaxEnds = s.Ends
 	if s.Approver == "" {
 		s.MaxEnds = now.Add(m.opts.Config.MaxDuration.D())
 	}
+	s.cast, s.Recorded = cast, cast != nil
 	m.changedLocked(s)
-	if m.opts.Config.Transcripts == toolbox.TranscriptsPVC && Interactive(s.Req.Tool) {
-		if t, err := newTranscript(m.opts.Config.TranscriptDir, s, now); err == nil {
-			s.cast, s.Recorded = t, true
-		} else {
-			m.opts.Logger.Warn("transcript not kept", "session", s.ID, "err", err)
-		}
-	}
 	m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("approved_by=%q pod=%s/%s container=%s limit=%s", s.Approver, s.Ns, s.Pod, s.Container, s.limit))
 	return true
 }
@@ -839,6 +902,7 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	objects := append([]Created(nil), s.Objects...)
 	cast := s.cast
 	s.cast = nil
+	debug := s.debug
 	m.changedLocked(s)
 	m.mu.Unlock()
 	if fwd != nil {
@@ -849,6 +913,13 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
 	defer cancel()
+	if debug != "" {
+		// An ephemeral container cannot be removed: its main process
+		// stops at this mark, and the container with it.
+		if err := s.backend.Exec(ctx, s.Req.Namespace, s.Req.Pod, debug, StopDebug(s.ID), false, nil, io.Discard, io.Discard, nil); err != nil {
+			m.opts.Logger.Warn("could not stop the debug container; its deadline will", "session", s.ID, "container", s.Req.Namespace+"/"+s.Req.Pod+"/"+debug, "err", err)
+		}
+	}
 	for _, o := range objects {
 		m.remove(ctx, s, o)
 	}
@@ -1273,7 +1344,9 @@ func (m *Manager) sweep() {
 		switch {
 		case !s.Ends.IsZero() && now.After(s.Ends):
 			ends = append(ends, ending{s, EndLimit, "Time limit reached."})
-		case now.Sub(s.LastActive) > idle:
+		case now.Sub(s.LastActive) > idle && !(s.Req.Tool == toolbox.ToolForward && s.Forward.CLI == ""):
+			// A forward waiting for its CLI is ended by forward(), after
+			// CLIWait (TB-21), not by an idle limit that may be shorter.
 			ends = append(ends, ending{s, EndIdle, fmt.Sprintf("No activity for %s.", short(idle))})
 		case s.Owner.Stands != nil:
 			signIns = append(signIns, signIn{s, s.Owner.Stands})

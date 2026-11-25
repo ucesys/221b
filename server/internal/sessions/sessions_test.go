@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -955,16 +958,16 @@ func TestGeneralDebugContainerIsAsCapableAsTheNamespaceAllows(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
 	r := Request{Tool: toolbox.ToolDebugContainer, Image: "network", Profile: toolbox.ProfileGeneral}
 	c := toolbox.Default()
-	ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged)
+	ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged, time.Hour)
 	if err != nil || ec.SecurityContext.Capabilities == nil || len(ec.SecurityContext.Capabilities.Add) != len(c.Images["network"].Caps) || ec.SecurityContext.RunAsUser != nil {
 		t.Fatalf("privileged: %+v %v", ec.SecurityContext, err)
 	}
 	// NET_RAW and NET_ADMIN are not baseline capabilities.
-	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelBaseline); ec.SecurityContext.Capabilities != nil {
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelBaseline, time.Hour); ec.SecurityContext.Capabilities != nil {
 		t.Fatalf("baseline: %+v", ec.SecurityContext.Capabilities)
 	}
 	r.Profile = toolbox.ProfileRestricted
-	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted); *ec.SecurityContext.RunAsUser != 65532 || *ec.SecurityContext.AllowPrivilegeEscalation {
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted, time.Hour); *ec.SecurityContext.RunAsUser != 65532 || *ec.SecurityContext.AllowPrivilegeEscalation {
 		t.Fatalf("restricted: %+v", ec.SecurityContext)
 	}
 }
@@ -1058,15 +1061,22 @@ func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
 }
 
 // Pairing runs a general node pod, so a chart that leaves that profile
-// out refuses it as it refuses a node command.
+// out refuses it as it refuses a node command; unpairing, the console's
+// own script that takes the trust away, is not held to the profiles, so a
+// node paired before they changed can still be unpaired (the toolbox
+// review, finding 6).
 func TestPairingRespectsTheNodeProfiles(t *testing.T) {
 	c := toolbox.Default()
 	c.SSH.Enabled = true
 	c.NodeShell.Profiles = []string{toolbox.ProfileNetAdmin}
-	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolSSHUnpair, Node: "a"}} {
-		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "node shell profiles here") {
+	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolNodeCommand, Node: "a", Command: "id"}} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "turned off") {
 			t.Errorf("%s: %v", r.Tool, err)
 		}
+	}
+	r := Request{Tool: toolbox.ToolSSHUnpair, Node: "a"}
+	if err := r.Validate(c, false); err != nil || r.Profile != toolbox.ProfileGeneral {
+		t.Errorf("unpair: %v %q", err, r.Profile)
 	}
 }
 
@@ -1604,5 +1614,193 @@ func TestTheRecordsStayWithinTheirBytes(t *testing.T) {
 	}
 	if got := h.List(); len(got) == 0 || got[0].ID != "r39" {
 		t.Fatalf("the newest was not kept: %+v", got[:1])
+	}
+}
+
+// What reaches Kubernetes as int32 seconds is clamped, never wrapped: a
+// time to live past 2^31-1 seconds went negative and every Job was
+// refused, and a deadline past it every node pod (the toolbox review,
+// finding 7).
+func TestDeadlinesAndTTLsFitKubernetes(t *testing.T) {
+	c := toolbox.Default()
+	c.DebugPod.TTLAfterFinished = toolbox.Duration(30000 * 24 * time.Hour)
+	long := 30000 * 24 * time.Hour
+	j, _, err := DebugJob(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "general"}, LevelPrivileged, nil, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl := *j.Spec.TTLSecondsAfterFinished; ttl != math.MaxInt32 {
+		t.Errorf("ttl %d", ttl)
+	}
+	c.DebugPod.TTLAfterFinished = toolbox.Duration(-time.Minute)
+	j, _, _ = DebugJob(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "general"}, LevelPrivileged, nil, time.Hour)
+	if ttl := *j.Spec.TTLSecondsAfterFinished; ttl != 0 {
+		t.Errorf("negative ttl %d", ttl)
+	}
+	p, err := NodePod(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolNodeShell, Node: "n1", Profile: toolbox.ProfileGeneral}, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := *p.Spec.ActiveDeadlineSeconds; d != math.MaxInt32 {
+		t.Errorf("node pod deadline %d", d)
+	}
+}
+
+// Debug containers have two profiles since the October 26, 2026 review,
+// general and restricted: netadmin and sysadmin (a privileged container)
+// are refused, and a profile the namespace's Pod Security level forbids
+// is refused by the server, the card's plan and the start alike (the
+// toolbox review, finding 12).
+func TestDebugContainersTakeOnlyGeneralAndRestricted(t *testing.T) {
+	c := toolbox.Default()
+	for _, p := range []string{toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin, "baseline"} {
+		r := Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: p}
+		if err := r.Validate(c, false); err == nil {
+			t.Errorf("%s passed", p)
+		}
+	}
+	if got := ProfilesAllowed(LevelPrivileged); len(got) != 2 {
+		t.Errorf("privileged: %v", got)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "web"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
+	r := Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: toolbox.ProfileGeneral}
+	if _, err := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted, time.Hour); err == nil || !strings.Contains(err.Error(), "restricted") {
+		t.Errorf("general in a restricted namespace: %v", err)
+	}
+	r.Profile = toolbox.ProfileSysAdmin
+	if ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged, time.Hour); err == nil || (ec.SecurityContext != nil && ec.SecurityContext.Privileged != nil) {
+		t.Errorf("sysadmin: %v", err)
+	}
+	// The start refuses it as the plan does: nothing is attached.
+	m, f, _, _ := setup(t)
+	f.mu.Lock()
+	f.ns["web"] = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "web", Labels: map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}}}
+	f.mu.Unlock()
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "general", Profile: toolbox.ProfileGeneral}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateEnded)
+	f.mu.Lock()
+	attached := len(f.pods["web/api-1"].Spec.EphemeralContainers)
+	f.mu.Unlock()
+	if got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "restricted") || attached != 0 {
+		t.Fatalf("%s %q %d attached", got.EndedBy, got.EndNote, attached)
+	}
+}
+
+// A debug container stops when its session ends: it waits for the end's
+// mark, or its deadline, instead of sleeping forever, and the end leaves
+// the mark. Its capabilities and the pod's volumes stayed open to anyone
+// with pods/exec in the namespace before; a Shell into another person's
+// debug container is refused (the toolbox review, finding 13).
+func TestADebugContainerStopsWhenItsSessionEnds(t *testing.T) {
+	m, f, _, _ := setup(t)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "network", Profile: toolbox.ProfileGeneral}, alice(), "", "")
+	live := waitState(t, m, s.ID, StateLive)
+	f.mu.Lock()
+	ec := f.pods["web/api-1"].Spec.EphemeralContainers[0]
+	f.mu.Unlock()
+	cmd := strings.Join(ec.Command, " ")
+	if strings.Contains(cmd, "infinity") || !strings.Contains(cmd, ".221b-end-"+s.ID) {
+		t.Fatalf("command %q", cmd)
+	}
+	// Another person's Shell into it is refused; the owner's is not.
+	other, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Container: live.Container}, bob(), "", "")
+	if got := waitState(t, m, other.ID, StateEnded); got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "debug container") {
+		t.Fatalf("bob's shell: %s %q", got.EndedBy, got.EndNote)
+	}
+	mine, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Container: live.Container}, alice(), "", "")
+	waitState(t, m, mine.ID, StateLive)
+	m.End(mine.ID, alice(), "")
+	m.End(s.ID, alice(), "")
+	waitState(t, m, s.ID, StateEnded)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.execs {
+		if e[0] == "web/api-1/"+live.Container && strings.Contains(strings.Join(e[1:], " "), "touch") && strings.Contains(strings.Join(e[1:], " "), ".221b-end-"+s.ID) {
+			return
+		}
+	}
+	t.Fatalf("the end left no mark: %v", f.execs)
+}
+
+// With transcripts kept, a terminal that cannot be recorded does not open
+// unrecorded: a transcript that cannot be made fails the session, and one
+// that cannot be written ends it, each saying why (the toolbox review,
+// finding 14).
+func TestATerminalThatCannotBeRecordedDoesNotRun(t *testing.T) {
+	m, f, _, _ := setup(t)
+	notDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.opts.Config.Transcripts, m.opts.Config.TranscriptDir = toolbox.TranscriptsPVC, notDir
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateEnded)
+	if got.EndedBy != EndFailed || got.Recorded || !strings.Contains(got.EndNote, "transcript") {
+		t.Fatalf("unrecordable: %s %q recorded=%v", got.EndedBy, got.EndNote, got.Recorded)
+	}
+	f.mu.Lock()
+	for _, e := range f.execs {
+		if e[0] == "web/api-1/api" {
+			t.Errorf("a shell ran unrecorded: %v", e)
+		}
+	}
+	f.noisy = true
+	f.mu.Unlock()
+	m.opts.Config.TranscriptDir = t.TempDir()
+	s, _ = m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.mu.Lock()
+	cast := m.all[s.ID].cast
+	m.mu.Unlock()
+	if cast == nil {
+		t.Fatal("no transcript")
+	}
+	cast.mu.Lock()
+	cast.f.Close() // as a full or vanished volume would fail every write
+	cast.mu.Unlock()
+	got = waitState(t, m, s.ID, StateEnded)
+	if got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "transcript") {
+		t.Fatalf("unwritable: %s %q", got.EndedBy, got.EndNote)
+	}
+}
+
+// A port forward waits for its CLI for CLIWait (5 minutes) whatever the
+// idle limit: with idleTimeout under it, the idle end came first (the
+// toolbox review's sweep). Once the CLI is there, idling counts.
+func TestAForwardWaitsForItsCLIPastTheIdleLimit(t *testing.T) {
+	m, _, c, _ := setup(t)
+	m.opts.Config.IdleTimeout = toolbox.Duration(time.Minute)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 80}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	c.add(3 * time.Minute)
+	m.sweep()
+	if got, _ := m.Get(s.ID); got.State != StateLive {
+		t.Fatalf("waiting for the CLI: %s %s", got.EndedBy, got.EndNote)
+	}
+	m.mu.Lock()
+	m.all[s.ID].Forward.CLI = "221b/0.14.0"
+	m.mu.Unlock()
+	c.add(2 * time.Minute)
+	m.sweep()
+	if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndIdle {
+		t.Fatalf("idle with the CLI: %s", got.EndedBy)
+	}
+}
+
+// The card's object shows the deadline of a session the asker approves
+// (maxDuration and the start); approved by another person, the pod gets
+// the duration asked for instead, and the card says so (the toolbox
+// review's sweep: the dry run showed another activeDeadlineSeconds).
+func TestTheCardSaysTheDeadlineAnApproverGives(t *testing.T) {
+	m, _, _, _ := setup(t)
+	ctx := context.Background()
+	p := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Profile: toolbox.ProfileGeneral, Minutes: 15}, kube.Person{User: "alice"}, "Alice")
+	impact := strings.Join(p.Impact, " ")
+	if !strings.Contains(p.Object, "activeDeadlineSeconds: 3602") || !strings.Contains(impact, "approved by another person") || !strings.Contains(impact, "902") {
+		t.Fatalf("%s\n%s", impact, p.Object)
+	}
+	p = m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Profile: toolbox.ProfileGeneral}, kube.Person{User: "alice"}, "Alice")
+	if strings.Contains(strings.Join(p.Impact, " "), "approved by another person") {
+		t.Fatalf("no duration asked: %v", p.Impact)
 	}
 }

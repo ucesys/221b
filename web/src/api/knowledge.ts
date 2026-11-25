@@ -184,8 +184,85 @@ export interface ItemState {
   lastSeen?: string
 }
 
+/** The embedding model of the semantic search (KN-55): a provider of Administration › AI and its model; none by default. */
+export interface EmbeddingSettings {
+  provider?: string
+  model?: string
+}
+
+/** A provider an embedding model may be chosen on: an OpenAI-compatible one of Administration › AI. */
+export interface EmbeddingProvider {
+  id: string
+  name: string
+  endpoint?: string
+}
+
+/** The search index in the database (KN-53 to KN-58). */
+export interface IndexView {
+  documents: number
+  passages: number
+  /** The database has pg_trgm (fuzzy matching) and pgvector (semantic search). */
+  fuzzy: boolean
+  semantic: boolean
+  /** Passages with an embedding by the chosen model; why the last pass stopped. */
+  embedded: number
+  embedError?: string
+  embeddedAt?: string
+  providers: EmbeddingProvider[]
+  /** Each source's trust, what it is about and what the index holds of it (KN-56 to KN-58). */
+  sources: SourceIndexView[]
+  pageSize?: SourceSize
+  /** The database's size, its volume's as the chart says (none: not known), and whether it holds 80 % of it or more. */
+  databaseBytes: number
+  volumeBytes?: number
+  full?: boolean
+  /** The versions the clusters run, major.minor. */
+  clusterVersions: string[]
+}
+
+export type TrustLevel = 'high' | 'normal' | 'low'
+
+export const TRUST_LABEL: Record<TrustLevel, string> = { high: 'High', normal: 'Normal', low: 'Low' }
+
+/** The trust levels an uploaded document is given (KN-61): '' is its source's, named with the source's level. */
+export const documentTrustOptions = (sourceTrust: TrustLevel | undefined): [string, string][] => [
+  ['', `Source’s (${TRUST_LABEL[sourceTrust ?? 'high']})`],
+  ['high', 'High'],
+  ['normal', 'Normal'],
+  ['low', 'Low'],
+]
+
+export interface SourceSize {
+  id: string
+  documents: number
+  passages: number
+  embedded: number
+  bytes: number
+}
+
+export interface SourceIndexView extends SourceSize {
+  name: string
+  kind: SourceKind
+  trust: TrustLevel
+  /** The trust is its kind's. */
+  trustDefault?: boolean
+  product?: string
+  productVersion?: string
+  followsClusterVersions?: boolean
+}
+
+/** A source's index settings, as a SuperAdmin sets them (KN-56, KN-57): trust '' is its kind's. */
+export interface SourceIndexSettings {
+  trust: '' | TrustLevel
+  product: string
+  productVersion: string
+  followsClusterVersions: boolean
+}
+
 export interface KnowledgeView {
-  settings: { sources: KnowledgeSource[]; store: StoreSettings; staleDays?: number }
+  settings: { sources: KnowledgeSource[]; store: StoreSettings; staleDays?: number; embeddings?: EmbeddingSettings }
+  /** The search index in the database (KN-53). */
+  index?: IndexView
   creds: Record<string, CredState>
   storeCreds: CredState
   hook: boolean
@@ -354,6 +431,10 @@ const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
+/** Sets a source's trust and what it is about (KN-56, KN-57). */
+export const saveSourceIndex = (id: string, s: SourceIndexSettings) => call<KnowledgeSource>(base + 'sources/' + enc(id) + '/index', { method: 'PUT', body: JSON.stringify(s) })
+/** Chooses the embedding model of the search, or none (KN-55). */
+export const saveEmbeddings = (e: EmbeddingSettings) => call<KnowledgeView>(base + 'embeddings', { method: 'PUT', body: JSON.stringify(e) })
 /** Adds a source, naming its credential (CR-11): no secret goes with it. */
 export const addSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources', post({ source }))
 export const saveSource = (source: KnowledgeSource) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify({ source }) })
@@ -482,6 +563,8 @@ export interface AddInput {
   name?: string
   /** A document's bytes, base64. */
   data?: string
+  /** A document's own trust, a SuperAdmin's choice (KN-61): '' is its source's; absent chooses none. */
+  trust?: '' | TrustLevel
 }
 
 export interface AddResult {
@@ -502,8 +585,11 @@ export const wikiHref = (view: 'pages' | 'drafts' = 'pages') => '#/aiops/mycroft
 /** The Wiki's page list showing only these pages: Review those pages, after a source item was removed or excluded. */
 export const wikiPagesHref = (paths: string[]) => '#/aiops/mycroft/wiki?pages=' + paths.map(encodeURIComponent).join(',')
 
-/** AIOps › Mycroft › Sources: every item the agents can draw on (0.12.1). */
+/** AIOps › Mycroft › Sources: the sources, one row each (0.12.1; one row a source since phase-13.1-ai, KN-50). */
 export const SOURCES_HREF = '#/aiops/mycroft/sources'
+
+/** A source opened in AIOps › Mycroft › Sources: its items. */
+export const sourceHref = (id: string) => `${SOURCES_HREF}/${enc(id)}`
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))
@@ -617,6 +703,9 @@ export interface UploadItem {
   /** The page a correction (This is outdated…) is for. */
   corrects?: string
   reported?: string
+  /** A document's own trust (absent: its source's), and its source's (KN-61). */
+  trust?: TrustLevel
+  sourceTrust?: TrustLevel
 }
 
 export interface UploadsView {
@@ -628,9 +717,14 @@ export interface UploadsView {
   model: boolean
   /** The built-in sources of uploads switched off: nothing in them is read until a SuperAdmin turns them on. */
   off: { id: string; name: string }[]
+  /** The trust of Added in Mycroft, where an upload lands: a document's own is chosen against it (KN-61). */
+  sourceTrust?: TrustLevel
 }
 
 export const fetchUploads = (background = false) => call<UploadsView>(base + 'uploads', {}, background)
+/** An uploaded document's own trust, on its row in AIOps › Mycroft › Sources (KN-61): '' is its source's. */
+export const setDocumentTrust = (source: string, name: string, trust: '' | TrustLevel) =>
+  call<{ source: string; id: string; trust: '' | TrustLevel; sourceTrust: TrustLevel; level: TrustLevel }>(base + 'sources/' + enc(source) + '/documents/' + enc(name) + '/trust', { method: 'PUT', body: JSON.stringify({ trust }) })
 export const removeUpload = (source: string, name: string) => call<{ removed: boolean; pages?: PageBrief[] }>(base + 'uploads/' + enc(source) + '/' + enc(name), { method: 'DELETE' })
 
 /** The types of a source's item. */
@@ -688,6 +782,9 @@ export interface SourceItem {
   /** The full pattern of everything under it, and that in words relative to its source, for Exclude everything under …; none at the source's root. */
   under?: string
   underLabel?: string
+  /** An uploaded document's own trust (absent: its source's), and its source's (KN-61). */
+  trust?: TrustLevel
+  sourceTrust?: TrustLevel
 }
 
 /** A source as the Sources filter offers it; 'uploads' is both built-in sources of uploads. */
@@ -706,6 +803,8 @@ export interface ItemsPage {
   sources: ItemSource[]
   mayExclude: boolean
   mayRemove: boolean
+  /** A SuperAdmin sets an uploaded document's trust (KN-61). */
+  mayTrust?: boolean
 }
 
 export interface ItemsQuery {
@@ -729,6 +828,38 @@ export function itemsUrl(q: ItemsQuery): string {
 
 export const fetchItems = (q: ItemsQuery) => call<ItemsPage>(itemsUrl(q))
 
+/** When a source's last sync finished, and how it went (KN-50). */
+export interface SourceSync {
+  at: string
+  /** How many changed items it read; absent for a sync of every source, or a read no kept sync names. */
+  changed?: number
+  failed?: boolean
+  error?: string
+  /** A sync of every source, not of this one alone. */
+  every?: boolean
+}
+
+/** A source as AIOps › Mycroft › Sources lists it (KN-50). */
+export interface SourceSummary {
+  id: string
+  name: string
+  kind: SourceKind
+  off?: boolean
+  items: number
+  failed?: number
+  excluded?: number
+  /** Absent for a live source, and for one never read. */
+  lastSync?: SourceSync
+}
+
+export interface SourcesView {
+  sources: SourceSummary[]
+  mayExclude: boolean
+  mayRemove: boolean
+}
+
+export const fetchSources = () => call<SourcesView>(base + 'sources')
+
 export interface ItemDetail {
   item: SourceItem
   excerpts: string[]
@@ -739,6 +870,14 @@ export interface ItemDetail {
 }
 
 export const fetchItemDetail = (source: string, id: string) => call<ItemDetail>(base + 'items/detail?source=' + enc(source) + '&id=' + enc(id))
+/** What asking Mycroft for a page from an item did (KN-59). */
+export interface PageRequestResult {
+  run?: string
+  pages: number
+  text: string
+}
+/** Has Mycroft write the wiki's pages from one item, whatever its source's trust (KN-59): they wait for review. */
+export const writePage = (source: string, id: string) => call<PageRequestResult>(base + 'items/page', post({ source, id }))
 
 export interface ExcludeResult {
   exclusion: Exclusion

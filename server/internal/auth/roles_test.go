@@ -1063,6 +1063,30 @@ func TestRolesViewHelpers(t *testing.T) {
 	}
 }
 
+// The review of November 24, 2026 (outside the package): the Roles
+// page's Orphaned flag asked for the user the way a sign-in does, by user
+// name and then by email, so a binding of a user name that is only an
+// account's email (a user taken out of the values, whose binding stayed)
+// read as a user who exists. A session is found by its user name only
+// (live), and so is the user of a binding.
+func TestUserExistsMatchesTheUserNameExactly(t *testing.T) {
+	cfg := auth.Config{
+		Mode: auth.ModeLocal,
+		Local: []auth.LocalUser{
+			{Username: "ann", Email: "ann@corp.example", PasswordHash: hashOf(t, goodPassword)},
+		},
+	}
+	e := newEnv(t, cfg)
+	if !e.svc.UserExists("ann") {
+		t.Error("ann, a local user, does not exist")
+	}
+	for _, name := range []string{"ann@corp.example", "ANN@corp.example", " ann"} {
+		if e.svc.UserExists(name) {
+			t.Errorf("UserExists(%q) is true: no account has that user name", name)
+		}
+	}
+}
+
 // Making a local user a SuperAdmin waits for another SuperAdmin when there
 // is one, whether by the role or by a group that gives it; the rest of the
 // change is made. The only SuperAdmin makes one at once, and the audit log
@@ -1230,6 +1254,30 @@ func TestLocalSuperAdminIsReadAsItStandsNow(t *testing.T) {
 	}
 	if e.svc.LocalSuperAdmin("alice") {
 		t.Fatal("a disabled account still counts")
+	}
+}
+
+// LocalSuperAdmin finds the asker of a run request by the user name its
+// session gave, exactly, as a session finds its account (live): the
+// sign-in lookup (the name lowercased and trimmed, then a unique email)
+// would let a request recorded under a name that is only some
+// SuperAdmin's email, or that name capitalised or padded, pass the check
+// again as that SuperAdmin.
+func TestLocalSuperAdminMatchesTheUserNameExactly(t *testing.T) {
+	cfg := auth.Config{
+		Mode: auth.ModeLocal,
+		Local: []auth.LocalUser{
+			{Username: "ann", Email: "ann@corp.example", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}},
+		},
+	}
+	e := newEnv(t, cfg)
+	if !e.svc.LocalSuperAdmin("ann") {
+		t.Fatal("ann, a local SuperAdmin, does not count")
+	}
+	for _, name := range []string{"ann@corp.example", "ANN@corp.example", " ann", "ANN"} {
+		if e.svc.LocalSuperAdmin(name) {
+			t.Errorf("LocalSuperAdmin(%q) is true: no account has that user name", name)
+		}
 	}
 }
 

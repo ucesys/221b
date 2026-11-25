@@ -22,6 +22,10 @@ func webSite(t *testing.T, f *fixture, x Source) SyncResult {
 		x.Name = "Docs site"
 	}
 	x.Kind = SourceWeb
+	// Mycroft writes pages from it (KN-59).
+	if x.Trust == "" {
+		x.Trust = TrustHigh
+	}
 	if _, err := f.s.SaveSource(ctx, admin, x, nil, true); err != nil {
 		t.Fatal(err)
 	}

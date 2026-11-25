@@ -184,7 +184,7 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 		From:         fromAddr(r),
 		// The view actions go to the asker's window only (SR-19).
 		Window:        windowID(in.Window),
-		WindowSession: sess.ID,
+		WindowSession: sess.StateID(),
 		View:          in.View,
 		ViewChanges:   s.sherlockSettings().ChangesView(),
 		// Asked from a case or a proposed change, Sherlock knows the Cases
@@ -219,7 +219,7 @@ func (s *Server) postCaseSherlockUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	s.deliverUI(w, r, key, r.PathValue("uid"), sess.ID)
+	s.deliverUI(w, r, key, r.PathValue("uid"), sess.StateID())
 }
 
 // postCaseSherlockStop stops the answer coming on a case's conversation:
@@ -255,7 +255,9 @@ func (s *Server) caseCommandFrom(w http.ResponseWriter, r *http.Request, n int, 
 
 // caseCommand is a Watson command as a case logs it: never its output.
 func caseCommand(it watson.Item) casework.Command {
-	cmd := casework.Command{ID: it.ID, Line: it.Line, By: it.Requester.Name, At: it.Created, Change: it.Change, Status: it.Status}
+	// The log is shown and audited: the line's parameters are hidden
+	// there, as in Watson's own records (DB-74).
+	cmd := casework.Command{ID: it.ID, Line: watson.MaskLine(it.Line), By: it.Requester.Name, At: it.Created, Change: it.Change, Status: it.Status}
 	if !it.Started.IsZero() && !it.Finished.IsZero() {
 		exit := it.Exit
 		cmd.Exit = &exit

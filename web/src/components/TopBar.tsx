@@ -1,6 +1,7 @@
 import { usePref } from '../lib/prefs'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { signOut } from '../api/auth'
+import { copyText } from '../lib/clipboard'
 import type { ClusterInfo, Counts, Me, Settings } from '../api/types'
 import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
@@ -41,6 +42,8 @@ interface Props {
   route: Route
   /** Opens the connection editor for a cluster, or for a new one (null). */
   onEditCluster: (id: string | null) => void
+  /** Says something for a moment: the version copied from the account menu. */
+  onToast?: (msg: string) => void
 }
 
 interface Measure {
@@ -216,8 +219,32 @@ function ReportItems({ onDone }: { onDone: () => void }) {
   )
 }
 
-/** The account button and its menu: who is signed in, their role, the theme, and sign-out. */
-function AccountMenu({ me, theme, onTheme }: { me: Me; theme: Theme; onTheme: (t: Theme) => void }) {
+/** The console's version as the account menu's last line says it (RB-58): `221B 0.13.0 · build 9ef9683`, a release's version alone; '' when the server told none. */
+export function versionLine(me: Me): string {
+  if (!me.version) return ''
+  return `221B ${me.version}` + (me.build ? ` · build ${me.build}` : '')
+}
+
+/** The account menu's last line: the console's version, copied with a click (RB-58). */
+export function VersionLine({ me, onToast }: { me: Me; onToast?: (msg: string) => void }) {
+  const text = versionLine(me)
+  if (!text) return null
+  return (
+    <button
+      className="rk-ddopt"
+      role="menuitem"
+      title="Copy the version"
+      style={{ fontSize: 11.5, color: 'var(--fg3)' }}
+      onClick={() => void copyText(text).then((ok) => onToast?.(ok ? `Copied ${text}` : 'Could not copy: the browser refused the clipboard.'))}
+      data-testid="account-version"
+    >
+      <span className="rk-mono">{text}</span>
+    </button>
+  )
+}
+
+/** The account button and its menu: who is signed in, their role, the theme, sign-out, and the version. */
+function AccountMenu({ me, theme, onTheme, onToast }: { me: Me; theme: Theme; onTheme: (t: Theme) => void; onToast?: (msg: string) => void }) {
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   if (me.mode === 'none') {
@@ -311,6 +338,12 @@ function AccountMenu({ me, theme, onTheme }: { me: Me; theme: Theme; onTheme: (t
             <button className="rk-ddopt" role="menuitem" onClick={() => void signOut()} data-testid="signout">
               Sign out
             </button>
+            {versionLine(me) && (
+              <>
+                <div className="rk-ddsep" />
+                <VersionLine me={me} onToast={onToast} />
+              </>
+            )}
           </div>
         </>
       )}
@@ -318,7 +351,7 @@ function AccountMenu({ me, theme, onTheme }: { me: Me; theme: Theme; onTheme: (t
   )
 }
 
-export function TopBar({ cluster, counts, tones, labelTones, tab, stream, updatedAt, refreshedAt, settings, theme, onTheme, me, route, onEditCluster }: Props) {
+export function TopBar({ cluster, counts, tones, labelTones, tab, stream, updatedAt, refreshedAt, settings, theme, onTheme, me, route, onEditCluster, onToast }: Props) {
   const conn = connection(cluster, stream)
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
@@ -646,7 +679,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
             <GearIcon />
           </a>
         )}
-        {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} />}
+        {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} onToast={onToast} />}
       </div>
       <div ref={measureEl} className="rk-tabmeasure" aria-hidden="true">
         {tabs.map((t) => (

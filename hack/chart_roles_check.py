@@ -74,6 +74,9 @@ check("the shipped Admin has no pods/exec and nothing cluster-scoped",
       not [r for r in by["221b-admin"]["rules"] if "pods/exec" in r.get("resources", []) or "nodes" in r.get("resources", [])
            and set(r["verbs"]) - {"get", "list", "watch"}])
 
+check("the full Admin may delete Secrets, as Helm's rollback prunes its oldest record (RB-12)",
+      [r for r in by["221b-admin"]["rules"] if r.get("resources") == ["secrets"] and "delete" in r["verbs"]] != [])
+
 # ---- the console's own account (RB-14, RB-37, RB-52)
 c = console_role(d)
 rbac_writes = [r for r in c["rules"] if "rbac.authorization.k8s.io" in r.get("apiGroups", []) and set(r["verbs"]) - {"get", "list", "watch"}]

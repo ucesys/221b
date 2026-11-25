@@ -80,13 +80,15 @@ type opener struct {
 	// opened and what replace the history's and the audit log's words
 	// for what opened it.
 	opened, what string
+	// corr is the case's correlation key (CF-117).
+	corr string
 }
 
 // open opens a case as Create does, and says whether its analysis
 // should start.
 func (s *Service) open(ctx context.Context, in NewCase, op opener) (caseInfo, bool, error) {
 	o := issues.Opening{Source: SourceManual, Title: in.Title, Text: in.Detail, Cluster: strings.TrimSpace(in.Cluster), Object: normObject(in.Resource), Priority: in.Priority,
-		KnownIssue: strings.TrimSpace(in.KnownIssue), Type: in.Type, Incident: in.Incident}
+		KnownIssue: strings.TrimSpace(in.KnownIssue), Type: in.Type, Incident: in.Incident, CorrelationKey: op.corr}
 	src := Source{Kind: SourceManual}
 	if a := in.FromAlert; a != nil {
 		if strings.TrimSpace(a.Name) == "" {

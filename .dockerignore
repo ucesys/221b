@@ -2,6 +2,7 @@
 *
 !server/
 !web/
+!deploy/helm/221b/Chart.yaml
 server/vendor/
 server/internal/ui/dist/*
 !server/internal/ui/dist/.gitkeep

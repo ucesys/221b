@@ -135,3 +135,18 @@ describe('Requests do not pile up: only the newest is active (CF-65)', () => {
     expect(screen.queryByTestId('watson-earlier')).toBeNull()
   })
 })
+
+describe('The fully protected read-only deployment (RB-03)', () => {
+  const status = { available: true, readOnly: true, twoPerson: false, env: 'other', signedIn: true, me: 'Pat', prompt: 'pat@local:~$', lapseSeconds: 600, reads: ['get'], changes: ['rollout restart'], admin: true }
+  const card = { id: '1', command: 'kubectl get pods', kind: 'read', from: '', status: 'done', by: 'me', mine: true, created: '2026-11-24T10:00:00Z', exit: 0, canApprove: false, lineStart: 0, rev: 1 } as WatsonItem
+  it('says changes are impossible by configuration, with cards and without', () => {
+    const { rerender } = render(<WatsonPane cluster="local" clusterName="local" state={{ status: { ...status, impossible: true }, items: [], live: true }} onToast={() => {}} />)
+    expect(screen.getByTestId('watson-impossible').textContent).toContain('Changes are impossible by configuration')
+    rerender(<WatsonPane cluster="local" clusterName="local" state={{ status: { ...status, impossible: true }, items: [card], live: true }} onToast={() => {}} />)
+    expect(screen.getByTestId('watson-impossible')).toBeTruthy()
+  })
+  it('says nothing of it otherwise', () => {
+    render(<WatsonPane cluster="local" clusterName="local" state={{ status, items: [card], live: true }} onToast={() => {}} />)
+    expect(screen.queryByTestId('watson-impossible')).toBeNull()
+  })
+})

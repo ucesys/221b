@@ -103,6 +103,10 @@ const (
 	// ActionReconcile is Housekeeping putting a case and its work right
 	// after a write that failed (W-9, CF-100).
 	ActionReconcile = "case.reconcile"
+	// One case for one failure (CF-117, CF-119): an alert attached to
+	// the case about its node, and a case merged into another.
+	ActionAttach = "case.attach"
+	ActionMerge  = "case.merge"
 )
 
 // Limits of one case; longer text is cut.
@@ -192,6 +196,12 @@ type Analysis struct {
 	// (W-6, CF-98): a suggested fix or a proposed change with a command
 	// Watson would refuse is dropped whole, never filed shortened.
 	LeftOut []string `json:"leftOut,omitempty"`
+	// SameCauseAs are the open cases the analysis says share this case's
+	// cause, and RootCase the one it names the root ("C-13"; this case's
+	// own id when it is the root), as the console checked them (CF-118):
+	// the case then suggests "Merge into C-13", which a person applies.
+	SameCauseAs []string `json:"sameCauseAs,omitempty"`
+	RootCase    string   `json:"rootCase,omitempty"`
 }
 
 // RCA is a case's root-cause analysis: what a person gave closing it as

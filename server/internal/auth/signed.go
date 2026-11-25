@@ -201,7 +201,7 @@ func (p signedPayload) session(id string, now time.Time) *Session {
 // sign makes the signed session of a session that could not be stored.
 func (s *Sessions) sign(sess Session) (*Session, error) {
 	s.mu.Lock()
-	keys, lasts := s.key, s.outage
+	keys, lasts := s.key, s.outageLasts()
 	s.mu.Unlock()
 	key := keys.fresh()
 	if key == nil {
@@ -227,6 +227,7 @@ func (s *Sessions) sign(sess Session) (*Session, error) {
 		return nil, err
 	}
 	signed := p.session(id, sess.LastSeen)
+	signed.state = exchangeIDWith(key, p.Sid)
 	// What the sign-in worked out stands on the replica that signed; every
 	// other replica works it out again (Service.live).
 	signed.User.KubeName, signed.User.KubeGroups = sess.User.KubeName, sess.User.KubeGroups
@@ -250,7 +251,12 @@ func (s *Sessions) exchangeID(sid string) (string, bool) {
 	if len(key) == 0 || sid == "" {
 		return "", false
 	}
-	return base64.RawURLEncoding.EncodeToString(macOf(key, "221b exchange\x00"+sid)), true
+	return exchangeIDWith(key, sid), true
+}
+
+// exchangeIDWith is exchangeID with a given key.
+func exchangeIDWith(key []byte, sid string) string {
+	return base64.RawURLEncoding.EncodeToString(macOf(key, "221b exchange\x00"+sid))
 }
 
 // endedInStore says whether the shared store holds the ending of a signed
@@ -270,7 +276,7 @@ func (s *Sessions) endedInStore(sid string) bool {
 	if here {
 		return true
 	}
-	if shared == nil || s.away() {
+	if shared == nil {
 		return false
 	}
 	var b []byte
@@ -300,7 +306,8 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 	s.mu.Lock()
 	keys := s.key
 	// The key of the map is a hash of the whole value: what is here was
-	// verified when it was put here.
+	// verified when it was put here, with the key as it was then, so it is
+	// checked again against the key as it is now (one HMAC).
 	sess := s.byID[key]
 	s.mu.Unlock()
 	if sess == nil {
@@ -324,9 +331,17 @@ func (s *Sessions) findSigned(id string) (string, *Session, int) {
 			sess = cur
 		} else {
 			sess = p.session(id, now)
+			// The key the cookie was verified with is the one an exchange
+			// works the stored session's ID out with.
+			sess.state = exchangeIDWith(keys.current(), p.Sid)
 			s.byID[key] = sess
 		}
 		s.mu.Unlock()
+	} else if !verified(keys.current(), signedText, mac) {
+		// Taken before with a key this replica no longer has: the key was
+		// replaced by hand, which ends what the old one signed, here too.
+		s.forget(key, false)
+		return key, nil, gone
 	}
 	s.mu.Lock()
 	sid, expires := sess.sid, sess.Expires
@@ -386,7 +401,15 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 	if !cur.Signed || cur.sid == "" {
 		return nil, false, false
 	}
-	s.exMu.Lock()
+	// One exchange at a time. A request that finds one under way does not
+	// wait for it: the signed session serves it, and a later request
+	// exchanges (what is kept for the person is under the same StateID
+	// either way). A store that swallows what it is sent so holds one
+	// request for its time, not every request with a signed cookie, one
+	// after the other.
+	if !s.exMu.TryLock() {
+		return nil, false, false
+	}
 	defer s.exMu.Unlock()
 	now := s.now()
 	s.mu.Lock()
@@ -408,7 +431,7 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 		}
 		return nil, false, false
 	}
-	if now.Before(wait) || s.away() || !now.Before(cur.Expires) {
+	if now.Before(wait) || !now.Before(cur.Expires) {
 		return nil, false, false
 	}
 	id, ok := s.exchangeID(cur.sid)
@@ -440,7 +463,7 @@ func (s *Sessions) Exchange(cur Session) (st *Session, made, ok bool) {
 	})
 	switch {
 	case err != nil:
-		// A store that is away is left alone for a while as it is (reach);
+		// A store that is away is asked again at the next request (reach);
 		// one that refuses is not asked on every request.
 		if !StoreAway(err) {
 			s.log.Warn("a session made while the session store was away could not be stored; it stands as it is until it expires", "err", err)

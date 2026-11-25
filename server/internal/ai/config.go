@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai/auto"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -56,6 +57,69 @@ type Provider struct {
 	// provider whose endpoint answered without a credential may be used
 	// without one (AS-04). Never taken from a request.
 	Tested *ProviderTest `json:"tested,omitempty"`
+	// --- The models it offers the agents (phase-13.1-ai, A9) ---
+	// Offered are the models its agents may be set to and Auto picks
+	// among, in order, each with its tier for Auto ("" none), once
+	// OfferedChosen says a SuperAdmin chose them; before (an upgrade) it
+	// offers every model it lists (offerOf). Its default model is always
+	// offered.
+	Offered       []auto.Offered `json:"offered,omitempty"`
+	OfferedChosen bool           `json:"offeredChosen,omitempty"`
+}
+
+// MaxOffered bounds the models a provider offers.
+const MaxOffered = 50
+
+// checkOffered reports what is wrong with the models a provider offers.
+func checkOffered(p Provider) error {
+	if len(p.Offered) > MaxOffered {
+		return fmt.Errorf("a provider offers at most %d models", MaxOffered)
+	}
+	seen := map[string]bool{}
+	for _, o := range p.Offered {
+		if !reModel.MatchString(o.Model) {
+			return fmt.Errorf("%q is not a model name", o.Model)
+		}
+		if seen[o.Model] {
+			return fmt.Errorf("%s is offered twice", o.Model)
+		}
+		seen[o.Model] = true
+		if !auto.ValidTier(o.Tier) {
+			return fmt.Errorf("a model's tier is light, standard, strong or none, not %q", o.Tier)
+		}
+	}
+	return nil
+}
+
+// offerOf is what a provider offers its agents: the models a SuperAdmin
+// chose, with its default model (with no tier when it is not among them);
+// or, while none are chosen (all), every model it lists, Auto picking on a
+// provider of kind Anthropic among Claude Haiku, Sonnet and Opus 5.5 as
+// before A9, and on any other among none.
+func offerOf(p Provider) (list []auto.Offered, all bool) {
+	if !p.OfferedChosen {
+		if anthropicKind(p) {
+			return slices.Clone(auto.Claude), true
+		}
+		return nil, true
+	}
+	list = slices.Clone(p.Offered)
+	if def := modelOf(AgentSettings{}, p); !slices.ContainsFunc(list, func(o auto.Offered) bool { return o.Model == def }) {
+		list = append(list, auto.Offered{Model: def})
+	}
+	return list, false
+}
+
+// ladderOf is what Auto picks among on a provider.
+func ladderOf(p Provider) auto.Ladder {
+	list, _ := offerOf(p)
+	return auto.Ladder(list)
+}
+
+// offers says whether a provider offers a model to its agents.
+func offers(p Provider, model string) bool {
+	list, all := offerOf(p)
+	return all || slices.ContainsFunc(list, func(o auto.Offered) bool { return o.Model == model })
 }
 
 // ProviderTest is the last connection test of a provider.
@@ -112,6 +176,13 @@ type Providers struct {
 	// default provider's too (Phase 12.1, AI-36): what every agent spends
 	// on it together. None, or 0, is no limit.
 	Limits map[string]sherlock.Caps `json:"limits,omitempty"`
+	// ClassifierID is the OpenAI-compatible provider Auto's classifier asks
+	// (phase-13.1-ai, AI-45), on its default model; "" is no classifier.
+	ClassifierID string `json:"classifierId,omitempty"`
+	// DefaultOffered and DefaultOfferedChosen are the models the default
+	// provider offers its agents (A9; Provider.Offered).
+	DefaultOffered       []auto.Offered `json:"defaultOffered,omitempty"`
+	DefaultOfferedChosen bool           `json:"defaultOfferedChosen,omitempty"`
 }
 
 // MaxProviders bounds the providers.
@@ -139,6 +210,9 @@ func (p Provider) Validate() error {
 		}
 	}
 	if err := checkWindow(p.ContextWindow); err != nil {
+		return err
+	}
+	if err := checkOffered(p); err != nil {
 		return err
 	}
 	return p.Provider.Validate()
@@ -181,7 +255,26 @@ type AgentSettings struct {
 	// form does not fit the model's context (CompactAuto), "always" or
 	// "never" (AS-07).
 	Compact string `json:"compact,omitempty"`
+	// --- Effort and Auto (phase-13.1-ai, AI-43 to AI-47) ---
+	// Effort is its effort: "" the model's default (as before), low,
+	// medium, high, xhigh, max, or auto. Model may be auto too, on a
+	// provider one of whose offered models has a tier: Auto picks among
+	// them by tier (A9).
+	Effort string `json:"effort,omitempty"`
+	// FloorEffort and FloorModel are the lowest effort and model Auto may
+	// pick for it; "" is none. FloorModel is one of its provider's offered
+	// models with a tier.
+	FloorEffort string `json:"floorEffort,omitempty"`
+	FloorModel  string `json:"floorModel,omitempty"`
 }
+
+// auto is the settings as package auto reads them.
+func (a AgentSettings) auto() auto.Settings {
+	return auto.Settings{Effort: a.Effort, Model: a.Model, FloorEffort: a.FloorEffort, FloorModel: a.FloorModel}
+}
+
+// usesAuto says Auto picks its effort or its model.
+func (a AgentSettings) usesAuto() bool { return a.Effort == auto.Auto || a.Model == auto.Auto }
 
 // Sherlock's forms.
 const (
@@ -212,6 +305,17 @@ const MaxCapUSD = 100_000
 func (a AgentSettings) Validate(info Info) error {
 	if a.Model != "" && !reModel.MatchString(a.Model) {
 		return fmt.Errorf("%q is not a model name", a.Model)
+	}
+	if !auto.ValidEffort(a.Effort) {
+		return fmt.Errorf("the effort is the model's default, low, medium, high, xhigh, max or auto, not %q", a.Effort)
+	}
+	// Auto never picks below the floor; a floor above high would make every
+	// pick xhigh or max, which Auto keeps for an open P0 or P1 case.
+	if a.FloorEffort != "" && (auto.Rank(a.FloorEffort) < 0 || auto.Rank(a.FloorEffort) > auto.Rank(auto.High)) {
+		return errors.New("the lowest effort Auto may pick is low, medium or high")
+	}
+	if a.FloorModel != "" && !reModel.MatchString(a.FloorModel) {
+		return fmt.Errorf("%q is not a model name", a.FloorModel)
 	}
 	for _, v := range []float64{a.DailyUSD, a.MonthlyUSD} {
 		if v < 0 || v > MaxCapUSD || math.IsNaN(v) {

@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"slices"
 	"sort"
 	"strings"
@@ -220,6 +221,13 @@ func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) 
 // Find is the search for people over this replica's index and the
 // records given (KN-35).
 func (s *Service) Find(query string, kinds []string, limit int, records []Record) Found {
+	if s.pg != nil {
+		found, err := s.findPG(context.Background(), query, kinds, limit, records)
+		if err == nil {
+			return found
+		}
+		s.o.Logger.Warn("the knowledge index in the database could not be searched; the pages of this replica's copy answer", "err", err)
+	}
 	s.mu.RLock()
 	idx := s.index
 	s.mu.RUnlock()

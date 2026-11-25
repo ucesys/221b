@@ -41,6 +41,16 @@ func TestRepoSettings(t *testing.T) {
 			if set, saved, err := r.Settings(ctx); err != nil || !saved || !reflect.DeepEqual(set, in) {
 				t.Fatalf("read back %+v, saved %v, %v", set, saved, err)
 			}
+			// The bucket's default encryption stays the bucket's default
+			// once saved: it is not read back as SSE-S3 (the owner,
+			// 2026-11-23: a MinIO without KMS refused SSE-S3 after saving).
+			in.SSE = ""
+			if err := r.SaveSettings(ctx, in); err != nil {
+				t.Fatal(err)
+			}
+			if set, _, err := r.Settings(ctx); err != nil || set.SSE != "" {
+				t.Fatalf("the bucket's default read back as %q, %v", set.SSE, err)
+			}
 		})
 	}
 }

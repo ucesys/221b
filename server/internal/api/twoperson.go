@@ -31,6 +31,7 @@ const approvalAdmin = "admin"
 type twoPersonAuth interface {
 	OtherSuperAdmin(auth.Session) bool
 	SuperAdminHold(sess auth.Session, before auth.Account, super []roles.ID, groups []string) auth.SuperChange
+	ListMakesSuperAdmin(sess auth.Session, before *auth.Account, after auth.Account) (held, alone bool)
 	RequestSuperAdmin(ctx context.Context, r *http.Request, sess auth.Session, hold twoperson.Request) (twoperson.Request, error)
 	ApplySuperAdmin(ctx context.Context, r twoperson.Request) error
 }

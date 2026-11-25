@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { useView } from '../api/live'
 import type { NamespaceRow, ObjectRow, ReleaseRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
@@ -12,7 +12,7 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { SearchBox } from './SearchBox'
-import { useSecretsConfig } from '../api/secrets'
+import { secretWrites, useSecretsConfig } from '../api/secrets'
 import { SecretDialog } from './SecretDialog'
 import { NamespaceDialog } from './NamespaceDialog'
 import { NamespaceTools } from './NamespaceTools'
@@ -161,6 +161,22 @@ function KindTable({
   )
 }
 
+/** A button that writes to the cluster, off with the reason beside it where the cluster refuses the console's writes (RB-36). */
+function WriteButton({ off, onClick, testId, style, children }: { off?: string; onClick: () => void; testId: string; style?: CSSProperties; children: ReactNode }) {
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, ...style }}>
+      <button className="rk-btn" disabled={!!off} title={off} onClick={onClick} style={{ alignSelf: 'flex-start' }} data-testid={testId}>
+        {children}
+      </button>
+      {off && (
+        <span className="rk-fhint" style={{ fontSize: 12, maxWidth: 320 }} data-testid={`${testId}-off`}>
+          {off}
+        </span>
+      )}
+    </span>
+  )
+}
+
 /**
  * The Namespaces tab (P2-02): every namespace on the left, what the chosen
  * one holds on the right, a tab per kind as the Helm tab has them (asked at
@@ -185,8 +201,12 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   // Helm releases, read where Helm keeps them (P2-07), listed like the namespace's other kinds.
   const releases = useView<ReleaseRow>(current?.releases.length ? 'helm' : null)
   const nsReleases = useMemo(() => releases.rows.filter((r) => r.namespace === ns), [releases.rows, ns])
-  // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
+  // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here,
+  // and a namespace (NS-01); not on a read-only connection, where the
+  // buttons are hidden, nor where rbac.enforce strict refuses the cluster,
+  // where they are off and say why (RB-36).
   const secretsCfg = useSecretsConfig(route.cluster)
+  const writes = secretWrites(secretsCfg)
   const kinds = useMemo(() => {
     const m = new Map<string, { kind: string; apiVersion: string; order: number; n: number }>()
     for (const r of objects.rows) {
@@ -212,10 +232,10 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     const list = kinds.map((k) => ({ id: k.kind, label: pluralKind(k.kind), apiVersion: k.apiVersion, n: byKind.get(k.kind)?.length ?? 0 }))
     list.sort((a, b) => Number(b.id === 'Pod') - Number(a.id === 'Pod'))
     // An Admin sees a Secrets tab even where there is no Secret yet: New Secret… lives there (SE-05).
-    if (secretsCfg?.read && secretsCfg.edit && !list.some((t) => t.id === 'Secret')) list.push({ id: 'Secret', label: pluralKind('Secret'), apiVersion: 'v1', n: 0 })
+    if (secretsCfg?.read && writes.show && !list.some((t) => t.id === 'Secret')) list.push({ id: 'Secret', label: pluralKind('Secret'), apiVersion: 'v1', n: 0 })
     if (nsReleases.length) list.push({ id: RELEASES, label: 'Helm releases', apiVersion: 'helm.sh/release.v1', n: releasesShown.length })
     return list
-  }, [kinds, byKind, nsReleases.length, releasesShown.length, secretsCfg])
+  }, [kinds, byKind, nsReleases.length, releasesShown.length, secretsCfg, writes.show])
   const tab = tabs.find((t) => t.id === kindsParam[0]) ?? tabs[0] ?? null
 
   const lq = listQuery.trim().toLowerCase()
@@ -264,10 +284,10 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
         empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'}
         testId="namespace-list"
         extra={
-          secretsCfg?.edit ? (
-            <button className="rk-btn" onClick={() => setNewNamespace(true)} style={{ alignSelf: 'flex-start' }} data-testid="namespace-new">
+          writes.show ? (
+            <WriteButton off={writes.off} onClick={() => setNewNamespace(true)} testId="namespace-new" style={{ alignSelf: 'flex-start' }}>
               New namespace…
-            </button>
+            </WriteButton>
           ) : undefined
         }
       />
@@ -297,6 +317,8 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
               <NamespaceTools
                 namespace={ns}
                 canCreate={!!secretsCfg?.edit}
+                createHidden={!!secretsCfg?.edit && !writes.show}
+                createOff={writes.off}
                 onPick={(a) => {
                   if (a === 'new') setNewNamespace(true)
                   else setDeleting(ns)
@@ -338,10 +360,10 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                 defaults={table.defaults}
                 search={search}
                 extra={
-                  tab.id === 'Secret' && secretsCfg?.edit ? (
-                    <button className="rk-btn" onClick={() => setNewSecret(true)} data-testid="secret-new">
+                  tab.id === 'Secret' && writes.show ? (
+                    <WriteButton off={writes.off} onClick={() => setNewSecret(true)} testId="secret-new">
                       New Secret…
-                    </button>
+                    </WriteButton>
                   ) : undefined
                 }
               />

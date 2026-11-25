@@ -82,12 +82,37 @@ export interface RunBrief {
   notFiled?: number
   costUSD: number
   model?: string
+  /** The provider its agent ran on, the highest effort a step ran at, and how Auto picked it (AI-48). */
+  provider?: string
+  effort?: string
+  pickBy?: string
+  /** Why Auto picked its effort, and the step that moved its model up: the Runs table's Model and Effort columns. */
+  pickWhy?: string
+  movedUp?: MovedUp
   health?: RunHealth
   severities?: Severities
   /** What the run could not be used for (I-3): see RunLimits. */
   failedClusters?: string[]
   leftOut?: LeftOut
   notRechecked?: number
+}
+
+/** A run's model moved up at one of its steps (AI-44): the step, from 1, the model before, and why. */
+/** A job's agent's model and effort as set now: model "auto" picks from autoFrom to autoTo; effort "" is the model's default, "auto" at least floorEffort. */
+export interface AgentSetup {
+  model?: string
+  defaultModel?: boolean
+  autoFrom?: string
+  autoTo?: string
+  provider?: string
+  effort?: string
+  floorEffort?: string
+}
+
+export interface MovedUp {
+  step: number
+  from: string
+  why?: string
 }
 
 /**
@@ -223,6 +248,12 @@ export interface Run {
   failedClusters?: string[]
   leftOut?: LeftOut
   notRechecked?: number
+  /** What its agent ran with (AI-48): the provider, the highest effort, how and why Auto picked it, and the step that moved its model up. */
+  provider?: string
+  effort?: string
+  pickBy?: string
+  pickWhy?: string
+  movedUp?: MovedUp
 }
 
 /** One thing a run did, for its drawer (KN-28): a label, the value in words, where it leads. */
@@ -296,6 +327,11 @@ export interface Job {
   running: boolean
   spentToday: number
   stoppedToday?: string
+  /** Its agent's model and effort as set now: the Schedule table's Model and Effort columns. */
+  setup?: AgentSetup
+  /** Its agent is turned off ("the Summarizer is off"), the job on or paused: Run now is refused, and its scheduled and event runs fail, until the agent is on (JB-25). */
+  agentOff?: string
+  /** Why its agent cannot work now otherwise: its provider, or the job's cluster. */
   unusable?: string
   external?: ExternalState
   where?: string

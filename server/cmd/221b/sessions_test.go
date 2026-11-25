@@ -237,7 +237,15 @@ func TestTheSessionsLeaveTheirSecretsAtAStart(t *testing.T) {
 	// The emptying is tried again (each minute, startAuth) and now goes
 	// through: every Secret the copy took or that had expired is emptied,
 	// bob's among them although his row is gone, and then deleted.
+	// A try while the database cannot say the copy was made empties
+	// nothing, and is not taken for done: the retry goes on (the review of
+	// the auth package, cut by its cap: it stopped silently).
 	refusing.empty = nil
+	w.database = gone
+	if done := w.sessionsLeft(ctx); done || refusing.emptied != 0 {
+		t.Fatalf("a try with the database away: done %v, %d emptied", done, refusing.emptied)
+	}
+	w.database = d
 	if done := w.sessionsLeft(ctx); !done || refusing.emptied != 5 {
 		t.Fatalf("the emptying tried again: done %v, %d emptied", done, refusing.emptied)
 	}

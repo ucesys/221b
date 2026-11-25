@@ -83,7 +83,7 @@ func openJobs(ctx context.Context, cfg config.Config, restCfg *rest.Config, mana
 		Clusters: func() []jobs.Cluster {
 			var out []jobs.Cluster
 			for _, c := range manager.List() {
-				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name})
+				out = append(out, jobs.Cluster{ID: c.ID, Name: c.Name, Env: c.Env})
 			}
 			return out
 		},
@@ -250,6 +250,22 @@ type agentRunner struct {
 
 func (a agentRunner) Usable(agent, cluster string) string { return a.ai.Usable(agent, cluster) }
 
+// SetupOf is an agent's model and effort as set now, for the jobs' list.
+func (a agentRunner) SetupOf(ctx context.Context, agent string) (jobs.AgentSetup, bool) {
+	st, ok := a.ai.SetupOf(ctx, agent)
+	return jobs.AgentSetup{Model: st.Model, DefaultModel: st.DefaultModel, AutoFrom: st.AutoFrom, AutoTo: st.AutoTo, Provider: st.Provider, Effort: st.Effort, FloorEffort: st.FloorEffort}, ok
+}
+
+// Available says whether an agent can answer at all (JB-25): one turned
+// off is jobs.AgentOff, in the agents' words.
+func (a agentRunner) Available(ctx context.Context, agent string) error {
+	err := a.ai.Available(ctx, agent)
+	if errors.Is(err, ai.ErrUnavailable) {
+		return jobs.AgentOff(err.Error())
+	}
+	return err
+}
+
 // Blind says whether the reader identity can read nothing of a cluster
 // (JB-23), so an audit says so in place of finding nothing.
 func (a agentRunner) Blind(ctx context.Context, cluster string, reader jobs.Settings) (bool, error) {
@@ -309,8 +325,15 @@ func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentR
 	if err != nil {
 		return jobs.AgentResult{Err: err}
 	}
+	// A run's step is picked by rules alone (the owner, November 22), from
+	// what started the run and what the step is about (AI-45).
+	movedFrom := ""
+	if req.Auto != nil {
+		_, movedFrom = a.ai.PickRun(ctx, &agent, req.Auto.Input, req.Auto.Model, req.Auto.MovedUp)
+	}
 	res := a.engine.RunAgent(ctx, agent, q, req.Task)
-	return jobs.AgentResult{Text: res.Text, Model: res.Model, Tokens: jobs.Tokens{In: res.Usage.Prompt(), Out: res.Usage.OutputTokens}, CostUSD: res.CostUSD, Tools: res.Tools, Err: res.Err}
+	return jobs.AgentResult{Text: res.Text, Model: res.Model, Tokens: jobs.Tokens{In: res.Usage.Prompt(), Out: res.Usage.OutputTokens}, CostUSD: res.CostUSD, Tools: res.Tools, Err: res.Err,
+		Provider: agent.ProviderName, Effort: res.Effort, PickBy: res.PickBy, PickWhy: res.PickWhy, MovedUpFrom: movedFrom}
 }
 
 // --- One flow for findings and cases (Phase 12, wave 6, CF-05) ---

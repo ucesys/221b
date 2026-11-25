@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/auth"
@@ -35,5 +36,23 @@ func TestAStandingApprovalsHolderIsReadAgain(t *testing.T) {
 		if ok && (!who.Admin || !who.ManageApps || who.From != "10.0.0.1" || who.Session != "s1") {
 			t.Fatalf("read again as %+v", who)
 		}
+	}
+}
+
+// Approving in the Inbox reads the person's groups again, as Watson's
+// approve does: a person the directory took out is refused (review of
+// November 24, 2026, pre_existing: api/cards.go:292).
+func TestApprovingInTheInboxReadsTheSessionAgain(t *testing.T) {
+	sess := auth.Session{ID: "s1", Admin: true}
+	s := &Server{opts: Options{Auth: rereadAuth{sess, true, false}}}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/aiops/proposals/PC-1/approve", nil)
+	r = r.WithContext(auth.WithSession(r.Context(), sess))
+	w := httptest.NewRecorder()
+	func() {
+		defer func() { _ = recover() }()
+		s.postProposalApprove(w, r)
+	}()
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }

@@ -1,8 +1,10 @@
 package roles
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Source is where a person or group comes from (RB-15).
@@ -41,6 +43,47 @@ func (p Prefixes) of(s Source, group bool) string {
 	return p.OIDCUser
 }
 
+// reservedSpaces are the name spaces Kubernetes and 221B keep for
+// themselves (RB-17).
+var reservedSpaces = []string{"system:", "221b:"}
+
+// inReservedSpace reports whether a name as Kubernetes sees it, prefix
+// included, is in a reserved name space.
+func inReservedSpace(full string) bool {
+	for _, r := range reservedSpaces {
+		if strings.HasPrefix(full, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// Check says what is wrong with the prefixes, or nil (RB-15, RB-17). A
+// prefix that starts a reserved name space ("221b:", "system:") or that a
+// name could complete into one ("sys", "221b") would turn an ordinary
+// name of its source into a reserved one: auth.prefixes.local "221b:" makes
+// the local group superadmins the group 221b:superadmins. The chart's
+// b221.validate refuses the same prefixes.
+func (p Prefixes) Check() error {
+	for _, x := range []struct{ key, v string }{
+		{"auth.prefixes.local", p.Local}, {"auth.prefixes.ldap", p.LDAP},
+		{"auth.kubernetes.userPrefix", p.OIDCUser}, {"auth.kubernetes.groupPrefix", p.OIDCGroup},
+	} {
+		if x.v == "" {
+			continue
+		}
+		if Unclean(x.v) {
+			return fmt.Errorf("%s %q has white space at an end or a control character", x.key, x.v)
+		}
+		for _, r := range reservedSpaces {
+			if strings.HasPrefix(x.v, r) || strings.HasPrefix(r, x.v) {
+				return fmt.Errorf("%s %q would put names in %s, which Kubernetes and 221B reserve: choose another prefix", x.key, x.v, r)
+			}
+		}
+	}
+	return nil
+}
+
 // User is a person's name as Kubernetes sees it.
 func (p Prefixes) User(s Source, name string) string { return p.of(s, false) + name }
 
@@ -66,8 +109,15 @@ func SuperGroup(id ID) string {
 }
 
 // Reserved reports whether a name from any source may not be used (RB-17):
-// it starts with system: or 221b:, or already carries a prefix of 221B's.
+// it starts with system: or 221b:, or already carries a prefix of 221B's,
+// or it has white space at either end or a control character anywhere.
+// HTTP/1.1 trims a header's value, so " system:masters" sent in
+// Impersonate-Group on an exec or port-forward upgrade arrives as
+// system:masters (TestImpersonatedGroupIsTrimmed in internal/sessions).
 func (p Prefixes) Reserved(name string) bool {
+	if Unclean(name) {
+		return true
+	}
 	if strings.HasPrefix(name, "system:") || strings.HasPrefix(name, "221b:") {
 		return true
 	}
@@ -79,18 +129,44 @@ func (p Prefixes) Reserved(name string) bool {
 	return false
 }
 
+// Unclean reports whether a name has white space at either end or a
+// control character anywhere: what a header could change on the way.
+func Unclean(name string) bool {
+	if strings.TrimSpace(name) != name {
+		return true
+	}
+	return strings.IndexFunc(name, unicode.IsControl) >= 0
+}
+
+// MaxUsername and MaxEmailUsername are the longest local user names: one
+// made in the console, and one from values, which may be an email
+// address (254 characters at most).
+const (
+	MaxUsername      = 64
+	MaxEmailUsername = 254
+)
+
 // ValidUsername reports whether a local user name is allowed (RB-16):
-// lowercase letters, digits, dot, dash and underscore. Users defined in
-// values keep their email as the name, so the one place that reads them
-// passes strict=false and allows an @ as well.
+// lowercase letters, digits, dot, dash and underscore, up to MaxUsername.
+// Users defined in values keep their email as the name, so the one place
+// that reads them passes strict=false and allows what an address commonly
+// holds as well, @ and + (ops+k8s@corp.example), up to MaxEmailUsername.
+// The chart's b221.validate checks the same, so a mistake is a helm error
+// rather than a console that exits at start.
 func ValidUsername(name string, strict bool) bool {
-	if name == "" || len(name) > 64 {
+	max := MaxUsername
+	if !strict {
+		max = MaxEmailUsername
+	}
+	// "." and ".." are path segments a browser folds away, so the
+	// account's own endpoints could not be reached.
+	if name == "" || len(name) > max || name == "." || name == ".." {
 		return false
 	}
 	for _, c := range name {
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '.', c == '-', c == '_':
-		case c == '@' && !strict:
+		case (c == '@' || c == '+') && !strict:
 		default:
 			return false
 		}
@@ -98,7 +174,9 @@ func ValidUsername(name string, strict bool) bool {
 	return true
 }
 
-// ValidGroupName reports whether a local group's name is allowed.
+// ValidGroupName reports whether a local group's name is allowed: as a
+// user name made in the console, up to MaxUsername (the chart checks the
+// length too).
 func ValidGroupName(name string) bool { return ValidUsername(name, true) }
 
 // Identity is what 221B knows about a signed-in person's groups.
@@ -133,8 +211,14 @@ func (g GroupSet) Build(id Identity) (groups, dropped []string) {
 			dropped = append(dropped, name)
 		case !g.allows(id.Source, name):
 		default:
+			// The prefix may make a reserved name of an ordinary one
+			// (Prefixes.Check refuses such prefixes at start): checked again
+			// with it, so system:masters and the 221b: groups never pass.
 			full := g.Prefixes.Group(id.Source, name)
-			if full != "system:masters" && !slices.Contains(groups, full) {
+			switch {
+			case inReservedSpace(full) || Unclean(full):
+				dropped = append(dropped, full)
+			case !slices.Contains(groups, full):
 				groups = append(groups, full)
 			}
 		}
@@ -162,7 +246,10 @@ func (g GroupSet) Impersonable() []string {
 	out := []string{GroupConsoleUsers, GroupSuperAdmins, GroupSuperViewers, "system:authenticated"}
 	for src, names := range g.Allowed {
 		for _, n := range names {
-			out = append(out, g.Prefixes.Group(src, n))
+			// What Build would drop is not impersonable either.
+			if full := g.Prefixes.Group(src, n); !g.Prefixes.Reserved(n) && !inReservedSpace(full) && !Unclean(full) {
+				out = append(out, full)
+			}
 		}
 	}
 	slices.Sort(out)

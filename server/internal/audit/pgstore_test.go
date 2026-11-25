@@ -4,8 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
@@ -127,5 +129,35 @@ func TestPGStoreImportsOnce(t *testing.T) {
 	}
 	if list, _ := s.List(ctx); len(list) != 2 || list[0].Time.Second() != 4 {
 		t.Fatalf("after the rollback: %+v", list)
+	}
+}
+
+// A zero byte or text that is not UTF-8 in any field, which PostgreSQL
+// refuses, does not hold up the queue: the text is saved made valid, and
+// the events after it are saved too (the review of the auth package,
+// finding 8: a typed user name of "x%00" stopped every flush).
+func TestPGStoreSavesTextPostgreSQLWouldRefuse(t *testing.T) {
+	s := pgStore(t)
+	ctx := context.Background()
+	bad := eventAt(0, "signin.failed")
+	bad.Who = Who{Email: "x\x00", Name: "\xff\xfe", Subject: "a\x00b"}
+	bad.Target, bad.Detail, bad.From, bad.Cluster, bad.Outcome = "t\x00", "the provider refused: \x00\xc3", "10.0.0.7\x00", "c\x00", "failed\x00"
+	s.Add(bad)
+	s.Add(eventAt(1, "signin"))
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("the flush: %v", err)
+	}
+	list, err := s.List(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("%d events: %v", len(list), err)
+	}
+	got := list[1]
+	for _, f := range []string{got.Who.Email, got.Who.Name, got.Who.Subject, got.Target, got.Detail, got.From, got.Cluster, got.Outcome} {
+		if strings.ContainsRune(f, 0) || !utf8.ValidString(f) {
+			t.Errorf("saved %q", f)
+		}
+	}
+	if got.Who.Email != "x�" {
+		t.Errorf("the email is saved as %q", got.Who.Email)
 	}
 }

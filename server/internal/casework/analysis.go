@@ -83,7 +83,8 @@ func (s *Service) event(c caseInfo, draft bool) jobs.Event {
 	if draft {
 		label = fmt.Sprintf("Draft the RCA of case %s", c.ID)
 	}
-	return jobs.Event{Kind: jobs.EventCase, Cluster: c.Cluster, Label: label, Ref: "case:" + c.ID, Data: request{Case: c, Draft: draft}}
+	pr := c.Priority
+	return jobs.Event{Kind: jobs.EventCase, Cluster: c.Cluster, Label: label, Ref: "case:" + c.ID, Data: request{Case: c, Draft: draft}, CasePriority: &pr}
 }
 
 // launch runs a case's analysis in the background, on the leader, where
@@ -382,6 +383,12 @@ type answer struct {
 	Timeline   looseText `json:"timeline"`
 	Detection  looseText `json:"detection"`
 	Impact     looseText `json:"impact"`
+	// The open cases with the same cause, and the root among them
+	// (CF-118); read leniently, as camelCase too.
+	SameCauseAs  looseList `json:"same_cause_as"`
+	RootCase     looseText `json:"root_case"`
+	SameCauseAs2 looseList `json:"sameCauseAs"`
+	RootCase2    looseText `json:"rootCase"`
 }
 
 // looseText is a text an agent may write as a string or as a list of
@@ -446,9 +453,11 @@ const analysisFormat = "End with exactly one fenced block of JSON, and nothing a
  "ruledOut": ["what you checked and found healthy, with the object it is on"],
  "fix": {"summary": "what a person should do to fix it, in a line", "commands": ["kubectl ..."]},
  "proposals": [],
- "expected": false, "expectedWhy": ""}` + "\n```\n\n" +
+ "expected": false, "expectedWhy": "",
+ "same_cause_as": [], "root_case": ""}` + "\n```\n\n" +
 	`- "expected" is your verdict that there is no problem. Set it true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. Never set it because you found nothing.
 - "confidence" is confirmed when you read the evidence for the cause, likely when it fits and you could not confirm it: then say in "summary" which read would confirm it, and propose no change.
+- "same_cause_as" lists the other open cases on this cluster (C-13) that have the same cause as this one, such as the pods of a node that stopped reporting and the node's own case; empty when none does or you are unsure. "root_case" is the one of them, or this case, that is about the cause itself (the node's case rather than its pods'), empty when none is. A person decides whether to merge them.
 - "ruledOut" lists what you checked and found healthy, each with its object, such as "shop/Deployment/web: image pulls fine, last pull 2m ago", so that nobody reads it again; empty when you ruled nothing out.
 - "fix.commands" are what a person runs in Watson, as themselves: at most five kubectl or helm commands Watson runs, each with its namespace; empty when no command would fix it.
 - "proposals" are changes that wait as Watson cards for a person to approve, each {"title": "...", "reasoning": "...", "commands": ["kubectl ..."], "impact": "what changes for whom, how to undo it, and the read that shows it worked", "risk": "low|medium|high", "fixes": []}; propose the fix you suggest as one, unless its cause is only likely. Each resolves this case; "fixes" may add other open cases on this cluster (C-12) the same change fixes.`
@@ -622,6 +631,9 @@ func (s *Service) run(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, erro
 			an.RuledOut = append(an.RuledOut, r)
 		}
 	}
+	// The cases with the same cause, only open ones on this cluster
+	// (CF-118).
+	an.SameCauseAs, an.RootCase = s.sameCause(ctx, c, append(a.SameCauseAs, a.SameCauseAs2...), firstOf(string(a.RootCase), string(a.RootCase2)))
 	// The suggested fix is kept whole or not at all (W-6, CF-98): one with
 	// a command Watson would refuse, or more commands than MaxCommands, is
 	// left out, and the run and the analysis say which command and why.

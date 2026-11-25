@@ -171,6 +171,9 @@ export interface CaseAnalysis {
    */
   expected?: boolean
   expectedWhy?: string
+  /** The open cases the analysis says share this case's cause, and the one it names the root ("C-13"), as the console checked them (CF-118). */
+  sameCauseAs?: string[]
+  rootCase?: string
   /** Why it did not finish. */
   error?: string
   /** What it suggested that was left out, and why: a fix or change with a command Watson would refuse is dropped whole (W-6). */
@@ -264,6 +267,10 @@ export interface CaseBrief extends CaseRef {
   sameAs?: string
   /** "C-12": the original of a case closed as duplicate. */
   duplicateOf?: string
+  /** "C-12": the case this one was merged into (CF-119); it is its duplicateOf too. */
+  mergedInto?: string
+  /** How many alerts are attached to it as its evidence (CF-117). */
+  signalCount?: number
   /** The known issue a case closed as known issue is ("KI-4"). */
   knownIssue?: string
   /** The exception a case closed as exception made ("EX-3"). */
@@ -545,6 +552,26 @@ export interface Case extends CaseBrief {
   fix?: string
   /** For those who work it: the clusters it may be put on, as New Case lists them (CF-60). */
   clusters?: { id: string; name: string }[]
+  /** The alerts attached to it as its evidence: a pod's on the node it is about, or a merged case's (CF-117). */
+  signals?: CaseSignal[]
+  /** What its alerts are grouped under: "node:prod/worker-3" (CF-117). */
+  correlationKey?: string
+  /** The open case its analysis says shares its cause: "Merge into C-13" applies it (CF-118, CF-119). */
+  mergeSuggestion?: CaseRef
+}
+
+/** An alert attached to a case as its evidence (CF-117). */
+export interface CaseSignal {
+  cluster: string
+  /** The console's key of the alert: "pod:shop/web-1". */
+  key: string
+  name?: string
+  object?: string
+  at: string
+  byKey?: string
+  by?: string
+  /** "same node", "merged from C-14". */
+  why?: string
 }
 
 /** A command run from a case's drawer (CF-48): never its output. */
@@ -714,6 +741,8 @@ export const applyOffer = (id: string, offer: Offer) => call<Case>(one(id) + '/o
 /** Closes an agent-found case as an accepted exception: the agents stop reporting it; a last day is optional. */
 export const closeException = (id: string, reason: string, expires?: string) => call<Case>(one(id) + '/exception', post(expires ? { reason, expires } : { reason }))
 export const reopenCase = (id: string, reason: string) => call<Case>(one(id) + '/reopen', post({ reason }))
+/** Merges an open case into another open case (CF-119): it closes as "Merged into C-n", its alerts move there. */
+export const mergeCase = (id: string, into: string, explanation?: string) => call<Case>(one(id) + '/merge', post(explanation ? { into, explanation } : { into }))
 /** Add to a case instead of opening another: the person follows it, and the text is added. */
 export const joinCase = (id: string, text: string) => call<Case>(one(id) + '/join', post({ text }))
 /** What matches a case being written (no agent runs). */

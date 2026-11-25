@@ -1321,6 +1321,10 @@ func (s *Store) Run(ctx context.Context, every time.Duration) {
 // WatsonEnded hears how the Watson card of a chat's proposal ended: run
 // in the panel, the proposal is done; discarded there, it is withdrawn;
 // lapsed, the proposal waits on here.
+// WatsonUnrun is the end of a chat's Watson command that never ran: it
+// was stopped before it started, or refused when it was to start.
+const WatsonUnrun = "unrun"
+
 func (s *Store) WatsonEnded(ctx context.Context, item, status string, approver Person, exit int) {
 	rec, err := s.loadCards(ctx)
 	if err != nil {
@@ -1359,6 +1363,11 @@ func (s *Store) WatsonEnded(ctx context.Context, item, status string, approver P
 		case "lapsed":
 			x.WatsonItem = ""
 			addEvent(x, now, "its Watson card lapsed; the proposed change waits on in the Inbox", "", SystemActor)
+		case WatsonUnrun:
+			// Stopped before it started, or refused when it was to start: it
+			// never ran, so the proposed change waits on.
+			x.WatsonItem = ""
+			addEvent(x, now, "its Watson command ended before it ran; the proposed change waits on in the Inbox", "", SystemActor)
 		default:
 			return ErrState
 		}

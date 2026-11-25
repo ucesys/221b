@@ -15,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -26,7 +27,7 @@ func seedSecret(src *source) {
 
 // NS-01: a namespace made from the console, as the person.
 func TestNamespaceIsCreatedAsThePerson(t *testing.T) {
-	srv, ops, _, aud, src, _ := multiSetupWith(t, "ops@corp.example", nil)
+	srv, ops, _, aud, src, _ := writeSetup(t, "ops@corp.example", nil)
 	if r, body := send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"made-here","labels":{"team":"a"}}`); r.StatusCode != http.StatusCreated || src.Object("namespaces", "", "made-here") == nil {
 		t.Fatalf("create: %d %s", r.StatusCode, body)
 	}
@@ -45,7 +46,7 @@ func TestNamespaceIsCreatedAsThePerson(t *testing.T) {
 // secrets.reveal on does one key's value reach the browser, audited; a
 // Viewer may do neither; keys-only views still carry no value.
 func TestSecretValuesAreWrittenBlindAndRevealedOnlyWhenTheChartSaysSo(t *testing.T) {
-	srv, ops, _, aud, src, _ := multiSetupWith(t, "ops@corp.example", nil)
+	srv, ops, _, aud, src, _ := writeSetup(t, "ops@corp.example", nil)
 	seedSecret(src)
 	r, body := send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/config", "")
 	if r.StatusCode != 200 || !strings.Contains(body, `"read":true`) || !strings.Contains(body, `"reveal":false`) || !strings.Contains(body, `"edit":true`) {
@@ -90,7 +91,7 @@ func TestSecretValuesAreWrittenBlindAndRevealedOnlyWhenTheChartSaysSo(t *testing
 	}
 
 	// A Viewer may neither see nor change.
-	srv2, viewer, _, _, src2, _ := multiSetupWith(t, "viewer@corp.example", nil)
+	srv2, viewer, _, _, src2, _ := writeSetup(t, "viewer@corp.example", nil)
 	seedSecret(src2)
 	if r, _ := send(t, viewer, http.MethodPut, srv2.URL+"/api/v1/secrets/web/db", `{"set":{"password":"x"}}`); r.StatusCode != http.StatusForbidden {
 		t.Errorf("viewer edit: %d", r.StatusCode)
@@ -100,7 +101,7 @@ func TestSecretValuesAreWrittenBlindAndRevealedOnlyWhenTheChartSaysSo(t *testing
 	}
 
 	// With secrets.reveal on, one key at a time, as text or base64, audited.
-	srv3, ops3, _, aud3, src3, _ := multiSetupWith(t, "ops@corp.example", map[string]bool{"secrets/kube-system": true}, func(o *Options) { o.SecretsReveal = true })
+	srv3, ops3, _, aud3, src3, _ := writeSetup(t, "ops@corp.example", map[string]bool{"secrets/kube-system": true}, func(o *Options) { o.SecretsReveal = true })
 	seedSecret(src3)
 	r, body = send(t, ops3, http.MethodGet, srv3.URL+"/api/v1/secrets/web/db/value?key=password", "")
 	if r.StatusCode != 200 || !strings.Contains(body, `"value":"`+plantedValue+`"`) || strings.Contains(body, `"base64":true`) || r.Header.Get("Cache-Control") != "no-store" {
@@ -128,7 +129,7 @@ func TestSecretValuesAreWrittenBlindAndRevealedOnlyWhenTheChartSaysSo(t *testing
 // server, though they may read the Secret as a Viewer does (SE-03, RB-06).
 func TestRevealNeedsTheRightInTheSecretsNamespace(t *testing.T) {
 	var opts *Options
-	_, _, _, aud, src, _ := multiSetupWith(t, "viewer@corp.example", map[string]bool{"update secrets/web": true}, func(o *Options) {
+	_, _, _, aud, src, _ := writeSetup(t, "viewer@corp.example", map[string]bool{"update secrets/web": true}, func(o *Options) {
 		o.SecretsReveal = true
 		opts = o
 	})
@@ -187,7 +188,7 @@ func auditEvents(t *testing.T, out string) []audit.Event {
 // An audit record says which cluster it concerns and how the attempt ended,
 // in the fields a filter or a SIEM reads, not only in the words of Detail.
 func TestAuditRecordsNameTheClusterAndHowTheAttemptEnded(t *testing.T) {
-	srv, ops, _, aud, src, _ := multiSetupWith(t, "ops@corp.example", map[string]bool{"secrets/kube-system": true}, func(o *Options) { o.SecretsReveal = true })
+	srv, ops, _, aud, src, _ := writeSetup(t, "ops@corp.example", map[string]bool{"secrets/kube-system": true}, func(o *Options) { o.SecretsReveal = true })
 	seedSecret(src)
 	src.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sys", Namespace: "kube-system", ResourceVersion: "1"}, Data: map[string][]byte{"k": []byte("v")}})
 	send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/web/db/value?key=password", "")
@@ -195,7 +196,7 @@ func TestAuditRecordsNameTheClusterAndHowTheAttemptEnded(t *testing.T) {
 	send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/web/absent/value?key=k", "")
 	send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"web"}`)
 
-	srv2, ops2, _, aud2, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	srv2, ops2, _, aud2, _, _ := writeSetup(t, "ops@corp.example", nil)
 	send(t, ops2, http.MethodGet, srv2.URL+"/api/v1/secrets/web/db/value?key=password", "")
 
 	type rec struct{ action, target, outcome string }
@@ -228,5 +229,97 @@ func TestAuditRecordsNameTheClusterAndHowTheAttemptEnded(t *testing.T) {
 		if e.Action == audit.ActionSettings && (e.Cluster != "" || e.Outcome != audit.OutcomeOK) {
 			t.Fatalf("settings record %+v", e)
 		}
+	}
+}
+
+// writeSetup is multiSetupWith with the local connection in write mode:
+// the console's direct writes, like Watson's, refuse a read-only one.
+func writeSetup(t *testing.T, who string, deny map[string]bool, mods ...func(*Options)) (*httptest.Server, *http.Client, *clusters.Manager, *lockedBuffer, *source, *live.Store) {
+	t.Helper()
+	srv, c, m, aud, src, store := multiSetupWith(t, who, deny, mods...)
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Mode: clusters.ModeWrite, Server: "https://10.0.0.1:6443", Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, src, store); err != nil {
+		t.Fatal(err)
+	}
+	return srv, c, m, aud, src, store
+}
+
+// Roles review, finding 14 (the owner, November 23): strict covers every
+// write. The console's own writes (a Secret's edit, a new Secret, a new
+// namespace) refuse, as Watson does, a read-only connection and a cluster
+// whose roles allow more than the shipped ones, with Watson's sentence.
+func TestDirectWritesFollowTheModeAndStrict(t *testing.T) {
+	writes := []struct{ method, path, body string }{
+		{http.MethodPut, "/api/v1/secrets/web/db", `{"set":{"password":"x"}}`},
+		{http.MethodPost, "/api/v1/secrets/web", `{"name":"made-here","set":{"a":"1"}}`},
+		{http.MethodPost, "/api/v1/namespaces", `{"name":"made-here"}`},
+	}
+	// A read-only connection: the default local one.
+	srv, ops, _, _, src, _ := multiSetupWith(t, "ops@corp.example", nil)
+	seedSecret(src)
+	for _, w := range writes {
+		if r, body := send(t, ops, w.method, srv.URL+w.path, w.body); r.StatusCode != http.StatusConflict || !strings.Contains(body, "read-only") {
+			t.Errorf("%s %s on a read-only connection: %d %s", w.method, w.path, r.StatusCode, body)
+		}
+	}
+	if string(src.full["web/db"].Data["password"]) != plantedValue || src.Object("namespaces", "", "made-here") != nil {
+		t.Fatal("a read-only connection was written")
+	}
+	// strict, with 221b-admin widened.
+	srv, ops, _, _, src, _ = writeSetup(t, "ops@corp.example", nil, func(o *Options) { o.Roles.Enforce = "strict" })
+	seedSecret(src)
+	for _, id := range roles.All {
+		rules := (roles.Templates{}).For(id, roles.Options{}).Rules
+		if id == roles.Admin {
+			rules = append(rules, roles.Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
+		}
+		src.Put(clusterRoleOf(id.ClusterRole(), rules))
+	}
+	src.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	for _, w := range writes {
+		if r, body := send(t, ops, w.method, srv.URL+w.path, w.body); r.StatusCode != http.StatusConflict || !strings.Contains(body, "rbac.enforce is strict") || !strings.Contains(body, "delete nodes") {
+			t.Errorf("%s %s under strict with a widened role: %d %s", w.method, w.path, r.StatusCode, body)
+		}
+	}
+	if string(src.full["web/db"].Data["password"]) != plantedValue {
+		t.Fatal("a Secret was written under strict")
+	}
+}
+
+// The page learns from the Secrets config whether the console's writes
+// are refused on the cluster and why, so it hides or disables what would
+// write (RB-36): a read-only connection, strict refusing the roles, and a
+// connection that takes changes.
+func TestTheSecretsConfigSaysWhyWritesAreRefused(t *testing.T) {
+	config := func(c *http.Client, url string) secretsConfig {
+		t.Helper()
+		r, body := send(t, c, http.MethodGet, url+"/api/v1/secrets/config", "")
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("config: %d %s", r.StatusCode, body)
+		}
+		var cfg secretsConfig
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	if c := config(ops, srv.URL); !c.Edit || !c.ReadOnly || !strings.Contains(c.Refused, "read-only") {
+		t.Errorf("a read-only connection: %+v", c)
+	}
+	srv, ops, _, _, _, _ = writeSetup(t, "ops@corp.example", nil)
+	if c := config(ops, srv.URL); !c.Edit || c.ReadOnly || c.Refused != "" {
+		t.Errorf("a connection that takes changes: %+v", c)
+	}
+	srv, ops, _, _, src, _ := writeSetup(t, "ops@corp.example", nil, func(o *Options) { o.Roles.Enforce = "strict" })
+	for _, id := range roles.All {
+		rules := (roles.Templates{}).For(id, roles.Options{}).Rules
+		if id == roles.Admin {
+			rules = append(rules, roles.Rule{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"}})
+		}
+		src.Put(clusterRoleOf(id.ClusterRole(), rules))
+	}
+	src.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	if c := config(ops, srv.URL); c.ReadOnly || !strings.Contains(c.Refused, "rbac.enforce is strict") || strings.HasPrefix(c.Refused, "Refused") {
+		t.Errorf("strict with a widened role: %+v", c)
 	}
 }

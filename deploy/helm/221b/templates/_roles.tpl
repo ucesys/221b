@@ -151,6 +151,21 @@ name of what is wrong. Renders nothing.
 {{- fail (printf "auth.prefixes must be lowercase and end with a colon, such as 221b-local: (not %q)" $p) -}}
 {{- end -}}
 {{- end -}}
+{{- /* A prefix in a reserved name space, or one a name could complete into
+       one ("sys", "221b"), makes an ordinary group a reserved one: with
+       auth.prefixes.local 221b: the local group superadmins is
+       221b:superadmins (RB-17). The console refuses them at start too. */ -}}
+{{- $k8s := $v.auth.kubernetes | default dict -}}
+{{- range $k, $p := dict "auth.prefixes.local" $v.auth.prefixes.local "auth.prefixes.ldap" $v.auth.prefixes.ldap "auth.kubernetes.userPrefix" ($k8s.userPrefix | default "") "auth.kubernetes.groupPrefix" ($k8s.groupPrefix | default "") -}}
+{{- if ne (toString $p) (trim (toString $p)) -}}
+{{- fail (printf "%s %q has white space at an end" $k (toString $p)) -}}
+{{- end -}}
+{{- range $r := list "system:" "221b:" -}}
+{{- if and $p (or (hasPrefix $r (toString $p)) (hasPrefix (toString $p) $r)) -}}
+{{- fail (printf "%s %q would put names in %s, which Kubernetes and 221B reserve: choose another prefix" $k (toString $p) $r) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if eq $v.auth.prefixes.local $v.auth.prefixes.ldap -}}
 {{- fail "auth.prefixes.local and auth.prefixes.ldap must differ, so a local and a directory user of the same name are different subjects" -}}
 {{- end -}}
@@ -162,6 +177,9 @@ name of what is wrong. Renders nothing.
 {{- end -}}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9._-]*$" $g.name) -}}
 {{- fail (printf "auth.local.groups: the name %q must use lowercase letters, digits, '.', '-' and '_'" $g.name) -}}
+{{- end -}}
+{{- if gt (len $g.name) 64 -}}
+{{- fail (printf "auth.local.groups: the name %q is longer than 64 characters" $g.name) -}}
 {{- end -}}
 {{- if hasKey $names $g.name -}}
 {{- fail (printf "auth.local.groups: %q is defined twice" $g.name) -}}
@@ -182,6 +200,12 @@ name of what is wrong. Renders nothing.
 {{- $who := coalesce $u.username $u.email "an account" -}}
 {{- if not (or $u.username $u.email) -}}
 {{- fail "every entry of auth.local.users needs a username or an email" -}}
+{{- end -}}
+{{- /* The name the console uses: the username, or else the email, in
+       lower case (roles.ValidUsername, not strict). */ -}}
+{{- $login := lower (trim (toString (coalesce $u.username $u.email ""))) -}}
+{{- if or (gt (len $login) 254) (not (regexMatch "^[a-z0-9._@+-]+$" $login)) (has $login (list "." "..")) -}}
+{{- fail (printf "auth.local.users: %s: a user's username, or its email when it has none, uses letters, digits, '.', '-', '_', '@' and '+', up to 254 characters" $who) -}}
 {{- end -}}
 {{- if not $u.passwordHash -}}
 {{- fail (printf "auth.local.users: %s needs a passwordHash (make one with the hash-password command)" $who) -}}
@@ -251,6 +275,13 @@ name of what is wrong. Renders nothing.
 {{- end -}}
 {{- if and (hasPrefix "ldap://" $l.url) (not $l.startTLS) -}}
 {{- fail "auth.ldap.url is ldap:// without startTLS: passwords would cross the network in the clear. Use ldaps://, or set auth.ldap.startTLS to true." -}}
+{{- end -}}
+{{- /* Only members of a listed group sign in, so the console refuses to
+       start without one: roles: {viewer: []} is no list (RB-20). */ -}}
+{{- $listed := 0 -}}
+{{- range $role, $entries := $lists -}}{{- $listed = add $listed (len (default list $entries)) -}}{{- end -}}
+{{- if eq (int $listed) 0 -}}
+{{- fail "LDAP sign-in needs at least one group under auth.ldap.roles: only members of a listed group may sign in" -}}
 {{- end -}}
 {{- if not $l.bindDN -}}{{- fail "LDAP sign-in needs auth.ldap.bindDN, the search account" -}}{{- end -}}
 {{- if not $l.existingSecret -}}{{- fail "LDAP sign-in needs auth.ldap.existingSecret, naming a Secret with the search account's password under the key bind-password" -}}{{- end -}}

@@ -11,6 +11,7 @@ package roles
 import (
 	"slices"
 	"sort"
+	"strings"
 )
 
 // ID names one of the four roles.
@@ -58,6 +59,8 @@ func (id ID) Name() string {
 		return "Viewer"
 	case Reporter:
 		return "Reporter"
+	case NodesID:
+		return NodesClusterRole
 	}
 	return string(id)
 }
@@ -80,6 +83,11 @@ func (id ID) ClusterRole() string {
 // NodesClusterRole is the ClusterRole that lets everyone who signs in see
 // the nodes and nothing else cluster-scoped (RB-07).
 const NodesClusterRole = "221b-nodes"
+
+// NodesID names the nodes role where a role's id is wanted: in the
+// comparison with the shipped roles (Drift) and in files/roles.json. It is
+// not one of the four roles, and not in All.
+const NodesID ID = "nodes"
 
 // Template is the definition of Admin or SuperAdmin to install (RB-02).
 type Template string
@@ -128,9 +136,10 @@ func (t Templates) ReadOnlyOnly() bool {
 
 // Options vary the definitions without changing the roles.
 type Options struct {
-	// Secrets adds the rules on Secrets (RB-10): reads for Viewer, Admin
-	// and the read-only SuperAdmin, and Helm's release records for Admin.
-	// SuperViewer never has them (RB-11).
+	// Secrets adds the rules on Secrets (RB-10): reads for Viewer and
+	// Admin, and Helm's release records for the full Admin. SuperViewer
+	// never has them (RB-11); the read-only SuperAdmin always reads them
+	// (RB-13), and the full one holds every verb, whatever this says.
 	Secrets bool
 	// Exec adds create on pods/exec to the full Admin: shells and one
 	// commands in its namespaces (rbac.roles.admin.exec, TB-50).
@@ -257,8 +266,10 @@ func join(s []string) string {
 var secretReads = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: readVerbs}
 
 // helmRecords are what Helm rollback writes: a release's records are
-// Secrets of its namespace (RB-12).
-var helmRecords = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create", "update"}}
+// Secrets of its namespace (RB-12). delete because Helm prunes the oldest
+// record past its history limit (10 for Watson's rollback) before it
+// writes the new one; the Secret page's Delete uses it too.
+var helmRecords = Rule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create", "update", "delete"}}
 
 // workloadKinds are what Admin may restart and roll back.
 var workloadKinds = []string{"deployments", "statefulsets", "daemonsets"}
@@ -387,15 +398,30 @@ func (t Templates) For(id ID, o Options) Role { return Definition(id, t.Of(id), 
 
 // Nodes is the nodes ClusterRole (RB-07): the nodes, and their metrics.
 func Nodes() Role {
-	return Role{ID: "nodes", ClusterRole: NodesClusterRole, Template: ReadOnly, Rules: []Rule{
+	return Role{ID: NodesID, ClusterRole: NodesClusterRole, Template: ReadOnly, Rules: []Rule{
 		{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: readVerbs},
 		{APIGroups: []string{"metrics.k8s.io"}, Resources: []string{"nodes"}, Verbs: []string{"get", "list"}},
 	}}
 }
 
-// Wildcard reports whether a rule has a wildcard anywhere.
+// Wildcard reports whether a rule has a wildcard anywhere: "*" as a group,
+// resource or verb, a resource "*/sub" (that subresource of every kind),
+// or a URL ending in "*" ("/*", "/api/*").
 func (r Rule) Wildcard() bool {
-	return slices.Contains(r.APIGroups, "*") || slices.Contains(r.Resources, "*") || slices.Contains(r.Verbs, "*")
+	if slices.Contains(r.APIGroups, "*") || slices.Contains(r.Resources, "*") || slices.Contains(r.Verbs, "*") {
+		return true
+	}
+	for _, res := range r.Resources {
+		if strings.HasPrefix(res, "*/") {
+			return true
+		}
+	}
+	for _, u := range r.NonResourceURLs {
+		if strings.HasSuffix(u, "*") {
+			return true
+		}
+	}
+	return false
 }
 
 // Writes reports whether any verb of the rule changes something.
@@ -419,6 +445,9 @@ var sensitive = map[string]string{
 	"serviceaccounts/token":    "serviceaccounts/token",
 }
 
+// sensitiveOrder is sensitive's keys in a fixed order.
+var sensitiveOrder = []string{"secrets", "pods/exec", "pods/attach", "pods/portforward", "pods/ephemeralcontainers", "nodes/proxy", "serviceaccounts/token"}
+
 // runsPods are the kinds whose creation runs a pod, and with it any
 // ServiceAccount of the namespace: the right to create one is the right
 // to act as every account there (TB-47, TB-50).
@@ -430,12 +459,20 @@ var runsPods = []string{"pods", "jobs", "cronjobs", "deployments", "replicasets"
 // starts one (TB-47).
 func (r Rule) Flags() []string {
 	var out []string
-	if r.Wildcard() || slices.Contains(r.NonResourceURLs, "*") {
+	if r.Wildcard() {
 		out = append(out, "wildcard")
 	}
 	for _, res := range r.Resources {
 		if f := sensitive[res]; f != "" && !slices.Contains(out, f) {
 			out = append(out, f)
+		}
+		// "*/exec" is pods/exec among others: what it reaches is flagged.
+		if sub, ok := strings.CutPrefix(res, "*/"); ok {
+			for _, k := range sensitiveOrder {
+				if strings.HasSuffix(k, "/"+sub) && !slices.Contains(out, sensitive[k]) {
+					out = append(out, sensitive[k])
+				}
+			}
 		}
 	}
 	for _, v := range []string{"escalate", "bind", "impersonate"} {

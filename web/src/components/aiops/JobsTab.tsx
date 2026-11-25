@@ -1,15 +1,40 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, rebuildJobNow, removeJob, runJobNow, updateJob, usd, type Job, type JobChange, type JobEvent, type JobsView, type JobWhen, type RunBrief } from '../../api/jobs'
+import {
+  addJob,
+  budgetText,
+  describeJobSchedule,
+  fetchJobRuns,
+  fetchJobs,
+  mergedNote,
+  rebuildJobNow,
+  STATUS,
+  removeJob,
+  runJobNow,
+  updateJob,
+  usd,
+  type Job,
+  type JobChange,
+  type JobEvent,
+  type JobsView,
+  type JobWhen,
+  type RunBrief,
+} from '../../api/jobs'
 import { hideAmounts, useShowCosts } from '../../lib/costs'
 import { clockInBrowser, fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { navigate, type Route, aiHref } from '../../lib/router'
+import type { ColumnDef, Term } from '../../lib/table'
+import { useTable } from '../../lib/useTable'
+import { SortTh } from '../automation/SortTh'
+import { ColumnsMenu } from '../ColumnsMenu'
 import { Drawer } from '../Drawer'
+import { ExportMenu } from '../ExportMenu'
 import { SchedulePicker, type Schedule } from '../SchedulePicker'
 import { Select } from '../Select'
 import { jobHref, pathId, runHref, scheduleHref } from './jobsRoute'
 import { PRIORITIES, PRIORITY } from './parts'
 import { RunDetail } from './RunDetail'
+import { SaidCell, saidText, setupEffort, setupModel } from './modelEffort'
 import { runSummary, StatusPill } from './RunsTab'
 import { useUnsaved } from '../../lib/unsaved'
 
@@ -33,32 +58,32 @@ function clustersText(j: Job, names: Map<string, string>): string {
   return 'On ' + j.clusters.map((c) => names.get(c) ?? c).join(', ')
 }
 
+/** A job's state in words, its tone, and why. */
+function stateOf(j: Job): [string, 'ok' | 'warn' | undefined, string | undefined] {
+  if (!j.on) return ['Paused', undefined, undefined]
+  if (j.stoppedToday) return ['Stopped for the day', 'warn', j.stoppedToday]
+  if (j.agentOff || j.unusable) return ['On, cannot run', 'warn', sentence(j.agentOff || j.unusable || '')]
+  return [j.running ? 'On · running' : 'On', 'ok', undefined]
+}
+
 /** A job's state, as a pill. */
 function StatePill({ j }: { j: Job }) {
-  if (!j.on)
-    return (
-      <span className="rk-pill" data-testid="job-state">
-        Paused
-      </span>
-    )
-  if (j.stoppedToday)
-    return (
-      <span className="rk-pill" data-tone="warn" title={j.stoppedToday} data-testid="job-state">
-        Stopped for the day
-      </span>
-    )
-  if (j.unusable)
-    return (
-      <span className="rk-pill" data-tone="warn" title={j.unusable} data-testid="job-state">
-        On, cannot run
-      </span>
-    )
+  const [text, tone, title] = stateOf(j)
   return (
-    <span className="rk-pill" data-tone="ok" data-testid="job-state">
-      {j.running ? 'On · running' : 'On'}
+    <span className="rk-pill" data-tone={tone} title={title} data-testid="job-state">
+      {text}
     </span>
   )
 }
+
+/** A reason as a sentence: "the Summarizer is off" → "The Summarizer is off". */
+const sentence = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
+
+/** Where its agent is turned on: the agent's drawer in Administration › AI › Agents (JB-25). */
+const agentHref = (j: Job) => aiHref('agents', j.agent ? [j.agent] : [])
+
+/** A run that failed or was stopped: the Jobs tab says why beside it (JB-25). */
+const stopped = (r: RunBrief) => r.status !== 'running' && r.status !== 'ok' && r.status !== 'skipped' && r.status !== 'missed'
 
 /**
  * When a job runs, as the list shows it: the schedule, its zone under it,
@@ -92,6 +117,17 @@ function LastCell({ j }: { j: Job }) {
     )
   }
   if (!j.last) return <span style={{ color: 'var(--fg3)' }}>Never</span>
+  // A failed or stopped run says so, and why, linked to the run (JB-25).
+  if (stopped(j.last))
+    return (
+      <>
+        {fmtTs(j.last.started)} ·{' '}
+        <a className="rk-link" href={runHref(j.last.id)} onClick={(e) => e.stopPropagation()} style={{ color: 'var(--err)' }} data-testid="job-last-failed">
+          {STATUS[j.last.status]?.[0] ?? j.last.status}
+          {j.last.note ? `: ${mergedNote(j.last.note)}` : ''}
+        </a>
+      </>
+    )
   return (
     <>
       {fmtTs(j.last.started)} ·{' '}
@@ -130,6 +166,10 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
     return () => clearInterval(t)
   }, [load])
   const names = useMemo(() => new Map((view?.clusters ?? []).map((c) => [c.id, c.name])), [view])
+  const [now] = useState(() => Date.now())
+  const rows = useMemo(() => view?.jobs ?? [], [view])
+  const columns = useMemo(() => jobColumns(costs, names, new Map(rows.map((j, i) => [j.id, i]))), [costs, names, rows])
+  const table = useTable<Job>({ id: 'aiops-jobs', columns, rows, terms: jobTerms, now, defaultSort: { col: 'job', dir: 'asc' } })
   const job = view?.jobs.find((j) => j.id === open)
   return (
     <section className="rk-card" style={{ padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 16 }} aria-labelledby="jobs-h" data-testid="jobs-tab">
@@ -153,52 +193,35 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
       )}
       {!view && !error && <p className="rk-fhint">Loading…</p>}
       {view && (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 13 }} data-testid="jobs-table">
-            <thead>
-              <tr>
-                {['Job', 'When', ...(costs ? ['Budget'] : []), 'Last run', 'Next run', 'State'].map((h) => (
-                  <th key={h} style={th}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {view.jobs.map((j) => (
-                <tr key={j.id} style={{ background: j.id === open ? 'var(--accent-weak)' : undefined, cursor: 'pointer' }} onClick={() => navigate(jobHref(j.id))} data-testid="job-row" data-job={j.id}>
-                  <td style={td}>
-                    <a className="rk-link" href={jobHref(j.id)} onClick={(e) => e.stopPropagation()} style={{ fontWeight: 600, color: 'var(--fg)' }}>
-                      {j.label}
-                    </a>
-                    {/* The agent beside the name (I-5): several jobs share one agent, and its settings. */}
-                    {j.agentName && (
-                      <span style={{ color: 'var(--fg2)' }} title={`Run by the ${j.agentName}: its model, tools and caps in Administration › AI › Agents apply to every job it runs`} data-testid="job-agent">
-                        {' · '}
-                        {j.agentName}
-                      </span>
-                    )}
-                    <br />
-                    <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
-                      {j.external ? `Set in ${j.where ?? 'Administration'}${j.external.detail ? ` · ${j.external.detail}` : ''}` : `${j.agentName ? '' : 'No agent · '}${clustersText(j, names)}`}
-                    </span>
-                  </td>
-                  <td style={td}>
-                    <WhenCell j={j} />
-                  </td>
-                  {costs && <td style={{ ...td, color: j.external ? 'var(--fg3)' : undefined }}>{j.external ? 'None' : budgetText(j.budget)}</td>}
-                  <td style={td}>
-                    <LastCell j={j} />
-                  </td>
-                  <td style={{ ...td, color: j.next ? undefined : 'var(--fg3)' }}>{j.next ? fmtTs(j.next) : j.nextText}</td>
-                  <td style={td}>
-                    <StatePill j={j} />
-                  </td>
+        <>
+          {/* Columns and Export above the table they act on, as every table's (CF-66). */}
+          <div className="rk-tools" data-testid="jobs-table-tools">
+            <ColumnsMenu cols={columns} hidden={table.hidden} defaults={table.defaults} onChange={table.setHidden} compact={false} />
+            <ExportMenu onExport={(fmt) => table.exportRows(fmt, undefined, 'jobs', onToast ?? (() => undefined))} disabled={!table.shown.length} what="the jobs in view" />
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 13 }} data-testid="jobs-table">
+              <thead>
+                <tr>
+                  {table.cols.map((c) => (
+                    <SortTh key={c.id} col={c.id} label={c.label} sort={table.sort} onSort={table.onSort} />
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {table.shown.map((j) => (
+                  <tr key={j.id} style={{ background: j.id === open ? 'var(--accent-weak)' : undefined, cursor: 'pointer' }} onClick={() => navigate(jobHref(j.id))} data-testid="job-row" data-job={j.id}>
+                    {table.cols.map((c) => (
+                      <td key={c.id} style={td}>
+                        {c.cell(j, now)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
       {open && view && (
         <Drawer
@@ -223,8 +246,149 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
   )
 }
 
-const th: React.CSSProperties = { fontSize: 12, color: 'var(--fg2)', fontWeight: 500, textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid var(--line)' }
 const td: React.CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', verticalAlign: 'top' }
+
+const jobTerms = (j: Job): Term[] => [{ kind: 'job', text: j.label }]
+
+/** A job's last run in words, for the export and the sort. */
+function lastText(j: Job): string {
+  if (j.external) return j.external.lastAt ? `${j.external.lastAt} · ${j.external.last ?? ''}` : ''
+  if (!j.last) return ''
+  if (stopped(j.last)) return `${STATUS[j.last.status]?.[0] ?? j.last.status}${j.last.note ? `: ${mergedNote(j.last.note)}` : ''}`
+  return runSummary(j.last)
+}
+
+/**
+ * The Schedule table's columns: each sorts, exports and may be hidden in
+ * the Columns menu, as every table's (X-13). Job sorts in the jobs' own
+ * order (the console's kinds, then the Wiki syncs). Model and Effort are
+ * the job's agent's as set now (the owner, November 23), from the jobs'
+ * list, so a person who may not open Administration › AI sees them too.
+ */
+export function jobColumns(costs: boolean, names: Map<string, string>, order: Map<string, number>): ColumnDef<Job>[] {
+  const cols: ColumnDef<Job>[] = [
+    {
+      id: 'job',
+      label: 'Job',
+      width: '',
+      min: 200,
+      sortValue: (j) => order.get(j.id) ?? 0,
+      cell: (j) => (
+        <>
+          <a className="rk-link" href={jobHref(j.id)} onClick={(e) => e.stopPropagation()} style={{ fontWeight: 600, color: 'var(--fg)' }}>
+            {j.label}
+          </a>
+          {/* The agent beside the name (I-5): several jobs share one agent, and its settings. */}
+          {j.agentName && (
+            <span style={{ color: 'var(--fg2)' }} title={`Run by the ${j.agentName}: its model, tools and caps in Administration › AI › Agents apply to every job it runs`} data-testid="job-agent">
+              {' · '}
+              {j.agentName}
+            </span>
+          )}
+          <br />
+          <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
+            {j.external ? `Set in ${j.where ?? 'Administration'}${j.external.detail ? ` · ${j.external.detail}` : ''}` : `${j.agentName ? '' : 'No agent · '}${clustersText(j, names)}`}
+          </span>
+          {j.agentOff && (
+            <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 12 }} data-testid="job-agent-off">
+              {sentence(j.agentOff)}:{' '}
+              <a className="rk-link" href={agentHref(j)} onClick={(e) => e.stopPropagation()}>
+                turn it on
+              </a>
+            </span>
+          )}
+        </>
+      ),
+      export: (j) => [
+        { head: 'Job', cell: j.label },
+        { head: 'Agent', cell: j.agentName ?? '' },
+        { head: 'Clusters', cell: j.external ? '' : clustersText(j, names) },
+      ],
+    },
+    {
+      id: 'model',
+      label: 'Model',
+      hint: "Its agent's model as set now in Administration › AI › Agents, on its provider",
+      width: '',
+      min: 140,
+      sortValue: (j) => setupModel(j.setup).text.replace('—', ''),
+      cell: (j) => <SaidCell said={setupModel(j.setup)} testId="job-model" />,
+      export: (j) => [
+        { head: 'Model', cell: saidText({ text: setupModel(j.setup).text }) },
+        { head: 'Provider', cell: j.setup?.provider ?? '' },
+      ],
+    },
+    {
+      id: 'effort',
+      label: 'Effort',
+      hint: "Its agent's effort as set now: Default, a level, or Auto with its floor",
+      width: '',
+      min: 90,
+      sortValue: (j) => setupEffort(j.setup).text.replace('—', ''),
+      cell: (j) => <SaidCell said={setupEffort(j.setup)} testId="job-effort" />,
+      export: (j) => [{ head: 'Effort', cell: saidText(setupEffort(j.setup)) }],
+    },
+    {
+      id: 'when',
+      label: 'When',
+      width: '',
+      min: 180,
+      sortValue: (j) => j.whenText,
+      cell: (j) => <WhenCell j={j} />,
+      export: (j) => [{ head: 'When', cell: j.whenText }],
+    },
+  ]
+  if (costs)
+    cols.push({
+      id: 'budget',
+      label: 'Budget',
+      width: '',
+      min: 120,
+      sortValue: (j) => (j.external ? null : (j.budget.runUSD ?? 0)),
+      cell: (j) => <span style={{ color: j.external ? 'var(--fg3)' : undefined }}>{j.external ? 'None' : budgetText(j.budget)}</span>,
+      export: (j) => [
+        { head: 'Budget per run (US$)', cell: j.external ? null : (j.budget.runUSD ?? null) },
+        { head: 'Budget per day (US$)', cell: j.external ? null : (j.budget.dayUSD ?? null) },
+      ],
+    })
+  cols.push(
+    {
+      id: 'last',
+      label: 'Last run',
+      width: '',
+      min: 180,
+      defaultDir: 'desc',
+      sortValue: (j) => {
+        const t = j.external ? j.external.lastAt : j.last?.started
+        return t ? Date.parse(t) : null
+      },
+      cell: (j) => <LastCell j={j} />,
+      export: (j) => [
+        { head: 'Last run', cell: (j.external ? j.external.lastAt : j.last?.started) ?? '' },
+        { head: 'Last result', cell: lastText(j) },
+      ],
+    },
+    {
+      id: 'next',
+      label: 'Next run',
+      width: '',
+      min: 140,
+      sortValue: (j) => (j.next ? Date.parse(j.next) : null),
+      cell: (j) => <span style={{ color: j.next ? undefined : 'var(--fg3)' }}>{j.next ? fmtTs(j.next) : j.nextText}</span>,
+      export: (j) => [{ head: 'Next run', cell: j.next ?? j.nextText ?? '' }],
+    },
+    {
+      id: 'state',
+      label: 'State',
+      width: '',
+      min: 110,
+      sortValue: (j) => stateOf(j)[0],
+      cell: (j) => <StatePill j={j} />,
+      export: (j) => [{ head: 'State', cell: stateOf(j)[0] }],
+    },
+  )
+  return cols
+}
 
 /** A job's settings as the form edits them. */
 interface Draft {
@@ -311,8 +475,10 @@ function JobActions({ job, onSaved, onToast }: { job: Job; onSaved: (j: Job) => 
       setBusy(false)
     }
   }
+  // Turning on a job whose agent is off is allowed (the agent may be turned on next); the toast says its runs fail until then (JB-25).
+  const resumed = job.agentOff ? `${job.label} resumed. ${sentence(job.agentOff)}: its runs fail until it is turned on in Administration › AI › Agents.` : `${job.label} resumed.`
   const setOn = (on: boolean) =>
-    act(on ? `${job.label} resumed.` : `${job.label} paused.`, async () => {
+    act(on ? resumed : `${job.label} paused.`, async () => {
       onSaved(await updateJob(job.id, { on }))
     })
   const runNow = () =>
@@ -401,9 +567,27 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
   const toggleEvent = (e: JobEvent, on: boolean) => set({ events: on ? [e] : draft.events.filter((x) => x !== e) })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="job-panel">
+      {job.agentOff && (
+        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-agent-off-callout">
+          {sentence(job.agentOff)}: Run now is refused, and {job.on ? 'its runs fail' : 'its runs would fail once it is on'}, until it is turned on in{' '}
+          <a className="rk-link" href={agentHref(job)}>
+            Administration › AI › Agents › {job.agentName ?? job.agent}
+          </a>
+          .
+        </p>
+      )}
       {job.unusable && (
         <p className="rk-callout" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-unusable">
           {job.unusable}
+        </p>
+      )}
+      {job.last && stopped(job.last) && (
+        <p className="rk-callout" data-tone="err" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-last-failed-callout">
+          Its last run, {fmtTs(job.last.started)}: {STATUS[job.last.status]?.[0] ?? job.last.status}
+          {job.last.note ? ` · ${mergedNote(job.last.note).replace(/\.$/, '')}` : ''}.{' '}
+          <a className="rk-link" href={runHref(job.last.id)}>
+            Open the run
+          </a>
         </p>
       )}
       {job.stoppedToday && (

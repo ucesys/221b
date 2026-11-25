@@ -22,6 +22,26 @@ export interface AIProvider extends SherlockProvider {
   priceOut?: number
   /** The context window of its default model in tokens; 0 or none is not known (Phase 12, wave 5). */
   contextWindow?: number
+  /** The models it offers the agents, in order, each with its tier for Auto, once offeredChosen (phase-13.1-ai, A9). */
+  offered?: OfferedModel[]
+  offeredChosen?: boolean
+}
+
+/** A model's tier for Auto: light, standard or strong; '' Auto does not pick it (A9). */
+export type Tier = '' | 'light' | 'standard' | 'strong'
+
+/** The tiers, cheapest first, with their labels. */
+export const TIERS: { id: Tier; label: string }[] = [
+  { id: '', label: 'No tier' },
+  { id: 'light', label: 'Light' },
+  { id: 'standard', label: 'Standard' },
+  { id: 'strong', label: 'Strong' },
+]
+
+/** A model a provider offers its agents. */
+export interface OfferedModel {
+  model: string
+  tier?: Tier
 }
 
 /** A provider's last connection test, kept by the console. */
@@ -49,6 +69,19 @@ export interface ProviderView extends AIProvider {
   /** Its daily and monthly limits, 0 none, and what every agent spent on it (Phase 12.1, AI-36). */
   limit?: Caps
   spend?: Spend
+  /** The models it offers in force, with their tiers; offersAll: none chosen yet, so every model it lists (A9). */
+  offers?: OfferedModel[]
+  offersAll?: boolean
+}
+
+/** The models Auto picks among on a provider: its offered models with a tier, in order (A9). */
+export function tieredOf(p?: ProviderView): OfferedModel[] {
+  return (p?.offers ?? []).filter((o) => !!o.tier)
+}
+
+/** A model with its tier: "qwen3.8-27b · standard". */
+export function offeredLabel(o: OfferedModel): string {
+  return o.tier ? `${o.model} · ${o.tier}` : o.model
 }
 
 /** A daily and a monthly limit in US dollars; 0 is no limit. */
@@ -77,6 +110,43 @@ export interface AgentSettings {
   contextWindow?: number
   /** Sherlock's compact form: '' when needed, 'always' or 'never'. */
   compact?: CompactMode
+  /** Its effort (phase-13.1-ai, AI-43): '' the model's default, a level, or 'auto'. The model may be 'auto' on a provider with a tiered model (A9). */
+  effort?: Effort
+  /** The lowest effort and model Auto may pick (AI-47); '' none. The model is one of its provider's tiered models (A9). */
+  floorEffort?: string
+  floorModel?: string
+}
+
+/** An agent's effort: the model's default (''), a level, or Auto. */
+export type Effort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto'
+
+/** The effort levels, lowest first, with their labels. */
+export const EFFORTS: { id: Effort; label: string }[] = [
+  { id: '', label: 'Default' },
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'Extra high' },
+  { id: 'max', label: 'Max' },
+  { id: 'auto', label: 'Auto' },
+]
+
+/** The value of a model left to Auto. */
+export const AUTO = 'auto'
+
+/** A model's name for people: "Claude Opus 5.5" for claude-opus-5-5; anything else as it is. */
+export function modelLabel(id?: string): string {
+  if (!id) return ''
+  const m = /^claude-(haiku|sonnet|opus|fable|mythos)-(\d+)(?:-(\d+))?$/.exec(id)
+  if (!m) return id
+  const family = m[1]!
+  return `Claude ${family[0]!.toUpperCase()}${family.slice(1)} ${m[2]}${m[3] ? '.' + m[3] : ''}`
+}
+
+/** What Auto's pick says: "high, picked: a P0 case". */
+export function pickText(effort?: string, why?: string): string {
+  if (!effort) return ''
+  return why ? `${effort}, picked: ${why}` : effort
 }
 
 export type CompactMode = '' | 'always' | 'never'
@@ -126,6 +196,9 @@ export interface AgentView {
   providerName: string
   model: string
   defaultModel: boolean
+  /** Its model is one its provider no longer offers; autoNoTier: its model is Auto on a provider with no tiered model (A9). */
+  notOffered?: boolean
+  autoNoTier?: boolean
   inForce: string[]
   clusters?: string[] | null
   state: PromptState
@@ -152,6 +225,9 @@ export interface AIOverview {
   clusters: { id: string; name: string; env: string }[]
   running: number
   knowledge: string
+  /** The provider Auto's classifier asks, '' none, and why it is not used when one is chosen (AI-45). */
+  classifier?: string
+  classifierOff?: string
 }
 
 export interface CaseResult {
@@ -225,6 +301,9 @@ export interface TestRun {
   replaysPlanned?: number
   /** The number (from 1) of the case it stopped or failed at. */
   stoppedAt?: number
+  /** A run at an effort or on a model of its own (AI-48): the model it ran on and its effort ('' the model's own); never the draft's test. */
+  effort?: string
+  model?: string
 }
 
 export interface Pilot {
@@ -381,6 +460,7 @@ const enc = encodeURIComponent
 
 export const fetchAI = () => call<AIOverview>('GET', '/api/v1/ai')
 /** Saves the total limits and, when given, the providers' (by id; one left out keeps its own). */
+export const saveClassifier = (provider: string) => call<AIOverview>('PUT', '/api/v1/ai/classifier', { provider })
 export const saveLimits = (dailyUSD: number, monthlyUSD: number, providers?: Record<string, Caps>) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD, providers })
 export const addProvider = (p: AIProvider) => call<AIOverview>('POST', '/api/v1/ai/providers', p)
 export const saveProvider = (p: AIProvider) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(p.id)}`, p)
@@ -436,8 +516,13 @@ export const fetchPrompt = (id: string, cluster: string, draft: boolean) =>
 export const saveDraft = (id: string, house: string, notes: Record<string, string>, parts?: Record<string, string>) => call<Instructions>('PUT', `/api/v1/ai/agents/${enc(id)}/draft`, { house, notes, ...(parts ? { parts } : {}) })
 export const discardDraft = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/draft`)
 export const resolveBaseline = (id: string, action: 'keep' | 'take') => call<Instructions>('POST', `/api/v1/ai/agents/${enc(id)}/baseline`, { action })
-export const estimateTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live })
-export const startTest = (id: string, replays: number, live = false) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live })
+/** A test run at an effort and on a model of its own (AI-48), for measuring Auto's floor. */
+export interface TestAt {
+  effort?: string
+  model?: string
+}
+export const estimateTest = (id: string, replays: number, live = false, at?: TestAt) => call<{ estimateUSD: number; cases: number; replays: number }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, estimate: true, live, ...at })
+export const startTest = (id: string, replays: number, live = false, at?: TestAt) => call<{ estimateUSD: number; started: boolean }>('POST', `/api/v1/ai/agents/${enc(id)}/test`, { replays, live, ...at })
 /** The agent's test run: the one in flight, with each case's state, else the latest that ended (Phase 12.1). */
 export const fetchTestRun = (id: string) => call<TestRun>('GET', `/api/v1/ai/agents/${enc(id)}/tests/run`)
 /** Stops the agent's tests in flight; the run is kept as stopped. */

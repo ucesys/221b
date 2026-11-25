@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -121,8 +122,13 @@ func (h *PGHistory) List() []Record {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var list []Record
+	// The newest Keep at most, should a trim not have run yet.
+	limit := ""
+	if h.Keep > 0 {
+		limit = fmt.Sprintf(" LIMIT %d", h.Keep)
+	}
 	err := h.DB.Do(ctx, func(q db.Querier) error {
-		rows, err := q.Query(ctx, "SELECT "+historyColumns+" FROM toolbox_sessions WHERE state = 'ended' ORDER BY ended_at DESC NULLS LAST, toolbox_session_id")
+		rows, err := q.Query(ctx, "SELECT "+historyColumns+" FROM toolbox_sessions WHERE state = 'ended' ORDER BY ended_at DESC NULLS LAST, toolbox_session_id"+limit)
 		if err != nil {
 			return err
 		}

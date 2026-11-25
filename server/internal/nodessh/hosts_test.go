@@ -17,12 +17,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -226,22 +228,42 @@ func (h *sshHost) run(command string, ch ssh.Channel) int {
 
 // hostEnv is a console with a host registered, its storage and its log.
 type hostEnv struct {
-	svc     *Service
-	host    *sshHost
-	backend *kv.Memory
-	log     *safeBuffer
-	login   string
+	svc  *Service
+	host *sshHost
+	// hosts and pairings are where the two records are kept: one
+	// ConfigMap's keys, or the database's rows (testStores).
+	hosts, pairings kv.Backend
+	log             *safeBuffer
+	login           string
+}
+
+// testStores are where a test keeps the hosts and the pairings: in
+// memory, as the settings ConfigMap's keys, or, when TEST_STORE is
+// "database", in the database's rows (TEST_DATABASE).
+func testStores(t *testing.T) (hosts, pairings kv.Backend) {
+	t.Helper()
+	if os.Getenv("TEST_STORE") == "database" {
+		d := dbtest.Open(t)
+		return NewHostsPG(d), NewPairingsPG(d)
+	}
+	b := &kv.Memory{}
+	return b, b
 }
 
 func newHostEnv(t *testing.T) hostEnv {
+	t.Helper()
+	hb, pb := testStores(t)
+	return newHostEnvIn(t, hb, pb)
+}
+
+func newHostEnvIn(t *testing.T, hb, pb kv.Backend) hostEnv {
 	t.Helper()
 	ca := NewCA(nil)
 	if err := ca.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	b := &kv.Memory{}
 	var log safeBuffer
-	svc := New(Options{CA: ca, Pairings: NewPairings(b), Hosts: NewHosts(b), Console: testConsole, CertTTL: time.Minute, Handshake: 5 * time.Second,
+	svc := New(Options{CA: ca, Pairings: NewPairings(pb), Hosts: NewHosts(hb), Console: testConsole, CertTTL: time.Minute, Handshake: 5 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Mask:   func(w io.Writer, secrets []string) io.Writer { return automation.NewMask(w, secrets) },
 		IsNode: func(_, name string) bool { return name == "worker-1" },
@@ -249,7 +271,7 @@ func newHostEnv(t *testing.T) hostEnv {
 		NodeAddr: func(string, string) (string, error) { return "", errors.New("not a node") },
 	})
 	h := newSSHHost(t)
-	env := hostEnv{svc: svc, host: h, backend: b, log: &log, login: user(t)}
+	env := hostEnv{svc: svc, host: h, hosts: hb, pairings: pb, log: &log, login: user(t)}
 	if _, err := svc.AddHost(context.Background(), Host{Cluster: "local", Name: "backup-1", Address: "127.0.0.1", Port: h.port(), LoginUser: env.login}, "Pat"); err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +296,8 @@ func (e hostEnv) trust(t *testing.T) {
 func (e hostEnv) leaks(t *testing.T, where string, texts ...string) {
 	t.Helper()
 	stored := ""
-	for _, k := range []string{HostsKey, PairingsKey} {
-		b, _, _ := e.backend.LoadKey(context.Background(), k)
+	for k, backend := range map[string]kv.Backend{HostsKey: e.hosts, PairingsKey: e.pairings} {
+		b, _, _ := backend.LoadKey(context.Background(), k)
 		stored += string(b)
 	}
 	all := append([]string{stored, e.log.String()}, texts...)
@@ -740,5 +762,413 @@ func TestAHostThatDoesNotAnswerSaysWhereToLook(t *testing.T) {
 	// Paired or elsewhere, the name stays taken, saying why.
 	if _, err := svc.AddHost(ctx, Host{Cluster: "local", Name: "gone", Address: "10.0.0.5", LoginUser: "root"}, "Pat"); err == nil || !strings.Contains(err.Error(), "at 127.0.0.1: remove it from its row on the Nodes tab") {
 		t.Fatalf("another address: %v", err)
+	}
+}
+
+// A host behind a NAT or a port forward pairs: the console reached its
+// sshd at the registered port, which sshd itself knows as another
+// (finding 5 of the review of November 24, 2026: the setup stopped with
+// "listens on port 22 and not on 2222").
+func TestAHostBehindAPortForwardPairs(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword, "SSHD_PORT=22"} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
+	h, steps, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err != nil || h.State != HostPaired {
+		t.Fatalf("pairing behind a port forward: %+v %v %v", h, steps, err)
+	}
+	if p, ok, _ := e.svc.opts.Pairings.Get(ctx, "local", "backup-1"); !ok || p.Port != e.host.port() {
+		t.Fatalf("the pairing: %+v", p)
+	}
+}
+
+// A first check that fails, before the setup ran, leaves the host as it
+// was: pending, and not "Paired <time> by <who>" (finding 8 of the review
+// of November 24, 2026: with the database the check's pairing wrote the
+// host's own paired_by and paired_at, and its rollback left them).
+func TestAFailedFirstCheckLeavesNoPairedBy(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	if _, err := e.svc.CheckHost(ctx, "local", "backup-1", "Pat"); err == nil {
+		t.Fatal("the check passed before the setup")
+	}
+	h, _, err := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err != nil || h.State != HostPending || h.PairedBy != "" || h.PairedAt != nil || h.HostKey == "" || h.TrustedBy != "Pat" {
+		t.Fatalf("after a failed check the host reads %+v (%v)", h, err)
+	}
+}
+
+// A pairing written for a host, such as one a backup brings, changes none
+// of the host's own: its port, its login user, its pinned key (finding 14
+// of the review of November 24, 2026: with the database it re-pinned the
+// key and changed the port and the login, with no trust event).
+func TestAPairingChangesNoneOfAHostsOwn(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	was, _, _ := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err := e.svc.opts.Pairings.Set(ctx, Pairing{Cluster: "local", Node: "backup-1", LoginUser: "someone", Port: 2222, HostKeys: []string{testCA}, CAFinger: "SHA256:old", Principal: "221b-superadmins-old"}); err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err != nil || h.Port != was.Port || h.LoginUser != was.LoginUser || h.HostKey != was.HostKey || h.Fingerprint != was.Fingerprint {
+		t.Fatalf("the host was %+v\nand reads %+v (%v)", was, h, err)
+	}
+}
+
+// A host may not take the name of a node paired for SSH, even before the
+// node list of its cluster has loaded and IsNode knows the node (finding
+// 15 of the review of November 24, 2026: with the database the host took
+// the node's row and blanked its pinned keys and its login).
+func TestAHostMayNotTakeAPairedNodesName(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	node := Pairing{Cluster: "local", Node: "worker-3", LoginUser: "core", Port: 22, HostKeys: []string{testCA}, CAFinger: "SHA256:ca", Principal: PrincipalOf(testConsole)}
+	if err := e.svc.opts.Pairings.Set(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.AddHost(ctx, Host{Cluster: "local", Name: "worker-3", Address: "10.0.0.30", LoginUser: "root"}, "Pat"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a host took a paired node's name: %v", err)
+	}
+	if _, err := e.svc.RestoreHost(ctx, Host{Cluster: "local", Name: "worker-3", Address: "10.0.0.30", LoginUser: "root", State: HostPending}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a restored host took a paired node's name: %v", err)
+	}
+	p, ok, err := e.svc.opts.Pairings.Get(ctx, "local", "worker-3")
+	if err != nil || !ok || p.LoginUser != "core" || len(p.HostKeys) != 1 || p.HostKeys[0] != testCA {
+		t.Fatalf("the node's pairing reads %+v (%v, %v)", p, ok, err)
+	}
+}
+
+// blinking is a store that fails every read while it is told to.
+type blinking struct {
+	kv.Backend
+	down atomic.Bool
+}
+
+func (b *blinking) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if b.down.Load() {
+		return nil, "", errors.New("the database blinked")
+	}
+	return b.Backend.LoadKey(ctx, key)
+}
+
+// A changed key trusted again takes effect and says so even when the
+// pairing cannot be read just then, and the host is reached with the key
+// now pinned (finding 13 of the review of November 24, 2026: the new pin
+// was saved, the answer was an error, so no audit record was written, and
+// trusting again said "read the host's key first").
+func TestTrustingAgainHoldsWhenThePairingCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	pairings := &blinking{Backend: &kv.Memory{}}
+	e := newHostEnvIn(t, &kv.Memory{}, pairings)
+	e.trust(t)
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
+	if _, _, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	e.host.setKey()
+	offer, err := e.svc.ScanHost(ctx, "local", "backup-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairings.down.Store(true)
+	h, again, err := e.svc.TrustHost(ctx, "local", "backup-1", offer.Fingerprint, "Sam")
+	pairings.down.Store(false)
+	if err != nil || !again || h.Fingerprint != e.host.fingerprint() {
+		t.Fatalf("trusted again with the pairing out of reach: %+v %v %v", h, again, err)
+	}
+	if code, err := e.svc.Exec(ctx, "local", "backup-1", "k", "true", false, strings.NewReader(""), io.Discard); err != nil || code != 0 {
+		t.Fatalf("after trusting again: %d %v", code, err)
+	}
+}
+
+// refusing is a store that refuses to save a record holding a text.
+type refusing struct {
+	kv.Backend
+	text string
+}
+
+func (r *refusing) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if bytes.Contains(b, []byte(r.text)) {
+		return "", errors.New("the store refused it")
+	}
+	return r.Backend.SaveKey(ctx, key, b, version)
+}
+
+// checkedAs adds a host under its address, trusts it, runs the setup on
+// it and checks it with uname -n answering by the script given.
+func checkedAs(t *testing.T, e hostEnv, uname string) (Host, error) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := e.svc.AddHost(ctx, Host{Cluster: "local", Name: "127.0.0.1", Address: "127.0.0.1", Port: e.host.port(), LoginUser: e.login}, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := e.svc.ScanHost(ctx, "local", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.TrustHost(ctx, "local", "127.0.0.1", offer.Fingerprint, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := e.svc.SetupCommand(ctx, "local", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.host.mustRun(strings.TrimSuffix(strings.TrimPrefix(cmd, "sudo sh <<'221B-SETUP'\n"), "\n221B-SETUP\n"))
+	if err := os.WriteFile(filepath.Join(e.host.bin, "uname"), []byte("#!/bin/sh\n"+uname+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return e.svc.CheckHost(ctx, "local", "127.0.0.1", "Pat")
+}
+
+// A host whose pairing cannot follow it to its hostname goes back to its
+// address with its pairing, saying why (the review of November 24, 2026:
+// the error it meant to give was a nil one, and the check panicked).
+func TestAHostWhosePairingCannotFollowKeepsItsAddress(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnvIn(t, &kv.Memory{}, &refusing{Backend: &kv.Memory{}, text: "db-primary"})
+	h, err := checkedAs(t, e, "echo db-primary")
+	if err != nil || h.Name != "127.0.0.1" || h.AutoName || h.State != HostPaired {
+		t.Fatalf("after the check: %+v %v", h, err)
+	}
+	if !strings.Contains(e.log.String(), "its pairing could not be moved: the store refused it") {
+		t.Fatalf("the log does not say why:\n%s", e.log.String())
+	}
+	if code, err := e.svc.Exec(ctx, "local", "127.0.0.1", "k", "true", false, strings.NewReader(""), io.Discard); err != nil || code != 0 {
+		t.Fatalf("a run on the host: %d %v", code, err)
+	}
+}
+
+// The host's name is read from what uname -n prints, not from what the
+// login prints on its errors (the review of November 24, 2026: a stray
+// line on standard error came first, read as the name, and the host kept
+// its address for good).
+func TestAHostsNameIsReadFromItsOutputAlone(t *testing.T) {
+	e := newHostEnv(t)
+	h, err := checkedAs(t, e, "echo 'bash: warning: setlocale: LC_ALL: cannot change locale' >&2; sleep 0.2; echo DB-Primary")
+	if err != nil || h.Name != "db-primary" {
+		t.Fatalf("after the check: %+v %v", h, err)
+	}
+}
+
+// A passphrase given with a key that has none is no reason to refuse the
+// key (the review of November 24, 2026: it was "not readable").
+func TestAPassphraseForAKeyWithNoneIsLeftAside(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, err := ssh.MarshalPrivateKey(priv, "boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := Credential{User: bootUser, PrivateKey: string(pem.EncodeToMemory(block)), Passphrase: passphrase}
+	if methods, _, err := cred.auth(); err != nil || len(methods) != 1 {
+		t.Fatalf("a key with no passphrase, given one: %v", err)
+	}
+}
+
+// A sign-in that fails before the host could ask for a password says what
+// failed, not that the host takes no password (the review of November 24,
+// 2026: every failure before the prompt read "PasswordAuthentication no").
+func TestASignInThatFailsBeforeThePasswordSaysWhy(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// An sshd that greets and then drops the connection.
+			io.WriteString(c, "SSH-2.0-OpenSSH_9.7\r\n")
+			c.Close()
+		}
+	}()
+	if _, err := e.svc.opts.Hosts.update(ctx, "local", "backup-1", func(x *Host) error {
+		x.Port = ln.Addr().(*net.TCPAddr).Port
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cred := Credential{User: bootUser, Password: bootPassword}
+	_, _, err = e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err == nil || strings.Contains(err.Error(), "takes no password") || !strings.Contains(err.Error(), "SSH to ") {
+		t.Fatalf("a dropped connection: %v", err)
+	}
+	e.leaks(t, "a dropped connection", err.Error())
+}
+
+// A check that runs out of time says so to its caller, which answers 504
+// (the review of November 24, 2026: the error was rewritten as text, and
+// the API answered 502).
+func TestACheckOutOfTimeIsADeadline(t *testing.T) {
+	e := newHostEnv(t)
+	e.trust(t)
+	// The host now takes the connection and says nothing: the deadline
+	// ends the login's handshake.
+	silent := silentNode(t)
+	if _, err := e.svc.opts.Hosts.update(context.Background(), "local", "backup-1", func(x *Host) error {
+		x.Port = silent.Port
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := e.svc.CheckHost(ctx, "local", "backup-1", "Pat")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.HasPrefix(err.Error(), "the console could not log in to backup-1 with its certificate: ") || strings.Contains(err.Error(), "unreachable: ") {
+		t.Fatalf("a check out of time: %v", err)
+	}
+}
+
+// A sudo password that happens to be part of a host key's text still
+// pairs: the keys are read from what the setup printed, and only the
+// lines shown are masked (the review of November 24, 2026: masking ran
+// first and broke the key lines).
+func TestAPasswordInsideAHostKeyStillPairs(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	pw := strings.Fields(e.host.read("etc/ssh/ssh_host_ed25519_key.pub"))[1][24:34]
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + pw} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: pw}
+	h, steps, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err != nil || h.State != HostPaired {
+		t.Fatalf("pairing: %+v %v %v", h, steps, err)
+	}
+	for _, s := range steps {
+		if strings.Contains(s, pw) {
+			t.Fatalf("a step shows the password: %s", s)
+		}
+	}
+}
+
+// A host's key marked changed late, after the key was trusted again, is
+// no mark (the review of November 24, 2026: the mark is saved in the
+// background, and one that landed after the new trust refused the host
+// again with the key it had just been trusted with).
+func TestALateKeyChangedMarkIsDropped(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	was, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1")
+	e.host.setKey()
+	e.trust(t)
+	now, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1")
+	presented, _, _, _, err := ssh.ParseAuthorizedKey([]byte(now.HostKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The connection that saw the new key against the old pin marks it
+	// only now.
+	e.svc.hostKeyMismatch("local", "backup-1", presented, was.HostKey)
+	time.Sleep(300 * time.Millisecond)
+	if h, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1"); h.Mismatch != "" {
+		t.Fatalf("a late mark refuses the key just trusted: %+v", h)
+	}
+	// A mark against the key pinned now still lands.
+	e.host.setKey()
+	other, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(e.host.read("etc/ssh/ssh_host_ed25519_key.pub"))))
+	e.svc.hostKeyMismatch("local", "backup-1", other, now.HostKey)
+	for i := 0; i < 100; i++ {
+		if h, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1"); h.Mismatch != "" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a mark against the key pinned now did not land")
+}
+
+// slowRead is a store whose first read is held, with what it read, until
+// it is let go.
+type slowRead struct {
+	kv.Backend
+	once    sync.Once
+	reading chan struct{}
+	release chan struct{}
+}
+
+func (s *slowRead) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	b, v, err := s.Backend.LoadKey(ctx, key)
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.reading)
+		<-s.release
+	}
+	return b, v, err
+}
+
+// A read that ends after a newer one, or after a write, leaves the list
+// at hand as the newer one has it (the review of November 24, 2026: the
+// older list was kept, and a host just added was unknown until the next
+// refresh).
+func TestAnOlderReadDoesNotOverwriteTheListAtHand(t *testing.T) {
+	ctx := context.Background()
+	store := &slowRead{Backend: &kv.Memory{}, reading: make(chan struct{}), release: make(chan struct{})}
+	hosts := NewHosts(store)
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = hosts.Load(ctx) }()
+	<-store.reading
+	if _, err := hosts.Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	close(store.release)
+	<-done
+	if _, ok, read := hosts.Known("local", "backup-1"); !ok || !read {
+		t.Fatal("the older read put back a list without the host just added")
+	}
+}
+
+// removedMeanwhile is a store where another writer removes a host just
+// before the first save, which then meets a conflict.
+type removedMeanwhile struct {
+	kv.Backend
+	once sync.Once
+	gone func()
+}
+
+func (r *removedMeanwhile) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	conflict := false
+	r.once.Do(func() { r.gone(); conflict = true })
+	if conflict {
+		return "", kv.ErrConflict
+	}
+	return r.Backend.SaveKey(ctx, key, b, version)
+}
+
+// A host added again whose first try met another writer is added from
+// what the second try reads (the review of November 24, 2026: the trusted
+// key taken from a pending host on the first try stayed, though that host
+// had been removed meanwhile).
+func TestAnAddTriedAgainKeepsNothingOfTheFirstTry(t *testing.T) {
+	ctx := context.Background()
+	inner := &kv.Memory{}
+	direct := NewHosts(inner)
+	if _, err := direct.Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	if _, err := direct.update(ctx, "local", "backup-1", func(x *Host) error {
+		x.HostKey, x.Fingerprint, x.TrustedBy, x.TrustedAt = testCA, fingerprintOf(testCA), "Pat", &at
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &removedMeanwhile{Backend: inner, gone: func() { _ = direct.Delete(ctx, "local", "backup-1") }}
+	h, err := NewHosts(store).Add(ctx, Host{Cluster: "local", Name: "backup-1", Address: "10.0.0.9", LoginUser: "root"}, nil)
+	if err != nil || h.HostKey != "" || h.TrustedBy != "" || h.TrustedAt != nil {
+		t.Fatalf("added on the second try: %+v %v", h, err)
+	}
+	if got, _, _ := direct.Get(ctx, "local", "backup-1"); got.HostKey != "" {
+		t.Fatalf("saved with the removed host's key: %+v", got)
 	}
 }

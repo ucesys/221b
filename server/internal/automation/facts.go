@@ -144,6 +144,7 @@ func (st *Store) Facts(ctx context.Context, cluster string) ([]NodeFacts, error)
 
 // saveFacts keeps what nodes said; when the record is full, the oldest go.
 func (st *Store) saveFacts(ctx context.Context, list []NodeFacts) error {
+	rows := st.inRows(FactsKey)
 	return change(ctx, st, FactsKey, maxFactsBytes, func(rec *map[string]NodeFacts) error {
 		if *rec == nil {
 			*rec = map[string]NodeFacts{}
@@ -151,7 +152,8 @@ func (st *Store) saveFacts(ctx context.Context, list []NodeFacts) error {
 		for _, f := range list {
 			(*rec)[factKey(f.Cluster, f.Node)] = f
 		}
-		for size := approximate(*rec); size > maxFactsBytes*9/10 && len(*rec) > 1; size = approximate(*rec) {
+		// A ConfigMap's limit: rows of host_facts are kept, one a node.
+		for size := approximate(*rec); !rows && size > maxFactsBytes*9/10 && len(*rec) > 1; size = approximate(*rec) {
 			oldest := ""
 			for k, f := range *rec {
 				if oldest == "" || f.At.Before((*rec)[oldest].At) {
@@ -229,7 +231,21 @@ func (e *Engine) CollectFacts(ctx context.Context, cluster string, nodes []strin
 		}(i, node)
 	}
 	wg.Wait()
-	if err := e.opts.Store.saveFacts(context.WithoutCancel(ctx), out); err != nil {
+	// A request cancelled (the page closed, the console stopping) says
+	// nothing of the nodes: what was kept of them stays.
+	keep := out
+	if ctx.Err() != nil {
+		keep = nil
+		for _, f := range out {
+			if f.Error == "" {
+				keep = append(keep, f)
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return out, ctx.Err()
+	}
+	if err := e.opts.Store.saveFacts(context.WithoutCancel(ctx), keep); err != nil {
 		return out, errors.Join(errors.New("the facts could not be kept"), err)
 	}
 	return out, nil

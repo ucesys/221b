@@ -192,14 +192,25 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 	if isHost && host.Mismatch != "" {
 		return nil, p, "", hostKeyChanged(node)
 	}
-	if err := s.opts.CA.Load(ctx); err != nil {
+	// Reading the key, never making one: a new authority cannot make a
+	// pairing work, and once made it keeps the backup's key from being put
+	// back (RestoreAuthority). Pairing makes the authority.
+	if err := s.opts.CA.Peek(ctx); err != nil {
 		return nil, p, "", err
+	}
+	if s.opts.CA.Fingerprint() == "" {
+		return nil, p, "", fmt.Errorf("this console has no SSH authority yet, so node %s cannot be reached with the authority it was paired with: restore the authority's key from a backup (Administration › Backup) or put the Secret <release>-ssh-ca back, else pair the node again", node)
 	}
 	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
 		return nil, p, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
 	}
 	if p.Principal == "" {
 		return nil, p, "", fmt.Errorf("the pairing of node %s names no principal: pair it again", node)
+	}
+	if isHost {
+		// A host's key is the one a SuperAdmin pinned on the host, trusted
+		// again when it changed; the pairing's copy may lag behind.
+		p.HostKeys = []string{host.HostKey}
 	}
 	pinned, algos, err := pinnedKeys(p)
 	if err != nil {
@@ -234,7 +245,7 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 			// October 30, 2026).
 			s.opts.Logger.Warn("SSH host key mismatch", "node", node, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "paired", fingerprints(pinned))
 			if isHost {
-				s.hostKeyMismatch(cluster, node, key)
+				s.hostKeyMismatch(cluster, node, key, host.HostKey)
 				mismatch = hostKeyChanged(node)
 				return mismatch
 			}
@@ -307,8 +318,16 @@ func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string
 		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer c.Close()
+	// Until the command has started, the channel's replies are waited for
+	// with no deadline: the context closes the connection, or a node that
+	// took the login and answers nothing more would hold the run.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
 	sess, err := c.NewSession()
 	if err != nil {
+		stop()
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
 		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer sess.Close()
@@ -318,8 +337,13 @@ func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string
 	sess.Stdin = stdin
 	sess.Stdout, sess.Stderr = Streams(out)
 	if err := sess.Start(command); err != nil {
+		stop()
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
 		return -1, err
 	}
+	stop()
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 	select {
@@ -415,9 +439,24 @@ func (t *term) Close() error { return t.client.Close() }
 
 func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-chan sessions.Size) error {
 	defer t.client.Close()
+	// Until the shell has started, the context closes the connection: the
+	// requests below wait for the node's replies with no deadline.
+	stop := context.AfterFunc(ctx, func() { t.client.Close() })
+	started := false
+	defer func() {
+		if !started {
+			stop()
+		}
+	}()
+	fail := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 	sess, err := t.client.NewSession()
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	defer sess.Close()
 	sess.Stdin = stdin
@@ -432,11 +471,13 @@ func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-
 	}
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {
-		return fmt.Errorf("the node refused a terminal: %w", err)
+		return fail(fmt.Errorf("the node refused a terminal: %w", err))
 	}
 	if err := sess.Shell(); err != nil {
-		return err
+		return fail(err)
 	}
+	started = true
+	stop()
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 	for {

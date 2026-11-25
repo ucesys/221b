@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -56,7 +55,7 @@ func (s *Service) OtherSuperAdmin(sess Session) bool {
 		return true
 	}
 	for _, a := range s.cfg.Admins {
-		if a != "" && !strings.EqualFold(a, me.Username) && a != me.Subject && (me.Email == "" || !strings.EqualFold(a, me.Email)) {
+		if a != "" && !asciiFold(a, me.Username) && a != me.Subject && (me.Email == "" || !asciiFold(a, me.Email)) {
 			return true
 		}
 	}

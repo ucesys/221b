@@ -160,9 +160,9 @@ func (p *people) snapshot() (DirectoryState, []directoryPerson) {
 // cleanErr keeps an error message to one line, without anything that
 // looks like a credential.
 func cleanErr(err error) string {
-	m := strings.Join(strings.Fields(err.Error()), " ")
-	if len(m) > 300 {
-		m = m[:300] + "…"
+	m := strings.Join(strings.Fields(plainText(err.Error())), " ")
+	if r := []rune(m); len(r) > 300 {
+		m = string(r[:300]) + "…"
 	}
 	return m
 }

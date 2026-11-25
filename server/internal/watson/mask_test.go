@@ -55,3 +55,52 @@ func TestALineIsRecordedWithItsParametersHidden(t *testing.T) {
 		}
 	}
 }
+
+// A parameter before the verb is never quoted back in a refusal, which is
+// recorded and shown (review of November 24, 2026, cut by the cap:
+// parse.go:306).
+func TestAParameterBeforeTheVerbStaysOutOfTheRefusal(t *testing.T) {
+	for _, line := range []string{
+		"helm --set password=hunter2 frobnicate shop",
+		"helm password=hunter2 upgrade shop",
+		"helm --set-string token=hunter2 upgrade",
+	} {
+		_, err := Parse(line)
+		if err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	// A parameter before the verb is the verb's, as helm takes it.
+	if c, err := Parse("helm --set replicas=2 upgrade shop -n web --git https://git.example/shop --ref main"); err != nil || c.Name() != "helm upgrade" || c.Flag("set") != "replicas=2" {
+		t.Fatalf("%v %v", c, err)
+	}
+}
+
+// kubectl patch's patch is hidden unless it is a claim's size (review of
+// November 24, 2026, plausible: mask.go:19).
+func TestAPatchIsRecordedHidden(t *testing.T) {
+	for line, want := range map[string]string{
+		`kubectl patch secret db -n web -p '{"data":{"password":"aHVudGVy"}}'`:                                    "kubectl patch secret db -n web -p '***'",
+		`kubectl patch secret db -n web --patch='{"data":{"password":"aHVudGVy"}}'`:                               "kubectl patch secret db -n web --patch='***'",
+		`kubectl patch pvc data -n web --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`: `kubectl patch pvc data -n web --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
+		"kubectl logs api -n web -p": "kubectl logs api -n web -p",
+	} {
+		if got := MaskLine(line); got != want {
+			t.Errorf("MaskLine(%q)\n got  %q\n want %q", line, got, want)
+		}
+	}
+}
+
+// A comment's text is hidden: it can hold a value a flag before it should
+// have had (review of November 24, 2026, sweep: --token #value).
+func TestACommentIsRecordedHidden(t *testing.T) {
+	for line, want := range map[string]string{
+		"kubectl get pods --token #s3cret":             "kubectl get pods --token # ***",
+		"helm upgrade shop -n web --set pw=x # s3cret": "helm upgrade shop -n web --set 'pw=***' # ***",
+		"kubectl get pods":                             "kubectl get pods",
+	} {
+		if got := MaskLine(line); got != want {
+			t.Errorf("MaskLine(%q)\n got  %q\n want %q", line, got, want)
+		}
+	}
+}

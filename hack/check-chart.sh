@@ -180,6 +180,10 @@ database_modes() {
     ! has '^kind: StatefulSet$' < "$ext" &&
     grep -A1 'name: DB_HOST' "$ext" | has '"pg.example.com"' && grep -A1 'name: DB_PORT' "$ext" | has '"6432"' &&
     grep -A1 'name: DB_MAX_CONNECTIONS' "$ext" | has '"10"' &&
+    # The knowledge index warns at 80 % of the volume (KN-58): the bundled
+    # database's storage.size; an external one's volumeSize, when set.
+    grep -A1 'name: DB_VOLUME_SIZE' "$d" | has '"10Gi"' && ! has 'DB_VOLUME_SIZE' < "$ext" &&
+    render_db k8s-console --set clusterName=ci --set database.mode=external --set database.external.host=h --set database.external.volumeSize=100Gi | grep -A1 'name: DB_VOLUME_SIZE' | has '"100Gi"' &&
     grep -A1 'name: DB_LISTENER_HOST' "$ext" | has '"pg-direct.example.com"' &&
     grep -A3 'secretName: pg$' "$ext" | has 'path: password' && grep -A3 'secretName: pg-ca$' "$ext" | has 'path: ca.crt' &&
     netpol "$ext" | has 'port: 6432$' &&
@@ -290,6 +294,20 @@ ssh_egress() {
     ! netpol "$out" | has 'port: 22$' &&
     ! netpol "$WORK/chart-ssh-off.yaml" | has 'port: 22$' &&
     netpol "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | has 'cidr: "192.168.1.0/24"'
+}
+# A nulled toolbox.ssh.port is 22 for the network policy and the console
+# alike, not a rule open on every port; one outside 1 to 65535 is refused
+# (the toolbox review, finding 15).
+ssh_port_nulled() {
+  local o
+  o=$(render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=null)
+  validate <<<"$o" > /dev/null &&
+    netpol <(cat <<<"$o") | grep -B1 -A1 'protocol: TCP' | has 'port: 22$' &&
+    ! netpol <(cat <<<"$o") | has 'port: *$' &&
+    sed -n '/"ssh": {/,/}/p' <<<"$o" | has '"port": 22' &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=0 > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=70000 > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=ssh > /dev/null 2>&1
 }
 # The scheduled backups' S3 endpoint (Phase 12): a rule only when its
 # CIDRs are listed, on its ports; values from an older release have none.
@@ -789,8 +807,20 @@ roles_refused() {
     ! render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://idp.example --set auth.oidc.clientID=c --set auth.oidc.clientSecret=s --set 'auth.oidc.roles.admin[0].group=g' --set 'auth.oidc.roles.admin[0].namespaces[0]=consoles' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.superAdmin[0].namespaces[0]=a' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=system:masters' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.prefixes.local=221b:' > /dev/null 2>&1 &&
+    render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=viewer' --set-string 'auth.local.groups[0].namespaces[0]=1234' 2>/dev/null | grep -A3 '^kind: RoleBinding' | has '^  namespace: "1234"$' &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].email=ops k8s@corp.example' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].username=..' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=a-very-long-group-name-that-is-more-than-sixty-four-characters-long' --set 'auth.local.groups[0].role=viewer' --set 'auth.local.groups[0].namespaces[0]=web' > /dev/null 2>&1 &&
+    render k8s-console --set clusterName=ci --set 'auth.local.users[0].email=Ops+K8s@corp.example' --set 'auth.local.users[0].passwordHash=h' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.prefixes.ldap=system:' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=221b:' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=sys' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.kubernetes.userPrefix=system:oidc:' > /dev/null 2>&1 &&
+    render k8s-console --set clusterName=ci --set 'auth.kubernetes.groupPrefix=oidc:' --set 'auth.kubernetes.userPrefix=oidc:' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.existingSecret= > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set-json 'auth.ldap.roles={"viewer":[],"admin":null,"superViewer":null,"superAdmin":null}' > /dev/null 2>&1 &&
     render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example --set auth.ldap.startTLS=true > /dev/null 2>&1
 }
 # Whose X-Forwarded-For the console believes comes from values; nobody's
@@ -815,6 +845,32 @@ toolbox_values() {
     grep -q 'claimName: k8s-console-221b-transcripts' "$WORK/chart-transcripts.yaml" && grep -q 'storageClassName: "fast"' "$WORK/chart-transcripts.yaml" &&
     ! render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set replicaCount=2 > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set toolbox.transcripts=s3 > /dev/null 2>&1
+}
+# A nulled allowlist (every item commented out, or --set …=null) is none,
+# not the chart's defaults; a null item is refused (the toolbox review,
+# finding 2).
+toolbox_null_lists() {
+  local o
+  o=$(render k8s-console --set clusterName=ci --set toolbox.nodeShell.profiles=null --set toolbox.debugPod.profiles=null --set toolbox.shell.quickCommands=null)
+  sed -n '/"nodeShell": {/,/^    }/p' <<<"$o" | has '"profiles": \[\]' &&
+    sed -n '/"debugPod": {/,/}/p' <<<"$o" | has '"profiles": \[\]' &&
+    sed -n '/"shell": {/,/}/p' <<<"$o" | has '"quickCommands": \[\]' &&
+    ! render k8s-console --set clusterName=ci --set-json 'toolbox.nodeShell.profiles=["general",null]' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set-json 'toolbox.debugContainer.images=["general",null]' > /dev/null 2>&1
+}
+# A toolbox key the chart does not know is refused, a mis-cased one too
+# (the toolbox review, finding 3).
+toolbox_unknown_keys() {
+  local k
+  for k in toolbox.nodeShell.aproval=always toolbox.nodeShell.Approval=always toolbox.debugPod.enable=false toolbox.images.db.repository=x toolbox.idletimeout=5m toolbox.ssh.user=ops; do
+    if render k8s-console --set clusterName=ci --set "$k" > /dev/null 2>&1; then
+      echo "rendered with $k"
+      return 1
+    fi
+  done
+  local msg
+  msg=$(render k8s-console --set clusterName=ci --set toolbox.nodeShell.aproval=always 2>&1 || true)
+  has 'toolbox.nodeShell.aproval is not a toolbox value' <<<"$msg"
 }
 toolbox_namespace() {
   sed -n '/^kind: Namespace$/,/^---/p' "$out" | has 'pod-security.kubernetes.io/enforce: privileged' &&
@@ -886,9 +942,12 @@ check "an exposed Service is reachable through the network policy" open_when_exp
 check "the replicas elect a leader and reach each other, the standbys warm unless told otherwise; more than one adds a budget and a spread, and needs Secrets" replicas
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
+check "a nulled toolbox allowlist is empty, not the defaults, and a null item in one is refused" toolbox_null_lists
+check "a toolbox key the chart does not know, or in another case, is refused" toolbox_unknown_keys
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
+check "a nulled toolbox.ssh.port is 22 in the network policy and the console's values, and one outside 1 to 65535 is refused" ssh_port_nulled
 check "the database: bundled by default, as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it and no value starts without it; none, values from before 0.13 and what cannot work are refused" database_modes
 check "an external database's IAM sign-in: the way and the region passed and no password; a password, no TLS, no region and an unknown way refused" database_iam
 check "the mode guard: a release without a database gets one, bundled by default or external; bundled and external do not flip without allowModeChange; one member in a production namespace only when acknowledged" database_guard

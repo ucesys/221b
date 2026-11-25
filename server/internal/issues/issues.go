@@ -294,6 +294,15 @@ type Case struct {
 	// that read alike (IS-12).
 	DuplicateOf int   `json:"duplicateOf,omitempty"`
 	Similar     []int `json:"similar,omitempty"`
+	// --- One case for one failure (CF-117 to CF-119) ---
+	// CorrelationKey groups the alerts of one failure under the case
+	// about it: "node:<cluster>/<node>" for a case about a node that
+	// stopped reporting; "" for none (CF-117). MergedInto is the case it
+	// was merged into, closed as a duplicate of it, 0 for none (CF-119).
+	// Signals are the alerts attached to it as its evidence, oldest first.
+	CorrelationKey string   `json:"correlationKey,omitempty"`
+	MergedInto     int      `json:"mergedInto,omitempty"`
+	Signals        []Signal `json:"signals,omitempty"`
 	// Waiting is when an operator asked the reporter for more: the case
 	// closes as no action needed after the silence (IS-15, CF-90).
 	Waiting *time.Time `json:"waiting,omitempty"`
@@ -316,6 +325,60 @@ type Case struct {
 	LastReporter time.Time `json:"lastReporter"`
 	// Reopened counts the times it was reopened.
 	Reopened int `json:"reopened,omitempty"`
+}
+
+// Signal is an alert attached to a case as its evidence (CF-117): the
+// alert by its cluster and key, its name and object as they were, when
+// and by whom it was attached, and why ("same node", "merged from C-14").
+type Signal struct {
+	Cluster string    `json:"cluster"`
+	Key     string    `json:"key"`
+	Name    string    `json:"name,omitempty"`
+	Object  string    `json:"object,omitempty"`
+	At      time.Time `json:"at"`
+	ByKey   string    `json:"byKey,omitempty"`
+	By      string    `json:"by,omitempty"`
+	Why     string    `json:"why,omitempty"`
+}
+
+// MaxSignals bounds the alerts one case keeps attached.
+const MaxSignals = 200
+
+// ID is how a case's line names a signal: cluster/key.
+func (g Signal) ID() string { return g.Cluster + "/" + g.Key }
+
+// NodeKey is the correlation key of a case about a node (CF-117).
+func NodeKey(cluster, node string) string { return "node:" + cluster + "/" + node }
+
+// HasSignal says whether a case holds an alert as its evidence.
+func (r *Case) HasSignal(cluster, key string) bool {
+	for _, x := range r.Signals {
+		if x.Cluster == cluster && x.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// AttachSignal attaches an alert to a case as its evidence, and counts
+// it as the case seen again (CF-117); false when the case holds it
+// already, or holds MaxSignals.
+func AttachSignal(r *Case, g Signal, now time.Time) bool {
+	if r.HasSignal(g.Cluster, g.Key) || len(r.Signals) >= MaxSignals {
+		return false
+	}
+	g.Key, g.Name, g.Object, g.Why = clip(g.Key, MaxShort), clip(g.Name, MaxShort), clip(g.Object, MaxObject), clip(g.Why, MaxShort)
+	if g.At.IsZero() {
+		g.At = now
+	}
+	r.Signals = append(r.Signals, g)
+	if r.Seen == nil {
+		r.Seen = &Seen{Count: 1, First: r.Created, Last: r.Created}
+	}
+	r.Seen.Count++
+	r.Seen.Last = now
+	r.Updated = now
+	return true
 }
 
 // AppliedChange is a change applied to fix a case (CF-29): the card, its

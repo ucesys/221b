@@ -50,13 +50,66 @@ func (s *Server) watsonRoutes() {
 
 // watsonCluster describes the request's cluster to Watson.
 func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.Cluster, bool) {
-	_, cl, ok := s.lookup(w, r)
+	_, _, ok := s.lookup(w, r)
 	if !ok {
 		return watson.Cluster{}, false
 	}
 	id := clusterID(r)
-	c := watson.Cluster{ID: id, Name: id, Env: clusters.EnvOther}
+	c := s.changeRules(r, id)
 	var cfg *rest.Config
+	if s.opts.Clusters != nil {
+		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
+			cfg = client.RestConfig()
+		}
+	} else if rc, ok := s.opts.Cluster.(interface{ RestConfig() *rest.Config }); ok {
+		cfg = rc.RestConfig()
+	}
+	if cfg == nil {
+		jsonError(w, http.StatusServiceUnavailable, "the connection to "+id+" is not running; see its cluster page")
+		return c, false
+	}
+	c.Config = cfg
+	return c, true
+}
+
+// changeRules is what decides whether a change may run on a cluster: its
+// name and environment, whether the connection takes changes (its mode,
+// and an anonymous Viewer with sign-in off makes none), and the role check
+// under rbac.enforce strict (RB-36). Watson's changes and the console's own
+// writes (writeRefused) follow the same rules.
+func (s *Server) changeRules(r *http.Request, id string) watson.Cluster {
+	c := s.connRules(id)
+	// With sign-in off, changes would be made with the console's own
+	// account; an anonymous Viewer makes none.
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
+		c.ReadOnly = true
+		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
+	}
+	return c
+}
+
+// watsonRules is a cluster's rules as they are now, for Watson to read
+// again when a queued change starts or a card is approved under a standing
+// approval (P6-05, RB-36): the connection's mode and the role check, and
+// its connection; the requester's own part (an anonymous Viewer) was read
+// with their request.
+func (s *Server) watsonRules(id string) (watson.Cluster, bool) {
+	c := s.connRules(id)
+	if s.opts.Clusters != nil {
+		if _, ok := s.opts.Clusters.Summary(id); !ok {
+			return c, false
+		}
+		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
+			c.Config = client.RestConfig()
+		}
+	}
+	return c, true
+}
+
+// connRules is changeRules without the request: the connection's name,
+// environment and mode, and the role check.
+func (s *Server) connRules(id string) watson.Cluster {
+	c := watson.Cluster{ID: id, Name: id, Env: clusters.EnvOther}
 	if s.opts.Clusters != nil {
 		if sum, ok := s.opts.Clusters.Summary(id); ok {
 			c.Name, c.Env = sum.Name, sum.Env
@@ -67,34 +120,49 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 				c.ReadOnlyHow = "An administrator can allow changes in the connection's settings (Read and change)."
 			}
 		}
-		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
-			cfg = client.RestConfig()
-		}
-	} else if rc, ok := s.opts.Cluster.(interface{ RestConfig() *rest.Config }); ok {
-		cfg = rc.RestConfig()
+	} else {
 		c.ReadOnly = !s.opts.WatsonLocalWrite
 	}
-	if cfg == nil {
-		jsonError(w, http.StatusServiceUnavailable, "the connection to "+id+" is not running; see its cluster page")
-		return c, false
-	}
-	// With sign-in off, changes would be made with the console's own
-	// account; an anonymous Viewer makes none.
-	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
-		c.ReadOnly = true
-		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
-	}
-	c.Config = cfg
 	// With rbac.enforce strict, a cluster whose roles have not been compared
-	// yet refuses changes (RB-36). A connection just made or a console just
-	// started is compared now, from the cache, rather than at the next round.
-	if s.opts.Roles.Enforce == "strict" {
-		if _, ok := s.monitor().Get(id); !ok {
-			s.checkRoles(id, cl)
-		}
-	}
+	// refuses changes (RB-36); RoleRefusal compares a connection just made
+	// or re-pointed now, from the cache, rather than at the next round.
 	c.Locked = s.RoleRefusal(id)
-	return c, true
+	return c
+}
+
+// writeRefusal says why the console's own writes as the person are refused
+// on a cluster, "" when they are not, in Watson's words; readOnly says the
+// connection is read-only (or an anonymous Viewer makes no change), where
+// the page hides the controls that write rather than disable them (RB-36).
+func (s *Server) writeRefusal(r *http.Request, id string) (why string, readOnly bool) {
+	c := s.changeRules(r, id)
+	switch {
+	case c.Locked != "":
+		return c.Locked, c.ReadOnly
+	case c.ReadOnly:
+		how := c.ReadOnlyHow
+		if how == "" {
+			how = "An administrator can allow changes in the connection's settings."
+		}
+		return fmt.Sprintf("%s is connected read-only, so the console changes nothing there. %s", c.Name, how), true
+	}
+	return "", false
+}
+
+// writeRefused answers 409, and audits the refusal, when the request's
+// cluster takes no change from the console: its connection is read-only,
+// or rbac.enforce strict refuses its roles (RB-36). The console's own
+// writes as the person (a Secret's edit, a new Secret, a new namespace)
+// follow the rules Watson's changes do, in Watson's words.
+func (s *Server) writeRefused(w http.ResponseWriter, r *http.Request, action, target string) bool {
+	why, _ := s.writeRefusal(r, clusterID(r))
+	if why == "" {
+		return false
+	}
+	msg := "Refused: " + why
+	s.recordOn(r, audit.OutcomeDenied, action, target, msg)
+	jsonError(w, http.StatusConflict, msg)
+	return true
 }
 
 // watsonWho is the person acting.
@@ -104,9 +172,12 @@ func (s *Server) watsonWho(r *http.Request) watson.Who {
 }
 
 func (s *Server) whoOf(sess auth.Session, person kube.Person, from string) watson.Who {
-	w := watson.Who{Session: sess.ID, Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
+	w := watson.Who{Session: sess.StateID(), Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
 		ManageApps: s.opts.Auth == nil || sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin),
 		Audit:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: from}
+	// A Viewer or SuperViewer changes nothing: their roles bind them read
+	// only, so they hold no standing approval (R2-04).
+	w.ViewOnly = !w.ManageApps
 	if !w.Person.Nobody() {
 		w.User = sess.User.Username
 		if w.User == "" {
@@ -148,6 +219,10 @@ type watsonStatus struct {
 	// allow them.
 	ReadOnly bool   `json:"readOnly"`
 	How      string `json:"how,omitempty"`
+	// Impossible says the deployment is the fully protected read-only one
+	// (RB-03): Admin and SuperAdmin are both read-only, so no role of 221B
+	// can change anything, on any cluster whose roles are 221B's.
+	Impossible bool `json:"impossible,omitempty"`
 	// TwoPerson says changes here need a second person (P6-07).
 	TwoPerson bool   `json:"twoPerson"`
 	Env       string `json:"env"`
@@ -230,6 +305,7 @@ func (s *Server) watsonStatusFor(r *http.Request, c watson.Cluster) watsonStatus
 	if c.ReadOnly {
 		st.How = c.ReadOnlyHow
 	}
+	st.Impossible = s.opts.Roles.Templates.ReadOnlyOnly()
 	user := "watson"
 	if who.User != "" {
 		user, _, _ = strings.Cut(who.User, "@")
@@ -528,7 +604,7 @@ func (s *Server) sherlockWrote(r *http.Request, cluster, command string) bool {
 		return false
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.ID, Cluster: cluster}, command)
+	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.StateID(), Cluster: cluster}, command)
 }
 
 // watsonAnswer turns the service's answer into a response.

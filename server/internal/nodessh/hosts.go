@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -77,17 +78,28 @@ type Hosts struct {
 	// cache is nil until the hosts were first read.
 	cache   map[string]Host
 	changed func(map[string]Host)
+	// seq orders the reads and writes: each takes a number as it begins
+	// (a read) or once it is saved (a write), and the list at hand is
+	// replaced only by a later one's (cacheSeq is the number it has).
+	seq      atomic.Uint64
+	cacheSeq uint64
 }
 
 func NewHosts(b kv.Backend) *Hosts { return &Hosts{backend: b} }
 
-func (h *Hosts) remember(m map[string]Host) {
+// remember keeps a list read or written as the list at hand, unless a
+// later read or write (by its number, n) already gave one.
+func (h *Hosts) remember(m map[string]Host, n uint64) {
 	c := make(map[string]Host, len(m))
 	for k, v := range m {
 		c[k] = v
 	}
 	h.cacheMu.Lock()
-	h.cache = c
+	if h.cache != nil && n < h.cacheSeq {
+		h.cacheMu.Unlock()
+		return
+	}
+	h.cache, h.cacheSeq = c, n
 	fn := h.changed
 	h.cacheMu.Unlock()
 	if fn != nil {
@@ -127,11 +139,12 @@ func ByCluster(m map[string]Host) map[string][]Host {
 
 // Load reads the hosts again, for the list at hand too.
 func (h *Hosts) Load(ctx context.Context) (map[string]Host, error) {
+	n := h.seq.Add(1)
 	m, _, err := loadKey[Host](ctx, h.backend, HostsKey)
 	if err != nil {
 		return nil, err
 	}
-	h.remember(m)
+	h.remember(m, n)
 	return m, nil
 }
 
@@ -198,7 +211,7 @@ func (h *Hosts) change(ctx context.Context, edit func(m map[string]Host) error) 
 		return nil
 	})
 	if err == nil {
-		h.remember(kept)
+		h.remember(kept, h.seq.Add(1))
 	}
 	return err
 }
@@ -275,7 +288,12 @@ func (h *Hosts) Add(ctx context.Context, x Host, isNode func(cluster, name strin
 	x.State = HostPending
 	x.AutoName = x.Name == strings.ToLower(x.Address)
 	x.HostKey, x.Fingerprint, x.Offered, x.Mismatch, x.TrustedBy, x.TrustedAt, x.PairedBy, x.PairedAt = "", "", "", "", "", nil, "", nil
+	given := x
 	err := h.change(ctx, func(m map[string]Host) error {
+		// Each try starts from what was given: one tried again after a
+		// conflict keeps nothing the earlier try took from a host since
+		// gone.
+		x = given
 		if old, ok := m[key(x.Cluster, x.Name)]; ok {
 			switch {
 			case old.State == HostPending && old.Address == x.Address:

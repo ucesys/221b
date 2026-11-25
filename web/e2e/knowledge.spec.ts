@@ -252,9 +252,14 @@ test('Administration › AI › Knowledge › Uploaded documents with a store: a
     await card.getByTestId('uploads-tab-notes').click()
     await expect(row('E2E zephyr backups').getByTestId('uploads-state')).toHaveAttribute('data-state', 'read')
 
-    // AIOps › Mycroft › Sources lists them under Uploaded documents; the search quotes them.
+    // AIOps › Mycroft › Sources lists Added in Mycroft as a source of uploaded
+    // documents (one row a source, KN-50); opened, it lists them; the search quotes them.
     await page.goto('/#/aiops/mycroft/sources')
-    await page.getByTestId('sources-filter-source').selectOption('uploads')
+    const added = page.locator('[data-testid=sources-row][data-id="added"]')
+    await expect(added.getByTestId('sources-row-kind')).toHaveText('Uploaded documents', { timeout: 20_000 })
+    await expect(page.getByTestId('sources-item')).toHaveCount(0)
+    await added.getByTestId('sources-row-open').click()
+    await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources\/added$/)
     const items = page.getByTestId('sources-item')
     await expect(items.filter({ hasText: 'E2E zephyr backups' })).toBeVisible({ timeout: 20_000 })
     await expect(items.filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
@@ -493,8 +498,21 @@ test('Administration › AI › Knowledge reads an S3 bucket of documents throug
   await drawer.getByTestId('knowledge-source-endpoint').fill(SIM)
   await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
   expect((await api('/api/v1/knowledge/settings')).body).not.toContain(ID)
+  // Mycroft writes pages by itself only from a source of high trust
+  // (KN-59), and the dialog has no trust: a source's is set apart, on its
+  // row (KN-56, KN-57), after its first read. The API takes one with a
+  // new source, so the save sends high and the first read drafts pages.
+  const addRoute = '**/api/v1/knowledge/sources'
+  await page.route(addRoute, async (route) => {
+    const req = route.request()
+    if (req.method() !== 'POST') return route.continue()
+    const body = req.postDataJSON() as { source: Record<string, unknown> }
+    await route.continue({ postData: JSON.stringify({ ...body, source: { ...body.source, trust: 'high' } }) })
+  })
   await drawer.getByTestId('knowledge-source-save').click()
   const row = section.locator(`[data-testid=knowledge-source][data-source=${ID}]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await page.unroute(addRoute)
   try {
     await expect(row.getByTestId('knowledge-source-creds')).toHaveText('credential E2E sim bucket key')
     await expect(row.getByTestId('knowledge-source-bucket-line')).toContainText('s3://sim-docs/docs/')
@@ -560,10 +578,18 @@ test('Administration › AI › Knowledge reads an S3 bucket of documents throug
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.source' && String(r.target) === ID), { timeout: 15_000 }).toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain(SECRET)
 
-    // Mycroft › Sources (0.12.1) lists its items, filtered by source.
+    // Mycroft › Sources lists it as one row (KN-50): its kind, its items, on,
+    // and its last Wiki sync (Run now, which read nothing changed); opened, it lists its items alone.
     await page.goto('/#/aiops/mycroft/sources')
     await expect(page.getByTestId('mycroft-sources')).toBeVisible({ timeout: 20_000 })
-    await page.getByTestId('sources-filter-source').selectOption(ID)
+    const source = page.locator(`[data-testid=sources-row][data-id="${ID}"]`)
+    await expect(source.getByTestId('sources-row-kind')).toHaveText('S3 bucket', { timeout: 20_000 })
+    await expect(source.getByTestId('sources-row-items')).toContainText(/^\d+ items/)
+    await expect(source.getByTestId('sources-row-state')).toHaveText('On')
+    await expect(source.getByTestId('sources-row-synced')).toContainText(' · nothing changed')
+    await source.getByTestId('sources-row-open').click()
+    await expect(page).toHaveURL(new RegExp(`#/aiops/mycroft/sources/${ID}$`))
+    await expect(page.getByTestId('sources-open-name')).toHaveText('E2E docs bucket')
     const item = (key: string) => page.locator(`[data-testid=sources-item][data-id="${key}"]`)
     await expect(item('docs/backup-windows.csv')).toBeVisible({ timeout: 20_000 })
     await expect(item('docs/runbooks/restart-the-wombat-cache.md')).toBeVisible()

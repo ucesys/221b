@@ -481,7 +481,7 @@ function Answer({
 }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const costs = useShowCosts()
-  const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && costs && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
+  const meta = [m.model, m.effort, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && costs && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
     <div className="rk-ans" data-testid="sherlock-answer" data-status={m.status}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)' }}>

@@ -30,6 +30,7 @@ import (
 func (s *Server) aiRoutes() {
 	s.handle("GET /api/v1/ai", "ai", s.getAI)
 	s.handle("PUT /api/v1/ai/limits", "ai-limits", s.putAILimits)
+	s.handle("PUT /api/v1/ai/classifier", "ai-classifier", s.putAIClassifier)
 	s.handle("POST /api/v1/ai/providers", "ai-provider-add", s.postAIProvider)
 	s.handle("PUT /api/v1/ai/providers/{id}", "ai-provider-update", s.putAIProvider)
 	s.handle("DELETE /api/v1/ai/providers/{id}", "ai-provider-remove", s.deleteAIProvider)
@@ -89,7 +90,7 @@ func (s *Server) aiFail(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case errors.Is(err, ai.ErrInvalid):
 		code = http.StatusBadRequest
-	case errors.Is(err, ai.ErrSameProvider):
+	case errors.Is(err, ai.ErrSameProvider), errors.Is(err, ai.ErrUnavailable), errors.Is(err, ai.ErrUnusable):
 		code = http.StatusConflict
 	case errors.As(err, &capErr):
 		code = http.StatusTooManyRequests
@@ -193,8 +194,29 @@ func (s *Server) saveAIProvider(w http.ResponseWriter, r *http.Request, adding b
 	if adding {
 		verb = "added"
 	}
-	s.record(r, audit.ActionAISettings, "provider "+p.ID, fmt.Sprintf("provider %s %s: %s", p.ID, verb, providerText(&p.Provider)))
+	s.record(r, audit.ActionAISettings, "provider "+p.ID, fmt.Sprintf("provider %s %s: %s%s", p.ID, verb, providerText(&p.Provider), offeredText(p)))
 	s.getAI(w, r)
+}
+
+// offeredText says the models a provider offers its agents, with their
+// tiers, when a SuperAdmin chose them (A9): "; offers gpt-5 (standard),
+// embed".
+func offeredText(p ai.Provider) string {
+	if !p.OfferedChosen {
+		return ""
+	}
+	if len(p.Offered) == 0 {
+		return "; offers its default model only"
+	}
+	var out []string
+	for _, o := range p.Offered {
+		if o.Tier != "" {
+			out = append(out, o.Model+" ("+o.Tier+")")
+		} else {
+			out = append(out, o.Model)
+		}
+	}
+	return "; offers " + strings.Join(out, ", ")
 }
 
 func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
@@ -202,11 +224,17 @@ func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.opts.AI.DeleteProvider(r.Context(), id); err != nil {
+	classifierOff, err := s.opts.AI.RemoveProvider(r.Context(), id)
+	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAISettings, "provider "+id, "provider "+id+" removed, with its credential")
+	d := "provider " + id + " removed, with its credential"
+	if classifierOff {
+		// As putAIClassifier says a change of it (AI-45).
+		d += "; Auto's classifier: " + id + " → off"
+	}
+	s.record(r, audit.ActionAISettings, "provider "+id, d)
 	s.getAI(w, r)
 }
 
@@ -501,18 +529,85 @@ func (s *Server) putAIAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		in.SherlockClusters = append([]string{}, keep...)
 	}
-	if err := s.opts.AI.SaveAgent(r.Context(), id, in); err != nil {
+	// What the save replaced, read in the save itself (AI-47).
+	before, err := s.opts.AI.ChangeAgent(r.Context(), id, in)
+	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
-	d := fmt.Sprintf("agent %s: provider %s, model %s, caps $%.2f/$%.2f, clusters [%s], tools [%s]", id, firstOf(in.Provider, ai.DefaultProvider), firstOf(in.Model, "the provider's default"), in.DailyUSD, in.MonthlyUSD, strings.Join(in.Clusters, ", "), strings.Join(in.Tools, ", "))
-	if in.On != nil {
+	d := fmt.Sprintf("agent %s: provider %s, model %s, caps $%.2f/$%.2f, ", id, firstOf(in.Provider, ai.DefaultProvider), firstOf(in.Model, "the provider's default"), in.DailyUSD, in.MonthlyUSD)
+	if id == ai.Sherlock {
+		// Sherlock is on where its clusters say, with or without view
+		// control, as SaveAgent saves them; its On is not used.
+		d += sherlockClustersText(in)
+	} else {
+		d += fmt.Sprintf("clusters [%s]", strings.Join(in.Clusters, ", "))
+	}
+	d += fmt.Sprintf(", tools [%s]", strings.Join(in.Tools, ", "))
+	// A change of what is left to Auto is saved at once and said in the
+	// audit record, before and after (the owner, November 22; AI-47).
+	d += autoChange(before, in.AgentSettings)
+	if in.On != nil && id != ai.Sherlock {
 		d += fmt.Sprintf(", on %v", *in.On)
 	}
 	if in.ConfirmSingleProvider {
 		d += "; confirmed a single provider"
 	}
 	s.record(r, audit.ActionAISettings, "agent "+id, d)
+	s.getAI(w, r)
+}
+
+// sherlockClustersText says where a save turns Sherlock on, and its view
+// control, as SaveAgent saves them: the clusters given (those the console
+// has), none being off on every cluster; what is not given stays.
+func sherlockClustersText(in ai.AgentChange) string {
+	var d string
+	switch {
+	case in.SherlockClusters == nil:
+		d = "on the clusters it was on"
+	case len(in.SherlockClusters) == 0:
+		d = "off on every cluster"
+	default:
+		d = "on clusters [" + strings.Join(in.SherlockClusters, ", ") + "]"
+	}
+	if in.ViewControl != nil {
+		d += fmt.Sprintf(", view control %v", *in.ViewControl)
+	}
+	return d
+}
+
+// autoChange says an agent's effort, Auto and floor settings for its audit
+// record, and what they were when they changed (AI-47).
+func autoChange(was, next ai.AgentSettings) string {
+	say := func(a ai.AgentSettings) string {
+		return fmt.Sprintf("effort %s, model %s, floor %s/%s", firstOf(a.Effort, "the model's default"), firstOf(a.Model, "the provider's default"),
+			firstOf(a.FloorEffort, "none"), firstOf(a.FloorModel, "none"))
+	}
+	d := "; " + say(next)
+	if was.Effort != next.Effort || was.FloorEffort != next.FloorEffort || was.FloorModel != next.FloorModel || was.Model != next.Model {
+		d += " (was " + say(was) + ")"
+	}
+	return d
+}
+
+// putAIClassifier chooses the provider Auto's classifier asks, or none
+// (AI-45): saved at once and audited.
+func (s *Server) putAIClassifier(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	var in struct {
+		Provider string `json:"provider"`
+	}
+	if !decodeAutomation(w, r, &in) {
+		return
+	}
+	was := s.opts.AI.View(r.Context()).Classifier
+	if err := s.opts.AI.SetClassifier(r.Context(), in.Provider); err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	s.record(r, audit.ActionAISettings, "classifier", fmt.Sprintf("Auto's classifier: %s → %s", firstOf(was, "off"), firstOf(in.Provider, "off")))
 	s.getAI(w, r)
 }
 
@@ -780,12 +875,21 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 		Replays  int  `json:"replays"`
 		Estimate bool `json:"estimate"`
 		Live     bool `json:"live"`
+		// Effort and Model run the cases at an effort and on a model other
+		// than the agent's (AI-48): for measuring Auto's floor.
+		Effort string `json:"effort"`
+		Model  string `json:"model"`
 	}
 	if !decodeAutomation(w, r, &in) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	o := ai.TestOptions{Draft: !in.Live, Replays: min(max(in.Replays, 0), ai.MaxReplays), By: aiBy(r), Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}}
+	o := ai.TestOptions{Draft: !in.Live, Replays: min(max(in.Replays, 0), ai.MaxReplays), By: aiBy(r), Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
+		Effort: in.Effort, Model: in.Model}
+	if err := o.CheckOverride(); err != nil {
+		s.aiFail(w, err)
+		return
+	}
 	usd, cases, replays, err := s.opts.AI.Estimate(r.Context(), id, o)
 	if err != nil {
 		s.aiFail(w, err)
@@ -811,6 +915,13 @@ func (s *Server) postAITest(w http.ResponseWriter, r *http.Request) {
 			detail = fmt.Sprintf("test stopped after %d of %d cases (%d passed), %d replays, $%.4f", run.Cases, len(run.Planned), run.Passed, len(run.Replays), run.CostUSD)
 		case run.State == ai.RunFailed:
 			detail, outcome = "the test failed: "+run.Error, audit.OutcomeFailed
+		}
+		// A run at an effort or on a model of its own says what it ran at,
+		// however it ended: for such a run it is the only lasting record
+		// (AI-48). What it ran at, not what was asked: the half not given
+		// is the agent's, or what Auto off leaves of it.
+		if o.Effort != "" || o.Model != "" {
+			detail += fmt.Sprintf(" (at effort %s on model %s)", firstOf(run.Effort, "the model's default"), firstOf(run.Model, o.Model, "the agent's"))
 		}
 		if s.opts.Audit != nil {
 			s.opts.Audit.Record(audit.Event{Action: audit.ActionAITest, Who: o.Who, Target: "agent " + id, Detail: detail, Outcome: outcome})
@@ -1107,7 +1218,7 @@ func (s *Server) postAICase(w http.ResponseWriter, r *http.Request) {
 		c = *in.Case
 	case s.opts.Sherlock != nil && in.Message > 0:
 		sess, _ := auth.SessionFrom(r.Context())
-		t, ok := s.opts.Sherlock.TraceOf(sherlock.Key{Session: sess.ID, Cluster: firstOf(in.Cluster, clusters.LocalID)}, in.Message)
+		t, ok := s.opts.Sherlock.TraceOf(sherlock.Key{Session: sess.StateID(), Cluster: firstOf(in.Cluster, clusters.LocalID)}, in.Message)
 		if !ok {
 			jsonError(w, http.StatusNotFound, "That answer is not in your conversation any more.")
 			return

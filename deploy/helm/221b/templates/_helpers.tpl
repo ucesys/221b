@@ -121,16 +121,92 @@ so a read-only SuperAdmin definition turns it off too. Values kept by
 {{- if and $t.enabled $ssh.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
 {{- end -}}
 
-{{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE). */}}
+{{/* A toolbox key the chart does not know, or one in another case, is
+refused: the console's start refuses it too, and a misspelled restriction
+(nodeShell.aproval: always) would otherwise never apply (the toolbox
+review, finding 3). */}}
+{{- define "b221.toolboxKeys" -}}
+{{- $t := .Values.toolbox -}}
+{{- $known := dict
+  "" (list "enabled" "idleTimeout" "maxDuration" "transcripts" "transcriptsVolume" "retention" "history" "shell" "portForward" "debugContainer" "debugPod" "nodeShell" "ssh" "images")
+  "transcriptsVolume" (list "size" "storageClass" "accessMode")
+  "history" (list "keep")
+  "shell" (list "enabled" "oneCommand" "fileTransfer" "quickCommands")
+  "portForward" (list "enabled" "cliMinVersion")
+  "debugContainer" (list "enabled" "mountVolumes" "images")
+  "debugPod" (list "enabled" "ttlAfterFinished" "profiles")
+  "nodeShell" (list "enabled" "namespace" "image" "profiles" "approval" "quickCommands")
+  "ssh" (list "enabled" "port" "loginUser") -}}
+{{- range $k, $_ := $t -}}
+{{- if not (has $k (get $known "")) -}}
+{{- fail (printf "toolbox.%s is not a toolbox value (toolbox takes %s)" $k (join ", " (get $known ""))) -}}
+{{- end -}}
+{{- end -}}
+{{- range $block, $keys := omit $known "" -}}
+{{- $b := get $t $block -}}
+{{- if and $b (not (kindIs "map" $b)) -}}
+{{- fail (printf "toolbox.%s is a map of %s" $block (join ", " $keys)) -}}
+{{- end -}}
+{{- range $k, $_ := ($b | default dict) -}}
+{{- if not (has $k $keys) -}}
+{{- fail (printf "toolbox.%s.%s is not a toolbox value (toolbox.%s takes %s)" $block $k $block (join ", " $keys)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $im := ($t.images | default dict) -}}
+{{- range $k, $_ := ($im | default dict) -}}
+{{- if not (has $k (list "image" "caps" "tools")) -}}
+{{- fail (printf "toolbox.images.%s.%s is not a toolbox value (an image takes image, caps and tools)" $name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* sshd's port on the nodes, for the network policy and the console
+alike: toolbox.ssh.port, 22 when it is left out or nulled (Helm drops a
+null, and an empty port in a NetworkPolicy matches every port), refused
+outside 1 to 65535 (the toolbox review, finding 15). */}}
+{{- define "b221.sshPort" -}}
+{{- $ssh := .Values.toolbox.ssh | default dict -}}
+{{- $p := 22 -}}
+{{- if not (kindIs "invalid" $ssh.port) -}}{{- $p = $ssh.port -}}{{- end -}}
+{{- $n := int $p -}}
+{{- if or (lt $n 1) (gt $n 65535) (ne (toString $n) (toString $p)) -}}
+{{- fail (printf "toolbox.ssh.port is a port, 1 to 65535, not %v" $p) -}}
+{{- end -}}
+{{- $n -}}
+{{- end -}}
+
+{{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE).
+Each allowlist is rendered, so a list whose items are all commented out
+(null, which Helm drops) is none, not the console's defaults; a null item
+(one commented-out line) is refused (the toolbox review, finding 2). */}}
 {{- define "b221.toolboxConfig" -}}
+{{- include "b221.toolboxKeys" . -}}
 {{- $t := .Values.toolbox -}}
 {{- $c := omit $t "transcriptsVolume" -}}
-{{- $node := deepCopy $t.nodeShell -}}
+{{- $lists := dict "shell" (list "quickCommands") "debugContainer" (list "images") "debugPod" (list "profiles") "nodeShell" (list "profiles" "quickCommands") -}}
+{{- range $block, $keys := $lists -}}
+{{- $b := deepCopy (get $t $block | default dict) -}}
+{{- range $k := $keys -}}
+{{- $l := get $b $k | default list -}}
+{{- range $l -}}
+{{- if or (kindIs "invalid" .) (eq (toString .) "") -}}
+{{- fail (printf "toolbox.%s.%s has an empty item: a commented-out item is null, remove its line" $block $k) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $b $k $l -}}
+{{- end -}}
+{{- $_ := set $c $block $b -}}
+{{- end -}}
+{{- $_ := set $c "images" ($t.images | default dict) -}}
+{{- $node := deepCopy (get $c "nodeShell") -}}
 {{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
 {{- $_ := set $node "namespace" (include "b221.toolboxNamespace" .) -}}
 {{- $_ := set $c "nodeShell" $node -}}
 {{- $ssh := deepCopy ($t.ssh | default dict) -}}
 {{- $_ := set $ssh "enabled" (include "b221.sshOn" . | eq "true") -}}
+{{- $_ := set $ssh "port" (include "b221.sshPort" . | int) -}}
 {{- $_ := set $c "ssh" $ssh -}}
 {{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}
