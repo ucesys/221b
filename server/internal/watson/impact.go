@@ -343,6 +343,27 @@ func joinAnd(xs []string) string {
 	return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
 }
 
+func plural64(n int64, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.FormatInt(n, 10) + " " + many
+}
+
+// ordinalsDown names the pods a StatefulSet scaled from cur to want
+// removes, highest number first: the first max of them by name, and how
+// many more, without making a name for each (a count can be huge).
+func ordinalsDown(name string, cur, want int64, max int) string {
+	var names []string
+	for i := cur - 1; i >= want && len(names) < max; i-- {
+		names = append(names, fmt.Sprintf("%s-%d", name, i))
+	}
+	if n := cur - want; n > int64(len(names)) {
+		return strings.Join(names, ", ") + fmt.Sprintf(" and %d more", n-int64(len(names)))
+	}
+	return joinAnd(names)
+}
+
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
@@ -440,7 +461,7 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			add("%v", err)
 			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
 		}
-		want, _ := strconv.Atoi(c.Flag("replicas"))
+		want, _ := replicasOf(c)
 		for _, t := range ts {
 			targets = append(targets, t.String())
 			if t.obj == nil {
@@ -452,27 +473,23 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			if v, ok, _ := unstructured.NestedInt64(t.obj.Object, "spec", "replicas"); ok {
 				cur = v
 			}
-			if cur == int64(want) {
+			if cur == want {
 				add("%s already has %d replicas; nothing changes.", t.title(), want)
 				continue
 			}
 			add("%s: %d → %d replicas.", t.title(), cur, want)
-			if int64(want) < cur {
-				n := int(cur) - want
+			if want < cur {
+				n := cur - want
 				if t.kind == "StatefulSet" {
-					var gone []string
-					for i := int(cur) - 1; i >= want; i-- {
-						gone = append(gone, fmt.Sprintf("%s-%d", t.name, i))
-					}
-					add("Removes %s, highest number first: %s. Their volume claims stay.", plural(n, "pod", "pods"), listText(gone, 4))
+					add("Removes %s, highest number first: %s. Their volume claims stay.", plural64(n, "pod", "pods"), ordinalsDown(t.name, cur, want, 4))
 				} else {
-					add("Removes %s.", plural(n, "pod", "pods"))
+					add("Removes %s.", plural64(n, "pod", "pods"))
 				}
 				if want == 0 {
 					add("With no replicas, nothing serves the %s's traffic until it is scaled up again.", strings.ToLower(t.kind))
 				}
 			} else {
-				add("Starts %s, where the scheduler finds room.", plural(want-int(cur), "pod", "pods"))
+				add("Starts %s, where the scheduler finds room.", plural64(want-cur, "pod", "pods"))
 			}
 			if c.Has("current-replicas") {
 				add("kubectl changes it only if it still has %s replicas.", c.Flag("current-replicas"))

@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -814,6 +816,9 @@ func checkScale(c *Command) *Refusal {
 	if !c.Has("replicas") {
 		return refuse("usage", "Say how many replicas with --replicas=N.")
 	}
+	if _, err := replicasOf(c); err != nil {
+		return refuse("usage", "%v", err)
+	}
 	types, names := targets(c.Positionals)
 	if len(names) == 0 {
 		return refuse("usage", "Usage: %s", c.spec.usage)
@@ -824,6 +829,24 @@ func checkScale(c *Command) *Refusal {
 		}
 	}
 	return nil
+}
+
+// replicasOf reads --replicas as kubectl does (pflag's int: base 0, so
+// 010 is 8 and 0x10 is 16), and refuses what kubectl or the API server
+// would: a count that is not a whole number, below 0, or above what a
+// workload's replicas hold.
+func replicasOf(c *Command) (int64, error) {
+	v := c.Flag("replicas")
+	n, err := strconv.ParseInt(v, 0, 64)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("--replicas takes a whole number of replicas, not %q.", v)
+	case n < 0:
+		return 0, fmt.Errorf("--replicas must be 0 or more, not %d.", n)
+	case n > math.MaxInt32:
+		return 0, fmt.Errorf("--replicas must be at most %d, not %d.", math.MaxInt32, n)
+	}
+	return n, nil
 }
 
 func checkRollout(c *Command) *Refusal {
