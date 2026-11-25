@@ -132,9 +132,26 @@ func (u *Use) Apply(req *http.Request) error {
 	case SendQuery:
 		req.URL.RawQuery = withParam(req.URL.RawQuery, u.SendAs.Param, u.Token)
 	case SendCookie:
+		// A value a cookie cannot carry as it is would be sent with bytes
+		// dropped (and the byte logged) or quoted: it is not sent
+		// (credentials-unver-2).
+		if !cookieSafe(u.Token) {
+			return fmt.Errorf("%s's token has characters a cookie cannot carry: send it another way", u.Name)
+		}
 		req.AddCookie(&http.Cookie{Name: u.SendAs.Cookie, Value: u.Token})
 	}
 	return nil
+}
+
+// cookieSafe says whether a cookie carries a value as it is: printable
+// ASCII without a space, a quote, a comma, a semicolon or a backslash.
+func cookieSafe(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if b := v[i]; b <= ' ' || b >= 0x7f || b == '"' || b == ';' || b == '\\' || b == ',' {
+			return false
+		}
+	}
+	return true
 }
 
 // withParam is a raw query with name=value at its end, and no other

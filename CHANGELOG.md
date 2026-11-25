@@ -65,6 +65,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **A Test of `git@host:org/repo.git`, or of a bucket with a dot in its name, asks the address under the endpoint** (credentials-cut-5); both were read as another host and refused as outside the endpoint.
 - **A credential refused because the credentials' Secret is full says what frees room** (credentials-cut-7): it said to shorten private CAs and descriptions, which have been in the database since 0.13.
 - **A token sent as a query parameter leaves the rest of the query as it is** (credentials-unver-1). The whole query was sorted and escaped again (`flag` became `flag=`, `%7E` became `~`), which can break an API that reads its parameters in order or a signed address.
+- **A token sent as a cookie is sent whole or not at all** (credentials-unver-2). Go's cookie writer dropped the bytes a cookie cannot carry (`;`, `"`, `\`) and logged the byte it dropped, or quoted a value with a space or a comma, so a wrong token was sent without a word. Such a token is now refused when saved, and a minted one is not sent.
 
 ## 0.13.2 (2026-11-25)
 

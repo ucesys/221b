@@ -958,3 +958,26 @@ func TestAQueryTokenLeavesTheRestOfTheQueryAsItIs(t *testing.T) {
 		t.Fatalf("the query: %s, not %s", req.URL.RawQuery, want)
 	}
 }
+
+// credentials-unver-2: a token a cookie cannot carry as it is is refused,
+// not sent with bytes dropped.
+func TestACookieTokenIsSentWholeOrNotAtAll(t *testing.T) {
+	s, _ := newService(t, nil)
+	for _, tok := range []string{"fake;tok", `fake"tok`, `fake\tok`, "fake tok"} {
+		if _, err := s.Create(ctx, Credential{Name: "c " + tok, Kind: KindToken, Endpoint: "https://a.example", SendAs: SendAs{Method: SendCookie, Cookie: "session"}}, Secret{Token: tok}, "ann"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%q: %v", tok, err)
+		}
+	}
+	// A minted token is checked as it is sent.
+	u := &Use{Name: "minted", Method: SendCookie, SendAs: SendAs{Method: SendCookie, Cookie: "session"}, Token: "fake;minted", ep: Endpoint{Scheme: "https", Host: "a.example"}}
+	req, _ := http.NewRequest(http.MethodGet, "https://a.example/x", nil)
+	if err := u.Apply(req); err == nil || req.Header.Get("Cookie") != "" {
+		t.Fatalf("sent %q: %v", req.Header.Get("Cookie"), err)
+	}
+	c := token(t, s, "ok", "https://a.example", SendAs{Method: SendCookie, Cookie: "session"}, "fake-tok_1.2")
+	ok, _ := s.Resolve(ctx, c.ID, UseHTTP, "https://a.example/x")
+	req, _ = http.NewRequest(http.MethodGet, "https://a.example/x", nil)
+	if err := ok.Apply(req); err != nil || req.Header.Get("Cookie") != "session=fake-tok_1.2" {
+		t.Fatalf("%q: %v", req.Header.Get("Cookie"), err)
+	}
+}

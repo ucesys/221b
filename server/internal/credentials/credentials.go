@@ -345,6 +345,9 @@ func (c *Credential) Check(sec Secret) error {
 		if err := need(sec.Token, "token"); err != nil {
 			return err
 		}
+		if c.SendAs.Method == SendCookie && !cookieSafe(sec.Token) {
+			return invalid("a cookie cannot carry this token as it is (a space, a quote, a comma, a semicolon or a backslash): send it another way")
+		}
 	case KindUserPass:
 		c.Username = strings.TrimSpace(c.Username)
 		if c.Username == "" || len(c.Username) > 200 || strings.ContainsAny(c.Username, ":\r\n") {
