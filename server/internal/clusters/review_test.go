@@ -17,10 +17,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"github.com/jackc/pgx/v5/pgconn"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"

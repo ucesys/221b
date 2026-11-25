@@ -172,7 +172,13 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 	case s.CA == CASkip:
 		t.add("TLS", "warn", "Not verified: anything between the console and the API server could read the console’s credentials. Use the cluster’s CA certificate instead.")
 	default:
-		t.tlsStep(ctx, s, c, host, port)
+		// The name the certificate is checked against is the connection's:
+		// a kubeconfig's tls-server-name, else the address's host.
+		name := host
+		if cfg != nil && cfg.TLSClientConfig.ServerName != "" {
+			name = cfg.TLSClientConfig.ServerName
+		}
+		t.tlsStep(ctx, s, c, host, port, name)
 	}
 
 	// 3. Sign-in.
@@ -287,10 +293,10 @@ func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM stri
 	return r
 }
 
-// tlsStep shakes hands with the server and checks its certificate the way
-// the connection will.
-func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port string) {
-	cfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+// tlsStep shakes hands with the server at host:port and checks its
+// certificate the way the connection will: against name.
+func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port, name string) {
+	cfg := &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12}
 	against := "the system trust store"
 	if s.CA == CAPEM {
 		if strings.TrimSpace(c.CAPEM) == "" {
@@ -320,7 +326,7 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port s
 	_ = conn.SetDeadline(time.Now().Add(t.opts.Timeout))
 	if err := conn.HandshakeContext(dctx); err != nil {
 		// Say who signed it, which is what the person needs to fix it.
-		issuer := serverIssuer(ctx, t.opts, host, port)
+		issuer := serverIssuer(ctx, t.opts, host, port, name)
 		var unknown x509.UnknownAuthorityError
 		var invalid x509.CertificateInvalidError
 		var hostErr x509.HostnameError
@@ -332,7 +338,7 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port s
 				t.add("TLS", "err", fmt.Sprintf("The server’s certificate is signed by %s, not by the CA you pasted.", issuer))
 			}
 		case errors.As(err, &hostErr):
-			t.add("TLS", "err", fmt.Sprintf("The server’s certificate is not for %s: %s.", host, hostErr.Error()))
+			t.add("TLS", "err", fmt.Sprintf("The server’s certificate is not for %s: %s.", name, hostErr.Error()))
 		case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
 			t.add("TLS", "err", "The server’s certificate has expired.")
 		default:
@@ -348,11 +354,11 @@ func (t *tester) tlsStep(ctx context.Context, s Spec, c Credential, host, port s
 			note = fmt.Sprintf(" Its certificate expires on %s.", state.PeerCertificates[0].NotAfter.UTC().Format("2006-01-02"))
 		}
 	}
-	t.add("TLS", "ok", fmt.Sprintf("The certificate for %s checks out against %s.%s", host, against, note))
+	t.add("TLS", "ok", fmt.Sprintf("The certificate for %s checks out against %s.%s", name, against, note))
 }
 
 // serverIssuer names who signed the server's certificate, without verifying it.
-func serverIssuer(ctx context.Context, opts TestOptions, host, port string) string {
+func serverIssuer(ctx context.Context, opts TestOptions, host, port, name string) string {
 	dctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	raw, err := opts.Dialer(dctx, "tcp", net.JoinHostPort(host, port))
@@ -360,17 +366,17 @@ func serverIssuer(ctx context.Context, opts TestOptions, host, port string) stri
 		return "an unknown CA"
 	}
 	defer raw.Close()
-	conn := tls.Client(raw, &tls.Config{ServerName: host, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) //nolint:gosec // only to read the issuer's name
+	conn := tls.Client(raw, &tls.Config{ServerName: name, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) //nolint:gosec // only to read the issuer's name
 	_ = conn.SetDeadline(time.Now().Add(opts.Timeout))
 	if err := conn.HandshakeContext(dctx); err != nil || len(conn.ConnectionState().PeerCertificates) == 0 {
 		return "an unknown CA"
 	}
 	cert := conn.ConnectionState().PeerCertificates[0]
-	name := cert.Issuer.CommonName
-	if name == "" {
-		name = cert.Issuer.String()
+	issuer := cert.Issuer.CommonName
+	if issuer == "" {
+		issuer = cert.Issuer.String()
 	}
-	return "its own CA (" + name + ")"
+	return "its own CA (" + issuer + ")"
 }
 
 // whoAmI asks the API server who the credentials are (SelfSubjectReview).

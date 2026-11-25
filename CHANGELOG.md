@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **The connection test failed for a kubeconfig that sets `tls-server-name`** (clusters review, finding 10). Its TLS step checked the certificate against the address's host, while the connection checks it against the kubeconfig's `tls-server-name`, so a working connection tested as "Can't connect: the tls step failed". The step now checks the name the connection checks.
+
 - **Edits of the local cluster were never held to the version they read** (clusters review, finding 8; DB-92). Its summary carried no version, so of two tabs editing it the second saved over the first rather than being told *This connection was changed by someone else*. It now carries its row's version, as every other connection does.
 
 - **A connection whose first read failed with an unexpected error was missing until a restart** (clusters review, finding 7). A statement timeout, a lock not granted, too many connections or a Secret's 403 between the list and the get marked the connection as read, so it was missing from the leader's list, from Watson and from the API (`Update` and `TestSaved` answered not found). Every such error is now read again at the next sync; only a record this console cannot read is said once and left until it changes.
