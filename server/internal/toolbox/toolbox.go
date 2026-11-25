@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -429,12 +430,22 @@ func (c Config) On(tool string) bool {
 		return c.DebugContainer.Enabled && len(c.DebugContainer.Images) > 0
 	case ToolDebugPod:
 		return c.DebugPod.Enabled && len(c.DebugPod.Profiles) > 0
-	case ToolNodeShell, ToolNodeCommand:
-		return c.NodeShell.Enabled
+	// A node tool is on only where a request for it can pass: a node shell
+	// needs a profile, and a node command and a pairing run with the
+	// general one (sessions' Request.Validate).
+	case ToolNodeShell:
+		return c.NodeShell.Enabled && len(c.NodeShell.Profiles) > 0
+	case ToolNodeCommand:
+		return c.NodeShell.Enabled && slices.Contains(c.NodeShell.Profiles, ProfileGeneral)
 	case ToolSSH:
 		return c.SSH.Enabled
-	case ToolSSHPair, ToolSSHUnpair:
+	case ToolSSHPair:
 		// Pairing runs a command on the node through a node pod.
+		return c.SSH.Enabled && c.NodeShell.Enabled && slices.Contains(c.NodeShell.Profiles, ProfileGeneral)
+	case ToolSSHUnpair:
+		// Unpairing too, with the console's own script; it is not held to
+		// the profiles, so a node paired before they changed can still be
+		// unpaired.
 		return c.SSH.Enabled && c.NodeShell.Enabled
 	}
 	return false

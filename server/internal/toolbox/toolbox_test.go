@@ -129,3 +129,23 @@ func TestParseRefusesKeysItDoesNotKnow(t *testing.T) {
 		}
 	}
 }
+
+// A node tool is on only where a request for it could pass: a node shell
+// needs a profile, and a node command and SSH pairing the general profile
+// they run with (the toolbox review, finding 6).
+func TestOnNeedsTheProfilesARequestNeeds(t *testing.T) {
+	c := Default()
+	c.SSH.Enabled = true
+	c.NodeShell.Profiles = []string{ProfileNetAdmin}
+	if !c.On(ToolNodeShell) || c.On(ToolNodeCommand) || c.On(ToolSSHPair) {
+		t.Errorf("without general: node shell %v, node command %v, pair %v", c.On(ToolNodeShell), c.On(ToolNodeCommand), c.On(ToolSSHPair))
+	}
+	c.NodeShell.Profiles = []string{}
+	if c.On(ToolNodeShell) || c.On(ToolNodeCommand) || c.On(ToolSSHPair) {
+		t.Error("with no profile a node tool is on")
+	}
+	c.NodeShell.Profiles = []string{ProfileGeneral}
+	if !c.On(ToolNodeShell) || !c.On(ToolNodeCommand) || !c.On(ToolSSHPair) {
+		t.Error("general alone")
+	}
+}

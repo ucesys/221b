@@ -204,7 +204,10 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 	}
 	if r.Tool == toolbox.ToolSSHPair || r.Tool == toolbox.ToolSSHUnpair {
 		r.Profile = toolbox.ProfileGeneral
-		if !contains(c.NodeShell.Profiles, r.Profile) {
+		// Unpairing runs the console's own script, which takes the trust
+		// away: it is not held to the profiles, or a node paired before
+		// they changed could never be unpaired.
+		if r.Tool == toolbox.ToolSSHPair && !contains(c.NodeShell.Profiles, r.Profile) {
 			errs = append(errs, fmt.Errorf("pairing runs with the %s node profile, and the node shell profiles here are %s", r.Profile, strings.Join(c.NodeShell.Profiles, ", ")))
 		}
 	}

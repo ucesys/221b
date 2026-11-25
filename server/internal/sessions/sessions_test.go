@@ -1058,15 +1058,22 @@ func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
 }
 
 // Pairing runs a general node pod, so a chart that leaves that profile
-// out refuses it as it refuses a node command.
+// out refuses it as it refuses a node command; unpairing, the console's
+// own script that takes the trust away, is not held to the profiles, so a
+// node paired before they changed can still be unpaired (the toolbox
+// review, finding 6).
 func TestPairingRespectsTheNodeProfiles(t *testing.T) {
 	c := toolbox.Default()
 	c.SSH.Enabled = true
 	c.NodeShell.Profiles = []string{toolbox.ProfileNetAdmin}
-	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolSSHUnpair, Node: "a"}} {
-		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "node shell profiles here") {
+	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolNodeCommand, Node: "a", Command: "id"}} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "turned off") {
 			t.Errorf("%s: %v", r.Tool, err)
 		}
+	}
+	r := Request{Tool: toolbox.ToolSSHUnpair, Node: "a"}
+	if err := r.Validate(c, false); err != nil || r.Profile != toolbox.ProfileGeneral {
+		t.Errorf("unpair: %v %q", err, r.Profile)
 	}
 }
 
