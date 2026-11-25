@@ -57,9 +57,13 @@ var (
 	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>@]+)@`)
 	reDigit       = regexp.MustCompile(`[0-9]`)
 	reLetter      = regexp.MustCompile(`[A-Za-z]`)
-	// What stands in for a password: $VAR, ${VAR}, <password>, {{ .x }},
-	// [REDACTED], %s, *** or xxx, or a word for what goes there.
-	rePlaceholder = regexp.MustCompile(`(?i)^(?:\$.*|<.*>|\{.*\}|\[.*\]|%.*|\*+|x+|\.+|(?:your|my|the)?[_-]?(?:pass(?:word|wd)?|pwd|secret|token|changeme|example|redacted)[_-]?[a-z0-9]{0,6})$`)
+	// What stands in for a password: $VAR, ${VAR}, $(command), <password>,
+	// {{ .x }}, [REDACTED], a format verb (%s, %(password)s) or %VAR%, ***
+	// or xxx, or a word for what goes there (password, your_password,
+	// password_here, changeme). A word with more after it (Passw0rd,
+	// password2024) is a password, and so is a value that only starts with
+	// $ or % (a percent-encoded character).
+	rePlaceholder = regexp.MustCompile(`(?i)^(?:\$\{[^}]*\}|\$\(.*|\$[A-Za-z_][A-Za-z0-9_]*|<.*>|\{.*\}|\[.*\]|%(?:\[[0-9]+\])?[-+# 0]*[0-9]*(?:\.[0-9]+)?[a-z]|%\([A-Za-z_][A-Za-z0-9_]*\)[a-z]|%[A-Za-z_][A-Za-z0-9_]*%|\*+|x+|\.+|(?:your|my|the)?[_-]?(?:pass(?:word|wd)?|pwd|secret|token|changeme|example|redacted)(?:[_-]?here)?)$`)
 )
 
 // Credential says whether text carries a real credential's shape: a

@@ -182,6 +182,22 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#1 basic authentication, prose": {"Basic authentication sends the user and password in a header.", false},
 		"#1 basic of a placeholder":      {"Authorization: Basic dXNlcjokUEFTUw==", false},
 		"#1 basic of the word password":  {"Authorization: Basic dXNlcjpwYXNzd29yZA==", false},
+		// scrub#2: a real password that starts like a placeholder word, or
+		// with a percent-encoded character.
+		"#2 Passw0rd":                 {"Its address is postgres://app:Passw0rd@db:5432/app.", true},
+		"#2 Secret123":                {"mysql://root:Secret123@db/shop", true},
+		"#2 password2024":             {"postgres://app:password2024@db/app", true},
+		"#2 changeme1":                {"postgres://app:changeme1@db/app", true},
+		"#2 a percent-encoded start":  {"postgres://app:%23Planted-77Qz@db/app", true},
+		"#2 a dollar without a name":  {"postgres://app:$%21x9@db/app", true},
+		"#2 a format verb":            {"postgres://app:%s@db/app", false},
+		"#2 a Python format":          {"postgres://app:%(password)s@db/app", false},
+		"#2 a Windows variable":       {"postgres://app:%DB_PASS%@db/app", false},
+		"#2 a shell variable":         {"postgres://app:$PGPASSWORD@db/app", false},
+		"#2 a variable with default":  {"postgres://app:${PGPASSWORD:-none}@db/app", false},
+		"#2 a placeholder word":       {"postgres://app:your_password@db/app", false},
+		"#2 a placeholder word, here": {"postgres://app:password_here@db/app", false},
+		"#2 changeme":                 {"postgres://app:changeme@db/app", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
