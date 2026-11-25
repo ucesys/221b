@@ -41,3 +41,16 @@ func TestScaleTakesOnlyACountKubectlTakes(t *testing.T) {
 		t.Errorf("a huge count: %q", got)
 	}
 }
+
+// rollout undo's --to-revision is read as kubectl reads it, base 0, on the
+// card too (review of November 24, 2026, cut by the cap: impact.go:807).
+func TestToRevisionIsReadAsKubectlReadsIt(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	got := card(t, svc, cl, alice(), "kubectl rollout undo statefulset/cache -n web --to-revision=010")
+	if text := strings.Join(got.Plan.Impact, " "); !strings.Contains(text, "revision 8") {
+		t.Fatalf("impact %v", got.Plan.Impact)
+	}
+	if _, err := Parse("kubectl rollout undo deploy/api -n web --to-revision=two"); err == nil {
+		t.Fatal("a revision that is not a number")
+	}
+}

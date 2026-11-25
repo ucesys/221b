@@ -850,7 +850,24 @@ func replicasOf(c *Command) (int64, error) {
 	return n, nil
 }
 
+// toRevision reads rollout undo's --to-revision as kubectl does (pflag's
+// int64: base 0, so 010 is 8); 0, or none, is the previous revision.
+func toRevision(c *Command) (int64, error) {
+	if !c.Has("to-revision") {
+		return 0, nil
+	}
+	v := c.Flag("to-revision")
+	n, err := strconv.ParseInt(v, 0, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("--to-revision takes a revision number, not %q.", v)
+	}
+	return n, nil
+}
+
 func checkRollout(c *Command) *Refusal {
+	if _, err := toRevision(c); err != nil {
+		return refuse("usage", "%v", err)
+	}
 	types, names := targets(c.Positionals)
 	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Usage: %s", c.spec.usage)

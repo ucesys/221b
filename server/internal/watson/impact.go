@@ -810,10 +810,11 @@ func images(spec corev1.PodSpec) string {
 }
 
 func undoImpact(ctx context.Context, cs *clients, c *Command, t target) []string {
+	want64, _ := toRevision(c)
 	if t.kind != "Deployment" {
 		rev := "the previous revision"
-		if v := c.Flag("to-revision"); v != "" && v != "0" {
-			rev = "revision " + v
+		if want64 > 0 {
+			rev = fmt.Sprintf("revision %d", want64)
 		}
 		return []string{fmt.Sprintf("Rolls %s back to %s; its pods are replaced as in a rollout.", t.title(), rev)}
 	}
@@ -844,7 +845,7 @@ func undoImpact(ctx context.Context, cs *clients, c *Command, t target) []string
 	}
 	cur := revs[0]
 	var to *rev
-	want, _ := strconv.Atoi(c.Flag("to-revision"))
+	want := int(want64)
 	for i := range revs {
 		if (want > 0 && revs[i].n == want) || (want == 0 && i == 1) {
 			to = &revs[i]
