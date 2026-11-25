@@ -8,6 +8,8 @@ Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-4
 
 ### Upgrading
 
+A `toolbox.history.keep` of 0 or below, or over 100,000, now stops the console's start.
+
 A `toolbox.ssh.port` outside 1 to 65535, or not a number, now stops `helm install` and `helm upgrade`; a nulled one is 22.
 
 Debug containers attached by an older console keep running (`sleep infinity`) until their pod is replaced: a Shell into one (`221b-<image>-<4 hex>`) is now refused. Replace the pod (a rollout restart) to stop them.
@@ -75,6 +77,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 
 ### Fixed
 
+- **The toolbox off turns SSH off, and the sessions' history is bounded** (TB-45): a hand-written toolbox file with `enabled: false` and `ssh.enabled: true` left Automation, the hosts and the host cards using SSH, which read `toolbox.ssh.enabled` itself (the chart cannot render this); and `toolbox.history.keep` of 0 or below kept every ended session and listed them all. The toolbox off now turns SSH off, the start refuses a `history.keep` outside 1 to 100,000, and the history is listed up to it.
 - **Mycroft's inventory cards that add hosts are no longer refused** (KN-19): the drift check sent each `host.add` action with a `cluster` argument, which the card's action does not take and its strict decoding refuses, so every card that listed a host failed whole. The host goes to the card's own cluster, as it always did; the argument is gone.
 - **A malformed `cliMinVersion` no longer turns the CLI minimum off** (TB-23): `toolbox.portForward.cliMinVersion: '>=0.11.1'` (or `0.11.*`, `V0.11.1`) passed the start, and the tunnel took a minimum it could not read as none, so a 0.10.0 CLI forwarded with no upgrade message while Administration › Toolbox read *>=0.11.1 or newer*. The start now refuses a minimum that is not a version.
 - **A very long toolbox duration is refused, not wrapped** (TB-48): `retention: 213504d` (meant as forever) became 25 minutes, so transcripts were pruned after about 25 minutes, and a number of seconds past 2^63 nanoseconds was converted as the platform does (the most negative duration on amd64, the largest on arm64), so `maxDuration: 10000000000` stopped an amd64 console and passed on arm64, where every node pod and debug Job was then refused. A duration over 106751 days is now refused at the start, and a bad duration names its key (`toolbox.debugPod.ttlAfterFinished: "soon" is not a duration`); a null one keeps its default.

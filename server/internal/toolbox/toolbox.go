@@ -287,6 +287,11 @@ func Parse(b []byte) (Config, error) {
 			}
 		}
 	}
+	// The toolbox off turns SSH off too: Automation, the hosts and the
+	// host cards read toolbox.ssh.enabled, not On.
+	if !c.Enabled {
+		c.SSH.Enabled = false
+	}
 	if c.Images == nil {
 		if given(raw, "images") {
 			c.Images = map[string]Image{}
@@ -380,6 +385,11 @@ func (c Config) Check() error {
 	// Administration › Toolbox shows it enforced.
 	if v := c.PortForward.CLIMinVersion; v != "" && !tunnel.ValidVersion(v) {
 		errs = append(errs, fmt.Sprintf("toolbox.portForward.cliMinVersion is a version such as 0.11.1, not %q", v))
+	}
+	// Kept for Administration › Sessions, newest first: 0 and below
+	// meant every record, listed whole.
+	if c.History.Keep < 1 || c.History.Keep > 100000 {
+		errs = append(errs, fmt.Sprintf("toolbox.history.keep is 1 to 100000 ended sessions, not %d", c.History.Keep))
 	}
 	if c.MaxDuration.D() > MaxSession {
 		errs = append(errs, "toolbox.maxDuration must be at most 365d")

@@ -269,3 +269,23 @@ func TestParseRefusesACLIMinimumThatDoesNotParse(t *testing.T) {
 		}
 	}
 }
+
+// With the toolbox off, SSH is off too: Automation, the hosts and the host
+// cards read toolbox.ssh.enabled itself, not On (the toolbox review, cut
+// by its cap; the chart cannot render this, a hand-written file can).
+func TestTheToolboxOffTurnsSSHOff(t *testing.T) {
+	c, err := Parse([]byte(`{"enabled":false,"ssh":{"enabled":true}}`))
+	if err != nil || c.SSH.Enabled {
+		t.Fatalf("%v ssh %v", err, c.SSH.Enabled)
+	}
+}
+
+// Ended sessions kept for Administration › Sessions: 1 at least, so the
+// history is bounded (the toolbox review's sweep).
+func TestParseRefusesAnUnboundedHistory(t *testing.T) {
+	for _, in := range []string{`{"history":{"keep":0}}`, `{"history":{"keep":-1}}`, `{"history":{"keep":100001}}`} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), "toolbox.history.keep") {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+}
