@@ -104,14 +104,16 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`printf '%s\n' '# Written by 221B: SSH sessions from the console (ADR-72). Unpair from the console to remove.' 'TrustedUserCAKeys ` + nodeDir + `/ca.pub' 'AuthorizedPrincipalsFile ` + nodeDir + `/principals-%u' > ` + nodeConf,
 		`chmod 644 ` + nodeConf,
 		// At the top: sshd takes a setting's first value, and an Include
-		// at the end could land inside a Match block. A system with no
-		// /etc/ssh/sshd_config keeps a vendor file that reads the
-		// drop-ins by itself, and an /etc file would replace it. The new
-		// file is written beside the old one, checked whole, and renamed
-		// over it: sshd_config is never left part-written.
-		`if [ -f /etc/ssh/sshd_config ] && ! grep -qs '^Include /etc/ssh/sshd_config.d/' /etc/ssh/sshd_config; then`,
+		// at the end could land inside a Match block. It names the
+		// console's file alone: one of every drop-in would turn on old
+		// ones that sshd_config had left out, ahead of its own settings.
+		// A system with no /etc/ssh/sshd_config keeps a vendor file that
+		// reads the drop-ins by itself, and an /etc file would replace it.
+		// The new file is written beside the old one, checked whole, and
+		// renamed over it: sshd_config is never left part-written.
+		`if [ -f /etc/ssh/sshd_config ] && ! grep -qsiE '` + includesOurs + `' /etc/ssh/sshd_config; then`,
 		`  cp -p "$b/sshd_config" "$b/new"`,
-		`  { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$b/sshd_config"; } > "$b/new"`,
+		`  { printf '%s\n' '` + includeLine + `'; cat "$b/sshd_config"; } > "$b/new"`,
 		`  if [ "$(tail -n +2 "$b/new" | wc -c)" -ne "$(wc -c < "$b/sshd_config")" ]; then echo "221B: the new sshd_config could not be written whole (is /etc full?)"; exit 5; fi`,
 		`  mv -f "$b/new" /etc/ssh/sshd_config`,
 		`fi`,
@@ -127,7 +129,8 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 
 // UnpairScript takes this console's lines off the node and reloads sshd,
 // when the node has one: a node whose sshd has gone can still be unpaired.
-// The drop-in and the directory go with the last console's key. caPublicKey
+// The drop-in, the directory and the Include of the drop-in go with the
+// last console's key. caPublicKey
 // is empty when the console has no key any more: its lines then go by name.
 func UnpairScript(caPublicKey, console string) string {
 	return strings.Join([]string{
@@ -135,8 +138,9 @@ func UnpairScript(caPublicKey, console string) string {
 		consoleVars(caPublicKey, console),
 		lockNode,
 		dropConsole,
+		dropInclude,
 		`drop_console`,
-		`if grep -qs '^[^#[:space:]]' "$d/ca.pub"; then echo "221B: another console's key stays on this node, with the drop-in"; else rm -f ` + nodeConf + `; rm -rf "$d"; fi`,
+		`if grep -qs '^[^#[:space:]]' "$d/ca.pub"; then echo "221B: another console's key stays on this node, with the drop-in"; else rm -f ` + nodeConf + `; rm -rf "$d"; drop_include; fi`,
 		sshdBin,
 		runDir,
 		reloadSSHD,
@@ -176,7 +180,26 @@ func consoleVars(caPublicKey, console string) string {
 	}, "\n")
 }
 
+// includeLine is the Include a pairing adds to sshd_config: of the
+// console's drop-in alone. includesOurs matches a line that already reads
+// it: this one, or one of every drop-in that a system had before.
 const (
+	includeLine  = "Include " + nodeConf
+	includesOurs = `^[[:space:]]*Include[[:space:]]+(/etc/ssh/)?sshd_config\.d/(\*|221b)\.conf([[:space:]]|$)`
+)
+
+const (
+	// dropInclude takes the Include a pairing added out of sshd_config,
+	// the file swapped whole; an Include of every drop-in, which may be
+	// the system's own, stays.
+	dropInclude = `drop_include() {
+  f=/etc/ssh/sshd_config
+  if [ -f "$f" ] && grep -qxF '` + includeLine + `' "$f"; then
+    cp -p "$f" "$f.221b-new"
+    grep -vxF '` + includeLine + `' "$f" > "$f.221b-new" || [ $? -eq 1 ]
+    mv -f "$f.221b-new" "$f"
+  fi
+}`
 	sshdBin = `sshd_bin=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)`
 	// runDir is what sshd -t asks for: under socket activation nothing
 	// has made it before the first connection since boot.

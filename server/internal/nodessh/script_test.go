@@ -562,7 +562,7 @@ func TestAPairingThatCannotKeepACopyChangesNothing(t *testing.T) {
 		t.Fatalf("the copies stayed: %v", left)
 	}
 	// Paired as it should be, sshd_config is the Include and all it held.
-	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22)); !ok || h.read("etc/ssh/sshd_config") != "Include "+h.root+"/etc/ssh/sshd_config.d/*.conf\n"+before {
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22)); !ok || h.read("etc/ssh/sshd_config") != "Include "+h.root+"/etc/ssh/sshd_config.d/221b.conf\n"+before {
 		t.Fatalf("the pairing:\n%s\nsshd_config:\n%s", out, h.read("etc/ssh/sshd_config"))
 	}
 }
@@ -702,5 +702,43 @@ func TestAPairingRefusesALoginUserSshdKeepsOut(t *testing.T) {
 				t.Fatalf("the pairing:\n%s", out)
 			}
 		})
+	}
+}
+
+// The Include a pairing adds reads the console's drop-in alone, and the
+// last unpairing takes it away (finding 7 of the review of November 24,
+// 2026: an Include of every drop-in turned on old ones that loosened sshd,
+// ahead of sshd_config's own settings, and stayed after unpairing). An
+// Include of every drop-in the system had already is left as it is.
+func TestTheIncludeReadsTheConsolesDropInAlone(t *testing.T) {
+	h := newHost(t)
+	before := h.read("etc/ssh/sshd_config")
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	want := "Include " + h.root + "/etc/ssh/sshd_config.d/221b.conf\n" + before
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("sshd_config:\n%s", got)
+	}
+	// Paired again, by this console or another: one Include.
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	b := newConsole(t, "ns.b")
+	h.mustRun(b.pair(user(t), 22))
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("paired again, sshd_config:\n%s", got)
+	}
+	h.mustRun(b.unpair())
+	if got := h.read("etc/ssh/sshd_config"); got != want {
+		t.Fatalf("with another console's key left, sshd_config:\n%s", got)
+	}
+	h.mustRun(UnpairScript(testCA, testConsole))
+	if got := h.read("etc/ssh/sshd_config"); got != before {
+		t.Fatalf("unpaired, sshd_config:\n%s", got)
+	}
+	// The system's own Include of every drop-in stays, and none is added.
+	own := "Include " + h.root + "/etc/ssh/sshd_config.d/*.conf\n" + before
+	h.write("etc/ssh/sshd_config", own)
+	h.mustRun(PairScript(testCA, testConsole, user(t), 22))
+	h.mustRun(UnpairScript(testCA, testConsole))
+	if got := h.read("etc/ssh/sshd_config"); got != own {
+		t.Fatalf("the system's Include, sshd_config:\n%s", got)
 	}
 }
