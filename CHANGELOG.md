@@ -64,6 +64,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **An SSH credential keeps every host key pasted** (credentials-cut-4): `ssh-keyscan HOST` prints a line for each key, and only the first was kept, so a host that no longer had that key's type could not be tested. Every line is kept and any of the keys is accepted; an `@revoked` or `@cert-authority` line, which was read as a key to trust, is refused.
 - **A Test of `git@host:org/repo.git`, or of a bucket with a dot in its name, asks the address under the endpoint** (credentials-cut-5); both were read as another host and refused as outside the endpoint.
 - **A credential refused because the credentials' Secret is full says what frees room** (credentials-cut-7): it said to shorten private CAs and descriptions, which have been in the database since 0.13.
+- **A token sent as a query parameter leaves the rest of the query as it is** (credentials-unver-1). The whole query was sorted and escaped again (`flag` became `flag=`, `%7E` became `~`), which can break an API that reads its parameters in order or a signed address.
 
 ## 0.13.2 (2026-11-25)
 

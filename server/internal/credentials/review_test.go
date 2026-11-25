@@ -939,3 +939,22 @@ func TestATypedTestAddressStaysUnderTheEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// credentials-unver-1: a token sent as a query parameter is added to the
+// request's query as it is: the other parameters keep their order and
+// their escaping, and one of the parameter's name is replaced.
+func TestAQueryTokenLeavesTheRestOfTheQueryAsItIs(t *testing.T) {
+	s, _ := newService(t, nil)
+	c := token(t, s, "q", "https://api.example.com", SendAs{Method: SendQuery, Param: "access_token"}, "fake+tok")
+	u, err := s.Resolve(ctx, c.ID, UseHTTP, "https://api.example.com/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/x?z=1&a=%7E&cql=a+b&flag&access_token=old", nil)
+	if err := u.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+	if want := "z=1&a=%7E&cql=a+b&flag&access_token=fake%2Btok"; req.URL.RawQuery != want {
+		t.Fatalf("the query: %s, not %s", req.URL.RawQuery, want)
+	}
+}

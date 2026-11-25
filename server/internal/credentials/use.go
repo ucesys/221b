@@ -130,13 +130,30 @@ func (u *Use) Apply(req *http.Request) error {
 	case SendHeader:
 		req.Header.Set(u.SendAs.Header, u.SendAs.Prefix+u.Token)
 	case SendQuery:
-		q := req.URL.Query()
-		q.Set(u.SendAs.Param, u.Token)
-		req.URL.RawQuery = q.Encode()
+		req.URL.RawQuery = withParam(req.URL.RawQuery, u.SendAs.Param, u.Token)
 	case SendCookie:
 		req.AddCookie(&http.Cookie{Name: u.SendAs.Cookie, Value: u.Token})
 	}
 	return nil
+}
+
+// withParam is a raw query with name=value at its end, and no other
+// parameter of that name: the others stay as they are, in their order
+// and their escaping, which Values.Encode would sort and escape again
+// (credentials-unver-1).
+func withParam(raw, name, value string) string {
+	var out []string
+	for _, part := range strings.Split(raw, "&") {
+		if part == "" {
+			continue
+		}
+		k, _, _ := strings.Cut(part, "=")
+		if key, err := url.QueryUnescape(k); err == nil && key == name {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(append(out, url.QueryEscape(name)+"="+url.QueryEscape(value)), "&")
 }
 
 // Signer is Apply for a request that may leave the endpoint (a crawl's
