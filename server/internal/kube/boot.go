@@ -145,6 +145,12 @@ func (c *Cluster) readBoots(ctx context.Context) {
 			defer wg.Done()
 			for n := range work {
 				at, err := c.readBoot(ctx, n.Name)
+				// A read stopped with the pass (the Lease lost, the console
+				// stopping) says nothing of the node: it is not a failure to
+				// wait bootRetry for (kube-cut-2).
+				if err != nil && ctx.Err() != nil {
+					continue
+				}
 				mu.Lock()
 				if apierrors.IsForbidden(err) {
 					forbidden = err
