@@ -21,6 +21,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 ### Security
 
 - **A password under a secret-named parent key no longer reaches the Claude API** (P5-03, scrub#10): in `auth:\n  rootPassword: …` (a chart's values in a ConfigMap) and `{"auth": {"password": "…"}}` (a JSON log line) the scrubber took the child key, or the `{`, for the parent's value and kept the password. A pair's value now stays on its key's line and is no object, so the inner pair is scrubbed on its own.
+- **`curl -u user:password` as separate container arguments no longer reaches the Claude API** (P5-03, scrub#11): a CronJob's `args: ["-u", "admin:…", …]` read with the yaml tool kept the password, and so did `--from-literal` with a key that is not secret-named. The scrubber now takes the password after `-u`, `--user` and `--proxy-user`, and `--from-literal`'s value, apart or joined.
 
 ## 0.13.2 (2026-11-25)
 

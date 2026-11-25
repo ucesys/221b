@@ -311,3 +311,28 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		}
 	}
 }
+
+// A list of arguments gives a password away after -u, --user and
+// --from-literal too, apart from the flag or joined to it (scrub#11).
+func TestScrubJSONTakesAPasswordAfterItsFlag(t *testing.T) {
+	for name, c := range map[string]struct{ in, gone, kept string }{
+		"-u apart":                  {`{"args":["-u","admin:F4keSecret","https://hooks.example.com/backup"]}`, "F4keSecret", `"admin:[REDACTED]","https://hooks.example.com/backup"`},
+		"curl --user apart":         {`{"command":["curl","--user","admin:F4keSecret","https://x"]}`, "F4keSecret", `"admin:[REDACTED]"`},
+		"--user joined":             {`{"args":["--user=admin:F4keSecret"]}`, "F4keSecret", `"--user=admin:[REDACTED]"`},
+		"-u joined":                 {`{"args":["-uadmin:F4keSecret"]}`, "F4keSecret", `"-uadmin:[REDACTED]"`},
+		"--proxy-user apart":        {`{"args":["--proxy-user","admin:F4keSecret"]}`, "F4keSecret", `"admin:[REDACTED]"`},
+		"--from-literal apart":      {`{"args":["--from-literal","db=F4keSecret"]}`, "F4keSecret", `"db=[REDACTED]"`},
+		"--from-literal joined":     {`{"args":["--from-literal=db=F4keSecret"]}`, "F4keSecret", `--from-literal=db=`},
+		"-u with no password":       {`{"args":["-u","1000","-uroot"]}`, "[REDACTED]", `"-u","1000","-uroot"`},
+		"--from-literal, no value":  {`{"args":["--from-literal","x"]}`, "[REDACTED]", `"x"`},
+		"a user name and a uid:gid": {`{"args":["--user","1000"]}`, "[REDACTED]", `"--user","1000"`},
+	} {
+		if out := string(JSON([]byte(c.in))); strings.Contains(out, c.gone) || !strings.Contains(out, c.kept) {
+			t.Errorf("%s: %s became %s", name, c.in, out)
+		}
+	}
+	in := "spec:\n  containers:\n  - command: [\"curl\", \"-u\", \"admin:F4keSecret\", \"https://hooks.example.com/backup\"]\n"
+	if out := string(YAML([]byte(in))); strings.Contains(out, "F4keSecret") || !strings.Contains(out, "admin:") {
+		t.Errorf("YAML: %s", out)
+	}
+}

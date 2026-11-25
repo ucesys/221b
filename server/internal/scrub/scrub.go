@@ -425,6 +425,13 @@ var secretFlag = regexp.MustCompile(`^-{1,2}` + secretKey + `$`)
 // so no client is asked for here.
 var joinedPassword = regexp.MustCompile(`^-p[^-=\s]`)
 
+// userFlag is a flag whose next argument is user:password (curl, wget),
+// and joinedUser one with user:password joined to it.
+var (
+	userFlag   = regexp.MustCompile(`^(?:-u|--user|--proxy-user|-U)$`)
+	joinedUser = regexp.MustCompile(`^((?:-u|--user=|--proxy-user=|-U)[^:]*:).+`)
+)
+
 // notSecretFields are fields of the console's own rows whose names look
 // secret but whose values are not: counts, flags and references.
 var notSecretFields = map[string]bool{"secretsRead": true, "tokens": true, "secretRefs": true, "secrets": true, "secretName": true, "secretKeyRef": true, "secret": true, "authMethod": true}
@@ -503,7 +510,10 @@ func scrubString(s string) string {
 	return Text(s)
 }
 
-// scrubArgs redacts what a list of command-line arguments gives away.
+// scrubArgs redacts what a list of command-line arguments gives away: the
+// argument after a flag that names a secret, a joined -p, the password of
+// user:password after -u or --user, and the value of --from-literal's
+// key=value, apart from the flag or joined to it.
 func scrubArgs(list []any) {
 	for i, e := range list {
 		s, ok := e.(string)
@@ -513,9 +523,26 @@ func scrubArgs(list []any) {
 		if joinedPassword.MatchString(s) {
 			list[i] = Redacted
 		}
-		if secretFlag.MatchString(s) && i+1 < len(list) {
-			if _, ok := list[i+1].(string); ok {
-				list[i+1] = Redacted
+		if m := joinedUser.FindStringSubmatch(s); m != nil {
+			list[i] = m[1] + Redacted
+		}
+		next, ok := "", i+1 < len(list)
+		if ok {
+			next, ok = list[i+1].(string)
+		}
+		if !ok {
+			continue
+		}
+		switch {
+		case secretFlag.MatchString(s):
+			list[i+1] = Redacted
+		case userFlag.MatchString(s):
+			if u, _, ok := strings.Cut(next, ":"); ok {
+				list[i+1] = u + ":" + Redacted
+			}
+		case s == "--from-literal":
+			if k, _, ok := strings.Cut(next, "="); ok {
+				list[i+1] = k + "=" + Redacted
 			}
 		}
 	}
