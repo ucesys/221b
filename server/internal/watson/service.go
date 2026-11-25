@@ -1349,12 +1349,17 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 	if c.Tool != "kubectl" {
 		return 1, fmt.Errorf("a script runs kubectl lines only")
 	}
-	if c.Change {
+	if c.Change && dryRun {
+		// The dry run is added to the parsed command, not to the text: a
+		// comment at the end of the line would swallow it there, and the
+		// line would make the real change (asked November 24, 2026).
+		c = asDryRun(c)
+		if !c.DryRun() {
+			return 1, fmt.Errorf("refused: Watson could not make %s a dry run, so it ran nothing", c.Name())
+		}
+	}
+	if c.Change && !c.DryRun() {
 		switch {
-		case dryRun && !c.DryRun():
-			if c, err = Parse(line + " --dry-run=server"); err != nil {
-				return 1, err
-			}
 		case cl.ReadOnly:
 			return 1, fmt.Errorf("this connection is read-only")
 		case cl.Locked != "":
@@ -1366,6 +1371,24 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 		return 1, fmt.Errorf("cannot reach the cluster: %w", err)
 	}
 	return s.opts.Run(ctx, c, Target{Config: cl.Config, Person: p, Cluster: cl.ID, Discovery: d}, out, out), nil
+}
+
+// asDryRun is a change as a server-side dry run: a copy of the parsed
+// command with --dry-run=server after its own arguments, which kubectl
+// takes over an earlier --dry-run. A command that is a dry run already
+// comes back as it is.
+func asDryRun(c *Command) *Command {
+	if c.DryRun() {
+		return c
+	}
+	cp := *c
+	cp.Flags = make(map[string][]string, len(c.Flags)+1)
+	for k, v := range c.Flags {
+		cp.Flags[k] = v
+	}
+	cp.Flags["dry-run"] = append(append([]string(nil), c.Flags["dry-run"]...), "server")
+	cp.Args = append(append([]string(nil), c.Args...), "--dry-run=server")
+	return &cp
 }
 
 // execute runs one command as the person who approved it.
