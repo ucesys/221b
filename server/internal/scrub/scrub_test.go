@@ -87,7 +87,9 @@ func TestScrubLeavesOrdinaryTextAlone(t *testing.T) {
 	for _, s := range []string{
 		"tests passed=5 passive: true",
 		"mysql -h db -P3306 shop",
-		"auth:\n  enabled: true\n  database: app\n", // scrub#10
+		"auth:\n  enabled: true\n  database: app\n",        // scrub#10
+		"pod payments-sk-worker-7f9c8d6b5-x2v7q restarted", // scrub-cut-2
+		"image: registry.example.com/risk.sk-scorer-v20240101-abc",
 		"client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNmYWtlRkFLRWZha2UwMTIzCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K", // scrub#14
 		"GET https://example.com/a?b=c 200",
 	} {
@@ -339,6 +341,10 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		// scrub#14: a private key in base64.
 		"#14 client-key-data": {"    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=", true},
 		"#14 a certificate":   {"    client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNmYWtlRkFLRWZha2UwMTIzCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K", false},
+		// scrub-cut-2: sk- inside a name is no API key.
+		"cut-2 a pod name":      {"payments-sk-worker-7f9c8d6b5-x2v7q is crash-looping", false},
+		"cut-2 a key after =":   {"OPENAI_API_KEY=sk-proj-abcdefghij0123456789", true},
+		"cut-2 a key in quotes": {`"sk-ant-api03-abcdefghijklmnop0123"`, true},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

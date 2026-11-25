@@ -40,6 +40,10 @@ const (
 // character (\x22, \u0022, %22, %3D), after which \b would not hold.
 const tokenLead = `(^|[^A-Za-z0-9_]|\\x[0-9A-Fa-f]{2}|\\u00[0-9A-Fa-f]{2}|%[0-9A-Fa-f]{2})`
 
+// skLead is tokenLead for sk-, which is also a word of names: not after
+// - or . either.
+const skLead = `(^|[^A-Za-z0-9_.-]|\\x[0-9A-Fa-f]{2}|\\u00[0-9A-Fa-f]{2}|%[0-9A-Fa-f]{2})`
+
 // The shapes of real credentials, whatever words stand around them. Text
 // removes them with the rest; Credential looks for them alone.
 var (
@@ -66,7 +70,8 @@ var (
 		regexp.MustCompile(tokenLead + `gh[pousr]_[A-Za-z0-9]{30,}\b`),
 		regexp.MustCompile(tokenLead + `github_pat_[A-Za-z0-9_]{40,}\b`),
 		regexp.MustCompile(tokenLead + `xox[abposr]-[A-Za-z0-9-]{10,}`),
-		regexp.MustCompile(tokenLead + `sk-[A-Za-z0-9_-]{20,}`),
+		// Not inside a name: payments-sk-worker-7f9c8d6b5-x2v7q is a pod.
+		regexp.MustCompile(skLead + `sk-[A-Za-z0-9_-]{20,}`),
 		regexp.MustCompile(tokenLead + `AIza[0-9A-Za-z_-]{35}\b`),
 		regexp.MustCompile(tokenLead + `glpat-[A-Za-z0-9_-]{20,}`),
 	}
