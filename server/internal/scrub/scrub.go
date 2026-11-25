@@ -71,8 +71,9 @@ var (
 	// An HTTP Basic value: user:password in base64.
 	reBasic = regexp.MustCompile(`(?i)\bbasic[ \t]+([A-Za-z0-9+/]{4,}={0,2})`)
 	// A password in an address: scheme://user:password@host. The password
-	// runs to the last @, as in Text, so it may hold @ itself.
-	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>]+)@`)
+	// runs to the last @, as in Text, so it may hold @ itself, and the user
+	// may hold @ too.
+	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/]*:([^\s"'<>]+)@`)
 	// What such a match takes for a password when the address has no user
 	// but a port: the port, then its path or query up to an @ further on
 	// (an image digest, PromQL's @, an e-mail address in the query).
@@ -316,8 +317,9 @@ var scrubbers = []struct {
 	// JSON Web Tokens, wherever they are.
 	{reJWT, 0},
 	// Credentials in URLs: scheme://user:password@host. The password runs
-	// to the last @ of the address, so it may hold / or @ itself.
-	{regexp.MustCompile(`(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:)[^\s"'<>]*(@)`), -1},
+	// to the last @ of the address, so it may hold / or @ itself, and the
+	// user may hold @ too (an e-mail address as an SMTP login).
+	{regexp.MustCompile(`(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/]*:)[^\s"'<>]*(@)`), -1},
 	// An environment variable's name and value, as text: JSON or YAML.
 	{regexp.MustCompile(`(?m)(\\*["']?\bname\\*["']?\s*[:=]\s*\\*["']?` + secretKey + `\\*["']?\s*,?\s*(?:-\s+)?\\*["']?value\\*["']?\s*[:=]\s*)` + secretValue), 1},
 	// A command-line flag followed by its value.

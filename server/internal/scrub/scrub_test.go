@@ -55,6 +55,8 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22 200", "AKIAIOSFODNN7EXAMPLE", "q=%22"},
 		"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", "glpat-abcdefghij", " ok"},
 		"#12 a Slack token ending in -":  {"posted with xoxb-1234567890-abcdef- ok", "xoxb-1234567890", " ok"},
+		// scrub#13: a user name that holds @.
+		"#13 an e-mail as the user": {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", "F4keSmtp7x", "@smtp.example.com:465"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
@@ -318,6 +320,10 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", true},
 		"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22", true},
 		"#12 an AWS key inside a word":   {"XAKIAIOSFODNN7EXAMPLE", false},
+		// scrub#13: the same in an answer.
+		"#13 an e-mail as the user":      {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", true},
+		"#13 an e-mail user, a variable": {"smtps://alerts@example.com:$SMTP_PASSWORD@smtp.example.com:465", false},
+		"#13 a user, a port and a path":  {"ssh://git@github.com:22/org/repo@v2", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
