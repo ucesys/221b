@@ -154,6 +154,17 @@ func TestASyncReadsOnlyWhatChanged(t *testing.T) {
 	if len(props) != 1 || props[0].Actions[0].Kind != "host.add" || props[0].Actions[0].Args["name"] != "db-3" || len(props[0].Actions) != 1 {
 		t.Fatalf("inventory: %+v", props)
 	}
+	// A host.add card takes these arguments alone, on the proposal's own
+	// cluster: with a cluster argument, cards' strict decoding refused
+	// every host.add card Mycroft made (out of scope of the toolbox review).
+	for k := range props[0].Actions[0].Args {
+		if !map[string]bool{"name": true, "address": true, "port": true, "loginUser": true, "labels": true}[k] {
+			t.Errorf("host.add has an argument cards refuse: %q", k)
+		}
+	}
+	if props[0].Cluster != DefaultCluster {
+		t.Errorf("the proposal's cluster: %q", props[0].Cluster)
+	}
 	b, _ := json.Marshal(props)
 	for _, never := range []string{"password", "hostKey", "token", "hunter2"} {
 		if strings.Contains(string(b), never) {

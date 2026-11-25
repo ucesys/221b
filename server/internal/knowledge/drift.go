@@ -109,7 +109,9 @@ func (s *Service) proposeInventory(ctx context.Context, changed []readItem, m *M
 				left = append(left, fmt.Sprintf("%s in %s: %s", h.Name, st.Title, why))
 				continue
 			}
-			args := map[string]any{"cluster": DefaultCluster, "name": h.Name}
+			// The host goes to the card's cluster, the proposal's own:
+			// host.add takes no cluster argument, and refuses one.
+			args := map[string]any{"name": h.Name}
 			if h.Address != "" {
 				args["address"] = h.Address
 			}
