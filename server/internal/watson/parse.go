@@ -304,7 +304,12 @@ func Parse(line string) (*Command, error) {
 	if sp == nil {
 		sub := ""
 		if len(args) > 0 {
+			// A word with a value in it (k=v) is not quoted back: it may be
+			// a parameter's, and a refusal is recorded and shown.
 			sub = " " + args[0]
+			if strings.Contains(args[0], "=") {
+				sub = " " + maskOne(args[0])
+			}
 		}
 		return nil, refuse("not supported", "Watson does not run %s%s. It runs %s, and changes with %s.", tool, sub, strings.Join(Supported(false), ", "), strings.Join(Supported(true), ", "))
 	}
@@ -328,7 +333,9 @@ func Parse(line string) (*Command, error) {
 // verb, written apart from it (-n web); the rest are taken to stand alone.
 var valueFlags = map[string]bool{"n": true, "namespace": true, "context": true, "kubeconfig": true, "cluster": true, "user": true, "server": true, "s": true,
 	"token": true, "as": true, "as-group": true, "as-uid": true, "kube-context": true, "kube-apiserver": true, "kube-token": true, "kube-as-user": true,
-	"kube-as-group": true, "kube-ca-file": true, "request-timeout": true, "username": true, "password": true}
+	"kube-as-group": true, "kube-ca-file": true, "request-timeout": true, "username": true, "password": true,
+	// helm's parameters: their value is a key=value, never a verb.
+	"set": true, "set-string": true, "set-json": true, "set-literal": true, "set-file": true, "from-literal": true}
 
 // leadingFlags splits the flags before the verb from the words after them.
 func leadingFlags(words []string) (rest, lead []string) {
