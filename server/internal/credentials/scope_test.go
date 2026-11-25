@@ -147,26 +147,31 @@ func TestAPinFollowsTheCredentialAsItIsNow(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 
-	// A Forget between a change's read and its write stays forgotten.
+	// A Forget made while a change runs takes its turn (the change reads
+	// and writes under the credential's lock, credentials-unver-7), and
+	// stays forgotten.
 	mem := &hookedSecret{MemorySecret: &MemorySecret{}}
 	s = open(t, Options{Secrets: mem, HTTP: pinService(t).o.HTTP, Dial: pinService(t).o.Dial})
 	c = token(t, s, "self-signed", srv.URL, SendAs{}, "tok-1")
 	if _, _, err := s.Trust(ctx, c.ID, "", fp, "ann"); err != nil {
 		t.Fatal(err)
 	}
+	var forgot sync.WaitGroup
 	mem.mu.Lock()
 	mem.key, mem.hook = secretKey(c.ID), func() {
-		if _, err := s.Forget(ctx, c.ID); err != nil {
-			t.Error(err)
-		}
+		forgot.Go(func() {
+			if _, err := s.Forget(ctx, c.ID); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 	mem.mu.Unlock()
-	got, err := s.Update(ctx, c.ID, Credential{Name: "self-signed", Kind: KindToken, Endpoint: srv.URL, Description: "renamed"}, nil, "bob")
-	if err != nil {
+	if _, err := s.Update(ctx, c.ID, Credential{Name: "self-signed", Kind: KindToken, Endpoint: srv.URL, Description: "renamed"}, nil, "bob"); err != nil {
 		t.Fatal(err)
 	}
-	if kept, _ := s.Get(ctx, c.ID); got.PinnedCert != nil || kept.PinnedCert != nil {
-		t.Fatalf("the forgotten pin came back: %+v", kept.PinnedCert)
+	forgot.Wait()
+	if kept, _ := s.Get(ctx, c.ID); kept.PinnedCert != nil || kept.Description != "renamed" {
+		t.Fatalf("the forgotten pin came back: %+v", kept)
 	}
 	// A pin trusted meanwhile is kept by a change on the same host.
 	if _, _, err := s.Trust(ctx, c.ID, "", fp, "ann"); err != nil {

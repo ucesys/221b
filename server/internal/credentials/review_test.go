@@ -212,19 +212,13 @@ func TestARefusedEditKeepsTheSecret(t *testing.T) {
 			t.Fatalf("a refused change to %s left the secret %q", edit.c.Kind, got)
 		}
 	}
-	// Removed while it was edited: no secret comes back for it.
+	// Removed while it was edited: no secret is written for it.
 	repo.err = fmt.Errorf("%w %q", ErrNotFound, gh.ID)
 	if _, err := s.Update(ctx, gh.ID, Credential{Name: "GitHub", Kind: KindToken, Endpoint: "https://github.com/org"}, &Secret{Token: "fake-tok-2"}, "bob"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("removed meanwhile: %v", err)
 	}
-	if _, _, found, _ := s.o.Secrets.LoadKey(ctx, secretKey(gh.ID)); found {
-		t.Fatal("the secret of a credential removed meanwhile was written")
-	}
-	repo.err = nil
-	u, err := s.Resolve(ctx, gh.ID, UseHTTP, "https://github.com/org/x")
-	_ = u
-	if err == nil {
-		t.Fatal("resolved a credential without its secret")
+	if got := secretOf(); got != "fake-tok-1" {
+		t.Fatalf("the secret of a credential removed meanwhile was written: %q", got)
 	}
 }
 
@@ -1079,5 +1073,65 @@ func TestABackupGoesPastASecretThatCannotBeRead(t *testing.T) {
 	away := open(t, Options{Secrets: failingSecret{mem}, Repo: s.o.Repo})
 	if _, err := away.Export(ctx, func(v string) string { return v }); err == nil {
 		t.Fatal("a Secret that cannot be read was backed up as having no secrets")
+	}
+}
+
+// afterSave runs a hook once, right after the first write of a key.
+type afterSave struct {
+	*MemorySecret
+	mu   sync.Mutex
+	key  string
+	hook func()
+}
+
+func (a *afterSave) SaveKeyIf(ctx context.Context, key string, b []byte, version string) error {
+	err := a.MemorySecret.SaveKeyIf(ctx, key, b, version)
+	a.mu.Lock()
+	f := a.hook
+	if key == a.key {
+		a.hook = nil
+	}
+	a.mu.Unlock()
+	if key == a.key && f != nil {
+		f()
+	}
+	return err
+}
+
+// credentials-unver-7: two edits of one credential take turns, the secret
+// with the row: the row never says one kind while the secret holds
+// another's.
+func TestTwoEditsOfACredentialTakeTurns(t *testing.T) {
+	store := &afterSave{MemorySecret: &MemorySecret{}}
+	s := open(t, Options{Secrets: store})
+	c := token(t, s, "app", "https://a.example", SendAs{}, "fake-tok-1")
+	var other sync.WaitGroup
+	var otherErr error
+	store.mu.Lock()
+	store.key = secretKey(c.ID)
+	store.hook = func() {
+		// Another edit, made while this one's secret is written: given
+		// time to finish, which it takes when nothing makes it wait.
+		finished := make(chan struct{})
+		other.Go(func() {
+			defer close(finished)
+			_, otherErr = s.Update(ctx, c.ID, Credential{Name: "app", Kind: KindToken, Endpoint: "https://a.example"}, &Secret{Token: "fake-tok-2"}, "bob")
+		})
+		select {
+		case <-finished:
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	store.mu.Unlock()
+	if _, err := s.Update(ctx, c.ID, Credential{Name: "app", Kind: KindUserPass, Endpoint: "https://a.example", Username: "u"}, &Secret{Password: "fake-pw"}, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	other.Wait()
+	if otherErr != nil {
+		t.Fatal(otherErr)
+	}
+	kept, _ := s.Get(ctx, c.ID)
+	if _, err := s.Resolve(ctx, c.ID, UseHTTP, "https://a.example/x"); err != nil {
+		t.Fatalf("the row says %s and the secret is another's: %v", kept.Kind, err)
 	}
 }

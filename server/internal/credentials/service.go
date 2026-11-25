@@ -383,75 +383,77 @@ func (s *Service) add(ctx context.Context, c Credential, sec Secret) error {
 // Update changes a credential (CR-05): its secret is replaced when sec is
 // given, and kept otherwise; a new kind needs its secret. The new secret
 // is what every use of it sends from then on.
-func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secret, by string) (Credential, error) {
-	old, err := s.Get(ctx, id)
-	if err != nil {
-		return Credential{}, err
-	}
-	have, err := s.secret(ctx, id)
-	if err != nil {
-		return Credential{}, err
-	}
-	next := have
-	if sec != nil {
-		next = sec.trimmed()
-	} else if c.Kind != old.Kind && c.Kind != KindNone {
-		return Credential{}, invalid("a credential of another kind needs its secret: give it")
-	}
-	next = keep(c.Kind, next)
-	// The host key is written and never read back (CR-02): not given, an
-	// SSH key keeps its own.
-	if c.Kind == KindSSH && old.Kind == KindSSH && strings.TrimSpace(c.HostKey) == "" {
-		c.HostKey = old.HostKey
-	}
-	if err := c.Check(next); err != nil {
-		return Credential{}, err
-	}
-	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
-	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
-	// The last test is kept while nothing it went by changed: everything
-	// but the name, the description and the expiry (credentials-cut-2).
-	resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM ||
-		c.Username != old.Username || c.Region != old.Region || c.HostKey != old.HostKey || c.AppID != old.AppID || c.InstallationID != old.InstallationID ||
-		c.TokenURL != old.TokenURL || c.ClientID != old.ClientID || c.Scope != old.Scope || c.CertPEM != old.CertPEM
-	// A name another credential has is refused before the secret is
-	// written (credentials#3); the list's own refusal below still holds
-	// for one taken meanwhile.
+func (s *Service) Update(ctx context.Context, id string, in Credential, sec *Secret, by string) (Credential, error) {
+	// A name another credential has is refused before anything is
+	// written (credentials#3); the list's own refusal still holds for one
+	// taken meanwhile.
 	if list, err := s.o.Repo.List(ctx); err != nil {
 		return Credential{}, err
-	} else if slices.ContainsFunc(list, func(o Credential) bool { return o.ID != id && strings.EqualFold(o.Name, c.Name) }) {
-		return Credential{}, errTaken(c.Name)
+	} else if slices.ContainsFunc(list, func(o Credential) bool { return o.ID != id && strings.EqualFold(o.Name, strings.TrimSpace(in.Name)) }) {
+		return Credential{}, errTaken(strings.TrimSpace(in.Name))
 	}
-	wrote := next != have
-	if wrote {
-		if err := s.saveSecret(ctx, id, next); err != nil {
-			return Credential{}, err
-		}
-	}
+	// Everything is read, checked and written under the credential's own
+	// lock, its secret too: two edits of one credential take turns, and
+	// the row never says one kind while the secret holds another's
+	// (credentials-unver-7).
+	var (
+		have  Secret
+		wrote bool
+		name  string
+	)
 	saved, err := s.o.Repo.Update(ctx, id, func(cur *Credential) error {
-		// A pinned certificate is set by Trust alone, and kept while the
-		// endpoint's host is the same (CR-16), and the last test while
-		// nothing it went by changed: the ones kept now, not the ones read
-		// before, which a Trust, a Forget or a Test may have changed.
-		c.PinnedCert, c.LastTest = nil, nil
-		if sameEndpointHost(c.Endpoint, cur.Endpoint) {
-			c.PinnedCert = cur.PinnedCert
+		wrote, name = false, cur.Name
+		old, c := *cur, in
+		var err error
+		if have, err = s.secret(ctx, id); err != nil {
+			return err
 		}
+		next := have
+		if sec != nil {
+			next = sec.trimmed()
+		} else if c.Kind != old.Kind && c.Kind != KindNone {
+			return invalid("a credential of another kind needs its secret: give it")
+		}
+		next = keep(c.Kind, next)
+		// The host key is written and never read back (CR-02): not given,
+		// an SSH key keeps its own.
+		if c.Kind == KindSSH && old.Kind == KindSSH && strings.TrimSpace(c.HostKey) == "" {
+			c.HostKey = old.HostKey
+		}
+		if err := c.Check(next); err != nil {
+			return err
+		}
+		c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
+		c.Changed, c.ChangedBy = s.o.Now().UTC(), by
+		// A pinned certificate is set by Trust alone, and kept while the
+		// endpoint's host is the same (CR-16); the last test is kept while
+		// nothing it went by changed: everything but the name, the
+		// description and the expiry (credentials-cut-2).
+		c.PinnedCert, c.LastTest = nil, nil
+		if sameEndpointHost(c.Endpoint, old.Endpoint) {
+			c.PinnedCert = old.PinnedCert
+		}
+		resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM ||
+			c.Username != old.Username || c.Region != old.Region || c.HostKey != old.HostKey || c.AppID != old.AppID || c.InstallationID != old.InstallationID ||
+			c.TokenURL != old.TokenURL || c.ClientID != old.ClientID || c.Scope != old.Scope || c.CertPEM != old.CertPEM
 		if !resetTest {
-			c.LastTest = cur.LastTest
+			c.LastTest = old.LastTest
+		}
+		if next != have {
+			if err := s.saveSecret(ctx, id, next); err != nil {
+				return err
+			}
+			wrote = true
 		}
 		*cur = c
 		return nil
 	})
 	if err != nil && wrote {
-		// The edit is refused: the secret goes back to what it was, and
-		// a credential removed meanwhile keeps none (credentials#3).
-		back := have
-		if errors.Is(err, ErrNotFound) {
-			back = Secret{}
-		}
-		if rerr := s.saveSecret(ctx, id, back); rerr != nil {
-			s.o.Logger.Error("a refused edit's secret could not be put back: give the credential's secret again", "credential", old.Name, "err", rerr)
+		// The edit is refused after its secret was written (a name taken
+		// meanwhile, a database error): the secret goes back to what it
+		// was (credentials#3).
+		if rerr := s.saveSecret(ctx, id, have); rerr != nil {
+			s.o.Logger.Error("a refused edit's secret could not be put back: give the credential's secret again", "credential", name, "err", rerr)
 		}
 	}
 	s.forget(id)
