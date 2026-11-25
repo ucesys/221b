@@ -32,8 +32,9 @@ const (
 )
 
 // PairScript is the shell script that pairs a node. It refuses, changing
-// nothing, when the login user or sshd is not there, or when sshd already
-// trusts an authority outside our file. It then replaces this console's
+// nothing, when the login user or sshd is not there, when sshd would not
+// let the login user in with a certificate (canLogIn), or when sshd
+// already trusts an authority outside our file. It then replaces this console's
 // lines: its key in ca.pub, and its principal in the principals file of
 // that user alone; other consoles' lines stay. It writes the drop-in,
 // checks that sshd accepts all that and really uses it on that port,
@@ -52,7 +53,14 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`set -- /etc/ssh/ssh_host_*_key.pub`,
 		`if [ ! -r "$1" ]; then echo "221B: this node has no /etc/ssh/ssh_host_*_key.pub to pin"; exit 5; fi`,
 		runDir,
-		`value() { "$sshd_bin" -T 2>/dev/null | awk -v k="$1" '$1==k{print $2}'; }`,
+		// sshd's settings as they apply to the login user: Match User and
+		// Group blocks included. An sshd too old to test a user alone
+		// wants a host and an address as well.
+		`spec="user=$u"`,
+		`"$sshd_bin" -T -C "$spec" >/dev/null 2>&1 || spec="user=$u,host=localhost,addr=127.0.0.1"`,
+		`value() { "$sshd_bin" -T -C "$spec" 2>/dev/null | awk -v k="$1" '$1==k{print $2}'; }`,
+		`values() { "$sshd_bin" -T -C "$spec" 2>/dev/null | awk -v k="$1" '$1==k{$1=""; print substr($0, 2)}'; }`,
+		canLogIn,
 		lockNode,
 		`cur=$(value trustedusercakeys)`,
 		`case "$cur" in ""|none|"$d/ca.pub") ;; *) echo "221B: sshd on this node already trusts another SSH authority ($cur); pairing would replace it, so nothing was changed"; exit 5;; esac`,
@@ -173,6 +181,40 @@ const (
 	// runDir is what sshd -t asks for: under socket activation nothing
 	// has made it before the first connection since boot.
 	runDir = `mkdir -p /run/sshd`
+	// canLogIn refuses, before anything changes, a login user sshd would
+	// not let in with a certificate: public keys off, root refused, a
+	// second method asked for, a command forced in place of every one, an
+	// Allow or Deny list that keeps the user out, or an account locked
+	// where sshd has no PAM to ask. Otherwise the node would be recorded
+	// as paired and every session refused. A list entry for a user at a
+	// host is taken as letting in (Allow) and not keeping out (Deny): the
+	// console's address is not known here.
+	canLogIn = `refuse() { echo "221B: sshd on this node would not let $u in with a certificate: $1; nothing was changed"; exit 5; }
+listed() {
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    who=${pat%%@*}
+    if [ "$who" != "$pat" ] && [ "$3" = strict ]; then continue; fi
+    for n in $2; do
+      case "$n" in $who) return 0 ;; esac
+    done
+  done
+  return 1
+}
+set -f
+[ "$(value pubkeyauthentication)" != no ] || refuse "PubkeyAuthentication is no"
+if [ "$u" = root ]; then case "$(value permitrootlogin)" in no|forced-commands-only) refuse "PermitRootLogin is $(value permitrootlogin)" ;; esac; fi
+am=$(values authenticationmethods)
+case " $am " in "  "|*" any "*|*" publickey "*) ;; *) refuse "AuthenticationMethods $am asks for more than a key" ;; esac
+fc=$(values forcecommand)
+case "$fc" in ""|none) ;; *) refuse "ForceCommand $fc runs in place of every command" ;; esac
+g=$(id -Gn "$u" 2>/dev/null || true)
+if value denyusers | listed x "$u" strict; then refuse "DenyUsers keeps $u out"; fi
+if [ -n "$(value allowusers)" ] && ! value allowusers | listed x "$u"; then refuse "AllowUsers does not name $u"; fi
+if value denygroups | listed x "$g"; then refuse "DenyGroups keeps a group of $u out"; fi
+if [ -n "$(value allowgroups)" ] && ! value allowgroups | listed x "$g"; then refuse "AllowGroups names no group of $u"; fi
+if [ "$(value usepam)" != yes ]; then case "$(awk -F: -v u="$u" '$1==u{print $2}' /etc/shadow 2>/dev/null)" in '!'*) refuse "the account is locked (its password in /etc/shadow starts with !), and an sshd without PAM refuses a locked account; unlock it, for instance with usermod -p '*' $u" ;; esac; fi
+set +f`
 	// lockNode lets one script at a time near the files the consoles
 	// share: each rewrites them, and a rollback puts back what was there
 	// when it began, so two at once could lose the other's line. The lock

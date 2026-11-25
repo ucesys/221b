@@ -31,6 +31,10 @@ if [ "$1" = -t ]; then
   [ -d "$ROOT/run/sshd" ] || { echo "Missing privilege separation directory"; exit 255; }
   exit 0
 fi
+# SSHD_SET is settings sshd shows whoever asks; SSHD_MATCH those it shows
+# only with -C for the user SSHD_MATCH_USER, as a Match User block.
+[ -n "$SSHD_SET" ] && printf '%s\n' "$SSHD_SET"
+case " $* " in *" -C user=$SSHD_MATCH_USER"*) [ -n "$SSHD_MATCH_USER" ] && printf '%s\n' "$SSHD_MATCH" ;; esac
 echo "port ${SSHD_PORT:-22}"
 for a in $LISTEN; do echo "listenaddress $a"; done
 if [ -n "$OTHER_CA" ]; then echo "trustedusercakeys $OTHER_CA"; echo "authorizedprincipalsfile none"; exit 0; fi
@@ -645,5 +649,58 @@ func TestAPairingFindsThePortOfAListenAddress(t *testing.T) {
 	}
 	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22), listen); ok || !strings.Contains(out, "listens on port 2222 and not on 22") {
 		t.Fatalf("a pairing on the port of Port alone:\n%s", out)
+	}
+}
+
+// A login user sshd would not let in with a certificate is refused before
+// anything changes (finding 6 of the review of November 24, 2026: a node
+// with PermitRootLogin no was paired as root, and every session failed
+// with "unable to authenticate"); settings that let it in pair.
+func TestAPairingRefusesALoginUserSshdKeepsOut(t *testing.T) {
+	login := user(t)
+	groups, _ := exec.Command("id", "-Gn", login).Output()
+	group := strings.Fields(string(groups))[0]
+	set := func(lines ...string) string { return "SSHD_SET=" + strings.Join(lines, "\n") }
+	refused := map[string][]string{
+		"public keys off":             {set("pubkeyauthentication no")},
+		"public keys off for the user": {"SSHD_MATCH_USER=" + login, "SSHD_MATCH=pubkeyauthentication no"},
+		"a second method":             {set("authenticationmethods publickey,password")},
+		"a forced command":            {set("forcecommand internal-sftp")},
+		"AllowUsers without the user": {set("allowusers ops", "allowusers admin@10.0.0.1")},
+		"DenyUsers by a pattern":      {set("denyusers " + login[:1] + "*")},
+		"DenyGroups":                  {set("denygroups " + group)},
+		"AllowGroups without a group": {set("allowgroups no-such-group")},
+	}
+	if login == "root" {
+		refused["PermitRootLogin no"] = []string{set("permitrootlogin no")}
+		refused["forced commands only"] = []string{set("permitrootlogin forced-commands-only")}
+	}
+	for name, env := range refused {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			before := h.read("etc/ssh/sshd_config")
+			out, ok := h.run(PairScript(testCA, testConsole, login, 22), env...)
+			if ok || strings.Contains(out, markPaired) || !strings.Contains(out, "would not let "+login+" in with a certificate") || !strings.Contains(out, "nothing was changed") {
+				t.Fatalf("the pairing went on:\n%s", out)
+			}
+			if h.read("etc/ssh/sshd_config") != before || h.exists("etc/ssh/221b") || h.exists("etc/ssh/sshd_config.d/221b.conf") || h.exists("etc/ssh/221b.lock") {
+				t.Fatal("the node was changed")
+			}
+		})
+	}
+	for name, env := range map[string][]string{
+		"a key or a key and a password": {set("authenticationmethods publickey,password publickey")},
+		"AllowUsers naming the user":    {set("allowusers ops", "allowusers " + login + "@10.0.0.1")},
+		"DenyUsers at another host":     {set("denyusers " + login + "@10.0.0.9")},
+		"AllowGroups naming a group":    {set("allowgroups " + group)},
+		"no forced command":             {set("forcecommand none", "permitrootlogin prohibit-password")},
+		"Match User of another user":    {"SSHD_MATCH_USER=someone-else", "SSHD_MATCH=pubkeyauthentication no"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			if out, ok := h.run(PairScript(testCA, testConsole, login, 22), env...); !ok || !strings.Contains(out, markPaired) {
+				t.Fatalf("the pairing:\n%s", out)
+			}
+		})
 	}
 }
