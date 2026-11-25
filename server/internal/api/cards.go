@@ -642,7 +642,16 @@ func (s *Server) watsonEnded(it watson.Item) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	s.opts.Cards.WatsonEnded(ctx, it.ID, it.Status, by, it.Exit)
+	s.opts.Cards.WatsonEnded(ctx, it.ID, watsonEndOf(it), by, it.Exit)
+}
+
+// watsonEndOf is how a chat's Watson command ended, for its card: one
+// stopped before it started, or refused when it was to start, never ran.
+func watsonEndOf(it watson.Item) string {
+	if (it.Status == watson.StatusStopped || it.Status == watson.StatusRefused) && it.Started.IsZero() {
+		return cards.WatsonUnrun
+	}
+	return it.Status
 }
 
 // proposeFromChat keeps the changes a person sent to Watson from an
