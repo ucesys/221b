@@ -721,10 +721,21 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		impact = append(impact, fmt.Sprintf("Installs chart %s %s (app %s) from %s: creates %s: %s.", ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, plural(len(objs), "object", "objects"), listText(objs, 8)))
 	case cur == nil:
 		impact = append(impact, fmt.Sprintf("There is no release %s in %s: helm will refuse. Install it, or add --install.", name, ns))
+	case strings.HasPrefix(cur.Info.Status.String(), "pending"):
+		impact = append(impact, fmt.Sprintf("Release %s/%s is %s (revision %d): helm will refuse while another operation is in progress.", ns, name, cur.Info.Status, cur.Version))
+	case upgradeBase(rels) == nil:
+		impact = append(impact, fmt.Sprintf("Release %s/%s has no deployed revision to upgrade from (revision %d is %s): helm will refuse.", ns, name, cur.Version, cur.Info.Status))
 	default:
+		// Helm upgrades from the last deployed revision, not from a newer
+		// one that failed: what it changes, deletes and resets is against
+		// that one.
+		base := upgradeBase(rels)
 		impact = append(impact, fmt.Sprintf("Upgrades release %s/%s from %s %s (revision %d, %s) to %s %s (app %s) from %s. Helm records it as revision %d.",
-			ns, name, chartName(cur.Chart), cur.Chart.Metadata.Version, cur.Version, cur.Info.Status, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1))
-		changed, added, removed := manifestDiff(cur.Manifest, r.Manifest)
+			ns, name, chartName(base.Chart), base.Chart.Metadata.Version, base.Version, base.Info.Status, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1))
+		if base != cur {
+			impact = append(impact, fmt.Sprintf("The newest revision, %d, is %s: Helm upgrades from revision %d, the last deployed, and this card compares against it.", cur.Version, cur.Info.Status, base.Version))
+		}
+		changed, added, removed := manifestDiff(base.Manifest, r.Manifest)
 		if len(changed)+len(added)+len(removed) == 0 {
 			impact = append(impact, "The objects are the same as deployed: Helm applies them again and records the new revision.")
 		}
@@ -739,7 +750,7 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		}
 		// The release's values the deploy would remove or change: an
 		// upgrade takes only the values it is given.
-		gone, changedVals := apps.ValueChanges(cur.Config, a.vals)
+		gone, changedVals := apps.ValueChanges(base.Config, a.vals)
 		impact = append(impact, valueImpact(gone, changedVals)...)
 		if t.pin != nil {
 			t.pin.removed = len(gone)
@@ -757,6 +768,25 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		impact = append(impact, fmt.Sprintf("Runs %s: %s.", plural(len(names), "image", "images"), listText(names, 6)))
 	}
 	return targets, guards, impact
+}
+
+// upgradeBase is the revision Helm upgrades from (prepareUpgrade): the
+// newest when it is deployed, else the last deployed one, else the newest
+// when it failed or was superseded with none deployed; nil when there is
+// none, and helm refuses. rels are newest first.
+func upgradeBase(rels []*release.Release) *release.Release {
+	if len(rels) == 0 {
+		return nil
+	}
+	for _, r := range rels {
+		if r.Info.Status.String() == "deployed" {
+			return r
+		}
+	}
+	if st := rels[0].Info.Status.String(); st == "failed" || st == "superseded" {
+		return rels[0]
+	}
+	return nil
 }
 
 // objectNames lists a manifest's objects as "Kind name".

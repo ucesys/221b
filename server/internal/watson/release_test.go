@@ -59,3 +59,21 @@ func TestADamagedReleaseRecordGivesACardThatCannotBeApproved(t *testing.T) {
 		}
 	}
 }
+
+// An upgrade card after a failed upgrade compares against the last
+// deployed revision, which Helm upgrades from, not the failed one (review
+// of November 24, 2026, finding 14).
+func TestAnUpgradeCardComparesAgainstTheLastDeployedRevision(t *testing.T) {
+	svc, cl, _ := pinSetup(t, Options{})
+	repo := gitChart(t)
+	helmRecord(t, cl, "web", "shop3", 3, `{"name":"shop3","namespace":"web","version":3,"info":{"status":"deployed"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"config":{"replicas":3,"cache":{"enabled":true}},"manifest":"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: shop-cache\n"}`)
+	helmRecord(t, cl, "web", "shop3", 4, `{"name":"shop3","namespace":"web","version":4,"info":{"status":"failed"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"config":{"replicas":3},"manifest":""}`)
+	got := card(t, svc, cl, manager(alice()), "helm upgrade shop3 --git "+repo+" --path charts/web --ref master -n web --set replicas=3")
+	text := strings.Join(got.Plan.Impact, "\n")
+	if !strings.Contains(text, "ConfigMap shop-cache") || !strings.Contains(text, "Removes 1 value the release has now (helm get values): cache.") || !strings.Contains(text, "revision 3, deployed") || !strings.Contains(text, "revision 5") {
+		t.Fatalf("impact:\n%s", text)
+	}
+	if got.Plan.pin == nil || got.Plan.pin.removed == 0 {
+		t.Fatalf("pin %+v", got.Plan.pin)
+	}
+}
