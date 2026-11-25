@@ -283,6 +283,12 @@ func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 // Neither is changed: a secret without its credential is never used, and
 // a credential without its secret says so where it is used. A store that
 // cannot list its keys is not compared.
+//
+// No secret is said to have no credential until the list of before 0.13
+// is copied into the database and has left the Secret (credentials#4):
+// until then every secret-<id> may be a credential not copied yet. A row
+// with only its id (what an application, a repository or a source names)
+// names its secret too.
 func Unmatched(ctx context.Context, list Repo, secrets SecretStore) (noCredential, noSecret []string, err error) {
 	all, ok := secrets.(interface {
 		Keys(ctx context.Context) ([]string, error)
@@ -298,20 +304,78 @@ func Unmatched(ctx context.Context, list Repo, secrets SecretStore) (noCredentia
 	if err != nil {
 		return nil, nil, err
 	}
-	listed := map[string]bool{}
 	for _, c := range creds {
-		listed[c.ID] = true
 		if len(c.Set) > 0 && !slices.Contains(keys, secretKey(c.ID)) {
 			noSecret = append(noSecret, c.ID)
 		}
 	}
+	named, settled, err := namedSecrets(ctx, list, secrets, creds)
+	if err != nil || !settled {
+		return nil, noSecret, err
+	}
 	for _, key := range keys {
-		if id, isSecret := strings.CutPrefix(key, "secret-"); isSecret && !listed[id] {
+		if id, isSecret := strings.CutPrefix(key, "secret-"); isSecret && !named[id] {
 			noCredential = append(noCredential, id)
 		}
 	}
 	slices.Sort(noCredential)
 	return noCredential, noSecret, nil
+}
+
+// rowKeeper is a list with rows of its own beside the credentials it
+// keeps: the database's, whose rows with only their id something points
+// at, and whose copy of the list of before 0.13 is recorded.
+type rowKeeper interface {
+	rowIDs(ctx context.Context) (map[string]bool, error)
+	listCopied(ctx context.Context) (bool, error)
+}
+
+func (r *PGRepo) rowIDs(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := r.d.Do(ctx, func(q db.Querier) error {
+		clear(out)
+		rows, err := q.Query(ctx, "SELECT credential_id FROM credentials")
+		if err != nil {
+			return err
+		}
+		var id string
+		_, err = pgx.ForEachRow(rows, []any{&id}, func() error { out[id] = true; return nil })
+		return err
+	})
+	return out, err
+}
+
+func (r *PGRepo) listCopied(ctx context.Context) (bool, error) {
+	return r.d.Imported(ctx, ListImportID)
+}
+
+// namedSecrets are the ids whose secret a credential names (creds, the
+// list's credentials, and the rows with only their id), and whether the
+// list is settled: copied out of the Secret's index, which is gone. A
+// list that is not settled may name any secret.
+func namedSecrets(ctx context.Context, list Repo, secrets SecretStore, creds []Credential) (map[string]bool, bool, error) {
+	named := map[string]bool{}
+	for _, c := range creds {
+		named[c.ID] = true
+	}
+	if rk, ok := list.(rowKeeper); ok {
+		copied, err := rk.listCopied(ctx)
+		if err != nil || !copied {
+			return nil, false, err
+		}
+		ids, err := rk.rowIDs(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		for id := range ids {
+			named[id] = true
+		}
+	}
+	b, _, found, err := secrets.LoadKey(ctx, indexKey)
+	if err != nil || found && len(b) > 0 {
+		return nil, false, err
+	}
+	return named, true, nil
 }
 
 // RemoveList takes the list out of the Secret once the database keeps it:

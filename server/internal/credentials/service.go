@@ -631,6 +631,19 @@ func (s *Service) RemoveUnnamedSecret(ctx context.Context, id string) error {
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	// Until the list of before 0.13 is copied, any secret may be a
+	// credential's, and an application, a repository or a source may name
+	// one whose record is not here (credentials#4).
+	named, settled, err := namedSecrets(ctx, s.o.Repo, s.o.Secrets, nil)
+	if err != nil {
+		return err
+	}
+	if !settled {
+		return fmt.Errorf("%w: the credentials' list of before 0.13 is not copied into the database yet, and may name this secret; the log of the start says why the copy failed, and the next start tries again", ErrInUse)
+	}
+	if named[id] {
+		return fmt.Errorf("%w: an application, a Helm repository or a source names a credential of this id; restore the credential, or choose another there first", ErrInUse)
+	}
 	if _, _, found, err := s.o.Secrets.LoadKey(ctx, secretKey(id)); err != nil {
 		return fmt.Errorf("reading the credentials' Secret: %w", err)
 	} else if !found {

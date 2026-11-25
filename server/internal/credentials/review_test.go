@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ucesys/221b/server/internal/certpin/certpintest"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
 
 // secretForms are the ways a value can be written in an address: as it
@@ -210,5 +212,64 @@ func TestARefusedEditKeepsTheSecret(t *testing.T) {
 	_ = u
 	if err == nil {
 		t.Fatal("resolved a credential without its secret")
+	}
+}
+
+// credentials#4: a secret is named "without a credential", and may be
+// removed, only once the list of before 0.13 is copied into the database
+// and has left the Secret; and a row with only its id (what an
+// application, a repository or a source names) names its secret too.
+func TestNoSecretIsUnnamedBeforeTheListIsCopied(t *testing.T) {
+	d := dbtest.Open(t)
+	now, _ := ticking()
+	mem := &MemorySecret{}
+	before := New(Options{Secrets: mem, Now: now})
+	a := token(t, before, "GitHub", "https://github.com/org", SendAs{}, "fake-tok-a")
+	asBefore(t, before, mem)
+	s := New(Options{Secrets: mem, Repo: NewPGRepo(d), Now: now})
+	// The copy failed: nothing is unnamed, and nothing is removed.
+	if ids, err := s.UnnamedSecrets(ctx); err != nil || len(ids) != 0 {
+		t.Fatalf("before the copy, unnamed: %v %v", ids, err)
+	}
+	if noRow, _, err := Unmatched(ctx, s.o.Repo, mem); err != nil || len(noRow) != 0 {
+		t.Fatalf("before the copy, unmatched: %v %v", noRow, err)
+	}
+	if err := s.RemoveUnnamedSecret(ctx, a.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("removed before the copy: %v", err)
+	}
+	if _, _, found, _ := mem.LoadKey(ctx, secretKey(a.ID)); !found {
+		t.Fatal("the secret of a credential not copied yet was removed")
+	}
+	// Copied, but the list is still in the Secret: still nothing.
+	if _, err := CopyList(ctx, d, mem); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.Repo.Remove(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveUnnamedSecret(ctx, a.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("removed while the list is in the Secret: %v", err)
+	}
+	if _, err := RemoveList(ctx, mem); err != nil {
+		t.Fatal(err)
+	}
+	// A row with only its id names its secret; a secret of no row is
+	// unnamed, and removed.
+	exec(t, d, "INSERT INTO credentials (credential_id) VALUES ($1) ON CONFLICT DO NOTHING", "cr-idonly")
+	for _, id := range []string{"cr-idonly", "cr-nobody"} {
+		_, v, _, _ := mem.LoadKey(ctx, secretKey(id))
+		if err := mem.SaveKeyIf(ctx, secretKey(id), []byte(`{"token":"fake-x"}`), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, err := s.UnnamedSecrets(ctx)
+	if err != nil || !slices.Contains(ids, "cr-nobody") || slices.Contains(ids, "cr-idonly") {
+		t.Fatalf("unnamed: %v %v", ids, err)
+	}
+	if err := s.RemoveUnnamedSecret(ctx, "cr-idonly"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("removed the secret a row names: %v", err)
+	}
+	if err := s.RemoveUnnamedSecret(ctx, "cr-nobody"); err != nil {
+		t.Fatal(err)
 	}
 }
