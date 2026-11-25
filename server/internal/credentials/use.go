@@ -69,7 +69,7 @@ func (s *Service) resolve(ctx context.Context, c Credential, sec Secret) (*Use, 
 	if err := cp.Check(sec); err != nil {
 		return nil, fmt.Errorf("the credential %s cannot be used (%s): give its secret again in Administration › Credentials", c.Name, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	}
-	ep, err := ParseEndpoint(c.Endpoint)
+	ep, err := c.endpoint()
 	if err != nil {
 		return nil, err
 	}

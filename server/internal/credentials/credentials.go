@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -284,6 +285,11 @@ func (c *Credential) Check(sec Secret) error {
 	if strings.Contains(c.Endpoint, "?") {
 		return invalid("an endpoint has no query")
 	}
+	if !forBucket(c.Kind) {
+		// A repository's endpoint is kept without git's suffix: it covers
+		// the repository with and without it (Covers).
+		ep.Path = strings.TrimSuffix(ep.Path, ".git")
+	}
 	c.Endpoint = ep.String()
 	if strings.TrimSpace(c.CAPEM) != "" {
 		if len(c.CAPEM) > 12<<10 || !strings.Contains(c.CAPEM, "-----BEGIN CERTIFICATE-----") {
@@ -544,7 +550,15 @@ type Endpoint struct {
 	Scheme string
 	Host   string
 	Path   string
+	// bucket is an endpoint of a bucket's credential (an access key, the
+	// pod's identity): its path is a bucket's name, where .git is part of
+	// the name, never git's suffix (credentials#9).
+	bucket bool
 }
+
+// forBucket says whether a kind's endpoint names a bucket: an access key
+// and the pod's identity serve buckets alone (Supports).
+func forBucket(kind string) bool { return kind == KindAccessKey || kind == KindNone }
 
 // String is the endpoint as it is kept and read again: its path escaped,
 // so a space, a # or a ? in it (typed %20, %23, %3F) reads back as the
@@ -624,9 +638,7 @@ func parseAddress(raw string, endpoint bool) (Endpoint, error) {
 	} else if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	p := strings.TrimRight(u.Path, "/")
-	p = strings.TrimSuffix(p, ".git")
-	return Endpoint{Scheme: scheme, Host: host, Path: p}, nil
+	return Endpoint{Scheme: scheme, Host: host, Path: strings.TrimRight(u.Path, "/")}, nil
 }
 
 // oddPath says a path could reach outside the endpoint's: a . or ..
@@ -675,13 +687,33 @@ func (e Endpoint) Covers(target string) bool {
 	if e.Path == "" {
 		return true
 	}
-	tp := strings.ReplaceAll(t.Path, ".git/", "/")
-	return tp == e.Path || strings.HasPrefix(tp, e.Path+"/")
+	// The target's path as it is (credentials#9): .git only where a
+	// repository's endpoint ends, as a git client asks it (the repository,
+	// and its smart HTTP paths), and never for a bucket.
+	if t.Path == e.Path || strings.HasPrefix(t.Path, e.Path+"/") {
+		return true
+	}
+	if e.bucket {
+		return false
+	}
+	rest, ok := strings.CutPrefix(t.Path, e.Path+".git")
+	return ok && slices.Contains(gitPaths, rest)
+}
+
+// gitPaths are what a git client asks under a repository's address that
+// ends with .git: the repository, and its smart HTTP paths.
+var gitPaths = []string{"", "/", "/info/refs", "/git-upload-pack", "/git-receive-pack"}
+
+// endpoint is the credential's endpoint, parsed for its kind.
+func (c Credential) endpoint() (Endpoint, error) {
+	ep, err := ParseEndpoint(c.Endpoint)
+	ep.bucket = forBucket(c.Kind)
+	return ep, err
 }
 
 // Covers says whether a credential may be sent to an address.
 func (c Credential) Covers(target string) bool {
-	ep, err := ParseEndpoint(c.Endpoint)
+	ep, err := c.endpoint()
 	return err == nil && ep.Covers(target)
 }
 

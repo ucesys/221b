@@ -413,3 +413,57 @@ func TestASegmentsParametersStayUnderTheEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// credentials#9: a target's path is compared as it is: .git is allowed
+// only where a repository's endpoint ends, for a git client's own paths,
+// and never for a bucket.
+func TestTheGitSuffixStaysInItsScope(t *testing.T) {
+	s, _ := newService(t, nil)
+	key, err := s.Create(ctx, Credential{Name: "docs", Kind: KindAccessKey, Endpoint: "https://s3.amazonaws.com/docs"}, Secret{AccessKeyID: "AKIAFAKE", SecretAccessKey: "fake-secret"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotgit, err := s.Create(ctx, Credential{Name: "docs.git", Kind: KindAccessKey, Endpoint: "https://s3.amazonaws.com/docs.git"}, Secret{AccessKeyID: "AKIAFAKE", SecretAccessKey: "fake-secret"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := token(t, s, "acme", "https://git.example.com/acme", SendAs{}, "fake-tok")
+	repo := token(t, s, "repo", "https://git.example.com/org/repo.git", SendAs{}, "fake-tok")
+	mid := token(t, s, "mid", "https://git.example.com/a.git/b", SendAs{}, "fake-tok")
+	for _, tc := range []struct {
+		c      Credential
+		target string
+		ok     bool
+	}{
+		{key, S3Address("", "docs"), true},
+		{key, S3Address("", "docs.git"), false},
+		{key, S3Address("", "docs.git") + "/x", false},
+		{dotgit, S3Address("", "docs.git"), true},
+		{dotgit, S3Address("", "docs"), false},
+		{owner, "https://git.example.com/acme/tool.git", true},
+		{owner, "https://git.example.com/acme.git/tool", false},
+		{owner, "https://git.example.com/acme.git/tool.git/info/refs", false},
+		{repo, "https://git.example.com/org/repo.git", true},
+		{repo, "https://git.example.com/org/repo", true},
+		{repo, "https://git.example.com/org/repo.git/info/refs?service=git-upload-pack", true},
+		{repo, "https://git.example.com/org/repo.git/git-upload-pack", true},
+		{repo, "https://git.example.com/org/repo.git/other", false},
+		{mid, "https://git.example.com/a.git/b", true},
+		{mid, "https://git.example.com/a.git/b/c.git", true},
+		{mid, "https://git.example.com/a/b", false},
+	} {
+		if got := tc.c.Covers(tc.target); got != tc.ok {
+			t.Errorf("%s (%s) covers %s: %v", tc.c.Name, tc.c.Endpoint, tc.target, got)
+		}
+	}
+	if dotgit.Endpoint != "https://s3.amazonaws.com/docs.git" {
+		t.Errorf("a bucket's endpoint lost its name: %s", dotgit.Endpoint)
+	}
+	u, err := s.Resolve(ctx, key.ID, UseS3, S3Address("", "docs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Covers(S3Address("", "docs.git")) {
+		t.Error("the access key's use covers the bucket docs.git")
+	}
+}
