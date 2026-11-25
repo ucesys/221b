@@ -69,6 +69,10 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 - **An access key whose bucket's name ends in `.git`** (credentials#9): earlier releases kept its endpoint without the `.git` (`…/docs.git` as `…/docs`), and 0.13.3 no longer lets `docs` cover `docs.git`; such a source's reads are refused as outside the endpoint. Give the endpoint again with the bucket's whole name.
 - **From a release before 0.13, the copy of the credentials' list goes past a record the database refuses** (credentials#5): such a record is left out, and Administration › Credentials names it, with why, under *Created from existing settings*; its secret stays in the Secret, and the credential is made again by hand. A console already on 0.13 whose copy kept failing (the log said *copying a record set from its Secret into the database failed* at every start, and the list was empty) copies the others at the first start of 0.13.3.
 
+## 0.13.3 (unreleased)
+
+**A connection made again after a rollback to 0.12 shows as failed until it is edited.** A console of 0.12 keeps its connections in their Secrets. If you rolled back to it, added a connection again under the name of one the database kept, for another API server, and then upgraded again, the Secret holds that connection's record and credential while the database keeps the old server. 0.13.2 dropped the record and connected to the old server with the new credential; 0.13.3 leaves the record in the Secret, logs *connection Secrets that hold a record for another API server than the database's are left as they are*, and shows the connection as failed: edit it, give its server and credential, and save. Connections whose Secret's record names the database's server are not affected.
+
 ## 0.13.2 (2026-11-25)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.

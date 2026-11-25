@@ -441,6 +441,9 @@ type held struct {
 	// server is the origin the credential was written for (the
 	// annotation); "" in a Secret written before it, or by hand.
 	server string
+	// record is the connection's record ("spec.json") a console from
+	// before the move left in it, or wrote since; nil when there is none.
+	record []byte
 }
 
 // credential reads a connection's credential from its Secret, and says
@@ -454,7 +457,7 @@ func (s *SecretStore) credential(ctx context.Context, id string) (held, error) {
 	if err != nil {
 		return held{}, fmt.Errorf("reading the connection Secret %s: %w", s.name(id), err)
 	}
-	return held{Credential: credentialOf(sec.Data), found: true, server: sec.Annotations[AnnotationServer]}, nil
+	return held{Credential: credentialOf(sec.Data), found: true, server: sec.Annotations[AnnotationServer], record: sec.Data[keySpec]}, nil
 }
 
 // putCredential writes a connection's Secret to hold the credential and

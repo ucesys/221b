@@ -934,12 +934,14 @@ func TestTheConnectionsAreCopiedFromTheirSecretsOnce(t *testing.T) {
 	byHand("bare", map[string]string{"token": "bare-token"})
 
 	// What the database holds already: a row with only its id that an
-	// application points at, and a connection it keeps.
+	// application points at, and a connection it keeps, of the server the
+	// Secret's record names (one of another server is the clusters
+	// review's finding 4: TestAConnectionMadeAgainAfterARollbackIsNotPairedWithTheOldServer).
 	app := db.NewID()
 	for _, sql := range []string{
 		"INSERT INTO clusters (cluster_id) VALUES ('old')",
 		"INSERT INTO applications (application_id, cluster_id, namespace, name) VALUES ('" + app + "', 'old', 'web', 'shop')",
-		"INSERT INTO clusters (cluster_id, name, environment, server_url, ca_mode, auth_method, mode, is_kept, version) VALUES ('kept', 'As the database has it', 'production', 'https://10.5.5.5:6443', 'system', 'token', 'read', true, 7)",
+		"INSERT INTO clusters (cluster_id, name, environment, server_url, ca_mode, auth_method, mode, is_kept, version) VALUES ('kept', 'As the database has it', 'production', 'https://10.21.0.10:6443', 'system', 'token', 'read', true, 7)",
 	} {
 		_, err := d.Pool().Exec(ctx, sql)
 		must(t, err)
@@ -974,7 +976,7 @@ func TestTheConnectionsAreCopiedFromTheirSecretsOnce(t *testing.T) {
 		gotCred.Token != "old-token" || gotCred.CAPEM != "old-ca" {
 		t.Fatalf("the connection of format 0 after the copy: %v %s", err, asJSON(got))
 	}
-	if got, gotCred, err := store.Get(ctx, "kept"); err != nil || got.Name != "As the database has it" || got.Server != "https://10.5.5.5:6443" || gotCred != keptCred {
+	if got, gotCred, err := store.Get(ctx, "kept"); err != nil || got.Name != "As the database has it" || got.Env != "production" || got.CA != "system" || gotCred != keptCred {
 		t.Fatalf("a connection the database kept was copied over: %v %s", err, asJSON(got))
 	}
 	if _, version, _, _ := row(t, d, "kept"); version != 7 {

@@ -370,12 +370,35 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 
 // unsettled says why a row and the credential its Secret holds do not go
 // together, or "": the Secret was written for another API server
-// (AnnotationServer) by a save whose row never committed.
+// (AnnotationServer) by a save whose row never committed, or it holds a
+// record for another server (recordFor), which a console from before the
+// move wrote with that credential after a rollback.
 func unsettled(spec Spec, h held) string {
-	if h.found && h.server != "" && h.server != serverOrigin(spec.Server) {
+	if !h.found {
+		return ""
+	}
+	if h.server != "" && h.server != serverOrigin(spec.Server) {
 		return fmt.Sprintf("Its credential was written for %s, and the connection is saved for %s: a save did not finish. Edit the connection and give its credential again.", h.server, spec.Server)
 	}
+	if other := recordFor(spec, h.record); other != "" {
+		return fmt.Sprintf("Its Secret holds a record of the connection for %s, which a console from before 0.13 wrote with its credential after a rollback, and the database's is for %s. Edit the connection and give its credential again.", other, spec.Server)
+	}
 	return ""
+}
+
+// recordFor is the server of a record a Secret holds when it is another
+// server than the row's (by scheme, host and port), or "": the credential
+// beside such a record is that server's, not the row's. A record this
+// console cannot read says nothing here, and is left as it is.
+func recordFor(spec Spec, record []byte) string {
+	if record == nil {
+		return ""
+	}
+	rec, err := UnmarshalSpec(record)
+	if err != nil || rec.ID != spec.ID || serverOrigin(rec.Server) == serverOrigin(spec.Server) {
+		return ""
+	}
+	return rec.Server
 }
 
 // Save writes the row, then the Secret when a credential is given, then
@@ -621,7 +644,8 @@ func CopyFromSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog
 
 // DropSpecs takes "spec.json" out of the connections' Secrets once the
 // database keeps the connections: out of each Secret that still holds it
-// and whose connection has a kept row, in one update over the version
+// and whose connection has a kept row of the same API server (a record
+// for another server is left whole, see recordFor), in one update over the version
 // listed, every other key and every label as they were. It says how many
 // it changed. No Secret is deleted, and no key of a credential is
 // touched: the local cluster's Secret, which held nothing else, is left
@@ -645,15 +669,17 @@ func DropSpecs(ctx context.Context, d *db.DB, from *SecretStore, log *slog.Logge
 	if len(with) == 0 {
 		return 0, nil
 	}
-	kept := map[string]bool{}
+	// Each kept row, by its Secret's name: the record of a Secret is
+	// dropped only beside the row of the same server.
+	kept := map[string]Spec{}
 	if err := d.Do(ctx, func(q db.Querier) error {
-		rows, err := q.Query(ctx, "SELECT cluster_id FROM clusters WHERE is_kept")
+		rows, err := q.Query(ctx, "SELECT cluster_id, server_url FROM clusters WHERE is_kept")
 		if err != nil {
 			return err
 		}
-		var id string
-		_, err = pgx.ForEachRow(rows, []any{&id}, func() error {
-			kept[from.name(id)] = true
+		var id, server string
+		_, err = pgx.ForEachRow(rows, []any{&id, &server}, func() error {
+			kept[from.name(id)] = Spec{ID: id, Server: server}
 			return nil
 		})
 		return err
@@ -661,13 +687,22 @@ func DropSpecs(ctx context.Context, d *db.DB, from *SecretStore, log *slog.Logge
 		return 0, err
 	}
 	n := 0
-	var failed, left []string
+	var failed, left, other []string
 	for _, sec := range with {
 		if err := ctx.Err(); err != nil {
-			return n, fmt.Errorf("%d of the connections' Secrets still hold their record: %w", len(with)-n-len(left), err)
+			return n, fmt.Errorf("%d of the connections' Secrets still hold their record: %w", len(with)-n-len(left)-len(other), err)
 		}
-		if !kept[sec.Name] {
+		row, ok := kept[sec.Name]
+		if !ok {
 			left = append(left, sec.Name)
+			continue
+		}
+		// A record for another server than the row's: a console from
+		// before the move made the connection again after a rollback, and
+		// the credential beside it is that server's. It is left whole, and
+		// the connection does not start until it is edited (unsettled).
+		if recordFor(row, sec.Data[keySpec]) != "" {
+			other = append(other, sec.Name)
 			continue
 		}
 		if err := from.dropSpec(ctx, sec); err != nil {
@@ -678,6 +713,9 @@ func DropSpecs(ctx context.Context, d *db.DB, from *SecretStore, log *slog.Logge
 	}
 	if len(left) > 0 {
 		log.Warn("connection Secrets that hold a record and are of no connection of the database are left as they are, and are not read", "secrets", left)
+	}
+	if len(other) > 0 {
+		log.Warn("connection Secrets that hold a record for another API server than the database's are left as they are: a console from before 0.13 made the connection again after a rollback. Each does not start until it is edited and given its credential", "secrets", other)
 	}
 	if len(failed) > 0 {
 		return n, errors.New(strings.Join(failed, "; "))

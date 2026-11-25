@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -240,5 +241,54 @@ func TestAWriteWhoseCommitFailsPairsNoTokenWithAnotherServer(t *testing.T) {
 	cut = false
 	if _, cred, err := store.Get(ctx, "prod"); err != nil || cred != before {
 		t.Fatalf("a removal reported as failed lost the credential: %v, kept %v", err, cred == before)
+	}
+}
+
+// Finding 4: after a rollback to a console from before the move and an
+// upgrade again, a connection the older console made again under the same
+// id lost its record from the Secret at the next start, unread, and ran
+// with the database's old server and the older console's new token.
+func TestAConnectionMadeAgainAfterARollbackIsNotPairedWithTheOldServer(t *testing.T) {
+	store, d, cs := clusterstest.PG(t, nil)
+	ctx := context.Background()
+	spec, a := fullSpec("staging"), fullCred("a")
+	spec.Server = "https://a.example:6443"
+	must(t, store.Save(ctx, spec, &a))
+	// Rolled back: the older console finds no staging, and it is added
+	// again there, for another server, its record in its Secret.
+	must(t, cs.CoreV1().Secrets(clusterstest.Namespace).Delete(ctx, clusterstest.SecretName("staging"), metav1.DeleteOptions{}))
+	again, b := spec, fullCred("b")
+	again.Server = "https://b.example:6443"
+	older := clusterstest.Secrets(cs)
+	must(t, older.Save(ctx, again, &b))
+	// Upgraded again: the copy is not made twice; the records are dropped.
+	if _, err := clusters.DropSpecs(ctx, d, older, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, cred, err := store.Get(ctx, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Server == spec.Server && cred.Token == b.Token {
+		t.Fatal("the old server is paired with the token of the connection made again")
+	}
+	if sec := held(t, cs)[clusterstest.SecretName("staging")]; sec["spec.json"] == "" {
+		t.Error("the record of the connection made again was dropped unread")
+	}
+	m, mctx := started(t, store)
+	if s, _ := m.Summary("staging"); s.State != "failed" || !strings.Contains(s.Message, "rollback") {
+		t.Errorf("the connection: %s %q", s.State, s.Message)
+	}
+	// Edited with its credential, it is whole, and its record goes.
+	edit := again
+	edit.Name, edit.CA = "staging", "system"
+	if _, err := m.Update(mctx, "staging", clusters.Draft{Spec: edit, Credential: clusters.Credential{Token: saToken("staging")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, cred, _ := store.Get(ctx, "staging"); got.Server != again.Server || cred.Token != saToken("staging") || got.Unsettled != "" {
+		t.Fatalf("after the edit: %s %q", got.Server, got.Unsettled)
+	}
+	if sec := held(t, cs)[clusterstest.SecretName("staging")]; sec["spec.json"] != "" {
+		t.Error("the edit left the record in the Secret")
 	}
 }
