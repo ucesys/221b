@@ -74,6 +74,9 @@ func (s *Service) AddHost(ctx context.Context, h Host, by string) (Host, error) 
 		return Host{}, errors.New("this console keeps no hosts")
 	}
 	h.AddedBy, h.AddedAt = by, time.Now().UTC()
+	if err := s.notAPairedNode(ctx, h.Cluster, h.Name); err != nil {
+		return Host{}, err
+	}
 	return s.opts.Hosts.Add(ctx, h, s.opts.IsNode)
 }
 
@@ -82,7 +85,30 @@ func (s *Service) RestoreHost(ctx context.Context, h Host) (Host, error) {
 	if s.opts.Hosts == nil {
 		return Host{}, errors.New("this console keeps no hosts")
 	}
+	if err := s.notAPairedNode(ctx, h.Cluster, h.Name); err != nil {
+		return Host{}, err
+	}
 	return s.opts.Hosts.Restore(ctx, h, s.opts.IsNode)
+}
+
+// notAPairedNode refuses a host the name of a node paired for SSH: a
+// pairing with no host of that name is a node's. IsNode alone does not
+// know a node until its cluster's node list has loaded, after a restart,
+// and a host of that name would take the node's row and break its
+// pairing.
+func (s *Service) notAPairedNode(ctx context.Context, cluster, name string) error {
+	name = strings.TrimSpace(name)
+	if _, ok, err := s.opts.Pairings.Get(ctx, cluster, name); err != nil {
+		return fmt.Errorf("reading the pairings: %w", err)
+	} else if !ok {
+		return nil
+	}
+	if _, ok, err := s.opts.Hosts.Get(ctx, cluster, name); err != nil {
+		return fmt.Errorf("reading the hosts: %w", err)
+	} else if ok {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is the name of a Kubernetes node of this cluster paired for SSH", ErrConflict, name)
 }
 
 // Hosts lists a cluster's hosts.

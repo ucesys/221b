@@ -2,6 +2,7 @@ package nodessh
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -128,5 +129,23 @@ func TestAHostTakesAHostnameThatHasARowWithItsPairing(t *testing.T) {
 	}
 	if code, err := e.svc.Exec(ctx, "local", "db-primary", "k", "true", false, strings.NewReader(""), io.Discard); err != nil || code != 0 {
 		t.Fatalf("a run on db-primary: %d %v", code, err)
+	}
+}
+
+// The database refuses a host the row of a paired node too, whoever adds
+// it, and the node's pairing stays whole (finding 15).
+func TestTheDatabaseKeepsAPairedNodesRowFromAHost(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.Open(t)
+	pairings, hosts := NewPairings(NewPairingsPG(d)), NewHosts(NewHostsPG(d))
+	node := Pairing{Cluster: "c1", Node: "worker-3", LoginUser: "core", Port: 22, HostKeys: []string{testCA}, CAFinger: "SHA256:ca", Principal: "221b-superadmins-x"}
+	if err := pairings.Set(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hosts.Add(ctx, Host{Cluster: "c1", Name: "worker-3", Address: "10.0.0.30", LoginUser: "root"}, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a host took the paired node's row: %v", err)
+	}
+	if p, ok, err := pairings.Get(ctx, "c1", "worker-3"); err != nil || !ok || p.LoginUser != "core" || len(p.HostKeys) != 1 {
+		t.Fatalf("the node's pairing reads %+v (%v, %v)", p, ok, err)
 	}
 }

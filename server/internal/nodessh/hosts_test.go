@@ -817,3 +817,26 @@ func TestAPairingChangesNoneOfAHostsOwn(t *testing.T) {
 		t.Fatalf("the host was %+v\nand reads %+v (%v)", was, h, err)
 	}
 }
+
+// A host may not take the name of a node paired for SSH, even before the
+// node list of its cluster has loaded and IsNode knows the node (finding
+// 15 of the review of November 24, 2026: with the database the host took
+// the node's row and blanked its pinned keys and its login).
+func TestAHostMayNotTakeAPairedNodesName(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	node := Pairing{Cluster: "local", Node: "worker-3", LoginUser: "core", Port: 22, HostKeys: []string{testCA}, CAFinger: "SHA256:ca", Principal: PrincipalOf(testConsole)}
+	if err := e.svc.opts.Pairings.Set(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.AddHost(ctx, Host{Cluster: "local", Name: "worker-3", Address: "10.0.0.30", LoginUser: "root"}, "Pat"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a host took a paired node's name: %v", err)
+	}
+	if _, err := e.svc.RestoreHost(ctx, Host{Cluster: "local", Name: "worker-3", Address: "10.0.0.30", LoginUser: "root", State: HostPending}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a restored host took a paired node's name: %v", err)
+	}
+	p, ok, err := e.svc.opts.Pairings.Get(ctx, "local", "worker-3")
+	if err != nil || !ok || p.LoginUser != "core" || len(p.HostKeys) != 1 || p.HostKeys[0] != testCA {
+		t.Fatalf("the node's pairing reads %+v (%v, %v)", p, ok, err)
+	}
+}

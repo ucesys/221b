@@ -2,6 +2,7 @@ package nodessh
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"time"
@@ -71,6 +72,16 @@ func putHost(ctx context.Context, tx pgx.Tx, x Host) error {
 	id, err := inventory.EnsureHost(ctx, tx, x.Cluster, x.Name)
 	if err != nil {
 		return err
+	}
+	// A node's row with a pairing is a paired node's: a host taking it
+	// over would blank the pinned keys and the login of the pairing.
+	var pairedNode bool
+	if err := tx.QueryRow(ctx, `SELECT h.is_kubernetes_node AND EXISTS (SELECT FROM host_pairings p WHERE p.host_id = h.host_id)
+		FROM hosts h WHERE h.host_id = $1`, id).Scan(&pairedNode); err != nil {
+		return err
+	}
+	if pairedNode {
+		return fmt.Errorf("%w: %s is the name of a Kubernetes node of this cluster paired for SSH", ErrConflict, x.Name)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE hosts SET is_kubernetes_node = false, address = $2, port = $3, state = $4, is_auto_named = $5, added_by = $6, created_at = $7
 		WHERE host_id = $1`, id, x.Address, x.Port, x.State, x.AutoName, x.AddedBy, x.AddedAt.UTC()); err != nil {
