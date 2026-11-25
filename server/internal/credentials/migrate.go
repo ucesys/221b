@@ -122,7 +122,13 @@ func (s *Service) Migrate(ctx context.Context, consumers []Consumer, by string) 
 				Description: migratedDescription(g.labels),
 				Set:         g.f.Secret.parts(), Created: now, CreatedBy: by, Changed: now, ChangedBy: by, From: g.labels}
 			if err := s.add(ctx, c, g.f.Secret); err != nil {
-				return created, err
+				// The others still go, and the run's notes are kept
+				// (credentials#11): what uses it is not switched, and the
+				// next run tries again.
+				why := strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")
+				notes = append(notes, fmt.Sprintf("%s keeps its own secret for now: its credential could not be made (%s); the upgrade tries again every quarter of an hour", strings.Join(g.labels, ", "), why))
+				s.o.Logger.Warn("the upgrade could not make a credential of secrets kept before 0.12.1; it tries again later", "from", strings.Join(g.labels, ", "), "err", why)
+				continue
 			}
 			credID = c.ID
 			have[id] = c.ID

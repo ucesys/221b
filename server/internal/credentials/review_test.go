@@ -519,3 +519,43 @@ func TestThePinIsTrustedAtTheEndpointsHostAlone(t *testing.T) {
 		t.Fatalf("the endpoint's own token URL: %v", err)
 	}
 }
+
+// credentials#11: one credential the upgrade cannot add does not stop the
+// others: what it made is listed, what it could not make is said and left
+// for the next run, and it returns no error, so the git addresses'
+// migration (RP-05) follows.
+func TestTheUpgradeGoesPastAnAddThatFails(t *testing.T) {
+	s, _ := newService(t, nil)
+	for i := range MaxCredentials - 2 {
+		if err := s.o.Repo.Add(ctx, Credential{ID: fmt.Sprintf("cr-fill-%d", i), Name: fmt.Sprintf("fill %d", i), Kind: KindNone, Endpoint: "https://fill.example"}, MaxCredentials); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var found []Found
+	for i := range 4 {
+		found = append(found, Found{Key: fmt.Sprint(i), Label: fmt.Sprintf("app ns/a%d", i), Endpoint: "https://github.com/org", Kind: KindToken, Secret: Secret{Token: fmt.Sprintf("fake-tok-%d", i)}})
+	}
+	apps := &fakeConsumer{switched: map[string]string{}, found: found}
+	created, err := s.Migrate(ctx, []Consumer{apps}, "the upgrade")
+	if err != nil || len(created) != 2 || len(apps.switched) != 2 {
+		t.Fatalf("made %d, switched %d: %v", len(created), len(apps.switched), err)
+	}
+	m, _ := s.Migration(ctx)
+	if len(m.Created) != 2 || len(m.Notes) != 2 || !strings.Contains(m.Notes[0], "keeps its own secret") || !strings.Contains(m.Notes[0], "at most") {
+		t.Fatalf("the note: %+v", m)
+	}
+	for _, n := range m.Notes {
+		if strings.Contains(n, "fake-tok") {
+			t.Fatalf("a note holds the secret: %s", n)
+		}
+	}
+	// Room again: the next run makes the others.
+	for i := range 2 {
+		if _, err := s.o.Repo.Remove(ctx, fmt.Sprintf("cr-fill-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if again, err := s.Migrate(ctx, []Consumer{apps}, "the upgrade"); err != nil || len(again) != 2 || len(apps.switched) != 4 {
+		t.Fatalf("again: %d %v", len(again), err)
+	}
+}
