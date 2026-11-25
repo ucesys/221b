@@ -38,6 +38,13 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 
 A private key kept beside a credential's certificate or private CA leaves the list at the first start; the log names the credentials. Backups made before keep it in clear: see [docs/upgrading.md](docs/upgrading.md).
 
+Four notes on the credentials; [docs/upgrading.md](docs/upgrading.md) says more:
+
+- A private key kept beside a credential's certificate or private CA leaves the list at the first start; the log names the credentials. Backups made before keep it in clear.
+- An endpoint typed with a percent-escape (`%20`, `%23`, `%3F`, `%25`) was kept unescaped by earlier releases: check those that hold a space, `#`, `?` or `%`, and type them again.
+- An access key whose bucket's name ends in `.git` was kept without it: give its endpoint again with the whole name.
+- From a release before 0.13, a credential the database refuses is left out of the copy and named in Administration › Credentials, the others copied.
+
 ### Security
 
 - **A credential's Test no longer keeps a query-parameter token in its text** (credentials#1). A redirect is named by its host alone (before, the whole `Location`, which a login redirect's `next=` fills with the request and its token), and the token is taken out in every form an address carries it (escaped for a query or a path, and escaped twice). The text was kept as the last test, returned by `GET /api/v1/credentials`, written into backups and the audit log.
