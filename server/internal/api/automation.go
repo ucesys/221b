@@ -695,7 +695,10 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 		answerJSON(w, r, variablesAnswer{Params: before, Change: &saved})
 		return
 	}
-	if err := s.opts.AutomationStore.SetVariablesFor(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, next, scope); err != nil {
+	// What this save changes, over the variables as they are now: one
+	// saved or approved since they were read (Sherlock may weigh this for
+	// 45 s) is never undone by it.
+	if err := s.opts.AutomationStore.SetVariablesFrom(automation.SetBy(r.Context(), s.automationWho(r)), list.Cluster, id, before, next); err != nil {
 		s.recordAutomation(r, audit.ActionAutomationParams, list.Cluster, "fleet "+id, audit.OutcomeFailed, err.Error())
 		jsonError(w, automationStatus(err), err.Error())
 		return

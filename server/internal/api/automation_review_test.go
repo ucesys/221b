@@ -138,3 +138,57 @@ func TestARunRequestRejectedWhileItIsApprovedDoesNotRunRejected(t *testing.T) {
 		}
 	}
 }
+
+// meanwhile is a store's backend that, armed, runs on once when the
+// scripts are read next: what someone else saves while a save is being
+// weighed (Sherlock may take 45 s).
+type meanwhile struct {
+	kv.Backend
+	armed atomic.Bool
+	on    func()
+}
+
+func (m *meanwhile) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if key == automation.ScriptsKey && m.armed.CompareAndSwap(true, false) {
+		m.on()
+	}
+	return m.Backend.LoadKey(ctx, key)
+}
+
+// A save of a fleet's variables sets what it changes and nothing else
+// (finding 6): a value someone else saved while it was weighed stays, and
+// one it would set that changed meanwhile refuses it.
+func TestAFleetSaveDoesNotUndoWhatChangedWhileItWasWeighed(t *testing.T) {
+	m := &meanwhile{Backend: &kv.Memory{}}
+	e := autoSetupOver(t, "ops@corp.example", clusters.EnvOther, m)
+	ctx := context.Background()
+	approved(t, e.store, "reads", valuesScript)
+	set := func(values map[string]string, sensitive ...string) {
+		t.Helper()
+		if err := e.store.SetVariables(ctx, clusters.LocalID, allNodes, automation.FleetVariables{Values: values, Sensitive: sensitive}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(map[string]string{"X": "1", "Y": "old", "PW": "pw-plain"})
+	// Ann saves X=2, sending Y and PW as she read them; meanwhile Y is
+	// changed and PW marked sensitive.
+	m.on = func() { set(map[string]string{"X": "1", "Y": "new", "PW": "pw-plain"}, "PW") }
+	m.armed.Store(true)
+	if code, body := e.do(t, "PUT", "/api/v1/automation/fleets/_all/variables", `{"values":{"X":"2","Y":"old","PW":"pw-plain"}}`); code != http.StatusOK {
+		t.Fatalf("%d %s", code, body)
+	}
+	vars, _ := e.store.Variables(ctx, clusters.LocalID)
+	all := vars[allNodes]
+	if all.Values["X"] != "2" || all.Values["Y"] != "new" || !automation.IsHidden(all.Values["PW"]) || len(all.Sensitive) != 1 {
+		t.Fatalf("after the save: %+v", all)
+	}
+	// Ann sets Y, which changed since she read it: refused.
+	m.on = func() { set(map[string]string{"X": "2", "Y": "newer", "PW": all.Values["PW"]}, "PW") }
+	m.armed.Store(true)
+	if code, body := e.do(t, "PUT", "/api/v1/automation/fleets/_all/variables", `{"values":{"X":"2","Y":"mine","PW":"`+all.Values["PW"]+`"},"sensitive":["PW"]}`); code != http.StatusConflict || !strings.Contains(body, "Y differ") {
+		t.Fatalf("%d %s", code, body)
+	}
+	if vars, _ := e.store.Variables(ctx, clusters.LocalID); vars[allNodes].Values["Y"] != "newer" {
+		t.Fatalf("Y is %q", vars[allNodes].Values["Y"])
+	}
+}
