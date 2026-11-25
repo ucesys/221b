@@ -133,7 +133,7 @@ type configMap struct {
 // LoadKey reads one key of the ConfigMap (the settings, or Sherlock's
 // spend) and the ConfigMap's resourceVersion.
 func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
-	raw, err := c.rest.Get().Namespace(c.namespace).Resource("configmaps").Name(c.name).Do(ctx).Raw()
+	raw, err := rawOf(ctx, c.rest.Get().Namespace(c.namespace).Resource("configmaps").Name(c.name))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, "", kv.ErrNotFound
@@ -162,7 +162,7 @@ func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte, ve
 		body["metadata"] = map[string]string{"resourceVersion": version}
 	}
 	patch, _ := json.Marshal(body)
-	raw, err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Raw()
+	raw, err := rawOf(ctx, c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch))
 	if err != nil {
 		if apierrors.IsConflict(err) {
 			return "", kv.ErrConflict
@@ -180,7 +180,7 @@ func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte, ve
 // DeleteKey drops one key, leaving the others as they are.
 func (c *ConfigMapStorage) DeleteKey(ctx context.Context, key string) error {
 	patch, _ := json.Marshal(map[string]any{"data": map[string]any{key: nil}})
-	_, err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Raw()
+	_, err := rawOf(ctx, c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch))
 	if err != nil {
 		return describeConfigMapError("saving to", c.Ref(), err)
 	}

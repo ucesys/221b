@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validation/path"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/yaml"
 )
 
@@ -49,7 +50,7 @@ func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, n
 			path = fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", k.Group, k.Version, namespace, k.Resource)
 		}
 	}
-	raw, err := cs.CoreV1().RESTClient().Get().AbsPath(path+"/"+name).SetHeader("Accept", "application/json").Do(ctx).Raw()
+	raw, err := rawOf(ctx, cs.CoreV1().RESTClient().Get().AbsPath(path+"/"+name).SetHeader("Accept", "application/json"))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", ErrNotFound
@@ -68,6 +69,18 @@ func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, n
 		hideSecretData(obj)
 	}
 	return ToYAML(obj)
+}
+
+// rawOf runs a request and returns its body, or as its error the API
+// server's own Status (kube#15): Raw's error is client-go's generic one
+// ("unknown" for a JSON body, a fixed sentence for 422 and 5xx), which
+// loses the reason, an RBAC refusal's say.
+func rawOf(ctx context.Context, req *rest.Request) ([]byte, error) {
+	res := req.Do(ctx)
+	if err := res.Error(); err != nil {
+		return nil, err
+	}
+	return res.Raw()
 }
 
 // CheckPathNames refuses a namespace or name that is not a single path

@@ -59,7 +59,7 @@ func (o *ConfigMapObjects) selector() string {
 }
 
 func (o *ConfigMapObjects) Load(ctx context.Context, name string) (map[string][]byte, string, error) {
-	raw, err := o.rest.Get().Namespace(o.namespace).Resource("configmaps").Name(o.prefix + name).Do(ctx).Raw()
+	raw, err := rawOf(ctx, o.rest.Get().Namespace(o.namespace).Resource("configmaps").Name(o.prefix+name))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, "", kv.ErrNotFound
@@ -87,13 +87,13 @@ func (o *ConfigMapObjects) Save(ctx context.Context, name, key string, b []byte,
 				"labels": map[string]string{"app.kubernetes.io/instance": o.instance, "app.kubernetes.io/managed-by": "221b", o.label: name}},
 			"data": map[string]string{key: string(b)}}
 		payload, _ := json.Marshal(body)
-		raw, err = o.rest.Post().Namespace(o.namespace).Resource("configmaps").Body(payload).Do(ctx).Raw()
+		raw, err = rawOf(ctx, o.rest.Post().Namespace(o.namespace).Resource("configmaps").Body(payload))
 		if apierrors.IsAlreadyExists(err) {
 			return "", kv.ErrConflict
 		}
 	} else {
 		patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: string(b)}, "metadata": map[string]string{"resourceVersion": ver}})
-		raw, err = o.rest.Patch(types.MergePatchType).Namespace(o.namespace).Resource("configmaps").Name(o.prefix + name).Body(patch).Do(ctx).Raw()
+		raw, err = rawOf(ctx, o.rest.Patch(types.MergePatchType).Namespace(o.namespace).Resource("configmaps").Name(o.prefix+name).Body(patch))
 		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 			return "", kv.ErrConflict
 		}
@@ -118,7 +118,7 @@ func (o *ConfigMapObjects) Delete(ctx context.Context, name string) error {
 }
 
 func (o *ConfigMapObjects) List(ctx context.Context) ([]string, error) {
-	raw, err := o.rest.Get().Namespace(o.namespace).Resource("configmaps").Param("labelSelector", o.selector()).Do(ctx).Raw()
+	raw, err := rawOf(ctx, o.rest.Get().Namespace(o.namespace).Resource("configmaps").Param("labelSelector", o.selector()))
 	if err != nil {
 		return nil, describeConfigMapError("listing", o.Ref(), err)
 	}
