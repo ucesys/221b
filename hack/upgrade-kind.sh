@@ -27,12 +27,23 @@
 # the local docker (hack/lib.sh). CLUSTER names the kind cluster
 # (221b-upgrade). Needs docker, kubectl, helm and git with the tag fetched.
 # Set KEEP=1 to keep the cluster afterwards.
+#
+# A release of 0.13 or later keeps its records in its own bundled database
+# already (FROM_DB): its database image (ghcr.io/ucesys/221b-postgres of
+# the same version) is pulled too, nothing is copied at the upgrade, and the
+# rollback finds every record still in the database, since a build runs
+# against a newer schema, which only added (server/internal/db/migrate.go).
 set -euo pipefail
 # shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 FROM_TAG=${1:?usage: hack/upgrade-kind.sh vX.Y.Z}
 FROM_IMAGE=${FROM_IMAGE:-ghcr.io/ucesys/221b:${FROM_TAG#v}}
+FROM_DB=
+if [ "$(printf '%s\n' 0.13.0 "${FROM_TAG#v}" | sort -V | head -1)" = 0.13.0 ]; then
+  FROM_DB=1
+  FROM_DB_IMAGE=${FROM_DB_IMAGE:-ghcr.io/ucesys/221b-postgres:${FROM_TAG#v}}
+fi
 MINOR=${MINOR:-1.37}
 CLUSTER=${CLUSTER:-221b-upgrade}
 NS=221b
@@ -147,13 +158,22 @@ git -C "$ROOT" archive "$FROM_TAG" deploy/helm/221b | tar -x -C "$FROM_CHART"
 FROM_CHART=$FROM_CHART/deploy/helm/221b
 grep -E '^(version|appVersion):' "$FROM_CHART/Chart.yaml"
 docker image inspect "$FROM_IMAGE" > /dev/null 2>&1 || docker pull -q "$FROM_IMAGE"
-echo "from $FROM_IMAGE to $IMAGE"
+FROM_VALUES=()
+if [ -n "$FROM_DB" ]; then
+  docker image inspect "$FROM_DB_IMAGE" > /dev/null 2>&1 || docker pull -q "$FROM_DB_IMAGE"
+  FROM_VALUES=(--set "database.bundled.image.repository=${FROM_DB_IMAGE%:*}" --set "database.bundled.image.tag=${FROM_DB_IMAGE##*:}"
+    --set database.bundled.image.pullPolicy=Never)
+  echo "from $FROM_IMAGE and $FROM_DB_IMAGE to $IMAGE and $DB_IMAGE"
+else
+  echo "from $FROM_IMAGE to $IMAGE"
+fi
 endstep
 
 step "Create a kind cluster with Kubernetes $MINOR"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$(kind_config)" --wait 120s
 kind load docker-image "$FROM_IMAGE" --name "$CLUSTER"
+if [ -n "$FROM_DB" ]; then kind load docker-image "$FROM_DB_IMAGE" --name "$CLUSTER"; fi
 load_images "$CLUSTER"
 endstep
 
@@ -170,7 +190,8 @@ helm install "$RELEASE" "$FROM_CHART" -n "$NS" \
   --set "auth.local.users[0].email=$ADMIN" --set "auth.local.users[0].name=Ada Admin" --set "auth.local.users[0].passwordHash=$hash" \
   --set 'auth.local.users[0].roles[0]=superAdmin' \
   --set "auth.admins[0]=$ADMIN" \
-  --wait --timeout 120s
+  "${FROM_VALUES[@]}" \
+  --wait --timeout "$HELM_TIMEOUT"
 open_console
 signin "$URL" "$ADMIN"
 api "$URL/api/v1/me" | has '"admin":true'
@@ -216,13 +237,24 @@ echo "kept: $before"
 echo "$before" | has '"refreshSeconds": 13'
 echo "$before" | has '"upgrade"'
 echo "$before" | has "$key"
-# Where the release before keeps them: the settings ConfigMap, and the
-# connection's Secret (its record and its credential).
-kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | has '"refreshSeconds":13'
-kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
+if [ -n "$FROM_DB" ]; then
+  # Where a release of 0.13 keeps them: rows of its database, and the
+  # connection's credential alone in its Secret (DB-64).
+  [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from settings where value::text ~ '\"refreshSeconds\": ?13[,}]'")" -ge 1 ] ||
+    { echo "$FROM_TAG has no settings row with refreshSeconds 13"; exit 1; }
+  kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert "spec.json" not in d and "token" in d, sorted(d)'
+else
+  # Where the release before keeps them: the settings ConfigMap, and the
+  # connection's Secret (its record and its credential).
+  kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | has '"refreshSeconds":13'
+  kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert "spec.json" in d and "token" in d, sorted(d)'
+fi
 endstep
 
 # check_kept WHAT: everything given above is still there.
@@ -273,7 +305,9 @@ in_database() {
   check_database "$URL" api
   # Each record set copied is written down once (DB-17).
   db_sql "$NS" "$DBNAME-0" "select import_id || ' from ' || source || ': ' || record_count from imports order by import_id" | tee "$WORK/upgrade-imports.txt"
-  has -i "configmap" "$WORK/upgrade-imports.txt" || { echo "no record set was copied from a ConfigMap"; exit 1; }
+  if [ -z "$FROM_DB" ]; then
+    has -i "configmap" "$WORK/upgrade-imports.txt" || { echo "no record set was copied from a ConfigMap"; exit 1; }
+  fi
   # The rows: the settings with their refresh rate, the fleet, the
   # acknowledged alert and the connection.
   [ "$(db_sql "$NS" "$DBNAME-0" "select count(*) from settings where value::text ~ '\"refreshSeconds\": ?13[,}]'")" -ge 1 ] ||
@@ -329,6 +363,17 @@ echo "users.json: version $v"
 [ "$v" -ge 1 ]
 endstep
 
+if [ -n "$FROM_DB" ]; then
+  step "helm rollback to $FROM_TAG: its database keeps every record, and it runs on the newer schema"
+  helm rollback "$RELEASE" 1 -n "$NS" --wait --timeout "$HELM_TIMEOUT"
+  kubectl -n "$NS" rollout status "statefulset/$DBNAME" --timeout=300s
+  open_console
+  [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$FROM_IMAGE" ]
+  check_kept "the rollback"
+  api "$URL/api/v1/admin/users" | has 'Una Upgraded'
+  echo "the rollback to $FROM_TAG kept every record"
+  endstep
+else
 step "helm rollback to $FROM_TAG: the accounts and Sherlock's key, and none of what is in the database (docs/upgrading.md)"
 helm rollback "$RELEASE" 1 -n "$NS" --wait --timeout "$HELM_TIMEOUT"
 open_console
@@ -368,6 +413,7 @@ fi
   { echo "the release before found the connection"; exit 1; }
 echo "the rollback has the accounts and Sherlock's key, and not the settings, fleet, acknowledgement or connection, as documented"
 endstep
+fi
 
 step "helm upgrade again: the database has everything, what the earlier release did not know too"
 upgrade
