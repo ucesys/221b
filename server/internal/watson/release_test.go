@@ -1,6 +1,7 @@
 package watson
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"strconv"
@@ -91,5 +92,25 @@ func TestAnUpgradeWithNoValuesKeepsTheReleasesValues(t *testing.T) {
 	text := strings.Join(got.Plan.Impact, "\n")
 	if strings.Contains(text, "Removes") || !strings.Contains(text, "Helm keeps the values the release has") || got.Plan.refusal != "" {
 		t.Fatalf("impact:\n%s\nrefusal %q", text, got.Plan.refusal)
+	}
+}
+
+// helm status masks the notes with the chart's own values too, whose
+// defaults can hold a credential (review of November 24, 2026, cut by the
+// cap: helm.go:166).
+func TestHelmStatusMasksNotesWithTheChartsDefaults(t *testing.T) {
+	_, cl, _, _, _ := setup(t, Options{})
+	helmRecord(t, cl, "web", "notes", 1, `{"name":"notes","namespace":"web","version":1,"info":{"status":"deployed","notes":"Sign in with admin / chart-default-pw7."},"chart":{"metadata":{"name":"web","version":"1.0.0"},"values":{"adminPassword":"chart-default-pw7"}},"config":{},"manifest":""}`)
+	var d Discovery
+	disc, err := d.For(cl.ID, cl.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"helm status notes -n web", "helm status notes -n web -o json"} {
+		var out bytes.Buffer
+		code := runHelm(context.Background(), mustParse(t, line), Target{Config: cl.Config, Discovery: disc}, &out, &out)
+		if code != 0 || strings.Contains(out.String(), "chart-default-pw7") || !strings.Contains(out.String(), "Sign in with admin") {
+			t.Errorf("%s: %d %s", line, code, out.String())
+		}
 	}
 }

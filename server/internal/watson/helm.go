@@ -163,8 +163,14 @@ func helm(ctx context.Context, c *Command, t Target, out, errOut io.Writer) erro
 		if err != nil {
 			return err
 		}
+		// The chart's own values mask the notes too: credentials can come
+		// from its defaults.
+		p := statusPrinter{rel: rel}
+		if rel.Chart != nil {
+			p.defaults = rel.Chart.Values
+		}
 		rel.Chart = nil
-		return format.Write(out, statusPrinter{rel: rel})
+		return format.Write(out, p)
 	case "helm history":
 		cfg, err := helmConfig(ctx, c, t, errOut, ns)
 		if err != nil {
@@ -390,6 +396,8 @@ func (v valuesWriter) WriteYAML(out io.Writer) error { return output.EncodeYAML(
 type statusPrinter struct {
 	rel          *release.Release
 	showMetadata bool
+	// defaults are the chart's values when the chart is not printed.
+	defaults map[string]any
 }
 
 func (s statusPrinter) WriteJSON(out io.Writer) error { return output.EncodeJSON(out, s.redacted()) }
@@ -424,7 +432,7 @@ func (s statusPrinter) redacted() *release.Release {
 // notes are the release's rendered notes with its credentials masked, as
 // the Helm tab has them.
 func (s statusPrinter) notes() string {
-	var defaults map[string]any
+	defaults := s.defaults
 	if s.rel.Chart != nil {
 		defaults = s.rel.Chart.Values
 	}
