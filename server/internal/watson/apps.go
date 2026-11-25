@@ -537,12 +537,21 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	vals := a.vals
 	desc := "221B: " + a.src.String() + " (" + short(a.co.Commit) + ")"
 	install := c.Name() == "helm install"
+	replace := false
 	if !install && c.Has("install") {
-		// helm upgrade --install: an install when there is no release yet.
+		// helm upgrade --install: an install when there is no release yet,
+		// or only the history an uninstall --keep-history kept, which the
+		// install replaces, as the helm CLI does.
 		h := action.NewHistory(cfg)
 		h.Max = 1
-		if _, err := h.Run(name); errors.Is(err, driver.ErrReleaseNotFound) {
+		versions, err := h.Run(name)
+		if errors.Is(err, driver.ErrReleaseNotFound) {
 			install = true
+		} else if rels, verr := v1List(versions); err == nil && verr == nil {
+			sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
+			if uninstalled(rels) {
+				install, replace = true, true
+			}
 		}
 	}
 	if dry {
@@ -552,6 +561,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	if install {
 		i := action.NewInstall(cfg)
 		i.ReleaseName, i.Namespace, i.CreateNamespace = name, ns, c.Has("create-namespace")
+		i.Replace = replace
 		i.Timeout, i.WaitStrategy, i.DisableHooks = timeout, wait, c.Has("no-hooks")
 		i.WaitOptions = append(i.WaitOptions, kube.WithStatusComputeWorkers(4))
 		// The API server validates what it is sent, and says what is wrong;
@@ -709,11 +719,14 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 	if a.src.FromRepository() {
 		from = fmt.Sprintf("%s, archive %s%s", a.src, short(a.co.Commit), when)
 	}
-	install := c.Name() == "helm install" || (c.Has("install") && cur == nil)
+	install := c.Name() == "helm install" || (c.Has("install") && (cur == nil || uninstalled(rels)))
 	switch {
 	case relErr != nil:
 		// What runs now is not known, so nothing is said about what changes.
 		impact = append(impact, fmt.Sprintf("Deploys chart %s %s (app %s) from %s.", ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from))
+	case install && cur != nil && c.Name() == "helm upgrade":
+		objs := objectNames(r.Manifest)
+		impact = append(impact, fmt.Sprintf("Release %s/%s was uninstalled with its history kept (revision %d): installs chart %s %s (app %s) from %s over it, as revision %d: creates %s: %s.", ns, name, cur.Version, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1, plural(len(objs), "object", "objects"), listText(objs, 8)))
 	case install && cur != nil:
 		impact = append(impact, fmt.Sprintf("Release %s/%s exists already (revision %d): helm will refuse. Upgrade it instead.", ns, name, cur.Version))
 	case install:
@@ -782,6 +795,13 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		impact = append(impact, fmt.Sprintf("Runs %s: %s.", plural(len(names), "image", "images"), listText(names, 6)))
 	}
 	return targets, guards, impact
+}
+
+// uninstalled says whether the newest revision is one an uninstall
+// --keep-history kept: helm upgrade --install installs over it. rels are
+// newest first.
+func uninstalled(rels []*release.Release) bool {
+	return len(rels) > 0 && rels[0].Info != nil && rels[0].Info.Status.String() == "uninstalled"
 }
 
 // upgradeBase is the revision Helm upgrades from (prepareUpgrade): the

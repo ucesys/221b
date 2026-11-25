@@ -114,3 +114,22 @@ func TestHelmStatusMasksNotesWithTheChartsDefaults(t *testing.T) {
 		}
 	}
 }
+
+// helm upgrade --install after an uninstall --keep-history installs, as
+// the helm CLI does, and its card says so (review of November 24, 2026,
+// cut by the cap: apps.go:517).
+func TestUpgradeInstallAfterAnUninstallThatKeptItsHistoryInstalls(t *testing.T) {
+	svc, cl, _ := pinSetup(t, Options{})
+	repo := gitChart(t)
+	helmRecord(t, cl, "web", "kept", 1, `{"name":"kept","namespace":"web","version":1,"info":{"status":"uninstalled"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"config":{},"manifest":""}`)
+	got := card(t, svc, cl, manager(alice()), "helm upgrade kept --install --git "+repo+" --path charts/web --ref master -n web")
+	if text := strings.Join(got.Plan.Impact, "\n"); !strings.Contains(text, "uninstalled with its history kept") {
+		t.Fatalf("impact:\n%s", text)
+	}
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), got.ID); err != nil {
+		t.Fatal(err)
+	}
+	if done := wait(t, svc, got.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusDone {
+		t.Fatalf("%s: %s", done.Status, outputOf(svc, got.ID))
+	}
+}
