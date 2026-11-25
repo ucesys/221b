@@ -1143,7 +1143,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		return it, r
 	}
 	if s.opts.Now().After(it.Expires) {
-		s.lapseLocked(it, fmt.Sprintf("The approval lapsed: cards are good for %s. Send the command again for a fresh card.", minutes(s.opts.Lapse)))
+		s.lapseLocked(it, lapsedText(it))
 		s.mu.Unlock()
 		return it, fmt.Errorf("%w: %s", ErrState, it.Reason)
 	}
@@ -1188,6 +1188,12 @@ func decidedText(it *Item) string {
 		return fmt.Sprintf("already approved by %s at %s; it is %s", name, it.Approved.UTC().Format("2006-01-02 15:04:05 UTC"), it.Status)
 	}
 	return "it is " + it.Status
+}
+
+// lapsedText says a card's time is up, with how long it was good for: a
+// card waiting for a second person is good for longer (TB-38).
+func lapsedText(it *Item) string {
+	return fmt.Sprintf("The approval lapsed: this card was good for %s. Send the command again for a fresh card.", minutes(it.Expires.Sub(it.Created)))
 }
 
 func minutes(d time.Duration) string {
@@ -1746,7 +1752,7 @@ func (s *Service) Watch(ctx context.Context, clusterOf func(id string) (Cluster,
 				continue
 			}
 			if now.After(it.Expires) {
-				s.lapseLocked(it, fmt.Sprintf("The approval lapsed: cards are good for %s. Send the command again for a fresh card.", minutes(s.opts.Lapse)))
+				s.lapseLocked(it, lapsedText(it))
 				continue
 			}
 			if it.Plan != nil && it.Plan.Ready && len(it.Plan.guards) > 0 {

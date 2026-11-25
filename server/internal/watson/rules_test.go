@@ -192,3 +192,21 @@ func TestOneRequestMakesABoundedNumberOfCards(t *testing.T) {
 		t.Fatalf("%d items, the last %+v", len(items), items[len(items)-1])
 	}
 }
+
+// A lapsed card says how long it was good for: 30 minutes for one that
+// waited for a second person, not the 10 of the others (review of
+// November 24, 2026, nit: service.go:979, 1509).
+func TestALapsedCardSaysHowLongItWasGoodFor(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	svc, cl, _, _, _ := setup(t, Options{Now: clock})
+	it := svc.SubmitSession(cl, alice(), SessionCard{Tool: "shell", Summary: "a node shell", NeedsTwo: true}, "Tools")
+	mu.Lock()
+	now = now.Add(31 * time.Minute)
+	mu.Unlock()
+	got := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	if got.Status != StatusLapsed || !strings.Contains(got.Reason, "30 minutes") {
+		t.Fatalf("%s %q", got.Status, got.Reason)
+	}
+}
