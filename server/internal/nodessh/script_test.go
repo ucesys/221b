@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ type fakeHost struct {
 const fakeSSHD = `#!/bin/sh
 cfg="$ROOT/etc/ssh/sshd_config"
 if [ "$1" = -t ]; then
+  # SLOW_T stops here a while, saying so, for a test to signal the script.
+  if [ -n "$SLOW_T" ]; then touch "$ROOT/at-t"; sleep 1; fi
   if [ -n "$NO_INCLUDE" ] && grep -q '^Include' "$cfg"; then echo "Bad configuration option: Include"; exit 255; fi
   [ -d "$ROOT/run/sshd" ] || { echo "Missing privilege separation directory"; exit 255; }
   exit 0
@@ -740,5 +743,72 @@ func TestTheIncludeReadsTheConsolesDropInAlone(t *testing.T) {
 	h.mustRun(UnpairScript(testCA, testConsole))
 	if got := h.read("etc/ssh/sshd_config"); got != own {
 		t.Fatalf("the system's Include, sshd_config:\n%s", got)
+	}
+}
+
+// A pairing stopped by a signal mid-way puts the files back and lets the
+// lock go, under every shell a node may have (finding 12 of the review of
+// November 24, 2026: dash and busybox sh, killed by TERM or PIPE, ran no
+// rollback and left the lock, and bash ran it with status 0, which
+// restored nothing). The console sends TERM when it gives up; a closed
+// connection is HUP or PIPE.
+func TestAPairingStoppedBySignalPutsTheNodeBack(t *testing.T) {
+	var shells [][]string
+	for _, sh := range [][]string{{"sh"}, {"dash"}, {"bash"}, {"busybox", "sh"}} {
+		if _, err := exec.LookPath(sh[0]); err == nil {
+			shells = append(shells, sh)
+		}
+	}
+	for _, sh := range shells {
+		for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGPIPE} {
+			t.Run(strings.Join(sh, " ")+" "+sig.String(), func(t *testing.T) {
+				h := newHost(t)
+				a := newConsole(t, "ns.a")
+				h.mustRun(a.pair(user(t), 22))
+				before := map[string]string{}
+				for _, f := range []string{"etc/ssh/sshd_config", "etc/ssh/sshd_config.d/221b.conf", "etc/ssh/221b/ca.pub", "etc/ssh/221b/principals-" + user(t)} {
+					before[f] = h.read(f)
+				}
+				script := PairScript(testCA, testConsole, user(t), 22)
+				script = strings.ReplaceAll(script, "/etc/ssh", h.root+"/etc/ssh")
+				script = strings.ReplaceAll(script, "/run/sshd", h.root+"/run/sshd")
+				cmd := exec.Command(sh[0], append(sh[1:], "-c", script)...)
+				cmd.Env = append(append([]string{}, h.env...), "SLOW_T=1")
+				var out bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &out, &out
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; !h.exists("at-t"); i++ {
+					if i > 500 {
+						t.Fatalf("the script never reached sshd -t:\n%s", out.String())
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if err := cmd.Process.Signal(sig); err != nil {
+					t.Fatal(err)
+				}
+				if err := cmd.Wait(); err == nil {
+					t.Fatalf("the script ended well after %s:\n%s", sig, out.String())
+				}
+				for f, want := range before {
+					if got := h.read(f); got != want {
+						t.Errorf("%s is now:\n%s\nwas:\n%s", f, got, want)
+					}
+				}
+				if h.exists("etc/ssh/221b.lock") {
+					t.Error("the lock stayed")
+				}
+				if left, _ := filepath.Glob(filepath.Join(h.root, "etc/ssh/221b.undo.*")); len(left) != 0 {
+					t.Errorf("the copies stayed: %v", left)
+				}
+				if !h.admits(a.own(), user(t)) {
+					t.Error("the earlier pairing was lost")
+				}
+				if t.Failed() {
+					t.Logf("the script said:\n%s", out.String())
+				}
+			})
+		}
 	}
 }

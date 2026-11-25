@@ -70,16 +70,22 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		// before anything changed.
 		`nospace() { echo "221B: no copy of the node's SSH files could be kept under /etc/ssh (is it full?); nothing was changed"; exit 5; }`,
 		`b=$(mktemp -d ` + undoDir + `.XXXXXX) || nospace`,
-		`saved=`,
+		// The rollback runs unless the pairing got to its end: on a
+		// failure, and on a signal (signalTraps), whatever exit code a
+		// shell gives its EXIT trap then; once begun, no signal stops it.
+		`saved= reloaded= finished=`,
 		`undo() {`,
 		`  code=$?`,
 		`  trap - EXIT`,
+		`  trap '' HUP INT PIPE TERM`,
 		`  set +e`,
-		`  if [ "$code" -ne 0 ] && [ -n "$saved" ]; then`,
+		`  if [ -z "$finished" ]; then [ "$code" -ne 0 ] || code=1; fi`,
+		`  if [ -z "$finished" ] && [ -n "$saved" ]; then`,
 		`    r=0`,
 		`    if [ -f "$b/sshd_config" ]; then mv -f "$b/sshd_config" /etc/ssh/sshd_config || r=1; fi`,
 		`    rm -f ` + nodeConf + `; if [ -f "$b/221b.conf" ]; then mv -f "$b/221b.conf" ` + nodeConf + ` || r=1; fi`,
 		`    rm -rf "$d"; if [ -d "$b/dir" ]; then mv "$b/dir" "$d" || r=1; fi`,
+		`    if [ "$r" -eq 0 ] && [ -n "$reloaded" ]; then reload_sshd >/dev/null 2>&1; fi`,
 		`    if [ "$r" -eq 0 ]; then echo "221B: the pairing did not finish; the node's SSH configuration is as it was"`,
 		`    else echo "221B: the pairing did not finish, and putting the node's SSH files back failed: check /etc/ssh/sshd_config, ` + nodeConf + ` and $d by hand; the copies are in $b"; b=; fi`,
 		`  fi`,
@@ -121,9 +127,11 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`if [ "$(value trustedusercakeys)" != "$d/ca.pub" ] || [ "$(value authorizedprincipalsfile)" != "$d/principals-%u" ]; then echo "221B: sshd on this node does not use the drop-in: another setting comes first, or the Include sits under a Match block"; exit 6; fi`,
 		portCheck(port),
 		reloadSSHD,
+		`reloaded=1`,
 		`reload_sshd`,
 		`for f in /etc/ssh/ssh_host_*_key.pub; do [ -r "$f" ] && echo "` + markHostKey + `$(cut -d' ' -f1,2 "$f")"; done`,
 		`echo "` + markPaired + `$u"`,
+		`finished=1`,
 	}, "\n")
 }
 
@@ -238,11 +246,22 @@ if value denygroups | listed x "$g"; then refuse "DenyGroups keeps a group of $u
 if [ -n "$(value allowgroups)" ] && ! value allowgroups | listed x "$g"; then refuse "AllowGroups names no group of $u"; fi
 if [ "$(value usepam)" != yes ]; then case "$(awk -F: -v u="$u" '$1==u{print $2}' /etc/shadow 2>/dev/null)" in '!'*) refuse "the account is locked (its password in /etc/shadow starts with !), and an sshd without PAM refuses a locked account; unlock it, for instance with usermod -p '*' $u" ;; esac; fi
 set +f`
+	// signalTraps turn the signals a script is stopped with into an exit,
+	// which runs its EXIT trap: dash and busybox sh run none when killed
+	// by one, and bash runs it with the status of the last command. A
+	// pairing ended from the console gets TERM, a closed connection HUP
+	// or PIPE.
+	signalTraps = `trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 141' PIPE
+trap 'exit 143' TERM`
 	// lockNode lets one script at a time near the files the consoles
 	// share: each rewrites them, and a rollback puts back what was there
 	// when it began, so two at once could lose the other's line. The lock
-	// is released on exit; one left by a killed script is broken once old.
-	lockNode = `lock=` + nodeLock + `
+	// is released on exit, a signal's too; one left by a script killed
+	// outright is broken once old.
+	lockNode = signalTraps + `
+lock=` + nodeLock + `
 tries=0
 until mkdir "$lock" 2>/dev/null; do
   if [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then rmdir "$lock" 2>/dev/null || true; fi
