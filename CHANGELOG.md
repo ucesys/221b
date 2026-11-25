@@ -89,6 +89,8 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 
 ### Fixed
 
+- A connection restored from a backup was taken as the backup had it: its name, description and server untrimmed, and its credential unread (clusters review, sweep). A restore now trims them and reads the credential as an edit does: a kubeconfig that signs in through a plugin, refers to files or acts as another user, or a token that is none, is refused; a credential that expired since the backup is restored and shows as expired.
+
 - A connection restored from a backup without its secret was tested as if the backup's placeholder were its credential, and the placeholder was sent to the API server (clusters review, sweep). Its test now says the credential is not in the backup, and sends nothing in its place.
 
 - The warning *the saved connections could not be read* was said again at every sync while several connections could not be read, because their errors came in another order each time (clusters review, nit). They are now in the order of their ids, and the warning is said once.

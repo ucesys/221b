@@ -951,3 +951,37 @@ func TestAKubeconfigThatActsAsAnotherIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Sweep: a restore took a backup's connection as it came, untrimmed and
+// its credential unread, where an edit trims it and reads the credential
+// (a kubeconfig's plugin, its files, a token that is not one).
+func TestARestoreChecksWhatAnEditChecks(t *testing.T) {
+	m, ctx := started(t, clusters.NewMemoryStore())
+	spec := clusters.Spec{ID: "padded", Name: "padded  ", Description: " what it is for ", Server: " https://10.9.0.1:6443 ", Env: "development", CA: "system", Auth: "token", Mode: "read", Added: at}
+	sum, err := m.Restore(ctx, spec, clusters.Credential{Token: saToken("padded")})
+	must(t, err)
+	if sum.Name != "padded" || sum.Description != "what it is for" || sum.Server != "https://10.9.0.1:6443" {
+		t.Errorf("restored untrimmed: %q %q %q", sum.Name, sum.Description, sum.Server)
+	}
+	plugin := `apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "https://10.9.0.2:6443"}}]
+users: [{name: u, user: {exec: {apiVersion: client.authentication.k8s.io/v1, command: aws}}}]
+contexts: [{name: c, context: {cluster: c, user: u}}]
+current-context: c
+`
+	bad := clusters.Spec{ID: "plugin", Name: "plugin", Server: "https://10.9.0.2:6443", Env: "development", CA: "system", Auth: "kubeconfig", Mode: "read", Added: at}
+	if _, err := m.Restore(ctx, bad, clusters.Credential{Kubeconfig: plugin}); err == nil {
+		t.Error("a kubeconfig that signs in through a plugin was restored")
+	}
+	notAToken := clusters.Spec{ID: "nonsense", Name: "nonsense", Server: "https://10.9.0.3:6443", Env: "development", CA: "system", Auth: "token", Mode: "read", Added: at}
+	if _, err := m.Restore(ctx, notAToken, clusters.Credential{Token: "not a token"}); err == nil {
+		t.Error("a token that is none was restored")
+	}
+	// A token that expired since the backup is restored, and shows as such.
+	expired := clusters.Spec{ID: "old", Name: "old", Server: "https://10.9.0.4:6443", Env: "development", CA: "system", Auth: "token", Mode: "read", Added: at, Cred: clusters.CredInfo{Set: at}}
+	tok := token(map[string]any{"sub": "system:serviceaccount:kube-system:old", "exp": at.Add(time.Hour).Unix()})
+	if _, err := m.Restore(ctx, expired, clusters.Credential{Token: tok}); err != nil {
+		t.Errorf("a token that expired since its backup: %v", err)
+	}
+}

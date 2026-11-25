@@ -1256,10 +1256,24 @@ func TestNoCredentialIsEverInTheDatabaseOrTheLog(t *testing.T) {
 	must(t, err)
 	// (A connection with no sign-in at all is the simulator's, and is not
 	// one a backup can bring back.)
+	// A restore reads the credential as an edit does: each method's is one
+	// it takes, with the marker in every secret part.
 	for _, auth := range methods[:4] {
 		spec := fullSpec("restored-" + auth)
 		spec.Name, spec.Auth, spec.Server, spec.CA = "restored-"+auth, auth, srv.URL, "system"
-		if _, err := a.Restore(ctx, spec, every); err != nil {
+		c := every
+		switch auth {
+		case "token":
+			c.Token = parts[0] + "." + parts[1] + "." + marker + "restored"
+		case "kubeconfig":
+			c.Kubeconfig, c.Context = kc, "here"
+		case "cert":
+			c.CertPEM = "-----BEGIN CERTIFICATE-----\n" + marker + "\n-----END CERTIFICATE-----"
+			c.KeyPEM = "-----BEGIN PRIVATE KEY-----\n" + marker + "\n-----END PRIVATE KEY-----"
+		case "oidc":
+			c.OIDCIssuer, c.OIDCClientID = "https://issuer.example.com", "console"
+		}
+		if _, err := a.Restore(ctx, spec, c); err != nil {
 			t.Fatalf("restoring a connection by %s: %v", auth, err)
 		}
 	}

@@ -902,8 +902,33 @@ func (m *Manager) Restore(ctx context.Context, spec Spec, cred Credential) (Summ
 	if _, ok := m.Get(spec.ID); ok {
 		return Summary{}, invalid("id", fmt.Sprintf("A connection “%s” is here already, with its own credential.", spec.ID))
 	}
+	// Trimmed and read as an edit is (prepare): a backup is input too.
+	spec.Name = strings.TrimSpace(spec.Name)
+	spec.Description = strings.TrimSpace(spec.Description)
+	spec.Server = strings.TrimSpace(spec.Server)
 	if err := ValidateSpec(spec); err != nil {
 		return Summary{}, err
+	}
+	// The credential is read as when it was saved: a kubeconfig that signs
+	// in through a plugin, refers to files or acts as another user, or a
+	// token that is none, is refused; one that has expired since is
+	// restored, and shows as expired. A placeholder is pasted again later.
+	if !cred.HasPlaceholder() {
+		when := spec.Cred.Set
+		if when.IsZero() {
+			when = m.opts.Now().UTC()
+		}
+		check, server, err := CheckCredential(spec.Auth, cred, spec.Server, when)
+		if err != nil {
+			return Summary{}, err
+		}
+		spec.Server = server
+		if spec.Auth == AuthKubeconfig && strings.TrimSpace(cred.Context) == "" {
+			cred.Context = check.Info.Context
+		}
+	}
+	if _, err := ServerURL(spec.Server); err != nil {
+		return Summary{}, invalid("server", err.Error())
 	}
 	if m.nameTaken(spec.Name, "") {
 		return Summary{}, invalid("name", fmt.Sprintf("Another cluster is already called “%s”.", spec.Name))
