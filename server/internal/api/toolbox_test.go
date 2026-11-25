@@ -746,3 +746,13 @@ func TestToolboxOffersUnpairWithSSHOff(t *testing.T) {
 		t.Fatalf("off: %v", v.Off)
 	}
 }
+
+// Getting Started's SSH step says SSH is off when the chart turns it off:
+// the SSH service always exists, so its absence never told (the toolbox
+// review's sweep).
+func TestGettingStartedSaysSSHIsOff(t *testing.T) {
+	s := &Server{opts: Options{SSH: sshStub{}, Sessions: sessions.New(sessions.Options{Config: tb.Default(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}}
+	if done, why := s.setupHosts(context.Background(), setupRecord{}); done || !strings.Contains(why, "off") {
+		t.Fatalf("%v %q", done, why)
+	}
+}

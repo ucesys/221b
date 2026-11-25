@@ -19,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
+	tb "github.com/ucesys/221b/server/internal/toolbox"
 )
 
 // --- Getting started (Phase 12, GS-01 to GS-12, ADR-103, ADR-104) ---
@@ -474,7 +475,9 @@ func (s *Server) setupFleets(_ context.Context, _ setupRecord) (bool, string) {
 }
 
 func (s *Server) setupHosts(ctx context.Context, _ setupRecord) (bool, string) {
-	if s.opts.SSH == nil {
+	// The SSH service is always made: the chart's toolbox.ssh says
+	// whether SSH is on.
+	if s.opts.SSH == nil || s.opts.Sessions == nil || !s.opts.Sessions.Config().On(tb.ToolSSH) {
 		return false, "SSH to nodes is off in this console (the chart's toolbox.ssh)."
 	}
 	pairs, hosts, paired := 0, 0, 0
