@@ -255,14 +255,18 @@ func (m *Manager) Sync(ctx context.Context) error {
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
-		if err != nil && NotAsked(err) {
+		if err != nil && !errors.Is(err, ErrUnreadable) {
 			// Not marked as seen: marked, the connection would stay as it
-			// is here, or not start at all, until someone changed it.
+			// is here, or not start at all, until someone changed it. Only
+			// a record the store holds and this console cannot read is
+			// left until it changes: every other error (the store away, a
+			// statement timeout, a lock not granted, a Secret's 403 between
+			// the list and the get) may be answered otherwise in a moment.
 			notAsked = append(notAsked, fmt.Errorf("the connection %s could not be read: %w", id, err))
 			continue
 		}
 		// Applied or not, this revision is not read again: an unreadable
-		// one is said once, not every few seconds.
+		// record is said once, not every few seconds.
 		m.seen[id] = rev
 		if err != nil {
 			m.log.Warn("connection not loaded", "cluster", id, "err", err)
@@ -321,8 +325,8 @@ func (m *Manager) Sync(ctx context.Context) error {
 // NotAsked says whether err is a store that could not be asked, rather
 // than a store that answered with something this console cannot use: the
 // database away (db.ErrUnavailable), a time that ran out, or the API
-// server not reached, overloaded or failing. What could not be asked is
-// asked again; what was answered is not, until it changes.
+// server not reached, overloaded or failing. Sync reads again whatever is
+// not ErrUnreadable, these among them.
 func NotAsked(err error) bool {
 	if err == nil {
 		return false

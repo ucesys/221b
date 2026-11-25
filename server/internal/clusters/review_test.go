@@ -17,6 +17,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/jackc/pgx/v5/pgconn"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
@@ -357,5 +358,35 @@ func TestALocalEditNeverSavesWhatWasNotRead(t *testing.T) {
 	refuse = nil
 	if got, _, _ := store.Get(ctx, clusters.LocalID); got.Description != "edited" || got.Env != "production" {
 		t.Fatalf("the edit once read: %+v", got)
+	}
+}
+
+// Finding 7: a connection whose read failed once with an error the sync
+// did not take for "could not be asked" (a statement timeout, a lock not
+// granted, a Secret's 403 between the list and the get) was marked as
+// read and missing from the leader until a restart.
+func TestAConnectionThatCouldNotBeReadIsReadAgain(t *testing.T) {
+	_, srv := simServer(t)
+	store := clusters.NewMemoryStore()
+	f := &flaky{Store: store}
+	m, ctx := started(t, f)
+	spec := clusters.Spec{ID: "prod", Name: "prod", Env: "production", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}
+	tok := clusters.Credential{Token: saToken("prod")}
+	for name, err := range map[string]error{
+		"a statement timeout":  fmt.Errorf("reading the connection prod: %w", &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}),
+		"a lock not granted":   fmt.Errorf("reading the connection prod: %w", &pgconn.PgError{Code: "55P03", Message: "could not obtain lock"}),
+		"a Secret's 403":       fmt.Errorf("reading the connection Secret: %w", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "b221-cluster-prod", errors.New("webhook"))),
+		"an internal error":    fmt.Errorf("reading the connection prod: %w", &pgconn.PgError{Code: "XX000", Message: "internal"}),
+		"too many connections": fmt.Errorf("reading the connection prod: %w", &pgconn.PgError{Code: "53300", Message: "too many connections"}),
+	} {
+		spec.Description = name
+		must(t, store.Save(ctx, spec, &tok))
+		f.set(nil, err, nil)
+		_ = m.Sync(ctx)
+		f.set(nil, nil, nil)
+		_ = m.Sync(ctx)
+		if s, ok := m.Summary("prod"); !ok || s.Description != name {
+			t.Errorf("after %s: the connection is not read again (%v %q)", name, ok, s.Description)
+		}
 	}
 }

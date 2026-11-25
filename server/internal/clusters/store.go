@@ -29,6 +29,13 @@ var ErrNotFound = errors.New("no such cluster connection")
 // read.
 var ErrConflict = errors.New("the connection was changed by someone else since it was read")
 
+// ErrUnreadable is a connection's record that the store holds and this
+// console cannot read (a newer console's format, or not a connection's):
+// what was answered, which a sync says once and does not read again until
+// it changes. Every other error of a read is one the store may answer
+// otherwise in a moment, and is read again at the next sync.
+var ErrUnreadable = errors.New("the connection's record cannot be read by this console")
+
 // ErrLocalUnread is an edit of the local cluster before its saved name
 // and environment could be read: saved, the installation's would replace
 // them, production among them (P3-09).
@@ -317,7 +324,7 @@ func (s *SecretStore) Get(ctx context.Context, id string) (Spec, Credential, err
 	}
 	spec, err := UnmarshalSpec(sec.Data[keySpec])
 	if err != nil {
-		return Spec{}, Credential{}, fmt.Errorf("reading the connection Secret %s: %w", sec.Name, err)
+		return Spec{}, Credential{}, fmt.Errorf("reading the connection Secret %s: %w: %w", sec.Name, ErrUnreadable, err)
 	}
 	return spec, credentialOf(sec.Data), nil
 }

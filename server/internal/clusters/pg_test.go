@@ -320,7 +320,7 @@ func testSyncKeepsWhatRunsWhileTheStoreCannotBeAsked(t *testing.T, store cluster
 	// use is said once: not read again until it changes.
 	_, err = b.Update(ctx, "staging", draft("staging", "development"))
 	must(t, err)
-	f.set(nil, errors.New("the connection was saved by a newer console (format 9)"), nil)
+	f.set(nil, fmt.Errorf("reading the connection Secret: %w: the connection was saved by a newer console (format 9)", clusters.ErrUnreadable), nil)
 	must(t, a.Sync(ctx))
 	asked := f.asked("staging")
 	must(t, a.Sync(ctx))

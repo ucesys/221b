@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **A connection whose first read failed with an unexpected error was missing until a restart** (clusters review, finding 7). A statement timeout, a lock not granted, too many connections or a Secret's 403 between the list and the get marked the connection as read, so it was missing from the leader's list, from Watson and from the API (`Update` and `TestSaved` answered not found). Every such error is now read again at the next sync; only a record this console cannot read is said once and left until it changes.
+
 - **A kubeconfig pasted again kept the old saved CA** (clusters review, finding 6). On a connection that checks the API server against a CA, pasting a fresh kubeconfig (after the cluster's CA was rotated, or to re-point it) saved the old CA, and the connection then failed with "certificate signed by unknown authority". The new kubeconfig's own CA is now taken; the saved one stays only when the kubeconfig has none and no CA is pasted.
 
 ### Security
