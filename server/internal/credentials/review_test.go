@@ -1135,3 +1135,29 @@ func TestTwoEditsOfACredentialTakeTurns(t *testing.T) {
 		t.Fatalf("the row says %s and the secret is another's: %v", kept.Kind, err)
 	}
 }
+
+// credentials-unver-8: removing a secret no credential names does not
+// remove one a restore brings back meanwhile under that id.
+func TestRemovingAnUnnamedSecretSparesARestoredOne(t *testing.T) {
+	mem := &hookedSecret{MemorySecret: &MemorySecret{}}
+	s := open(t, Options{Secrets: mem})
+	const id = "cr-restored"
+	if err := mem.SaveKeyIf(ctx, secretKey(id), []byte(`{"token":"fake-old"}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	mem.mu.Lock()
+	mem.key, mem.hook = secretKey(id), func() {
+		// A restore of the credential of that id, meanwhile.
+		e := BackupEntry{Credential: Credential{ID: id, Name: "restored", Kind: KindToken, Endpoint: "https://a.example", Set: []string{"token"}}, Secret: "sealed"}
+		if _, err := s.Import(ctx, []BackupEntry{e}, func(string) error { return nil }, func(string, string, string) (string, error) { return `{"token":"fake-restored"}`, nil }, func(string, ...any) {}); err != nil {
+			t.Error(err)
+		}
+	}
+	mem.mu.Unlock()
+	if err := s.RemoveUnnamedSecret(ctx, id); !errors.Is(err, ErrInUse) {
+		t.Errorf("removed: %v", err)
+	}
+	if u, err := s.Resolve(ctx, id, UseHTTP, "https://a.example/x"); err != nil || u.Token != "fake-restored" {
+		t.Fatalf("the restored credential lost its secret: %v", err)
+	}
+}

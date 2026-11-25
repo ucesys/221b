@@ -71,6 +71,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **A password or a passphrase is kept as typed, with its spaces** (credentials-unver-5): leading and trailing spaces were cut, so a password that has them never signed in (a Helm repository's moved by the 0.12.1 upgrade too). Only a pasted line end is taken off. Tokens and keys are trimmed as before.
 - **One credential's secret that cannot be read no longer fails every backup** (credentials-unver-6): the credential is backed up without it (logged), and a restore says to give it again. A Secret that cannot be read at all still fails the backup.
 - **Two edits of one credential at once take turns, its secret with its list row** (credentials-unver-7). Each wrote its secret and then its row, so two SuperAdmins (or two replicas) could leave one's row and the other's secret: a credential of one kind holding another's secret, which said *give its secret again* everywhere it was used.
+- **Removing a secret no credential names no longer removes one a restore brings back meanwhile** (credentials-unver-8): the restored credential was left without its secret.
 
 ## 0.13.2 (2026-11-25)
 

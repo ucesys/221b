@@ -650,6 +650,38 @@ func (s *Service) RemoveUnnamedSecret(ctx context.Context, id string) error {
 	if id == "" || strings.ContainsAny(id, "/ ") {
 		return fmt.Errorf("%w: no secret %q", ErrNotFound, id)
 	}
+	// The key is read first, then whether anything names it, and removed
+	// only as it was read: a restore that brings its credential back
+	// meanwhile adds the row before it writes the secret, so a secret
+	// changed since it was read is looked at again, never removed
+	// (credentials-unver-8).
+	for range 10 {
+		_, version, found, err := s.o.Secrets.LoadKey(ctx, secretKey(id))
+		if err != nil {
+			return fmt.Errorf("reading the credentials' Secret: %w", err)
+		} else if !found {
+			return fmt.Errorf("%w: no secret %q in the credentials' Secret", ErrNotFound, id)
+		}
+		if err := s.unnamed(ctx, id); err != nil {
+			return err
+		}
+		if del, ok := s.o.Secrets.(keyDeleter); ok {
+			err = del.DeleteKeyIf(ctx, secretKey(id), version)
+		} else {
+			err = s.o.Secrets.SaveKeyIf(ctx, secretKey(id), []byte{}, version)
+		}
+		if !conflict(err) {
+			if err != nil {
+				return fmt.Errorf("removing the secret: %w", err)
+			}
+			return nil
+		}
+	}
+	return errors.New("the credentials' Secret kept changing: try again")
+}
+
+// unnamed says why no secret of an id may be removed, nil when none.
+func (s *Service) unnamed(ctx context.Context, id string) error {
 	if c, err := s.o.Repo.Get(ctx, id); err == nil {
 		return fmt.Errorf("%w: the credential %s names this secret; remove the credential in Administration › Credentials instead", ErrInUse, c.Name)
 	} else if !errors.Is(err, ErrNotFound) {
@@ -668,10 +700,5 @@ func (s *Service) RemoveUnnamedSecret(ctx context.Context, id string) error {
 	if named[id] {
 		return fmt.Errorf("%w: an application, a Helm repository or a source names a credential of this id; restore the credential, or choose another there first", ErrInUse)
 	}
-	if _, _, found, err := s.o.Secrets.LoadKey(ctx, secretKey(id)); err != nil {
-		return fmt.Errorf("reading the credentials' Secret: %w", err)
-	} else if !found {
-		return fmt.Errorf("%w: no secret %q in the credentials' Secret", ErrNotFound, id)
-	}
-	return s.saveSecret(ctx, id, Secret{})
+	return nil
 }
