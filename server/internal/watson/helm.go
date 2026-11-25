@@ -403,6 +403,10 @@ func (s statusPrinter) redacted() *release.Release {
 	if r.Info != nil {
 		info := *r.Info
 		info.Notes = s.notes()
+		// Helm loads every object of the manifest here, whole when the
+		// resources are not asked for as tables: Secrets with their data.
+		// The table output reads them as tables, which hold no value.
+		info.Resources = nil
 		r.Info = &info
 	}
 	r.Config = MaskValues(r.Config)
