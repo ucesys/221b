@@ -57,6 +57,10 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#12 a Slack token ending in -":  {"posted with xoxb-1234567890-abcdef- ok", "xoxb-1234567890", " ok"},
 		// scrub#13: a user name that holds @.
 		"#13 an e-mail as the user": {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", "F4keSmtp7x", "@smtp.example.com:465"},
+		// scrub#14: a private key in base64, as a kubeconfig holds one.
+		"#14 client-key-data":       {"users:\n- name: admin\n  user:\n    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=\n", "LS0tLS1CRUdJTiBSU0Eg", "name: admin"},
+		"#14 a base64 key in a log": {"loaded key=LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFmYWtlCi0tLS0tRU5EIE9QRU5TU0ggUFJJVkFURSBLRVktLS0tLQo= ok", "LS0tLS1CRUdJTiBPUEVO", " ok"},
+		"#14 any key data":          {"keyData: QUJDREVGRzEyMzQ1Njc4OQ==", "QUJDREVGRzEyMzQ1Njc4OQ==", "keyData"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
@@ -77,6 +81,7 @@ func TestScrubLeavesOrdinaryTextAlone(t *testing.T) {
 		"tests passed=5 passive: true",
 		"mysql -h db -P3306 shop",
 		"auth:\n  enabled: true\n  database: app\n", // scrub#10
+		"client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNmYWtlRkFLRWZha2UwMTIzCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K", // scrub#14
 		"GET https://example.com/a?b=c 200",
 	} {
 		if out := Text(s); out != s {
@@ -324,6 +329,9 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#13 an e-mail as the user":      {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", true},
 		"#13 an e-mail user, a variable": {"smtps://alerts@example.com:$SMTP_PASSWORD@smtp.example.com:465", false},
 		"#13 a user, a port and a path":  {"ssh://git@github.com:22/org/repo@v2", false},
+		// scrub#14: a private key in base64.
+		"#14 client-key-data": {"    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=", true},
+		"#14 a certificate":   {"    client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNmYWtlRkFLRWZha2UwMTIzCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

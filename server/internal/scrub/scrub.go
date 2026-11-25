@@ -18,7 +18,7 @@ const Redacted = "[REDACTED]"
 
 // secretWords are what mark a name as holding a secret, in any case, for
 // the patterns below and SecretName alike.
-const secretWords = `password|passwd|passphrase|passcode|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth|dsn|connection[_-]?string|conn[_-]?str|cookie`
+const secretWords = `password|passwd|passphrase|passcode|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth|dsn|connection[_-]?string|conn[_-]?str|cookie|key[_-]?data`
 
 const (
 	nameChars = `[A-Za-z0-9_.-]*`
@@ -50,6 +50,10 @@ var (
 	// an encrypted key's Proc-Type:), also in a JSON string's \n, or on the
 	// same line. rePEM takes a header alone, as Text should.
 	rePrivateKey = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\(?:r\\)?n)(?:[ \t]*[A-Za-z][A-Za-z-]*:[^\r\n\\]*(?:\r?\n|\\(?:r\\)?n))*(?:\s|\\(?:r\\)?n)*([A-Za-z0-9+/]{6,})|[ \t]+([A-Za-z0-9+/]{20,}))`)
+	// A PEM block in base64 ("-----BEGIN" is LS0tLS1CRUdJTi), as a
+	// kubeconfig's client-key-data holds one; base64PrivateKey says
+	// whether it is a private key's.
+	reBase64PEM = regexp.MustCompile(`LS0tLS1CRUdJTi[A-Za-z0-9+/]{16,}={0,2}`)
 	// JSON Web Tokens, wherever they are: also right after an escape or a
 	// percent-encoded character (\x22eyJ…, %3DeyJ…), so with no \b.
 	reJWT = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`)
@@ -120,6 +124,11 @@ func Credential(s string) bool {
 	}
 	if reJWT.MatchString(s) {
 		return true
+	}
+	for _, m := range reBase64PEM.FindAllString(s, -1) {
+		if base64PrivateKey(m) {
+			return true
+		}
 	}
 	for _, re := range tokenShapes {
 		for _, m := range re.FindAllStringSubmatch(s, -1) {
@@ -269,6 +278,18 @@ func elided(body string) bool {
 	return strings.Trim(body, "xX") == "" || reYourWord.MatchString(body)
 }
 
+// base64PrivateKey says whether a PEM block in base64 is a private key's:
+// its first line, decoded, is a PRIVATE KEY header.
+func base64PrivateKey(m string) bool {
+	head := m[:min(len(m), 80)&^3]
+	b, err := base64.StdEncoding.DecodeString(head)
+	if err != nil {
+		return false
+	}
+	line, _, _ := strings.Cut(string(b), "\n")
+	return strings.Contains(line, "PRIVATE KEY")
+}
+
 // keyMaterial says whether what follows a private key's header is base64
 // rather than a word: it holds a digit, + or /, or a capital letter after
 // a small one's start (MIIEow), where "followed", "Followed" and
@@ -306,41 +327,43 @@ func basicPassword(v string) bool {
 // Claude API (P5-03): log lines above all, but every tool result passes
 // through them. They err towards removing too much.
 var scrubbers = []struct {
-	re   *regexp.Regexp
-	keep int // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
+	re    *regexp.Regexp
+	keep  int               // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
+	check func(string) bool // for keep 0: whether a match is a credential, nil for always
 }{
-	// PEM and PGP private keys.
-	{rePEM, 0},
+	// PEM and PGP private keys, also in base64.
+	{re: rePEM},
+	{re: reBase64PEM, check: base64PrivateKey},
 	// Authorization and cookie headers, and bearer tokens.
-	{regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)`), 1},
-	{regexp.MustCompile(`(?i)(\b(?:bearer|basic|token)\s+)[A-Za-z0-9\-._~+/]{8,}=*`), 1},
+	{re: regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)`), keep: 1},
+	{re: regexp.MustCompile(`(?i)(\b(?:bearer|basic|token)\s+)[A-Za-z0-9\-._~+/]{8,}=*`), keep: 1},
 	// JSON Web Tokens, wherever they are.
-	{reJWT, 0},
+	{re: reJWT},
 	// Credentials in URLs: scheme://user:password@host. The password runs
 	// to the last @ of the address, so it may hold / or @ itself, and the
 	// user may hold @ too (an e-mail address as an SMTP login).
-	{regexp.MustCompile(`(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/]*:)[^\s"'<>]*(@)`), -1},
+	{re: regexp.MustCompile(`(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/]*:)[^\s"'<>]*(@)`), keep: -1},
 	// An environment variable's name and value, as text: JSON or YAML.
-	{regexp.MustCompile(`(?m)(\\*["']?\bname\\*["']?\s*[:=]\s*\\*["']?` + secretKey + `\\*["']?\s*,?\s*(?:-\s+)?\\*["']?value\\*["']?\s*[:=]\s*)` + secretValue), 1},
+	{re: regexp.MustCompile(`(?m)(\\*["']?\bname\\*["']?\s*[:=]\s*\\*["']?` + secretKey + `\\*["']?\s*,?\s*(?:-\s+)?\\*["']?value\\*["']?\s*[:=]\s*)` + secretValue), keep: 1},
 	// A command-line flag followed by its value.
-	{regexp.MustCompile(`(?m)((?:^|[\s"'\[,])-{1,2}` + secretKey + `["']?(?:\s*,\s*|\s+))` + secretValue), 1},
+	{re: regexp.MustCompile(`(?m)((?:^|[\s"'\[,])-{1,2}` + secretKey + `["']?(?:\s*,\s*|\s+))` + secretValue), keep: 1},
 	// A MySQL client's password, joined to its -p.
-	{regexp.MustCompile(`(?m)(\b(?:mysql|mysqldump|mysqladmin|mysqlsh|mariadb|mariadb-dump)\b[^\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`), 1},
+	{re: regexp.MustCompile(`(?m)(\b(?:mysql|mysqldump|mysqladmin|mysqlsh|mariadb|mariadb-dump)\b[^\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`), keep: 1},
 	// A Secret's literal value, whatever its key is called.
-	{regexp.MustCompile(`(--from-literal[= ]\\*["']?[^=\s"'\\]+=)` + secretValue), 1},
+	{re: regexp.MustCompile(`(--from-literal[= ]\\*["']?[^=\s"'\\]+=)` + secretValue), keep: 1},
 	// curl's user:password.
-	{regexp.MustCompile(`(\bcurl\b[^\n]*?\s(?:-u\s*|--user[=\s]\s*)\\*["']?[^\s:"'\\]*:)` + secretValue), 1},
+	{re: regexp.MustCompile(`(\bcurl\b[^\n]*?\s(?:-u\s*|--user[=\s]\s*)\\*["']?[^\s:"'\\]*:)` + secretValue), keep: 1},
 	// key=value and key: value pairs whose key names a secret, also inside
 	// a JSON string. The value is on the key's line, and is no object and
 	// no key of its own: under a secret-named parent (auth: in a chart's
 	// values, {"auth": {"password": …}}) the child pairs are matched on
 	// their own. A list of plain values is taken whole.
-	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), 1},
+	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), keep: 1},
 	// A YAML plain value on the line below its key.
-	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), 1},
+	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), keep: 1},
 	// Well-known token shapes.
-	{tokenShapes[0], -1}, {tokenShapes[1], -1}, {tokenShapes[2], -1}, {tokenShapes[3], -1},
-	{tokenShapes[4], -1}, {tokenShapes[5], -1}, {tokenShapes[6], -1},
+	{re: tokenShapes[0], keep: -1}, {re: tokenShapes[1], keep: -1}, {re: tokenShapes[2], keep: -1}, {re: tokenShapes[3], keep: -1},
+	{re: tokenShapes[4], keep: -1}, {re: tokenShapes[5], keep: -1}, {re: tokenShapes[6], keep: -1},
 }
 
 // blockKey is a YAML key that names a secret and whose value is the block
@@ -384,10 +407,17 @@ func Text(s string) string {
 	}
 	s = scrubBlocks(s)
 	for _, sc := range scrubbers {
-		switch sc.keep {
-		case 0:
+		switch {
+		case sc.keep == 0 && sc.check != nil:
+			s = sc.re.ReplaceAllStringFunc(s, func(m string) string {
+				if sc.check(m) {
+					return Redacted
+				}
+				return m
+			})
+		case sc.keep == 0:
 			s = sc.re.ReplaceAllString(s, Redacted)
-		case -1:
+		case sc.keep == -1:
 			s = sc.re.ReplaceAllString(s, "${1}"+Redacted+"${2}")
 		default:
 			s = sc.re.ReplaceAllStringFunc(s, func(m string) string {

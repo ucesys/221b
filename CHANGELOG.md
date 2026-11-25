@@ -24,6 +24,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **`curl -u user:password` as separate container arguments no longer reaches the Claude API** (P5-03, scrub#11): a CronJob's `args: ["-u", "admin:…", …]` read with the yaml tool kept the password, and so did `--from-literal` with a key that is not secret-named. The scrubber now takes the password after `-u`, `--user` and `--proxy-user`, and `--from-literal`'s value, apart or joined.
 - **A JWT or token in an escaped or URL-encoded log line no longer reaches the Claude API** (P5-03, AI-49, scrub#12): nginx's `\x22eyJ…`, `%3DeyJ…` and `%22AKIA…` were missed, because a word character stood before the token, and so was a GitLab token whose last character is `-`.
 - **A URL whose user name holds `@` no longer keeps its password** (P5-03, AI-49, scrub#13): `smtps://alerts@example.com:…@smtp.example.com:465`, an e-mail address as an SMTP login, was left whole by the scrubber and passed the credential check.
+- **A private key in base64 no longer reaches the Claude API** (P5-03, AI-49, scrub#14): a kubeconfig's `client-key-data` in a ConfigMap, a pod log or an event passed every check. A base64 PEM block whose header is a private key's is now scrubbed and fails the credential check, and a name holding `key-data` counts as a secret's (also for `scrub.SecretName`).
 
 ## 0.13.2 (2026-11-25)
 
