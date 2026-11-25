@@ -4,12 +4,19 @@ package credentials
 // the review's item it holds to.
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/certpin/certpintest"
@@ -585,5 +594,85 @@ func TestAnEditOfASchemelessEndpointKeepsThePin(t *testing.T) {
 		if (saved.PinnedCert != nil) != tc.kept {
 			t.Errorf("git.internal/org to %s: pin kept %v", tc.endpoint, saved.PinnedCert != nil)
 		}
+	}
+}
+
+// sshServer is an SSH server with an RSA, an ECDSA and an Ed25519 host
+// key, as most are, that lets the client key in; closed with the test.
+func sshServer(t *testing.T, client ssh.PublicKey) (addr string, keys map[string]ssh.PublicKey) {
+	t.Helper()
+	cfg := &ssh.ServerConfig{PublicKeyCallback: func(_ ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
+		if bytes.Equal(k.Marshal(), client.Marshal()) {
+			return nil, nil
+		}
+		return nil, errors.New("not that key")
+	}}
+	keys = map[string]ssh.PublicKey{}
+	rk, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ek, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, dk, _ := ed25519.GenerateKey(rand.Reader)
+	for _, k := range []any{rk, ek, dk} {
+		sg, err := ssh.NewSignerFromKey(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.AddHostKey(sg)
+		keys[sg.PublicKey().Type()] = sg.PublicKey()
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if sc, chans, reqs, err := ssh.NewServerConn(c, cfg); err == nil {
+					go ssh.DiscardRequests(reqs)
+					go func() {
+						for ch := range chans {
+							_ = ch.Reject(ssh.Prohibited, "no")
+						}
+					}()
+					_ = sc.Wait()
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), keys
+}
+
+// credentials#13: the SSH test asks the server for the type of key saved,
+// so a server with several host keys shows the one saved; another key
+// is still a mismatch.
+func TestTheSSHTestAsksForTheSavedKeysType(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(priv, "")
+	clientKey, _ := ssh.NewSignerFromKey(priv)
+	addr, keys := sshServer(t, clientKey.PublicKey())
+	s := pinService(t)
+	for _, typ := range []string{ssh.KeyAlgoED25519, ssh.KeyAlgoRSA, ssh.KeyAlgoECDSA256} {
+		c, err := s.Create(ctx, Credential{Name: "deploy " + typ, Kind: KindSSH, Endpoint: "ssh://git@" + addr + "/org", HostKey: string(ssh.MarshalAuthorizedKey(keys[typ]))}, Secret{PrivateKey: string(pem.EncodeToMemory(block))}, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.RunTest(ctx, c.ID, "", "ann")
+		if err != nil || !res.OK || !strings.Contains(res.Text, "matched") {
+			t.Errorf("%s: %+v %v", typ, res, err)
+		}
+	}
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	otherPub, _ := ssh.NewPublicKey(&other.PublicKey)
+	c, err := s.Create(ctx, Credential{Name: "deploy other", Kind: KindSSH, Endpoint: "ssh://git@" + addr + "/org", HostKey: string(ssh.MarshalAuthorizedKey(otherPub))}, Secret{PrivateKey: string(pem.EncodeToMemory(block))}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := s.RunTest(ctx, c.ID, "", "ann"); res.OK || !strings.Contains(res.Text, "another host key") {
+		t.Errorf("another key: %+v", res)
 	}
 }

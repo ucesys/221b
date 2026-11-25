@@ -100,7 +100,7 @@ func (s *Service) test(ctx context.Context, c Credential, sec Secret, target str
 	case KindAccessKey:
 		s.testBucket(ctx, c, use, target, &t)
 	case KindSSH:
-		testSSH(ctx, use, target, &t)
+		s.testSSH(ctx, use, target, &t)
 	default:
 		s.testHTTP(ctx, c, use, target, &t)
 	}
@@ -257,7 +257,7 @@ func (s *Service) testBucket(ctx context.Context, c Credential, use *Use, target
 
 // testSSH connects to the host, checks its key against the one saved, and
 // signs in with the private key.
-func testSSH(ctx context.Context, use *Use, target string, t *Test) {
+func (s *Service) testSSH(ctx context.Context, use *Use, target string, t *Test) {
 	u, err := url.Parse(target)
 	if err != nil || u.Host == "" {
 		t.Text = "Name the SSH host to test, as ssh://git@host."
@@ -281,9 +281,12 @@ func testSSH(ctx context.Context, use *Use, target string, t *Test) {
 		t.Text = err.Error()
 		return
 	}
-	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hk), Timeout: 15 * time.Second}
-	d := net.Dialer{Timeout: 15 * time.Second, Control: guardedControl}
-	conn, err := d.DialContext(ctx, "tcp", host)
+	// The server is asked for the type of key saved: one with several
+	// host keys shows another first otherwise, which FixedHostKey takes
+	// for a mismatch (credentials#13).
+	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hk), HostKeyAlgorithms: algorithmsOf(hk.Type()), Timeout: 15 * time.Second}
+	// The service's dialer: the guarded one, or a test's.
+	conn, err := s.o.Dial(ctx, "tcp", host)
 	if err != nil {
 		t.Text = "Could not reach " + host + ": " + err.Error()
 		return
@@ -307,4 +310,13 @@ func testSSH(ctx context.Context, use *Use, target string, t *Test) {
 	sc.Close()
 	t.OK = true
 	t.Text = "The host key of " + host + " matched, and the server accepted the key for " + user + "."
+}
+
+// algorithmsOf names the signature algorithms a host key type is used
+// with: an RSA key signs with SHA-2 today (as nodessh asks).
+func algorithmsOf(keyType string) []string {
+	if keyType == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	return []string{keyType}
 }
