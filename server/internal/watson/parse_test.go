@@ -220,3 +220,17 @@ func TestCommandsNamesEveryCommand(t *testing.T) {
 		t.Errorf("sentence: %q", text)
 	}
 }
+
+// -f is refused as a file everywhere but kubectl logs, where it is
+// --follow (review of November 24, 2026, nit: parse.go:389).
+func TestTheRefusalOfDashFSaysWhatItIs(t *testing.T) {
+	for line, want := range map[string]string{
+		"kubectl delete -f pods.yaml":          "does not read files",
+		"helm upgrade shop -n web -f prod.yaml": "does not read files",
+		"kubectl logs api -n web -f":           "follows them live",
+	} {
+		if _, err := Parse(line); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+}

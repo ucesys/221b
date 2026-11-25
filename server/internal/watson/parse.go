@@ -402,6 +402,17 @@ var blocked = map[string]string{
 	"profile": "Watson does not profile commands.", "cache-dir": "Watson does not use a cache directory.", "template": "Watson does not run templates.",
 }
 
+// blockedWhy says why a command may not take a flag: -f is kubectl logs'
+// --follow, and for every other command a file (kubectl's --filename,
+// helm's --values).
+func blockedWhy(c *Command, name string) (string, bool) {
+	if name == "f" && c.Name() != "kubectl logs" {
+		return "Watson does not read files.", true
+	}
+	why, ok := blocked[name]
+	return why, ok
+}
+
 // parseArgs reads flags and positional arguments the way kubectl and helm
 // (pflag) do, refusing any flag the command does not take.
 func (c *Command) parseArgs(words []string) error {
@@ -415,7 +426,7 @@ func (c *Command) parseArgs(words []string) error {
 	add := func(name, value, typed string) error {
 		f, ok := sp.flags[name]
 		if !ok {
-			if why, b := blocked[name]; b {
+			if why, b := blockedWhy(c, name); b {
 				return refuse("flag", "%s does not take %s here: %s", c.Name(), typed, why)
 			}
 			return refuse("flag", "%s does not take %s here. Usage: %s", c.Name(), typed, sp.usage)
@@ -483,7 +494,7 @@ func (c *Command) parseArgs(words []string) error {
 				sh := string(body[j])
 				name, known := byShort[sh]
 				if !known {
-					if why, b := blocked[sh]; b {
+					if why, b := blockedWhy(c, sh); b {
 						return refuse("flag", "%s does not take -%s here: %s", c.Name(), sh, why)
 					}
 					return refuse("flag", "%s does not take -%s here. Usage: %s", c.Name(), sh, sp.usage)
