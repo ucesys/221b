@@ -482,6 +482,19 @@ func (s *SecretStore) credential(ctx context.Context, id string) (held, error) {
 	return held{Credential: credentialOf(sec.Data), found: true, server: sec.Annotations[AnnotationServer], record: sec.Data[keySpec]}, nil
 }
 
+// revisionOf is a connection's Secret's resourceVersion, read by its
+// name, and whether there is one.
+func (s *SecretStore) revisionOf(ctx context.Context, id string) (string, bool, error) {
+	sec, err := s.secrets.Get(ctx, s.name(id), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reading the connection Secret %s: %w", s.name(id), err)
+	}
+	return sec.ResourceVersion, true, nil
+}
+
 // putCredential writes a connection's Secret to hold the credential and
 // nothing else, marked with the API server it is for (AnnotationServer),
 // making it when it is not there. A record a console without the

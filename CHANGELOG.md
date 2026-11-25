@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **A connection's Secret made again by hand without its labels stopped later rotations reaching the connection** (clusters review, finding 12). Its revision was read from the Secrets listed by label, so after `kubectl delete secret` and `kubectl create secret generic …` it stopped changing, the connection kept the old token while tests and backups used the new one, and the start said the connection had no Secret. A connection whose Secret is not listed by its label is now read by its name for both.
+
 - **A connection test still running when its connection was removed and made again, or re-pointed, was kept as the new connection's last test** (clusters review, finding 11), timed after the change, where a connection made again starts untested. A test is now kept only while the connection is the one it went to: made at the same time, with the same server, certificate check, sign-in method and credential.
 
 - **The connection test said "Can't connect" for a cluster reached through a proxy** (clusters review, finding 9). Its address and TLS steps resolved and dialled the API server directly, while the connection goes through a kubeconfig's `proxy-url` or `HTTPS_PROXY`, so Sign-in, Kubernetes and Permissions were never checked. The test now goes through the same proxy: an https:// server through the proxy's tunnel (CONNECT), anything else by reaching the proxy and checking the server when signing in.

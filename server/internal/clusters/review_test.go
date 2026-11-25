@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -510,4 +511,38 @@ func TestATestRunningAcrossARecreationIsNotTheNewConnections(t *testing.T) {
 			t.Error("a test of the connection as it is was not kept")
 		}
 	})
+}
+
+// Finding 12: once a connection's Secret was made again by hand without
+// its labels, its revision no longer followed it (the Secrets are listed
+// by label), so later rotations never reached the running connection, and
+// the start said the connection had no Secret.
+func TestASecretMadeAgainByHandWithoutItsLabelsIsFollowed(t *testing.T) {
+	store, _, cs := clusterstest.PG(t, nil)
+	ctx := context.Background()
+	spec, cred := fullSpec("prod"), fullCred("first")
+	must(t, store.Save(ctx, spec, &cred))
+	secrets := cs.CoreV1().Secrets(clusterstest.Namespace)
+	byHand := func(tok string) {
+		t.Helper()
+		_ = secrets.Delete(ctx, clusterstest.SecretName("prod"), metav1.DeleteOptions{})
+		_, err := secrets.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clusterstest.SecretName("prod"), Namespace: clusterstest.Namespace}, Data: map[string][]byte{"token": []byte(tok)}}, metav1.CreateOptions{})
+		must(t, err)
+	}
+	byHand("second-token")
+	first, err := store.Revisions(ctx)
+	must(t, err)
+	// Rotated again, the way it was replaced.
+	byHand("third-token")
+	second, err := store.Revisions(ctx)
+	must(t, err)
+	if first["prod"] == second["prod"] {
+		t.Errorf("a rotation in a Secret without its labels left the revision at %q", first["prod"])
+	}
+	if _, cred, _ := store.Get(ctx, "prod"); cred.Token != "third-token" {
+		t.Fatal("the Secret made by hand is not read")
+	}
+	if noSecret, _, err := store.Unmatched(ctx); err != nil || len(noSecret) != 0 {
+		t.Errorf("a connection whose Secret is there, without its labels, is said to have none: %v %v", noSecret, err)
+	}
 }

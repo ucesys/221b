@@ -563,7 +563,16 @@ func (s *PGStore) Revisions(ctx context.Context) (map[string]string, error) {
 		if spec.Tested != nil {
 			tested = strconv.FormatInt(spec.Tested.At.UnixMicro(), 10)
 		}
-		out[spec.ID] = strconv.Itoa(versions[i]) + "/" + tested + "/" + secrets[spec.ID]
+		secret, listed := secrets[spec.ID]
+		if !listed && !spec.Local {
+			// Not listed: the Secrets are listed by their label, and one
+			// made again by hand may have none. Get reads it by its name,
+			// so its revision is read the same way.
+			if secret, _, err = s.secrets.revisionOf(ctx, spec.ID); err != nil {
+				return nil, err
+			}
+		}
+		out[spec.ID] = strconv.Itoa(versions[i]) + "/" + tested + "/" + secret
 	}
 	return out, nil
 }
@@ -592,7 +601,13 @@ func (s *PGStore) Unmatched(ctx context.Context) (noSecret, noRow []string, err 
 	for _, spec := range specs {
 		name := s.secrets.name(spec.ID)
 		of[name] = true
-		if !have[name] && !spec.Local {
+		if have[name] || spec.Local {
+			continue
+		}
+		// Not listed by its label: looked for by its name, as Get reads it.
+		if _, found, err := s.secrets.revisionOf(ctx, spec.ID); err != nil {
+			return nil, nil, err
+		} else if !found {
 			noSecret = append(noSecret, spec.ID)
 		}
 	}
