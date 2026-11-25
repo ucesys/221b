@@ -77,6 +77,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 
 ### Fixed
 
+- **A card says the deadline another approver gives** (TB-36): a node pod's, debug pod's or debug container's card showed the deadline of a session its asker approves (`maxDuration` and the start), while a session another person approves gets the duration asked for, so the dry run showed another `activeDeadlineSeconds` than the pod then had. Where the two differ the card now names both.
 - **A port forward waits its 5 minutes for the CLI** (TB-21): with `toolbox.idleTimeout` under 5 minutes, a forward whose CLI had not connected yet ended *No activity* before the wait was over. The idle limit now counts from when the CLI is there.
 - **A short idle limit no longer warns from the first second** (TB-13): a session pane warns 120 seconds before its idle end, so with `toolbox.idleTimeout` of 2 minutes or less it showed *the session ends in…* from the start; it now warns halfway through a shorter limit.
 - **Administration › Toolbox shows the values as they are written** (TB-46): its *values* block showed durations as Go writes them (`1h0m0s`, `9600h0m0s` for `400d`) and left out an emptied list or an empty `cliMinVersion`; it now shows `1h`, `400d` and `[]`.

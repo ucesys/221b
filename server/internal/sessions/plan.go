@@ -56,6 +56,22 @@ func (b *KubeBackend) Node(ctx context.Context, name string) (*corev1.Node, erro
 // answers the dry run, or the access review where a session has no dry
 // run (a shell, a command, a forward).
 func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube.Person, ownerName string) Plan {
+	p := m.planFor(ctx, cl, r, owner, ownerName)
+	// The object shows the deadline of a session its asker approves: the
+	// most Extend can reach. Approved by another person, the session gets
+	// the duration asked for and its pod that deadline, which the card
+	// cannot know yet, so it says so (the toolbox review's sweep).
+	switch r.Tool {
+	case toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
+		limit := m.opts.Config.Limit(minutes(r.Minutes))
+		if self, other := m.deadline(limit, ""), m.deadline(limit, "another"); p.Object != "" && self != other {
+			p.Impact = append(p.Impact, fmt.Sprintf("Its deadline is %d seconds as shown where the asker approves it; approved by another person, %d seconds, from the duration asked for.", seconds(self, 1), seconds(other, 1)))
+		}
+	}
+	return p
+}
+
+func (m *Manager) planFor(ctx context.Context, cl Cluster, r Request, owner kube.Person, ownerName string) Plan {
 	var p Plan
 	b, err := m.opts.Backend(cl, owner)
 	if err != nil {

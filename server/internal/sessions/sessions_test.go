@@ -1786,3 +1786,21 @@ func TestAForwardWaitsForItsCLIPastTheIdleLimit(t *testing.T) {
 		t.Fatalf("idle with the CLI: %s", got.EndedBy)
 	}
 }
+
+// The card's object shows the deadline of a session the asker approves
+// (maxDuration and the start); approved by another person, the pod gets
+// the duration asked for instead, and the card says so (the toolbox
+// review's sweep: the dry run showed another activeDeadlineSeconds).
+func TestTheCardSaysTheDeadlineAnApproverGives(t *testing.T) {
+	m, _, _, _ := setup(t)
+	ctx := context.Background()
+	p := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Profile: toolbox.ProfileGeneral, Minutes: 15}, kube.Person{User: "alice"}, "Alice")
+	impact := strings.Join(p.Impact, " ")
+	if !strings.Contains(p.Object, "activeDeadlineSeconds: 3602") || !strings.Contains(impact, "approved by another person") || !strings.Contains(impact, "902") {
+		t.Fatalf("%s\n%s", impact, p.Object)
+	}
+	p = m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Profile: toolbox.ProfileGeneral}, kube.Person{User: "alice"}, "Alice")
+	if strings.Contains(strings.Join(p.Impact, " "), "approved by another person") {
+		t.Fatalf("no duration asked: %v", p.Impact)
+	}
+}
