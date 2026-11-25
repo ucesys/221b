@@ -30,7 +30,6 @@ import (
 	"k8s.io/kubectl/pkg/cmd/events"
 	"k8s.io/kubectl/pkg/cmd/get"
 	"k8s.io/kubectl/pkg/cmd/label"
-	"k8s.io/kubectl/pkg/cmd/logs"
 	"k8s.io/kubectl/pkg/cmd/patch"
 	"k8s.io/kubectl/pkg/cmd/rollout"
 	"k8s.io/kubectl/pkg/cmd/scale"
@@ -288,7 +287,7 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 	case "kubectl describe":
 		cmd = describe.NewCmdDescribe("kubectl", f, streams)
 	case "kubectl logs":
-		cmd = logs.NewCmdLogs(f, streams)
+		cmd = newCmdLogs(f, streams)
 	case "kubectl top":
 		cmd = top.NewCmdTop(f, streams)
 	case "kubectl events":
