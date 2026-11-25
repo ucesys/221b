@@ -237,6 +237,12 @@ type Options struct {
 	// LapseWaiting is how long a card waiting for a second person stays
 	// valid (TB-38): 30 minutes.
 	LapseWaiting time.Duration
+	// Rules reads a cluster's rules as they are now (read-only, locked,
+	// its name, environment and connection), for what runs after the
+	// request that asked for it: a queued change when it starts, a card
+	// approved under a standing approval. Nil keeps the cluster as the
+	// request saw it.
+	Rules func(id string) (Cluster, bool)
 }
 
 // Service keeps the commands.
@@ -509,15 +515,8 @@ func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
 // TB-37): a Watson command runs as its approver, which bounds it; a
 // session does not.
 func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, session, needsTwo bool) *Refusal {
-	if cl.Locked != "" {
-		return refuse("roles", "Refused: %s", cl.Locked)
-	}
-	if cl.ReadOnly {
-		how := cl.ReadOnlyHow
-		if how == "" {
-			how = "An administrator can allow changes in the connection's settings."
-		}
-		return refuse("read-only cluster", "Refused: %s is connected read-only, so Watson changes nothing there. %s", cl.Name, how)
+	if r := connRefusal(cl); r != nil {
+		return r
 	}
 	if s.opts.TwoPerson(cl) {
 		if requester.User == "" {
@@ -542,6 +541,64 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, session, 
 		}
 	}
 	return nil
+}
+
+// connRefusal says why the connection takes no change: it is locked by
+// the role check, or read-only (P6-05, RB-36).
+func connRefusal(cl Cluster) *Refusal {
+	if cl.Locked != "" {
+		return refuse("roles", "Refused: %s", cl.Locked)
+	}
+	if cl.ReadOnly {
+		how := cl.ReadOnlyHow
+		if how == "" {
+			how = "An administrator can allow changes in the connection's settings."
+		}
+		return refuse("read-only cluster", "Refused: %s is connected read-only, so Watson changes nothing there. %s", cl.Name, how)
+	}
+	return nil
+}
+
+// SetRules sets how a cluster's rules are read again: the API sets it once
+// it is built, before any request.
+func (s *Service) SetRules(f func(id string) (Cluster, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.Rules = f
+}
+
+// current is a cluster with its rules as they are now: what a request saw
+// can only be made stricter (read-only, locked), since the person's own
+// part of it (an anonymous Viewer makes no change) does not change; the
+// name, environment and connection are taken as they are now. It is
+// called without the lock.
+func (s *Service) current(cl Cluster) Cluster {
+	s.mu.Lock()
+	rules := s.opts.Rules
+	s.mu.Unlock()
+	if rules == nil {
+		return cl
+	}
+	now, ok := rules(cl.ID)
+	if !ok {
+		return cl
+	}
+	if now.ReadOnly {
+		cl.ReadOnly, cl.ReadOnlyHow = true, now.ReadOnlyHow
+	}
+	if now.Locked != "" {
+		cl.Locked = now.Locked
+	}
+	if now.Name != "" {
+		cl.Name = now.Name
+	}
+	if now.Env != "" {
+		cl.Env = now.Env
+	}
+	if now.Config != nil {
+		cl.Config = now.Config
+	}
+	return cl
 }
 
 // Refusal says why a change from this person could not run here at all
@@ -660,6 +717,9 @@ func (s *Service) readyLocked(cl Cluster) []string {
 // Approve applies every rule a click would (P6-04, P6-07, TB-32).
 func (s *Service) autoApprove(cl Cluster, id string) {
 	defer s.recoverIn("approving a card under a standing approval")
+	// The card was planned with the cluster its request saw; it is
+	// approved under the rules as they are now (P6-05).
+	cl = s.current(cl)
 	s.mu.Lock()
 	it := s.items[id]
 	if it == nil || it.Status != StatusPending || it.Plan == nil || !it.Plan.Ready || !it.Change {
@@ -1310,7 +1370,12 @@ func (s *Service) Drain(ctx context.Context, settle time.Duration) {
 
 func (s *Service) work(cl Cluster, key string, q *runQueue) {
 	defer s.workers.Done()
+	approvedOn := cl
 	for {
+		// Each change starts under the cluster's rules as they are then,
+		// not as they were when the queue's first change was approved: a
+		// connection made read-only or locked meanwhile runs none of them.
+		cl := s.current(approvedOn)
 		s.mu.Lock()
 		if len(q.ids) == 0 {
 			q.running = false
@@ -1322,6 +1387,13 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 		q.ids = q.ids[1:]
 		it := s.items[id]
 		if it == nil || it.Status != StatusQueued {
+			s.mu.Unlock()
+			continue
+		}
+		if r := connRefusal(cl); r != nil && it.Change {
+			it.Status, it.Reason, it.Rule, it.Finished = StatusRefused, r.Message, r.Rule, s.opts.Now()
+			s.changedLocked(it)
+			go s.record(ActionRefuse, it, *it.Approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 			s.mu.Unlock()
 			continue
 		}

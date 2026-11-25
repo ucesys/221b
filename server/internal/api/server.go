@@ -567,6 +567,7 @@ func New(o Options) *Server {
 	if o.Watson != nil {
 		o.Watson.SetReread(s.rereadWho)
 		o.Watson.SetAppAccess(s.watsonAppAccess)
+		o.Watson.SetRules(s.watsonRules)
 	}
 	if o.Automation != nil && o.AutomationStore != nil {
 		s.automationRoutes()

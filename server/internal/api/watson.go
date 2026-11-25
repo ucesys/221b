@@ -78,6 +78,37 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 // under rbac.enforce strict (RB-36). Watson's changes and the console's own
 // writes (writeRefused) follow the same rules.
 func (s *Server) changeRules(r *http.Request, id string) watson.Cluster {
+	c := s.connRules(id)
+	// With sign-in off, changes would be made with the console's own
+	// account; an anonymous Viewer makes none.
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
+		c.ReadOnly = true
+		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
+	}
+	return c
+}
+
+// watsonRules is a cluster's rules as they are now, for Watson to read
+// again when a queued change starts or a card is approved under a standing
+// approval (P6-05, RB-36): the connection's mode and the role check, and
+// its connection; the requester's own part (an anonymous Viewer) was read
+// with their request.
+func (s *Server) watsonRules(id string) (watson.Cluster, bool) {
+	c := s.connRules(id)
+	if s.opts.Clusters != nil {
+		if _, ok := s.opts.Clusters.Summary(id); !ok {
+			return c, false
+		}
+		if _, client, ok := s.opts.Clusters.Lookup(id); ok && client != nil {
+			c.Config = client.RestConfig()
+		}
+	}
+	return c, true
+}
+
+// connRules is changeRules without the request: the connection's name,
+// environment and mode, and the role check.
+func (s *Server) connRules(id string) watson.Cluster {
 	c := watson.Cluster{ID: id, Name: id, Env: clusters.EnvOther}
 	if s.opts.Clusters != nil {
 		if sum, ok := s.opts.Clusters.Summary(id); ok {
@@ -91,12 +122,6 @@ func (s *Server) changeRules(r *http.Request, id string) watson.Cluster {
 		}
 	} else {
 		c.ReadOnly = !s.opts.WatsonLocalWrite
-	}
-	// With sign-in off, changes would be made with the console's own
-	// account; an anonymous Viewer makes none.
-	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
-		c.ReadOnly = true
-		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
 	}
 	// With rbac.enforce strict, a cluster whose roles have not been compared
 	// refuses changes (RB-36); RoleRefusal compares a connection just made
