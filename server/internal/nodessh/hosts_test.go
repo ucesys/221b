@@ -885,3 +885,60 @@ func TestTrustingAgainHoldsWhenThePairingCannotBeRead(t *testing.T) {
 		t.Fatalf("after trusting again: %d %v", code, err)
 	}
 }
+
+// refusing is a store that refuses to save a record holding a text.
+type refusing struct {
+	kv.Backend
+	text string
+}
+
+func (r *refusing) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if bytes.Contains(b, []byte(r.text)) {
+		return "", errors.New("the store refused it")
+	}
+	return r.Backend.SaveKey(ctx, key, b, version)
+}
+
+// checkedAs adds a host under its address, trusts it, runs the setup on
+// it and checks it with uname -n answering by the script given.
+func checkedAs(t *testing.T, e hostEnv, uname string) (Host, error) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := e.svc.AddHost(ctx, Host{Cluster: "local", Name: "127.0.0.1", Address: "127.0.0.1", Port: e.host.port(), LoginUser: e.login}, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := e.svc.ScanHost(ctx, "local", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.TrustHost(ctx, "local", "127.0.0.1", offer.Fingerprint, "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := e.svc.SetupCommand(ctx, "local", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.host.mustRun(strings.TrimSuffix(strings.TrimPrefix(cmd, "sudo sh <<'221B-SETUP'\n"), "\n221B-SETUP\n"))
+	if err := os.WriteFile(filepath.Join(e.host.bin, "uname"), []byte("#!/bin/sh\n"+uname+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return e.svc.CheckHost(ctx, "local", "127.0.0.1", "Pat")
+}
+
+// A host whose pairing cannot follow it to its hostname goes back to its
+// address with its pairing, saying why (the review of November 24, 2026:
+// the error it meant to give was a nil one, and the check panicked).
+func TestAHostWhosePairingCannotFollowKeepsItsAddress(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnvIn(t, &kv.Memory{}, &refusing{Backend: &kv.Memory{}, text: "db-primary"})
+	h, err := checkedAs(t, e, "echo db-primary")
+	if err != nil || h.Name != "127.0.0.1" || h.AutoName || h.State != HostPaired {
+		t.Fatalf("after the check: %+v %v", h, err)
+	}
+	if !strings.Contains(e.log.String(), "its pairing could not be moved: the store refused it") {
+		t.Fatalf("the log does not say why:\n%s", e.log.String())
+	}
+	if code, err := e.svc.Exec(ctx, "local", "127.0.0.1", "k", "true", false, strings.NewReader(""), io.Discard); err != nil || code != 0 {
+		t.Fatalf("a run on the host: %d %v", code, err)
+	}
+}

@@ -709,7 +709,7 @@ func (s *Service) takeHostname(ctx context.Context, h Host, hostname string) Hos
 		p.Node = name
 		if err := s.opts.Pairings.Set(ctx, p); err != nil {
 			// Its pairing could not follow: back to its address, with it.
-			if _, err := s.opts.Hosts.rename(ctx, h.Cluster, name, h.Name); err == nil {
+			if _, back := s.opts.Hosts.rename(ctx, h.Cluster, name, h.Name); back == nil {
 				_ = s.opts.Pairings.Set(ctx, before)
 				return keep("its pairing could not be moved: " + err.Error())
 			}
