@@ -304,8 +304,9 @@ func trimAnnotations(in map[string]string) map[string]string {
 
 // templateImages keeps a pod template's container names and images, which
 // is what the Namespaces tab shows of a workload, and what its pods
-// request and their priority class, which decide the quotas that must have
-// room for them during a rollout (P4-06).
+// request (pod-level requests too, which quota admission counts when they
+// are set, kube#8) and their priority class, which decide the quotas that
+// must have room for them during a rollout (P4-06).
 func templateImages(t *corev1.PodTemplateSpec) {
 	t.ObjectMeta = metav1.ObjectMeta{Labels: t.Labels}
 	keep := func(cs []corev1.Container) []corev1.Container {
@@ -315,7 +316,7 @@ func templateImages(t *corev1.PodTemplateSpec) {
 		}
 		return out
 	}
-	t.Spec = corev1.PodSpec{Containers: keep(t.Spec.Containers), InitContainers: keep(t.Spec.InitContainers), NodeSelector: t.Spec.NodeSelector, Overhead: t.Spec.Overhead, PriorityClassName: t.Spec.PriorityClassName}
+	t.Spec = corev1.PodSpec{Containers: keep(t.Spec.Containers), InitContainers: keep(t.Spec.InitContainers), NodeSelector: t.Spec.NodeSelector, Overhead: t.Spec.Overhead, PriorityClassName: t.Spec.PriorityClassName, Resources: t.Spec.Resources}
 }
 
 func stripDeployment(obj any) (any, error) {

@@ -269,6 +269,10 @@ func quotaApplies(q *corev1.ResourceQuota, spec *corev1.PodSpec) bool {
 			besteffort = false
 		}
 	}
+	// Pod-level requests or limits make a pod not BestEffort (kube#8).
+	if r := spec.Resources; r != nil && (len(r.Requests) > 0 || len(r.Limits) > 0) {
+		besteffort = false
+	}
 	terminating := spec.ActiveDeadlineSeconds != nil
 	match := func(scope corev1.ResourceQuotaScope, op corev1.ScopeSelectorOperator, values []string) bool {
 		switch scope {
