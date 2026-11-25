@@ -127,7 +127,7 @@ func TestADurableCardShowsWhatItsRequesterMaySee(t *testing.T) {
 			t.Fatalf("%s: %s", path, resp.Status)
 		}
 	}
-	post("/api/v1/namespaces/default/secrets", `{"metadata":{"name":"db-creds","annotations":{"note":"value-only-some-may-read"}},"data":{"k":"dg=="}}`)
+	post("/api/v1/namespaces/default/secrets", `{"metadata":{"name":"db-creds","annotations":{"note":"value-only-some-may-read"}},"data":{"k":"c2VjcmV0LXZhbHVl"}}`)
 	post("/sim/deny", `{"only":{"alice@corp.example":["web"]}}`)
 	line := "kubectl annotate secret db-creds -n default note-"
 	own, err := svc.Inspect(ctx, cl, line, nil)

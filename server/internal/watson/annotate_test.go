@@ -1,7 +1,12 @@
 package watson
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // kubectl annotate never shows a Secret's annotations, which can hold its
@@ -30,6 +35,40 @@ func TestAnnotateNeverListsOrQuotesASecretsAnnotations(t *testing.T) {
 	} {
 		if _, err := Parse(line); err != nil {
 			t.Errorf("%s: %v", line, err)
+		}
+	}
+}
+
+// plantedSecret makes Secret web/db, labelled app=db, as kubectl apply
+// leaves it: its last-applied annotation holds its data.
+func plantedSecret(t *testing.T, cl Cluster) {
+	t.Helper()
+	applied := `{"apiVersion":"v1","data":{"password":"aHVudGVyMi1hcHBsaWVk"},"kind":"Secret"}`
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "web", Labels: map[string]string{"app": "db"},
+		Annotations: map[string]string{"kubectl.kubernetes.io/last-applied-configuration": applied, "copy": "x hunter2-applied x", "note": "plain"}},
+		Data: map[string][]byte{"password": []byte("hunter2-applied")}}
+	if _, err := simClient(t, cl).CoreV1().Secrets("web").Create(context.Background(), sec, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An annotate card that picks Secrets with -l shows none of their values:
+// the annotations that hold one are hidden as by name (finding 6).
+func TestAnAnnotateCardOfSecretsBySelectorShowsNoValue(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	plantedSecret(t, cl)
+	for _, line := range []string{
+		"kubectl annotate secret -n web -l app=db kubectl.kubernetes.io/last-applied-configuration-",
+		"kubectl annotate secret -n web -l app=db copy=y --overwrite",
+		"kubectl annotate secret db -n web kubectl.kubernetes.io/last-applied-configuration-",
+	} {
+		got := card(t, svc, cl, alice(), line)
+		all := strings.Join(got.Plan.Impact, "\n")
+		for _, l := range got.Plan.DryRun {
+			all += "\n" + l.T
+		}
+		if strings.Contains(all, "hunter2") || strings.Contains(all, "aHVudGVy") || !strings.Contains(all, "hidden by 221B") {
+			t.Errorf("%s: %s", line, all)
 		}
 	}
 }

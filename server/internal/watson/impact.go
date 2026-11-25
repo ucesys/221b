@@ -3,6 +3,7 @@ package watson
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	release "helm.sh/helm/v4/pkg/release/v1"
+
+	"github.com/ucesys/221b/server/internal/kube"
 )
 
 // What an approval card says a change does (P6-04), worked out from the
@@ -252,6 +255,9 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			var names []string
 			for i := range list.Items {
 				o := &list.Items[i]
+				if gvr.Group == "" && gvr.Resource == "secrets" {
+					withoutValues(o)
+				}
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: o.GetName(), obj: o})
 				names = append(names, o.GetName())
 			}
@@ -1365,22 +1371,35 @@ func manifestDiff(from, to string) (changed, added, removed []string) {
 // (NS-02): its pods, its claims and their volumes' fate, and the
 // Secrets and ConfigMaps in it.
 // withoutValues blanks a Secret's values as soon as it is read, so a card
-// holds its key names and never a value (X-01).
+// holds its key names and never a value (X-01). An annotation that can
+// carry one, last-applied-configuration or any that holds a value of the
+// Secret, is hidden as the Secret's page hides it (kube.HideSecretValues):
+// a card may still say that it is there and that it goes.
 func withoutValues(o *unstructured.Unstructured) {
+	var values [][]byte
 	for _, f := range []string{"data", "stringData"} {
 		m, ok, _ := unstructured.NestedMap(o.Object, f)
 		if !ok {
 			continue
 		}
-		for k := range m {
+		for k, v := range m {
+			if s, ok := v.(string); ok && s != "" {
+				if f == "data" {
+					// Raw and base64, the forms an annotation may carry it in.
+					if b, err := base64.StdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+						values = append(values, b, []byte(s))
+					}
+				} else {
+					values = append(values, []byte(s), []byte(base64.StdEncoding.EncodeToString([]byte(s))))
+				}
+			}
 			m[k] = ""
 		}
 		_ = unstructured.SetNestedMap(o.Object, m, f)
 	}
 	unstructured.RemoveNestedField(o.Object, "metadata", "managedFields")
 	if a := o.GetAnnotations(); a != nil {
-		delete(a, "kubectl.kubernetes.io/last-applied-configuration")
-		o.SetAnnotations(a)
+		o.SetAnnotations(kube.HideSecretValues(a, values))
 	}
 }
 
