@@ -198,8 +198,17 @@ func TestCredentialsInTheDatabase(t *testing.T) {
 // name another has is refused with why, and changes nothing; the count is
 // held to its bound; an id kept already is refused.
 func TestTheRepositoryChangesOneCredentialAtATime(t *testing.T) {
-	for name, repo := range map[string]Repo{"memory": NewMemoryRepo(), "database": NewPGRepo(dbtest.Open(t))} {
-		t.Run(name, func(t *testing.T) {
+	// Each repository is made in its subtest: the database's skips its
+	// own when there is no database, not the memory's (credentials-cut-6).
+	for _, tc := range []struct {
+		name string
+		open func(*testing.T) Repo
+	}{
+		{"memory", func(*testing.T) Repo { return NewMemoryRepo() }},
+		{"database", func(t *testing.T) Repo { return NewPGRepo(dbtest.Open(t)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := tc.open(t)
 			for i, n := range []string{"one", "two"} {
 				if err := repo.Add(ctx, Credential{ID: fmt.Sprint("cr-", i), Name: n, Kind: KindToken, Endpoint: "https://example.com"}, 2); err != nil {
 					t.Fatal(err)
