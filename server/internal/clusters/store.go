@@ -29,6 +29,11 @@ var ErrNotFound = errors.New("no such cluster connection")
 // read.
 var ErrConflict = errors.New("the connection was changed by someone else since it was read")
 
+// ErrLocalUnread is an edit of the local cluster before its saved name
+// and environment could be read: saved, the installation's would replace
+// them, production among them (P3-09).
+var ErrLocalUnread = errors.New("The local cluster's saved name and environment could not be read yet, so it is not edited now. Try again in a moment.")
+
 // Store keeps connections: specs beside their credentials, which are
 // written and read by the server only (X-04, P3-07).
 type Store interface {

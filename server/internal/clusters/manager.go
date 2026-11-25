@@ -86,6 +86,10 @@ type Manager struct {
 	seen   map[string]string
 	// syncErr is the last sync error said in the log, to say it once.
 	syncErr string
+	// localRead says the local cluster's saved spec was read (or the store
+	// said there is none): until then it stands under the installation's
+	// name and environment, and is not edited (ErrLocalUnread).
+	localRead bool
 	// soon asks Run for a sync before its next tick (SyncSoon).
 	soon chan struct{}
 	// settings are the shared settings every store follows.
@@ -148,11 +152,13 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	// up, the database is away) is not fatal: the local cluster never
 	// needs it, the installation's name stands, and Sync takes the saved
 	// one when the store answers.
+	read := true
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 		spec.Tested = saved.Tested
 	} else if !errors.Is(err, ErrNotFound) {
-		m.log.Warn("the local connection's saved name could not be read; using the installation's", "err", err)
+		read = false
+		m.log.Warn("the local connection's saved name could not be read; using the installation's until it can, and refusing its edits", "err", err)
 	}
 	if spec.Added.IsZero() {
 		spec.Added = m.opts.Now().UTC()
@@ -165,6 +171,7 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 		inst.reading = newReading(ctx, r, store, m.opts.Activity)
 	}
 	m.instances[LocalID] = inst
+	m.localRead = read
 	raw, refresh := m.settingsRaw, m.settingsRefresh
 	m.mu.Unlock()
 	if raw != nil && store != nil {
@@ -229,10 +236,16 @@ func (m *Manager) load(ctx context.Context) error {
 func (m *Manager) Sync(ctx context.Context) error {
 	revs, err := m.store.Revisions(ctx)
 	if err != nil {
+		m.syncLocal(ctx)
 		return err
 	}
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
+	if _, saved := revs[LocalID]; !saved {
+		m.mu.Lock()
+		m.localRead = true
+		m.mu.Unlock()
+	}
 	var notAsked []error
 	for id, rev := range revs {
 		if m.seen[id] == rev {
@@ -338,6 +351,27 @@ func (m *Manager) SyncSoon() {
 	}
 }
 
+// syncLocal reads the local cluster's saved spec alone, when the list
+// of every connection could not be read: its row needs no Secret, so a
+// Secrets API that fails does not keep the installation's name and
+// environment standing in for the saved ones.
+func (m *Manager) syncLocal(ctx context.Context) {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	if _, ok := m.Get(LocalID); !ok {
+		return
+	}
+	saved, _, err := m.store.Get(ctx, LocalID)
+	switch {
+	case err == nil:
+		m.applyLocal(saved)
+	case errors.Is(err, ErrNotFound):
+		m.mu.Lock()
+		m.localRead = true
+		m.mu.Unlock()
+	}
+}
+
 // applyLocal takes the local cluster's saved name, environment and
 // description; its server, credentials and mode are the installation's.
 func (m *Manager) applyLocal(saved Spec) {
@@ -347,6 +381,7 @@ func (m *Manager) applyLocal(saved Spec) {
 	if inst == nil {
 		return
 	}
+	m.localRead = true
 	spec := inst.Spec
 	spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 	inst.Spec = spec
@@ -849,6 +884,12 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	// keeps it.
 	spec.Tested = orig.Tested
 	if spec.Local {
+		m.mu.RLock()
+		read := m.localRead
+		m.mu.RUnlock()
+		if !read {
+			return Summary{}, ErrLocalUnread
+		}
 		if err := m.store.Save(ctx, spec, nil); err != nil {
 			return Summary{}, err
 		}

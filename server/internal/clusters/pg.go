@@ -345,6 +345,12 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 		return Spec{}, Credential{}, ErrNotFound
 	}
 	spec := specs[0]
+	// The local cluster signs in as the console itself and never had a
+	// credential kept: its row is read without its Secret, so a Secrets
+	// API that fails never hides its saved name and environment.
+	if spec.Local {
+		return spec, Credential{}, nil
+	}
 	h, err := s.secrets.credential(ctx, id)
 	if err != nil {
 		return Spec{}, Credential{}, err
@@ -356,9 +362,7 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 		spec.Unsettled = why
 		return spec, Credential{}, nil
 	}
-	// The local cluster signs in as the console itself and never had a
-	// credential kept.
-	if !found && !spec.Local {
+	if !found {
 		if _, said := s.said.LoadOrStore(id, true); !said {
 			s.log.Warn("a connection of the database has no Secret, so nothing to sign in with: edit the connection and give its credential again", "cluster", id, "secret", s.secrets.name(id))
 		}

@@ -113,6 +113,8 @@ func clusterError(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusNotFound, "no such cluster connection")
 	case errors.Is(err, clusters.ErrConflict):
 		jsonError(w, http.StatusConflict, ConnectionChanged)
+	case errors.Is(err, clusters.ErrLocalUnread):
+		jsonError(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		jsonError(w, http.StatusInternalServerError, err.Error())
 	}

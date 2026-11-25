@@ -15,12 +15,15 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
+	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube/kubetest"
 )
 
@@ -290,5 +293,69 @@ func TestAConnectionMadeAgainAfterARollbackIsNotPairedWithTheOldServer(t *testin
 	}
 	if sec := held(t, cs)[clusterstest.SecretName("staging")]; sec["spec.json"] != "" {
 		t.Error("the edit left the record in the Secret")
+	}
+}
+
+// Finding 3: a console that started while its Secrets API failed (a 403
+// from a webhook, KMS errors) showed the local cluster under the
+// installation's name and environment "other", and an edit then saved
+// those over the saved row: off production, with no two-person request.
+func TestALocalEditNeverSavesWhatWasNotRead(t *testing.T) {
+	store, _, cs := clusterstest.PG(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	saved := clusters.Spec{ID: clusters.LocalID, Name: "eu-prod", Env: "production", Description: "saved", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster", Mode: "read", Local: true, Added: at, Updated: at}
+	must(t, store.Save(ctx, saved, nil))
+	install := clusters.Spec{Name: "here", Server: "https://10.0.0.1:6443", CA: "pem", Auth: "incluster"}
+	edit := clusters.Draft{Spec: clusters.Spec{Name: "eu-prod", Env: "other", Description: "edited", Mode: "read"}}
+	env := func(what string) {
+		t.Helper()
+		if got, _, err := store.Get(ctx, clusters.LocalID); err != nil || got.Env != "production" {
+			t.Fatalf("%s: the local cluster's saved environment is %q (%v)", what, got.Env, err)
+		}
+	}
+
+	// The Secrets API refuses every read; the database answers.
+	refuse := error(apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("denied by a webhook")))
+	failing(cs, &refuse, "get")
+	failing(cs, &refuse, "list")
+	m := clusters.New(store, quiet)
+	must(t, m.SetLocal(ctx, install, nil, nil))
+	_ = m.Start(ctx)
+	s, _ := m.Summary(clusters.LocalID)
+	if s.Name != "eu-prod" || s.Env != "production" {
+		t.Errorf("the local cluster while the Secrets fail: %s, %s", s.Name, s.Env)
+	}
+	// The editor sends the environment the page shows.
+	edit.Env = s.Env
+	if _, err := m.Update(ctx, clusters.LocalID, edit); err != nil {
+		t.Fatalf("a local edit while the Secrets fail: %v", err)
+	}
+	env("an edit while the Secrets fail")
+
+	// The database is away at the start: nothing saved was read, and an
+	// edit is refused rather than saving the installation's environment.
+	away := fmt.Errorf("reading the connection: %w", db.ErrUnavailable)
+	f := &flaky{Store: store}
+	f.set(away, away, nil)
+	m2 := clusters.New(f, quiet)
+	must(t, m2.SetLocal(ctx, install, nil, nil))
+	f.set(away, nil, nil)
+	if _, err := m2.Update(ctx, clusters.LocalID, clusters.Draft{Spec: clusters.Spec{Name: "here", Env: "other", Description: "x", Mode: "read"}}); err == nil {
+		t.Error("a local edit before its saved spec was read went through")
+	}
+	env("an edit before the saved spec was read")
+	// Read at a sync, even one whose list fails (the Secrets), it is edited.
+	f.set(nil, nil, nil)
+	_ = m2.Sync(ctx)
+	if s, _ := m2.Summary(clusters.LocalID); s.Env != "production" || s.Name != "eu-prod" {
+		t.Fatalf("after a sync whose list failed: %s %s", s.Name, s.Env)
+	}
+	if _, err := m2.Update(ctx, clusters.LocalID, clusters.Draft{Spec: clusters.Spec{Name: "eu-prod", Env: "production", Description: "edited", Mode: "read"}}); err != nil {
+		t.Fatalf("a local edit once read: %v", err)
+	}
+	refuse = nil
+	if got, _, _ := store.Get(ctx, clusters.LocalID); got.Description != "edited" || got.Env != "production" {
+		t.Fatalf("the edit once read: %+v", got)
 	}
 }
