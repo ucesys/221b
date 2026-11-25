@@ -9,6 +9,7 @@ package sessions
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -570,8 +571,8 @@ func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copie
 		sc.RunAsNonRoot, sc.RunAsUser = ptr(true), ptr(int64(65532))
 		notes = append(notes, fmt.Sprintf("It runs as a user other than root: namespace %s enforces the restricted Pod Security level.", r.Namespace))
 	}
-	secs := int64(deadline / time.Second)
-	ttl := int32(c.DebugPod.TTLAfterFinished.D() / time.Second)
+	secs := seconds(deadline, 1)
+	ttl := int32(seconds(c.DebugPod.TTLAfterFinished.D(), 0))
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: m.Labels, Annotations: m.Annotations},
 		Spec: corev1.PodSpec{
@@ -638,7 +639,7 @@ func NodePod(c toolbox.Config, id, owner string, r Request, deadline time.Durati
 		return nil, fmt.Errorf("no image named %q", c.NodeShell.Image)
 	}
 	m := meta(id, r.Tool, c.NodeShell.Namespace, owner, nil)
-	secs := int64(deadline / time.Second)
+	secs := seconds(deadline, 1)
 	spec := corev1.PodSpec{
 		NodeName:                      r.Node,
 		RestartPolicy:                 corev1.RestartPolicyNever,
@@ -700,6 +701,15 @@ func Containers(p *corev1.Pod) []string {
 	}
 	sort.Strings(eph)
 	return append(out, eph...)
+}
+
+// seconds is a duration as the seconds Kubernetes takes (a pod's deadline,
+// a Job's time to live): at least least, at most 2^31-1, which is what a
+// pod's activeDeadlineSeconds and a Job's int32 hold, so a long value is
+// clamped rather than wrapped (the toolbox review, finding 7).
+func seconds(d time.Duration, least int64) int64 {
+	s := int64(d / time.Second)
+	return min(max(s, least), math.MaxInt32)
 }
 
 func short(d time.Duration) string {

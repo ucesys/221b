@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"regexp"
@@ -341,6 +342,14 @@ func (c Config) Check() error {
 	if c.MaxDuration.D() < c.IdleTimeout.D() {
 		errs = append(errs, "toolbox.maxDuration must be at least toolbox.idleTimeout")
 	}
+	// A node pod's deadline is maxDuration and the time to start, in a
+	// pod's int32 seconds: a year leaves room, and no session is longer.
+	if c.MaxDuration.D() > MaxSession {
+		errs = append(errs, "toolbox.maxDuration must be at most 365d")
+	}
+	if ttl := c.DebugPod.TTLAfterFinished.D(); ttl < 0 || ttl > math.MaxInt32*time.Second {
+		errs = append(errs, fmt.Sprintf("toolbox.debugPod.ttlAfterFinished must be 0 to 24855d, as a Job takes it, not %s", ttl))
+	}
 	switch c.Transcripts {
 	case TranscriptsNone, "":
 	case TranscriptsPVC:
@@ -420,6 +429,9 @@ func (c Config) Check() error {
 
 // capRE is a Linux capability's name, as a container adds it.
 var capRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// MaxSession is the longest toolbox.maxDuration.
+const MaxSession = 365 * 24 * time.Hour
 
 // LoginUserRE is what a Unix user name looks like, as useradd takes it.
 var LoginUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)

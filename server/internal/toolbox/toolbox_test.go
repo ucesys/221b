@@ -179,3 +179,25 @@ func TestParseRefusesARetentionThatPrunesLiveTranscripts(t *testing.T) {
 		}
 	}
 }
+
+// A debug pod's time to live is 0 to 2^31-1 seconds, as a Job takes it,
+// and maxDuration at most a year, so a node pod's deadline (maxDuration
+// and the start) fits a pod's (the toolbox review, finding 7).
+func TestParseRefusesLimitsKubernetesRefuses(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"debugPod":{"ttlAfterFinished":-1}}`:       "ttlAfterFinished",
+		`{"debugPod":{"ttlAfterFinished":"-10m"}}`:   "ttlAfterFinished",
+		`{"debugPod":{"ttlAfterFinished":"24856d"}}`: "ttlAfterFinished",
+		`{"maxDuration":"36500d"}`:                   "toolbox.maxDuration",
+		`{"maxDuration":"366d"}`:                     "toolbox.maxDuration",
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+	for _, in := range []string{`{"debugPod":{"ttlAfterFinished":0}}`, `{"maxDuration":"365d"}`} {
+		if _, err := Parse([]byte(in)); err != nil {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+}

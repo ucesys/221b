@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -1611,5 +1612,34 @@ func TestTheRecordsStayWithinTheirBytes(t *testing.T) {
 	}
 	if got := h.List(); len(got) == 0 || got[0].ID != "r39" {
 		t.Fatalf("the newest was not kept: %+v", got[:1])
+	}
+}
+
+// What reaches Kubernetes as int32 seconds is clamped, never wrapped: a
+// time to live past 2^31-1 seconds went negative and every Job was
+// refused, and a deadline past it every node pod (the toolbox review,
+// finding 7).
+func TestDeadlinesAndTTLsFitKubernetes(t *testing.T) {
+	c := toolbox.Default()
+	c.DebugPod.TTLAfterFinished = toolbox.Duration(30000 * 24 * time.Hour)
+	long := 30000 * 24 * time.Hour
+	j, _, err := DebugJob(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "general"}, LevelPrivileged, nil, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl := *j.Spec.TTLSecondsAfterFinished; ttl != math.MaxInt32 {
+		t.Errorf("ttl %d", ttl)
+	}
+	c.DebugPod.TTLAfterFinished = toolbox.Duration(-time.Minute)
+	j, _, _ = DebugJob(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "general"}, LevelPrivileged, nil, time.Hour)
+	if ttl := *j.Spec.TTLSecondsAfterFinished; ttl != 0 {
+		t.Errorf("negative ttl %d", ttl)
+	}
+	p, err := NodePod(c, "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolNodeShell, Node: "n1", Profile: toolbox.ProfileGeneral}, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := *p.Spec.ActiveDeadlineSeconds; d != math.MaxInt32 {
+		t.Errorf("node pod deadline %d", d)
 	}
 }
