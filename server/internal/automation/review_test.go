@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -551,5 +553,44 @@ func TestConditionsReadAParameterInTheCommonWays(t *testing.T) {
 		if ConditionRE("MODE").MatchString(line) {
 			t.Errorf("seen as a condition: %s", line)
 		}
+	}
+}
+
+// Automation's output does not fill the transcripts' volume (the review of
+// the toolbox, finding 14, its run-output half): with the database keeping
+// each host's whole output no file is written beside the transcripts, and
+// the files of runs the store no longer keeps are removed.
+func TestRunOutputFilesDoNotFillTheTranscriptsVolume(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	// A file of a run long gone, and one of a run still kept.
+	for _, id := range []string{"7", "1"} {
+		if err := os.MkdirAll(filepath.Join(dir, "automation", id), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "automation", id, "n1.log"), []byte("old output\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	x := &stubExec{run: func(_, _, _ string, out io.Writer) (int, error) {
+		io.WriteString(out, "hello\n")
+		return 0, nil
+	}}
+	e := NewEngine(Options{Store: st, Exec: x, OutputDir: dir})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"n1"}, Rollout: Rollout{Mode: RolloutAll}, Values: map[string]map[string]string{"n1": {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, e, r.ID)
+	if _, err := os.Stat(filepath.Join(dir, "automation", "7")); !os.IsNotExist(err) {
+		t.Errorf("the files of run 7, which the store does not keep, are still there: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "automation", "1", "n1.log")); err != nil || string(b) != "old output\n" {
+		t.Errorf("run 1 is kept: its file %q, %v", b, err)
+	}
+	if _, out, _, err := e.Get(ctx, r.ID); err != nil || !strings.Contains(out["n1"], "hello") {
+		t.Fatalf("the output: %q %v", out, err)
 	}
 }

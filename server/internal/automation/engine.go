@@ -630,7 +630,13 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 	}
 	e.mu.Unlock()
 	if e.opts.OutputDir != "" {
-		writeOutputs(e.opts.OutputDir, r.ID, outs, e.opts.Logger)
+		// The database keeps each host's whole output (DB-87): a file
+		// beside the transcripts would only fill their volume. A store of
+		// documents keeps none, so there the file is the output.
+		if !e.opts.Store.KeepsOutputs() {
+			writeOutputs(e.opts.OutputDir, r.ID, outs, e.opts.Logger)
+		}
+		e.pruneOutputs()
 	}
 	if e.opts.OnEnd != nil {
 		e.opts.OnEnd(r)
@@ -1213,6 +1219,43 @@ func writeOutputs(dir string, id int, outs map[string]string, log *slog.Logger) 
 	for node, s := range outs {
 		if err := os.WriteFile(filepath.Join(p, filepath.Base(node)+".log"), []byte(s), 0o640); err != nil {
 			log.Warn("keeping an automation run's output failed", "run", id, "node", node, "err", err)
+		}
+	}
+}
+
+// pruneOutputs removes the output files of the runs the store no longer
+// keeps (it keeps the newest MaxRuns), which nothing could read or clean
+// any more, and which would fill the transcripts' volume: the console's
+// own sessions are then recorded nowhere. A failure is logged.
+func (e *Engine) pruneOutputs() {
+	root := filepath.Join(e.opts.OutputDir, "automation")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runs, err := e.opts.Store.Runs(ctx)
+	if err != nil {
+		e.opts.Logger.Warn("the output files of old automation runs were not looked at", "err", err)
+		return
+	}
+	kept := map[int]bool{}
+	for _, r := range runs {
+		kept[r.ID] = true
+	}
+	e.mu.Lock()
+	for id := range e.active {
+		kept[id] = true
+	}
+	e.mu.Unlock()
+	for _, en := range entries {
+		id, err := strconv.Atoi(en.Name())
+		if err != nil || !en.IsDir() || kept[id] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, en.Name())); err != nil {
+			e.opts.Logger.Warn("removing an old automation run's output files failed", "run", id, "err", err)
 		}
 	}
 }
