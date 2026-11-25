@@ -281,6 +281,7 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		return canI(c, f, streams, args)
 	}
 	var cmd *cobra.Command
+	var waitFor []deleted
 	switch c.Name() {
 	case "kubectl get":
 		cmd = get.NewCmdGet("kubectl", f, streams)
@@ -304,6 +305,15 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		cmd = rollout.NewCmdRollout("kubectl", f, streams)
 	case "kubectl delete":
 		cmd = delete.NewCmdDelete(f, streams)
+		// kubectl's own wait for the deletion runs under
+		// context.Background() and a signal handler that ends the process:
+		// Stop could not end it, and SIGTERM ended the console. kubectl
+		// deletes without waiting, and Watson waits under the command's
+		// context (deletewait.go).
+		if waitsForDeletion(c, extra) {
+			waitFor = resolveDeleted(f, c)
+			args = append(args, "--wait=false")
+		}
 	case "kubectl label":
 		cmd = label.NewCmdLabel(f, streams)
 	case "kubectl annotate":
@@ -331,6 +341,15 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		}
 		fmt.Fprintf(errOut, "error: %v\n", err)
 		return 1
+	}
+	if len(waitFor) > 0 {
+		if err := waitDeleted(ctx, f, waitFor, deleteTimeout(c)); err != nil {
+			if ctx.Err() != nil {
+				return 130
+			}
+			fmt.Fprintf(errOut, "error: %v\n", err)
+			return 1
+		}
 	}
 	if ctx.Err() != nil {
 		return 130

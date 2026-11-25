@@ -101,3 +101,91 @@ func TestSIGTERMDuringKubectlLogsDoesNotEndTheProcess(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 }
+
+// A kubectl delete that waits for its object to go stops when its item is
+// stopped, and SIGTERM meanwhile does not end the process: the wait is
+// Watson's, under the item's context (review of November 24, 2026,
+// finding 13). The pod here never goes: its deletion is answered, not made.
+func TestStopEndsADeleteThatWaitsForDeletion(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	never := make(chan struct{})
+	tg := heldSim(t, func(r *http.Request) bool { return false }, never)
+	deleting := make(chan struct{}, 8)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/pods/") && r.URL.Query().Get("dryRun") == "" {
+			deleting <- struct{}{}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
+			return
+		}
+		proxy(w, r, tg.Config.Host)
+	}))
+	t.Cleanup(front.Close)
+	svc := New(Options{CheckEvery: 50 * time.Millisecond})
+	cl := Cluster{ID: "local", Name: "test", Env: "development", Config: &rest.Config{Host: front.URL}}
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl delete pod cache-0 -n web", "typed", "", false)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-deleting:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the pod was never deleted")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	<-sigs
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusRunning {
+		t.Fatalf("not waiting: %s %s", got.Status, outputOf(svc, it.ID))
+	}
+	if _, err := svc.Stop(cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, _, _ := svc.Snapshot(it.ID, 0); got.Status == StatusStopped {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, _, _ := svc.Snapshot(it.ID, 0)
+	t.Fatalf("Stop did not end the wait: %s", got.Status)
+}
+
+// proxy passes a request on to the server at host.
+func proxy(w http.ResponseWriter, r *http.Request, host string) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, host+r.URL.RequestURI(), r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	req.Header = r.Header.Clone()
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
