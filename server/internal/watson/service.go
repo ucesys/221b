@@ -936,6 +936,10 @@ func (s *Service) startSession(cl Cluster, it *Item, approver Who) {
 func (s *Service) add(it *Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if finished(it.Status) && it.Finished.IsZero() {
+		// Refused as it came: it ended then, and is kept as long as others.
+		it.Finished = it.Created
+	}
 	s.items[it.ID] = it
 	s.trimLocked(it.Requester.Session, it.Cluster)
 	s.changedLocked(it)
@@ -949,7 +953,11 @@ func (s *Service) trimLocked(session, cluster string) {
 		if it.Requester.Session == session && it.Cluster == cluster {
 			mine = append(mine, it)
 		}
-		if finished(it.Status) && !it.Finished.IsZero() && it.Finished.Before(cutoff) {
+		switch {
+		case finished(it.Status) && !it.Finished.IsZero() && it.Finished.Before(cutoff):
+			delete(s.items, it.ID)
+		case it.Status == StatusPending && !it.Change && it.Created.Before(cutoff):
+			// A read never run: nothing waits on it.
 			delete(s.items, it.ID)
 		}
 	}

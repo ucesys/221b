@@ -3,6 +3,7 @@ package watson
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -138,5 +139,27 @@ func TestAViewerHoldsNoStandingApproval(t *testing.T) {
 	}
 	if _, ok := svc.Standing(cl, alice()); ok {
 		t.Fatal("the grant stands")
+	}
+}
+
+// Refused commands and reads never run are trimmed like finished ones
+// (review of November 24, 2026, cut by the cap: service.go:821).
+func TestRefusedAndUnrunItemsAreTrimmed(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	svc, cl, _, _, _ := setup(t, Options{Now: clock})
+	ctx := context.Background()
+	refused := svc.Submit(ctx, cl, alice(), "kubectl exec -it api -- sh", "typed", "", false)[0]
+	unrun := svc.Submit(ctx, cl, alice(), "kubectl get nodes", "typed", "", false)[0]
+	if refused.Status != StatusRefused || unrun.Status != StatusPending {
+		t.Fatalf("%s %s", refused.Status, unrun.Status)
+	}
+	mu.Lock()
+	now = now.Add(13 * time.Hour)
+	mu.Unlock()
+	svc.Submit(ctx, cl, bob(), "kubectl exec -it api -- sh", "typed", "", false)
+	if svc.Get(refused.ID) != nil || svc.Get(unrun.ID) != nil {
+		t.Fatal("kept past their time")
 	}
 }
