@@ -895,3 +895,21 @@ func TestACancelledScriptAndARebootAreAuditedAsTheyWent(t *testing.T) {
 		t.Fatalf("a reboot is audited as %q", got)
 	}
 }
+
+// A run stops at its limit of failures: no node starts once it is
+// reached, a node waiting for its turn included (cut by the review's
+// cap).
+func TestNoNodeStartsOnceTheFailureLimitIsReached(t *testing.T) {
+	f := &fakeExec{}
+	e := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: f, MaxParallel: 1})
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approved(PrivilegeElevated), Cluster: "local", Fleet: AllNodes, Nodes: []string{"fail-1", "fail-2", "fail-3"},
+		Rollout: Rollout{Mode: RolloutAll, StopAfter: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRun(t, e, r.ID)
+	c := done.Counts()
+	if c[NodeFailed] != 1 || c[NodeSkipped] != 2 {
+		t.Fatalf("%v: %+v", c, done.Nodes)
+	}
+}

@@ -574,6 +574,12 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 				break
 			}
 			sem <- struct{}{}
+			// A node that ended while this one waited for its turn may have
+			// reached the limit: then this one does not start.
+			if ctx.Err() != nil || (ro.StopAfter > 0 && failures() >= ro.StopAfter) {
+				<-sem
+				break
+			}
 			wg.Add(1)
 			go func(node string) {
 				defer wg.Done()
