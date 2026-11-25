@@ -581,3 +581,32 @@ func TestAnEditWithoutACredentialLeavesTheSecretAlone(t *testing.T) {
 		t.Errorf("an edit without a credential made a Secret: %v", err)
 	}
 }
+
+// Finding 14: a Kubernetes failure while saving or removing a connection
+// was reported as a database outage: the Secret's write ran inside the
+// transaction, whose error a "connection reset" turned into
+// db.ErrUnavailable.
+func TestASecretsFailureIsNotADatabaseOutage(t *testing.T) {
+	store, d, cs := clusterstest.PG(t, nil)
+	ctx := context.Background()
+	spec, cred := fullSpec("staging"), fullCred("first")
+	must(t, store.Save(ctx, spec, &cred))
+	reset := error(errors.New("Put \"https://10.43.0.1:443/api/v1/namespaces/console/secrets/b221-cluster-staging\": read tcp 10.42.0.5:40000->10.43.0.1:443: read: connection reset by peer"))
+	for _, verb := range []string{"create", "update", "delete", "list"} {
+		failing(cs, &reset, verb)
+	}
+	next := fullCred("second")
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil || errors.Is(err, db.ErrUnavailable) || !strings.Contains(err.Error(), "connection reset") {
+			t.Errorf("%s: %v", what, err)
+		}
+	}
+	check("a save", store.Save(ctx, spec, &next))
+	check("a removal", store.Delete(ctx, "staging"))
+	_, err := clusters.CopyFromSecrets(ctx, d, clusterstest.Secrets(cs), nil)
+	check("the copy", err)
+	if h := d.Health(); !h.Available {
+		t.Errorf("the database is taken for away: %+v", h)
+	}
+}

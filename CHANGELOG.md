@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **A Kubernetes failure while saving or removing a connection was reported as a database outage** (clusters review, finding 14). An API server that reset the Secret's write gave 503 *the database is unavailable* with `X-221b-Database: unavailable`, the audit said the same, and a database probe started, although PostgreSQL was fine. The Secrets API's own error is now what the answer and the audit say, for a save, a removal and the one-time copy.
+
 - **Every rename, description, mode or environment edit of a connection wrote its Secret again** (clusters review, finding 13), from the credential read at the edit's start: a key the console does not know went, a token replaced by hand while the edit was open came back, and a connection with no Secret was given an empty one, which silenced the start's warning. An edit that gives no credential now leaves the Secret alone.
 
 - **A connection's Secret made again by hand without its labels stopped later rotations reaching the connection** (clusters review, finding 12). Its revision was read from the Secrets listed by label, so after `kubectl delete secret` and `kubectl create secret generic …` it stopped changing, the connection kept the old token while tests and backups used the new one, and the start said the connection had no Secret. A connection whose Secret is not listed by its label is now read by its name for both.

@@ -392,6 +392,21 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 	return spec, cred, nil
 }
 
+// errSecrets ends a transaction whose Secret could not be written, read
+// or listed: the Secrets API's own error is kept apart and returned after
+// the transaction, so that its words ("connection reset", a deadline) are
+// never taken for the database's (db.Tx turns those into ErrUnavailable).
+var errSecrets = errors.New("the connection Secrets could not be written")
+
+// secretsErr is the error of a transaction that ended with errSecrets:
+// the Secrets API's own, kept in kept; any other error as it is.
+func secretsErr(err, kept error) error {
+	if kept != nil && errors.Is(err, errSecrets) {
+		return kept
+	}
+	return err
+}
+
 // unsettled says why a row and the credential its Secret holds do not go
 // together, or "": the Secret was written for another API server
 // (AnnotationServer) by a save whose row never committed, or it holds a
@@ -436,7 +451,9 @@ func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 	if spec.ID == "" {
 		return errors.New("a connection is saved under its identifier, and this one has none")
 	}
+	var secretErr error
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
+		secretErr = nil
 		if spec.RowVersion > 0 {
 			var now int
 			err := tx.QueryRow(ctx, "SELECT version FROM clusters WHERE cluster_id = $1 AND is_kept FOR UPDATE", spec.ID).Scan(&now)
@@ -458,8 +475,12 @@ func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 		}
 		// Safe to do again: the transaction is run again when another one
 		// changed the same row first.
-		return s.secrets.putCredential(ctx, spec.ID, spec.Server, *c)
+		if secretErr = s.secrets.putCredential(ctx, spec.ID, spec.Server, *c); secretErr != nil {
+			return errSecrets
+		}
+		return nil
 	})
+	err = secretsErr(err, secretErr)
 	if errors.Is(err, ErrConflict) {
 		return err
 	}
@@ -478,7 +499,9 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 	// after the Secret went: a removal said to have failed keeps the
 	// connection whole, its credential with it.
 	var gone *corev1.Secret
+	var secretErr error
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
+		secretErr = nil
 		tag, err := tx.Exec(ctx, emptySQL, id)
 		if err != nil {
 			return err
@@ -496,10 +519,12 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 		}
 		was, err := s.secrets.secrets.Get(ctx, s.secrets.name(id), metav1.GetOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("reading the connection Secret %s: %w", s.secrets.name(id), err)
+			secretErr = fmt.Errorf("reading the connection Secret %s: %w", s.secrets.name(id), err)
+			return errSecrets
 		}
 		if err := s.secrets.Delete(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
-			return err
+			secretErr = err
+			return errSecrets
 		}
 		// A try run again after its Secret went keeps the first one's.
 		if was != nil && was.Name != "" {
@@ -507,6 +532,7 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 		}
 		return nil
 	})
+	err = secretsErr(err, secretErr)
 	if err != nil {
 		if gone != nil {
 			s.putBack(ctx, gone)
@@ -638,11 +664,13 @@ func CopyFromSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog
 		log = slog.Default()
 	}
 	n := 0
+	var secretErr error
 	_, err := d.ImportOnce(ctx, ImportID, "secret", func(ctx context.Context, tx pgx.Tx) (int, error) {
-		n = 0
+		n, secretErr = 0, nil
 		secs, err := from.all(ctx)
 		if err != nil {
-			return 0, err
+			secretErr = err
+			return 0, errSecrets
 		}
 		for i := range secs {
 			raw, has := secs[i].Data[keySpec]
@@ -675,7 +703,7 @@ func CopyFromSecrets(ctx context.Context, d *db.DB, from *SecretStore, log *slog
 		}
 		return n, nil
 	})
-	if err != nil {
+	if err = secretsErr(err, secretErr); err != nil {
 		n = 0
 	}
 	return n, err
