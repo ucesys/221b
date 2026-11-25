@@ -498,8 +498,21 @@ test('Administration › AI › Knowledge reads an S3 bucket of documents throug
   await drawer.getByTestId('knowledge-source-endpoint').fill(SIM)
   await expect(drawer.getByTestId('knowledge-source-credential-select')).toHaveValue(credId)
   expect((await api('/api/v1/knowledge/settings')).body).not.toContain(ID)
+  // Mycroft writes pages by itself only from a source of high trust
+  // (KN-59), and the dialog has no trust: a source's is set apart, on its
+  // row (KN-56, KN-57), after its first read. The API takes one with a
+  // new source, so the save sends high and the first read drafts pages.
+  const addRoute = '**/api/v1/knowledge/sources'
+  await page.route(addRoute, async (route) => {
+    const req = route.request()
+    if (req.method() !== 'POST') return route.continue()
+    const body = req.postDataJSON() as { source: Record<string, unknown> }
+    await route.continue({ postData: JSON.stringify({ ...body, source: { ...body.source, trust: 'high' } }) })
+  })
   await drawer.getByTestId('knowledge-source-save').click()
   const row = section.locator(`[data-testid=knowledge-source][data-source=${ID}]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await page.unroute(addRoute)
   try {
     await expect(row.getByTestId('knowledge-source-creds')).toHaveText('credential E2E sim bucket key')
     await expect(row.getByTestId('knowledge-source-bucket-line')).toContainText('s3://sim-docs/docs/')
