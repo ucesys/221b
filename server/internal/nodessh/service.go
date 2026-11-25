@@ -313,8 +313,16 @@ func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string
 		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer c.Close()
+	// Until the command has started, the channel's replies are waited for
+	// with no deadline: the context closes the connection, or a node that
+	// took the login and answers nothing more would hold the run.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
 	sess, err := c.NewSession()
 	if err != nil {
+		stop()
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
 		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer sess.Close()
@@ -324,8 +332,13 @@ func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string
 	sess.Stdin = stdin
 	sess.Stdout, sess.Stderr = Streams(out)
 	if err := sess.Start(command); err != nil {
+		stop()
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
 		return -1, err
 	}
+	stop()
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 	select {
@@ -421,9 +434,24 @@ func (t *term) Close() error { return t.client.Close() }
 
 func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-chan sessions.Size) error {
 	defer t.client.Close()
+	// Until the shell has started, the context closes the connection: the
+	// requests below wait for the node's replies with no deadline.
+	stop := context.AfterFunc(ctx, func() { t.client.Close() })
+	started := false
+	defer func() {
+		if !started {
+			stop()
+		}
+	}()
+	fail := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 	sess, err := t.client.NewSession()
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	defer sess.Close()
 	sess.Stdin = stdin
@@ -438,11 +466,13 @@ func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-
 	}
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {
-		return fmt.Errorf("the node refused a terminal: %w", err)
+		return fail(fmt.Errorf("the node refused a terminal: %w", err))
 	}
 	if err := sess.Shell(); err != nil {
-		return err
+		return fail(err)
 	}
+	started = true
+	stop()
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 	for {

@@ -439,8 +439,15 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 		return Host{}, nil, fmt.Errorf("SSH to %s as %s: %w", hostPort, cred.User, err)
 	}
 	defer c.Close()
+	// Until the setup has started, the context closes the connection: the
+	// channel's replies are waited for with no deadline.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
 	sess, err := c.NewSession()
 	if err != nil {
+		if ctx.Err() != nil {
+			return Host{}, nil, fmt.Errorf("the setup on %s did not start in time: %w", hostPort, ctx.Err())
+		}
 		return Host{}, nil, fmt.Errorf("SSH to %s as %s: %w", hostPort, cred.User, err)
 	}
 	defer sess.Close()
@@ -471,8 +478,12 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 	exit := 0
 	done := make(chan error, 1)
 	if err := sess.Start(command); err != nil {
+		if ctx.Err() != nil {
+			return Host{}, nil, fmt.Errorf("the setup on %s did not start in time: %w", hostPort, ctx.Err())
+		}
 		return Host{}, nil, fmt.Errorf("the setup did not start on %s: %w", hostPort, err)
 	}
+	stop()
 	go func() { done <- sess.Wait() }()
 	select {
 	case <-ctx.Done():
