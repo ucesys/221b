@@ -220,7 +220,17 @@ func keptOutput(s string) (string, bool) {
 	if len(s) > OutputBytes {
 		s, cut = last(s, OutputBytes), true
 	}
-	return strings.ToValidUTF8(s, ""), cut
+	return pgText(strings.ToValidUTF8(s, "")), cut
+}
+
+// pgText is text as a PostgreSQL text column takes it, as the audit log
+// writes it (audit.pgText): valid UTF-8 with no zero byte, each byte it
+// would refuse replaced. A script's output may hold one (cat
+// /proc/1/cmdline, find -print0), and a row refused would fail every
+// later save of its run.
+func pgText(s string) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	return strings.ReplaceAll(s, "\x00", "\uFFFD")
 }
 
 func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output string) error {
@@ -247,6 +257,7 @@ func (p *pgRuns) PutNode(ctx context.Context, id int, n NodeResult, output strin
 		if seen := runPlain(Run{Nodes: []NodeResult{n}}, names(cluster)); len(seen) > 0 {
 			text, n.Tail, n.Msg, n.Error = maskPlain(text, seen), maskPlain(n.Tail, seen), maskPlain(n.Msg, seen), maskPlain(n.Error, seen)
 		}
+		n.Tail, n.Msg, n.Error = pgText(n.Tail), pgText(n.Msg), pgText(n.Error)
 		var started, ended *time.Time
 		if n.Started != nil {
 			started = timeOrNil(*n.Started)

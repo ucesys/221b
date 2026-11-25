@@ -352,3 +352,32 @@ func TestTheByteLimitsAreTheConfigMapsAlone(t *testing.T) {
 		t.Fatalf("revoking with scripts.json at %d of %d bytes: %v", len(b), maxScriptsBytes, err)
 	}
 }
+
+// A zero byte in what a script prints is kept as U+FFFD (finding 9), as
+// the audit log keeps one: every save of the run goes through, and it
+// ends as it ended, with each host's output.
+func TestAZeroByteInOutputDoesNotStopTheRunsSaves(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	x := &stubExec{run: func(_, _, _ string, out io.Writer) (int, error) {
+		io.WriteString(out, "/sbin/init\x00splash\x00\n")
+		io.WriteString(out, `{"changed":false,"msg":"read\u0000it"}`+"\n")
+		return 0, nil
+	}}
+	e := NewEngine(Options{Store: st, Exec: x, BeatEvery: 20 * time.Millisecond})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"n1"},
+		Rollout: Rollout{Mode: RolloutAll}, Values: map[string]map[string]string{"n1": {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, e, r.ID)
+	other := NewEngine(Options{Store: pgSensitiveStore(d, NewMemorySensitive(), nil), Exec: x})
+	run, out, found, err := other.Get(ctx, r.ID)
+	if err != nil || !found {
+		t.Fatalf("%v %v", found, err)
+	}
+	if run.State != RunSucceeded || !strings.Contains(run.Nodes[0].Tail, "init�splash") || run.Nodes[0].Msg != "read�it" || !strings.Contains(out["n1"], "init�splash") {
+		t.Fatalf("as the database keeps it: %+v %q", run, out)
+	}
+}

@@ -332,6 +332,12 @@ func writeRunsRows(ctx context.Context, tx pgx.Tx, old, next runsRecord) error {
 }
 
 func writeRun(ctx context.Context, tx pgx.Tx, was, r Run, had bool) error {
+	// What a script printed goes into text columns, which take no zero byte.
+	r.Note, r.Nodes = pgText(r.Note), append([]NodeResult(nil), r.Nodes...)
+	for i := range r.Nodes {
+		n := &r.Nodes[i]
+		n.Tail, n.Msg, n.Error = pgText(n.Tail), pgText(n.Msg), pgText(n.Error)
+	}
 	list := func(s []string) []string {
 		if s == nil {
 			return []string{}
