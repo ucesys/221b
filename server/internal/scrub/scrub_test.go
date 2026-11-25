@@ -47,6 +47,14 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#10 an object in a JSON string":    {`{"msg":"{\"auth\":{\"password\":\"hunter2secret\"}}","level":"info"}`, "hunter2secret", `"level":"info"`},
 		"#10 a list under such a key":       {`{"passwords": ["hunter2secret", "hunter3"], "db": "app"}`, "hunter2secret", `"db": "app"`},
 		"#10 a value on the next line":      {"password:\n  hunter2secret\nnext: 1\n", "hunter2secret", "next: 1"},
+		// scrub#12: a token right after an escape or a percent-encoded
+		// character, and a GitLab token that ends in -.
+		"#12 a JWT after \\x22":          {`{\x22access_token\x22:\x22eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl\x22}`, "eyJzdWIiOiJhZG1pbiJ9", `{\x22access_token\x22:`},
+		"#12 a JWT after %3D":            {"GET /cb?id_token%3DeyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl&x=1 200", "eyJzdWIiOiJhZG1pbiJ9", "&x=1 200"},
+		"#12 a GitHub token after \\x22": {`{\x22t\x22:\x22ghp_abcdefghijklmnopqrstuvwxyz0123456789\x22}`, "ghp_abcdefghij", `{\x22t\x22:\x22`},
+		"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22 200", "AKIAIOSFODNN7EXAMPLE", "q=%22"},
+		"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", "glpat-abcdefghij", " ok"},
+		"#12 a Slack token ending in -":  {"posted with xoxb-1234567890-abcdef- ok", "xoxb-1234567890", " ok"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
@@ -305,6 +313,11 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#4 a call as the value":         {"password = os.getenv('DB_PASSWORD2')", false},
 		"#4 a dotted real one":           {"password = S3cr3t.Pa55w0rd", true},
 		"#4 a quoted one with brackets":  {`password: "Pa[ss]w0rd-x"`, true},
+		// scrub#12: the same in an answer.
+		"#12 a JWT after \\x22":          {`{\x22access_token\x22:\x22eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl\x22}`, true},
+		"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", true},
+		"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22", true},
+		"#12 an AWS key inside a word":   {"XAKIAIOSFODNN7EXAMPLE", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)

@@ -35,6 +35,11 @@ const (
 	pairValue = `(?:\\+".*?\\+"(?:\s*[,}\]]|\s*$)|"[^"]*"|'[^']*'|\[[^\[\]{}\n]*\]|[{\[][^"'{\[\s\\,;&}\]][^\s,;&}\]]*|[^\s,;&}\]{\[](?:[^\s,;&}\]]*[^\s,;&}\]:])?)`
 )
 
+// tokenLead is what may stand before a token: the text's start, a
+// character that is not a word's, or an escape or a percent-encoded
+// character (\x22, \u0022, %22, %3D), after which \b would not hold.
+const tokenLead = `(^|[^A-Za-z0-9_]|\\x[0-9A-Fa-f]{2}|\\u00[0-9A-Fa-f]{2}|%[0-9A-Fa-f]{2})`
+
 // The shapes of real credentials, whatever words stand around them. Text
 // removes them with the rest; Credential looks for them alone.
 var (
@@ -45,18 +50,21 @@ var (
 	// an encrypted key's Proc-Type:), also in a JSON string's \n, or on the
 	// same line. rePEM takes a header alone, as Text should.
 	rePrivateKey = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\(?:r\\)?n)(?:[ \t]*[A-Za-z][A-Za-z-]*:[^\r\n\\]*(?:\r?\n|\\(?:r\\)?n))*(?:\s|\\(?:r\\)?n)*([A-Za-z0-9+/]{6,})|[ \t]+([A-Za-z0-9+/]{20,}))`)
-	// JSON Web Tokens, wherever they are.
-	reJWT = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`)
+	// JSON Web Tokens, wherever they are: also right after an escape or a
+	// percent-encoded character (\x22eyJ…, %3DeyJ…), so with no \b.
+	reJWT = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}`)
 	// Tokens of well-known formats: AWS access keys, GitHub, Slack, OpenAI
-	// and Anthropic API keys, Google API keys, GitLab.
+	// and Anthropic API keys, Google API keys, GitLab. Each starts after
+	// tokenLead, which Text keeps, and runs as far as its characters go:
+	// one that ends in - has no \b after it.
 	tokenShapes = []*regexp.Regexp{
-		regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
-		regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{30,}\b`),
-		regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{40,}\b`),
-		regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`),
-		regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),
-		regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
-		regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}\b`),
+		regexp.MustCompile(tokenLead + `(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+		regexp.MustCompile(tokenLead + `gh[pousr]_[A-Za-z0-9]{30,}\b`),
+		regexp.MustCompile(tokenLead + `github_pat_[A-Za-z0-9_]{40,}\b`),
+		regexp.MustCompile(tokenLead + `xox[abposr]-[A-Za-z0-9-]{10,}`),
+		regexp.MustCompile(tokenLead + `sk-[A-Za-z0-9_-]{20,}`),
+		regexp.MustCompile(tokenLead + `AIza[0-9A-Za-z_-]{35}\b`),
+		regexp.MustCompile(tokenLead + `glpat-[A-Za-z0-9_-]{20,}`),
 	}
 	// A bearer token written out, on the scheme's line.
 	reBearer = regexp.MustCompile(`(?i)\bbearer[ \t]+([A-Za-z0-9\-._~+/]{20,}=*)`)
@@ -113,8 +121,8 @@ func Credential(s string) bool {
 		return true
 	}
 	for _, re := range tokenShapes {
-		for _, m := range re.FindAllString(s, -1) {
-			if !elided(reTokenPrefix.ReplaceAllString(m, "")) {
+		for _, m := range re.FindAllStringSubmatch(s, -1) {
+			if !elided(reTokenPrefix.ReplaceAllString(m[0][len(m[1]):], "")) {
 				return true
 			}
 		}
@@ -298,7 +306,7 @@ func basicPassword(v string) bool {
 // through them. They err towards removing too much.
 var scrubbers = []struct {
 	re   *regexp.Regexp
-	keep int // the submatch to keep in front of the redaction, 0 for none
+	keep int // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
 }{
 	// PEM and PGP private keys.
 	{rePEM, 0},
@@ -329,8 +337,8 @@ var scrubbers = []struct {
 	// A YAML plain value on the line below its key.
 	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), 1},
 	// Well-known token shapes.
-	{tokenShapes[0], 0}, {tokenShapes[1], 0}, {tokenShapes[2], 0}, {tokenShapes[3], 0},
-	{tokenShapes[4], 0}, {tokenShapes[5], 0}, {tokenShapes[6], 0},
+	{tokenShapes[0], -1}, {tokenShapes[1], -1}, {tokenShapes[2], -1}, {tokenShapes[3], -1},
+	{tokenShapes[4], -1}, {tokenShapes[5], -1}, {tokenShapes[6], -1},
 }
 
 // blockKey is a YAML key that names a secret and whose value is the block
