@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/client-go/discovery"
+
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/kube"
 )
@@ -75,22 +77,17 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 		return Inspection{}, fmt.Errorf("%w: %s reads, and runs without an approval", ErrNotChange, c.Name())
 	}
 	out = Inspection{Line: c.Line}
-	if cl.Config == nil {
-		return out, errors.New("the cluster cannot be reached")
-	}
-	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: &appPin{}}
-	d, err := s.disc.For(cl.ID, cl.Config)
+	w, err := s.consoleCard(ctx, cl, c)
 	if err != nil {
-		return out, fmt.Errorf("cannot reach the cluster: %w", err)
+		return out, err
 	}
-	t.Discovery = d
-	cs, err := clientsFor(ctx, t)
-	if err != nil {
-		return out, fmt.Errorf("cannot reach the cluster: %w", err)
-	}
-	targets, guards, impact := cardFor(ctx, cs, c, t)
-	_, alert, refusal := s.cardAlert(cl.ID, c, t.pin)
+	d, cs, guards, alert, refusal := w.disc, w.cs, w.guards, w.alert, w.refusal
+	targets, impact := w.targets, w.impact
 	out.Refusal = refusal
+	if refusal != "" {
+		// The card says why it will not run, as a Watson card does.
+		impact = append(impact, refusal)
+	}
 	switch {
 	case !describe:
 	case as == nil || as.Nobody():
@@ -106,6 +103,9 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 		}
 		var asImpact []string
 		out.Targets, _, asImpact = cardFor(ctx, acs, c, asker)
+		if refusal != "" {
+			asImpact = append(asImpact, refusal)
+		}
 		out.Impact = withAlert(alert, asImpact)
 	}
 	parts := make([]string, 0, len(guards))
@@ -120,6 +120,40 @@ func (s *Service) inspect(ctx context.Context, cl Cluster, line string, as *kube
 	sum := sha256.Sum256([]byte(c.Line + "\x00" + strings.Join(parts, "\x01")))
 	out.Fingerprint = hex.EncodeToString(sum[:16])
 	return out, nil
+}
+
+// consoleView is a change's card worked out with the console's account:
+// what a durable card's fingerprint, refusal, pin and guards come from.
+type consoleView struct {
+	disc    discovery.CachedDiscoveryInterface
+	cs      *clients
+	targets []string
+	guards  []guard
+	impact  []string
+	pin     *appPin
+	tone    string
+	alert   string
+	refusal string
+}
+
+// consoleCard works out a change's card with the console's account.
+func (s *Service) consoleCard(ctx context.Context, cl Cluster, c *Command) (*consoleView, error) {
+	if cl.Config == nil {
+		return nil, errors.New("the cluster cannot be reached")
+	}
+	w := &consoleView{pin: &appPin{}}
+	t := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, Credentials: s.opts.Credentials, pin: w.pin}
+	d, err := s.disc.For(cl.ID, cl.Config)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach the cluster: %w", err)
+	}
+	t.Discovery, w.disc = d, d
+	if w.cs, err = clientsFor(ctx, t); err != nil {
+		return nil, fmt.Errorf("cannot reach the cluster: %w", err)
+	}
+	w.targets, w.guards, w.impact = cardFor(ctx, w.cs, c, t)
+	w.tone, w.alert, w.refusal = s.cardAlert(cl.ID, c, w.pin)
+	return w, nil
 }
 
 // RunApproved runs a change whose durable card its people approved: the
@@ -144,8 +178,21 @@ func (s *Service) RunApproved(cl Cluster, approver Who, line, from, why string, 
 		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 		return it, r
 	}
-	if inspected != nil && inspected.Refusal != "" {
-		r := refuse("own release", "%s", inspected.Refusal)
+	// The card is worked out again here, whatever the caller says of it:
+	// a refusal it holds is Watson's to find (asked November 24, 2026,
+	// after a durable card upgraded the console's own release past it).
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	w, werr := s.consoleCard(ctx, cl, c)
+	if werr != nil {
+		r := refuse("unchecked", "Refused: Watson could not work out what this change does now, so it ran nothing: %v", werr)
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it, r
+	}
+	if w.refusal != "" {
+		r := refuse("own release", "%s", w.refusal)
 		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 		s.add(it)
 		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
@@ -158,8 +205,8 @@ func (s *Service) RunApproved(cl Cluster, approver Who, line, from, why string, 
 	it.Status, it.Plan, it.Expires = StatusPending, p, now.Add(s.opts.Lapse)
 	s.add(it)
 	s.mu.Lock()
-	w := approver
-	it.Approver, it.Approved = &w, now
+	by := approver
+	it.Approver, it.Approved = &by, now
 	s.record(ActionApprove, it, approver, audit.OutcomeOK, "approval=\"a durable card's\"")
 	s.enqueueLocked(cl, it, approver)
 	s.mu.Unlock()
