@@ -91,7 +91,14 @@ func (s *Service) test(ctx context.Context, c Credential, sec Secret, target str
 	}
 	use, err := s.resolve(ctx, c, sec)
 	if err != nil {
-		t.Text = redact(err.Error(), sec.values())
+		t.Text = err.Error()
+		// A GitHub App's or an OAuth2 client's token is fetched over TLS
+		// first: a certificate it failed on is shown, so it can be trusted
+		// (credentials#14).
+		if c.Kind == KindGitHubApp || c.Kind == KindOAuth2 {
+			s.noteCertificate(ctx, &Use{CAPEM: c.CAPEM, Pin: c.PinnedCert.Fingerprint()}, target, &t)
+		}
+		t.Text = redact(t.Text, sec.values())
 		return t
 	}
 	t.Method = use.Text()

@@ -676,3 +676,35 @@ func TestTheSSHTestAsksForTheSavedKeysType(t *testing.T) {
 		t.Errorf("another key: %+v", res)
 	}
 }
+
+// credentials#14: a GitHub App on a host with a self-signed certificate
+// is offered Trust when minting its token fails for that certificate,
+// and works once it is trusted.
+func TestAGitHubAppOnASelfSignedHostIsOfferedTrust(t *testing.T) {
+	cert := certpintest.SelfSigned(t)
+	srv := certpintest.Server(t, cert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v3/app/installations/7/access_tokens" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"fake-ghs","expires_at":"2099-01-01T00:00:00Z"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	rk, _ := rsa.GenerateKey(rand.Reader, 2048)
+	appKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rk)}))
+	s := pinService(t)
+	c, err := s.Create(ctx, Credential{Name: "ghes", Kind: KindGitHubApp, Endpoint: srv.URL + "/org", AppID: "1", InstallationID: "7"}, Secret{PrivateKey: appKey}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.RunTest(ctx, c.ID, "", "ann")
+	if err != nil || res.OK || res.Certificate == nil || !res.Certificate.Trustable {
+		t.Fatalf("no certificate to trust: %+v %v", res, err)
+	}
+	if _, _, err := s.Trust(ctx, c.ID, "", res.Certificate.SHA256, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.RunTest(ctx, c.ID, "", "ann"); err != nil || !res.OK {
+		t.Fatalf("trusted: %+v %v", res, err)
+	}
+}
