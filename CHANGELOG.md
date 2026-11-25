@@ -77,6 +77,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 
 ### Fixed
 
+- **A port forward waits its 5 minutes for the CLI** (TB-21): with `toolbox.idleTimeout` under 5 minutes, a forward whose CLI had not connected yet ended *No activity* before the wait was over. The idle limit now counts from when the CLI is there.
 - **A short idle limit no longer warns from the first second** (TB-13): a session pane warns 120 seconds before its idle end, so with `toolbox.idleTimeout` of 2 minutes or less it showed *the session ends in…* from the start; it now warns halfway through a shorter limit.
 - **Administration › Toolbox shows the values as they are written** (TB-46): its *values* block showed durations as Go writes them (`1h0m0s`, `9600h0m0s` for `400d`) and left out an emptied list or an empty `cliMinVersion`; it now shows `1h`, `400d` and `[]`.
 - **The toolbox off turns SSH off, and the sessions' history is bounded** (TB-45): a hand-written toolbox file with `enabled: false` and `ssh.enabled: true` left Automation, the hosts and the host cards using SSH, which read `toolbox.ssh.enabled` itself (the chart cannot render this); and `toolbox.history.keep` of 0 or below kept every ended session and listed them all. The toolbox off now turns SSH off, the start refuses a `history.keep` outside 1 to 100,000, and the history is listed up to it.

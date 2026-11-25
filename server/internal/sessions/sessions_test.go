@@ -1763,3 +1763,26 @@ func TestATerminalThatCannotBeRecordedDoesNotRun(t *testing.T) {
 		t.Fatalf("unwritable: %s %q", got.EndedBy, got.EndNote)
 	}
 }
+
+// A port forward waits for its CLI for CLIWait (5 minutes) whatever the
+// idle limit: with idleTimeout under it, the idle end came first (the
+// toolbox review's sweep). Once the CLI is there, idling counts.
+func TestAForwardWaitsForItsCLIPastTheIdleLimit(t *testing.T) {
+	m, _, c, _ := setup(t)
+	m.opts.Config.IdleTimeout = toolbox.Duration(time.Minute)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 80}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	c.add(3 * time.Minute)
+	m.sweep()
+	if got, _ := m.Get(s.ID); got.State != StateLive {
+		t.Fatalf("waiting for the CLI: %s %s", got.EndedBy, got.EndNote)
+	}
+	m.mu.Lock()
+	m.all[s.ID].Forward.CLI = "221b/0.14.0"
+	m.mu.Unlock()
+	c.add(2 * time.Minute)
+	m.sweep()
+	if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndIdle {
+		t.Fatalf("idle with the CLI: %s", got.EndedBy)
+	}
+}

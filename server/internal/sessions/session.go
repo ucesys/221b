@@ -1344,7 +1344,9 @@ func (m *Manager) sweep() {
 		switch {
 		case !s.Ends.IsZero() && now.After(s.Ends):
 			ends = append(ends, ending{s, EndLimit, "Time limit reached."})
-		case now.Sub(s.LastActive) > idle:
+		case now.Sub(s.LastActive) > idle && !(s.Req.Tool == toolbox.ToolForward && s.Forward.CLI == ""):
+			// A forward waiting for its CLI is ended by forward(), after
+			// CLIWait (TB-21), not by an idle limit that may be shorter.
 			ends = append(ends, ending{s, EndIdle, fmt.Sprintf("No activity for %s.", short(idle))})
 		case s.Owner.Stands != nil:
 			signIns = append(signIns, signIn{s, s.Owner.Stands})
