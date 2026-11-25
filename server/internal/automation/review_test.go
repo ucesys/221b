@@ -214,3 +214,66 @@ func TestAnApprovalAndARejectionNeverBothTakeEffect(t *testing.T) {
 		})
 	}
 }
+
+// A kubectl line is allowed only when its header declares the verb on
+// every resource it acts on (finding 7): each TYPE/NAME, each type of a
+// list, past the value of every flag that takes one; a flag the console
+// does not know must have its value joined to it.
+func TestAKubernetesLineIsCheckedOnEveryResourceItNames(t *testing.T) {
+	label, restart, get := "label deployments", "rollout restart deployments", "get pods"
+	// allowed says whether the static check takes the line under a header
+	// that declares only what is given.
+	allowed := func(declared, line string) (bool, error) {
+		_, fs := Check("#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:target kubernetes\n# 221b:k8s " + declared + "\n" + line + "\n")
+		for _, f := range fs {
+			switch f.Code {
+			case "k8s-undeclared":
+				return false, nil
+			case "k8s-line":
+				return false, errors.New(f.Msg)
+			}
+		}
+		return true, nil
+	}
+	for _, c := range []struct {
+		h    string
+		line string
+		want bool
+	}{
+		{label, "kubectl label deploy/a namespace/prod pod-security.kubernetes.io/enforce=privileged --overwrite", false},
+		{label, "kubectl label deploy/a team=web --overwrite", true},
+		{label, "kubectl label deployments a b team- -n web", true},
+		{restart, "kubectl rollout restart deploy/a daemonset/b", false},
+		{restart, "kubectl rollout restart deployment a -n web", true},
+		{get, "kubectl get -L pods configmaps -o yaml", false},
+		{get, "kubectl get pods,configmaps -A", false},
+		{get, "kubectl get pods -n kube-system -o wide", true},
+		{get, "kubectl get pods --sort-by .metadata.name", true},
+	} {
+		if got, err := allowed(c.h, c.line); err != nil || got != c.want {
+			t.Errorf("%q: allowed %v (%v), want %v", c.line, got, err, c.want)
+		}
+	}
+	if _, err := allowed("get pods", "kubectl get --unknown-flag configmaps pods"); err == nil {
+		t.Error("a flag the console does not know, its value apart, is taken")
+	}
+	// The static check says so too, and the engine refuses the line.
+	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:target kubernetes\n# 221b:k8s label deployments\nkubectl label deploy/a namespace/prod pod-security.kubernetes.io/enforce=privileged --overwrite\n"
+	_, fs := Check(text)
+	undeclared := false
+	for _, f := range fs {
+		undeclared = undeclared || f.Code == "k8s-undeclared"
+	}
+	if !undeclared {
+		t.Errorf("no k8s-undeclared finding: %+v", fs)
+	}
+	k := &stubKube{}
+	e, _ := stubEngine(&stubExec{}, k, nil)
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approvedText(text), Cluster: "local", Fleet: "_cluster", Nodes: []string{"local"}, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := waitRun(t, e, r.ID); done.Nodes[0].State != NodeFailed || len(k.lines) != 0 {
+		t.Fatalf("the engine ran it: %+v %v", done.Nodes, k.lines)
+	}
+}

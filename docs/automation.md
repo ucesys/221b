@@ -40,7 +40,7 @@ Out: Ansible or another tool as the executor; a module library, playbooks and ha
 | `# 221b:dry-run` | `yes` when the script honours `DRY_RUN=1` | `# 221b:dry-run yes` |
 | `# 221b:facts` | Facts it reads, fresh from the node, as `FACT_OS_FAMILY` | `# 221b:facts os.family` |
 | `# 221b:target` | `nodes`, or `kubernetes` for kubectl lines on the cluster | `# 221b:target kubernetes` |
-| `# 221b:k8s` | One Kubernetes action it may take; Watson refuses any other | `# 221b:k8s rollout restart deployments` |
+| `# 221b:k8s` | One Kubernetes action it may take; Watson refuses any other. A line must be declared for every resource it acts on: each type of `TYPE,TYPE`, and each `TYPE/NAME` it names. A flag's value is skipped; a flag the console does not know must have its value joined to it (`--flag=value`), or the line is refused (the review of November 24, 2026) | `# 221b:k8s rollout restart deployments` |
 | `# 221b:runs-as` | The service account of a Kubernetes script | `# 221b:runs-as ops/deployer` |
 
 Spaces after `221b:` and a colon after the key are optional: `# 221b: privilege: none` is the same line as `# 221b:privilege nobody`.

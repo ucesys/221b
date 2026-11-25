@@ -674,10 +674,16 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 			a.mu.Unlock()
 		}
 		if err == nil {
-			var action KubeAction
-			if action, err = KubeActionOf(line); err == nil && !h.Allowed(action) {
-				err = fmt.Errorf("Watson refused %q: the script does not declare %s %s", line, action.Verb, action.Resource)
-			} else if err == nil && !readOnlyVerb(action.Verb) {
+			var actions []KubeAction
+			if actions, err = KubeActionsOf(line); err == nil {
+				for _, action := range actions {
+					if !h.Allowed(action) {
+						err = fmt.Errorf("Watson refused %q: the script does not declare %s %s", line, action.Verb, action.Resource)
+						break
+					}
+				}
+			}
+			if err == nil && !readOnlyVerb(actions[0].Verb) {
 				changed = true
 			}
 		}
