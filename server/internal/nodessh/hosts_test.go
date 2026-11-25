@@ -23,6 +23,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/db/dbtest"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -226,22 +227,42 @@ func (h *sshHost) run(command string, ch ssh.Channel) int {
 
 // hostEnv is a console with a host registered, its storage and its log.
 type hostEnv struct {
-	svc     *Service
-	host    *sshHost
-	backend *kv.Memory
-	log     *safeBuffer
-	login   string
+	svc  *Service
+	host *sshHost
+	// hosts and pairings are where the two records are kept: one
+	// ConfigMap's keys, or the database's rows (testStores).
+	hosts, pairings kv.Backend
+	log             *safeBuffer
+	login           string
+}
+
+// testStores are where a test keeps the hosts and the pairings: in
+// memory, as the settings ConfigMap's keys, or, when TEST_STORE is
+// "database", in the database's rows (TEST_DATABASE).
+func testStores(t *testing.T) (hosts, pairings kv.Backend) {
+	t.Helper()
+	if os.Getenv("TEST_STORE") == "database" {
+		d := dbtest.Open(t)
+		return NewHostsPG(d), NewPairingsPG(d)
+	}
+	b := &kv.Memory{}
+	return b, b
 }
 
 func newHostEnv(t *testing.T) hostEnv {
+	t.Helper()
+	hb, pb := testStores(t)
+	return newHostEnvIn(t, hb, pb)
+}
+
+func newHostEnvIn(t *testing.T, hb, pb kv.Backend) hostEnv {
 	t.Helper()
 	ca := NewCA(nil)
 	if err := ca.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	b := &kv.Memory{}
 	var log safeBuffer
-	svc := New(Options{CA: ca, Pairings: NewPairings(b), Hosts: NewHosts(b), Console: testConsole, CertTTL: time.Minute, Handshake: 5 * time.Second,
+	svc := New(Options{CA: ca, Pairings: NewPairings(pb), Hosts: NewHosts(hb), Console: testConsole, CertTTL: time.Minute, Handshake: 5 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Mask:   func(w io.Writer, secrets []string) io.Writer { return automation.NewMask(w, secrets) },
 		IsNode: func(_, name string) bool { return name == "worker-1" },
@@ -249,7 +270,7 @@ func newHostEnv(t *testing.T) hostEnv {
 		NodeAddr: func(string, string) (string, error) { return "", errors.New("not a node") },
 	})
 	h := newSSHHost(t)
-	env := hostEnv{svc: svc, host: h, backend: b, log: &log, login: user(t)}
+	env := hostEnv{svc: svc, host: h, hosts: hb, pairings: pb, log: &log, login: user(t)}
 	if _, err := svc.AddHost(context.Background(), Host{Cluster: "local", Name: "backup-1", Address: "127.0.0.1", Port: h.port(), LoginUser: env.login}, "Pat"); err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +295,8 @@ func (e hostEnv) trust(t *testing.T) {
 func (e hostEnv) leaks(t *testing.T, where string, texts ...string) {
 	t.Helper()
 	stored := ""
-	for _, k := range []string{HostsKey, PairingsKey} {
-		b, _, _ := e.backend.LoadKey(context.Background(), k)
+	for k, backend := range map[string]kv.Backend{HostsKey: e.hosts, PairingsKey: e.pairings} {
+		b, _, _ := backend.LoadKey(context.Background(), k)
 		stored += string(b)
 	}
 	all := append([]string{stored, e.log.String()}, texts...)

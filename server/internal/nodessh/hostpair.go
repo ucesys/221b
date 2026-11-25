@@ -651,15 +651,25 @@ func (s *Service) takeHostname(ctx context.Context, h Host, hostname string) Hos
 	case s.opts.IsNode != nil && s.opts.IsNode(h.Cluster, name):
 		return keep("a node has its hostname")
 	}
+	// The pairing is read before the rename and set under the new name
+	// after it: in the database a row may have the new name already (a
+	// fleet's list names it), and the host takes that row over while its
+	// old one goes, with the pairing it held.
+	before, had, err := s.opts.Pairings.Get(ctx, h.Cluster, h.Name)
+	if err != nil {
+		return keep("its pairing could not be read: " + err.Error())
+	}
 	x, err := s.opts.Hosts.rename(ctx, h.Cluster, h.Name, name)
 	if err != nil {
 		return keep(err.Error())
 	}
-	if p, ok, err := s.opts.Pairings.Get(ctx, h.Cluster, h.Name); err == nil && ok {
+	if had {
+		p := before
 		p.Node = name
 		if err := s.opts.Pairings.Set(ctx, p); err != nil {
-			// Its pairing could not follow: back to its address.
+			// Its pairing could not follow: back to its address, with it.
 			if _, err := s.opts.Hosts.rename(ctx, h.Cluster, name, h.Name); err == nil {
+				_ = s.opts.Pairings.Set(ctx, before)
 				return keep("its pairing could not be moved: " + err.Error())
 			}
 			return x
