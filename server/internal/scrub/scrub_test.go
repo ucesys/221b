@@ -66,6 +66,8 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#15 a DSN with a URL password": {`DSN="postgres://app:pw1@db/x?sslpassword=hunter2secret" next=1`, "hunter2secret", "next=1"},
 		"#15 a cookie already masked":   {"Cookie: a=[REDACTED]; sid=hunter2secret\nnext line", "hunter2secret", "next line"},
 		"#15 a quoted pair, half done":  {`password="[REDACTED] hunter2secret" next=1`, "hunter2secret", "next=1"},
+		// scrub-cut-1: a key's body not indented under its block key.
+		"cut-1 a key body not indented": {"privateKey: |\n  -----BEGIN RSA PRIVATE KEY-----\nMIIEfakeBODYline0123\n  -----END RSA PRIVATE KEY-----\nnext: 1\n", "MIIEfakeBODYline0123", "next: 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)

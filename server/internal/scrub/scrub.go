@@ -331,8 +331,8 @@ var scrubbers = []struct {
 	keep  int               // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
 	check func(string) bool // for keep 0: whether a match is a credential, nil for always
 }{
-	// PEM and PGP private keys, also in base64.
-	{re: rePEM},
+	// PEM and PGP private keys in base64 (Text removes the PEM blocks
+	// themselves first).
 	{re: reBase64PEM, check: base64PrivateKey},
 	// Authorization and cookie headers, and bearer tokens.
 	{re: regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)`), keep: 1},
@@ -405,7 +405,9 @@ func Text(s string) string {
 	if s == "" {
 		return s
 	}
-	s = scrubBlocks(s)
+	// PEM and PGP private keys go first, whole: a block key's scrub stops at
+	// a line indented less than the key, which a key's body may be.
+	s = scrubBlocks(rePEM.ReplaceAllString(s, Redacted))
 	for _, sc := range scrubbers {
 		switch {
 		case sc.keep == 0 && sc.check != nil:
