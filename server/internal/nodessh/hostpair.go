@@ -309,8 +309,10 @@ func (c Credential) auth() ([]ssh.AuthMethod, *bool, error) {
 }
 
 // HostSetupScript is what pairs a host: the login user made when missing,
-// then the pairing script nodes run (PairScript), as root.
-func HostSetupScript(caPublicKey, console, loginUser string, port int) string {
+// then the pairing script nodes run (PairScript), as root, with no port
+// check: the console has just reached sshd at the host's address and port,
+// which a NAT or a port forward may map to another port on the host.
+func HostSetupScript(caPublicKey, console, loginUser string) string {
 	return strings.Join([]string{
 		"set -e",
 		"u=" + shellQuote(loginUser),
@@ -322,7 +324,7 @@ func HostSetupScript(caPublicKey, console, loginUser string, port int) string {
 		`  if command -v usermod >/dev/null 2>&1; then usermod -p '*' "$u"; else echo "$u:*" | chpasswd -e 2>/dev/null; fi || { echo "221B: the login user $u was made, but its account could not be unlocked"; exit 3; }`,
 		`  echo "221B: created the login user $u"`,
 		`fi`,
-		PairScript(caPublicKey, console, loginUser, port),
+		PairScript(caPublicKey, console, loginUser, 0),
 	}, "\n")
 }
 
@@ -341,7 +343,7 @@ func (s *Service) SetupCommand(ctx context.Context, cluster, name string) (strin
 	if err := s.opts.CA.Load(ctx); err != nil {
 		return "", err
 	}
-	return asRoot(HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser, h.Port), "221B-SETUP"), nil
+	return asRoot(HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser), "221B-SETUP"), nil
 }
 
 // PairHost pairs a host with a credential given once: one session, the
@@ -416,7 +418,7 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 		return Host{}, nil, fmt.Errorf("SSH to %s as %s: %w", hostPort, cred.User, err)
 	}
 	defer sess.Close()
-	script := HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser, h.Port)
+	script := HostSetupScript(s.opts.CA.PublicKey(), s.opts.Console, h.LoginUser)
 	command, stdin := "sh -c "+shellQuote(script), ""
 	if cred.User != "root" {
 		sudoPW := cred.SudoPassword

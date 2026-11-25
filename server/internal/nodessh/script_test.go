@@ -32,6 +32,7 @@ if [ "$1" = -t ]; then
   exit 0
 fi
 echo "port ${SSHD_PORT:-22}"
+for a in $LISTEN; do echo "listenaddress $a"; done
 if [ -n "$OTHER_CA" ]; then echo "trustedusercakeys $OTHER_CA"; echo "authorizedprincipalsfile none"; exit 0; fi
 if [ -f "$ROOT/etc/ssh/sshd_config.d/221b.conf" ] && { [ ! -f "$cfg" ] || head -1 "$cfg" | grep -q '^Include'; }; then
   echo "trustedusercakeys $ROOT/etc/ssh/221b/ca.pub"; echo "authorizedprincipalsfile $ROOT/etc/ssh/221b/principals-%u"
@@ -622,7 +623,7 @@ func TestALoginUserTheSetupMakesIsNotLocked(t *testing.T) {
 			if c.path != "" {
 				env = append(env, "PATH="+h.bin+":"+c.path)
 			}
-			out, ok := h.run(strings.ReplaceAll(HostSetupScript(testCA, testConsole, "ops", 22), "/usr/sbin/sshd", h.bin+"/sshd"), env...)
+			out, ok := h.run(strings.ReplaceAll(HostSetupScript(testCA, testConsole, "ops"), "/usr/sbin/sshd", h.bin+"/sshd"), env...)
 			if !ok || !strings.Contains(out, "created the login user ops") {
 				t.Fatalf("the setup:\n%s", out)
 			}
@@ -630,5 +631,19 @@ func TestALoginUserTheSetupMakesIsNotLocked(t *testing.T) {
 				t.Fatalf("the account was left locked; the calls were:\n%s", calls)
 			}
 		})
+	}
+}
+
+// The port sshd listens on is the one of its listen addresses, which win
+// over Port (finding 5 of the review of November 24, 2026: ListenAddress
+// 0.0.0.0:2222 with no Port prints port 22, and the pairing was refused).
+func TestAPairingFindsThePortOfAListenAddress(t *testing.T) {
+	h := newHost(t)
+	listen := "LISTEN=0.0.0.0:2222 [::]:2222"
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 2222), listen); !ok {
+		t.Fatalf("a pairing on the port of the listen addresses:\n%s", out)
+	}
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22), listen); ok || !strings.Contains(out, "listens on port 2222 and not on 22") {
+		t.Fatalf("a pairing on the port of Port alone:\n%s", out)
 	}
 }

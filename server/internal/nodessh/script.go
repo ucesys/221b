@@ -39,7 +39,8 @@ const (
 // checks that sshd accepts all that and really uses it on that port,
 // reloads sshd, and prints the node's host keys. Any failure puts the
 // files back as they were.
-// It runs as root with the node's root at / (chroot /host, TB-31).
+// It runs as root with the node's root at / (chroot /host, TB-31). A port
+// of 0 leaves out the port check (portCheck).
 func PairScript(caPublicKey, console, loginUser string, port int) string {
 	return strings.Join([]string{
 		"set -e",
@@ -108,7 +109,7 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		`fi`,
 		`"$sshd_bin" -t`,
 		`if [ "$(value trustedusercakeys)" != "$d/ca.pub" ] || [ "$(value authorizedprincipalsfile)" != "$d/principals-%u" ]; then echo "221B: sshd on this node does not use the drop-in: another setting comes first, or the Include sits under a Match block"; exit 6; fi`,
-		fmt.Sprintf(`if ! value port | grep -qx %d; then echo "221B: sshd on this node listens on port $(value port | tr '\n' ' ')and not on %d"; exit 6; fi`, port, port),
+		portCheck(port),
 		reloadSSHD,
 		`reload_sshd`,
 		`for f in /etc/ssh/ssh_host_*_key.pub; do [ -r "$f" ] && echo "` + markHostKey + `$(cut -d' ' -f1,2 "$f")"; done`,
@@ -133,6 +134,22 @@ func UnpairScript(caPublicKey, console string) string {
 		reloadSSHD,
 		`if [ -x "$sshd_bin" ]; then "$sshd_bin" -t; reload_sshd; fi`,
 		`echo "` + markUnpaired + `"`,
+	}, "\n")
+}
+
+// portCheck checks that sshd listens on the port the console dials a node
+// at: the ports of its listen addresses, which sshd -T always lists and
+// which win over Port, or its Port lines where it lists none (ListenAddress
+// 0.0.0.0:2222 with no Port still prints port 22). Port 0 checks nothing: a
+// host was just reached on its port, which a NAT or a port forward may
+// map to another one on the host.
+func portCheck(port int) string {
+	if port <= 0 {
+		return ""
+	}
+	return strings.Join([]string{
+		`ports() { a=$(value listenaddress | sed 's/.*://'); if [ -n "$a" ]; then echo "$a"; else value port; fi | sort -u; }`,
+		fmt.Sprintf(`if ! ports | grep -qx %d; then echo "221B: sshd on this node listens on port $(ports | tr '\n' ' ')and not on %d"; exit 6; fi`, port, port),
 	}, "\n")
 }
 

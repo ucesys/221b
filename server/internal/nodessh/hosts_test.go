@@ -742,3 +742,22 @@ func TestAHostThatDoesNotAnswerSaysWhereToLook(t *testing.T) {
 		t.Fatalf("another address: %v", err)
 	}
 }
+
+// A host behind a NAT or a port forward pairs: the console reached its
+// sshd at the registered port, which sshd itself knows as another
+// (finding 5 of the review of November 24, 2026: the setup stopped with
+// "listens on port 22 and not on 2222").
+func TestAHostBehindAPortForwardPairs(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword, "SSHD_PORT=22"} })
+	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
+	h, steps, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
+	if err != nil || h.State != HostPaired {
+		t.Fatalf("pairing behind a port forward: %+v %v %v", h, steps, err)
+	}
+	if p, ok, _ := e.svc.opts.Pairings.Get(ctx, "local", "backup-1"); !ok || p.Port != e.host.port() {
+		t.Fatalf("the pairing: %+v", p)
+	}
+}
