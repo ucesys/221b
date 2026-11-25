@@ -113,11 +113,11 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const containers = useMemo(() => (pod?.containers ?? []).filter((c) => !c.init || c.sidecar), [pod])
   // What the person has not chosen yet comes from the pod and the values.
   const level = info?.namespaces[ns]?.level ?? 'privileged'
-  const pick = (list: string[] | undefined) => (list?.includes('network') ? 'network' : (list?.[0] ?? ''))
+  const pick = (list: string[] | null | undefined) => (list?.includes('network') ? 'network' : (list?.[0] ?? ''))
   const containerV = container || containers[0]?.name || ''
   const targetV = target || containers[0]?.name || ''
   const imageV = image || (tool === 'debug-container' ? pick(info?.debugContainerImages) : tool === 'debug-pod' ? pick(info?.debugPodProfiles) : '')
-  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
+  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles?.[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
   const onNode = HOST_TOOLS.includes(tool)

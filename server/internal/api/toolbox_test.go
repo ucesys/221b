@@ -34,6 +34,12 @@ import (
 // toolboxSetup is the Watson test console with the toolbox.
 func toolboxSetup(t *testing.T, who, env string) (*httptest.Server, *http.Client, *sim.Sim, *sessions.Manager) {
 	t.Helper()
+	return toolboxSetupWith(t, who, env, tb.Default())
+}
+
+// toolboxSetupWith is toolboxSetup with these toolbox values.
+func toolboxSetupWith(t *testing.T, who, env string, cfg tb.Config) (*httptest.Server, *http.Client, *sim.Sim, *sessions.Manager) {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
@@ -43,7 +49,7 @@ func toolboxSetup(t *testing.T, who, env string) (*httptest.Server, *http.Client
 			TwoPerson: func(c watson.Cluster) bool {
 				return c.Env == clusters.EnvProduction && o.Settings.Current().WatsonOrDefault().TwoPerson
 			}})
-		mgr = sessions.New(sessions.Options{Config: tb.Default(), Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		mgr = sessions.New(sessions.Options{Config: cfg, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 		o.Sessions = mgr
 	})
 	local.restCfg = &rest.Config{Host: simSrv.URL}
@@ -86,6 +92,23 @@ func TestToolboxSaysWhatAPersonMayUse(t *testing.T) {
 	}
 	if _, ok := v.Namespaces["web"]; !ok {
 		t.Fatalf("no tools for web: %s", b)
+	}
+}
+
+// Emptied lists turn tools off; the page is sent empty lists, never null,
+// which it would call .map and .includes on (the toolbox review, finding 1).
+func TestToolboxSendsEmptyListsNotNull(t *testing.T) {
+	cfg := tb.Default()
+	cfg.DebugContainer.Images, cfg.DebugPod.Profiles, cfg.NodeShell.Profiles = []string{}, nil, nil
+	srv, c, _, _ := toolboxSetupWith(t, "ops@corp.example", clusters.EnvStaging, cfg)
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces=web", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	for _, k := range []string{"debugContainerImages", "debugPodProfiles", "nodeProfiles"} {
+		if !strings.Contains(b, `"`+k+`":[]`) {
+			t.Errorf("%s is not an empty list: %s", k, b)
+		}
 	}
 }
 

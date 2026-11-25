@@ -65,3 +65,15 @@ func TestOn(t *testing.T) {
 		t.Fatal("the toolbox is off")
 	}
 }
+
+// An emptied list is an empty list, never nil: the API sends it as [] (the
+// toolbox review, finding 1).
+func TestImageNamesOfAnEmptyListIsEmpty(t *testing.T) {
+	c := Default()
+	c.DebugContainer.Images, c.DebugPod.Profiles = nil, []string{}
+	for _, tool := range []string{ToolDebugContainer, ToolDebugPod, ToolShell} {
+		if n := c.ImageNames(tool); n == nil || len(n) != 0 {
+			t.Errorf("%s: %#v", tool, n)
+		}
+	}
+}

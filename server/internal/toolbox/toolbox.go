@@ -314,9 +314,10 @@ func (c Config) On(tool string) bool {
 	return false
 }
 
-// ImageNames are the images a tool may use, sorted.
+// ImageNames are the images a tool may use, sorted: never nil, so an
+// emptied list reaches the page as [], not null.
 func (c Config) ImageNames(tool string) []string {
-	var names []string
+	names := []string{}
 	switch tool {
 	case ToolDebugContainer:
 		names = append(names, c.DebugContainer.Images...)

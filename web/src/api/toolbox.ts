@@ -72,9 +72,10 @@ export interface ToolboxInfo {
   fileTransfer: boolean
   cliMinVersion?: string
   images: ToolboxImage[]
-  debugContainerImages: string[]
-  debugPodProfiles: string[]
-  nodeProfiles: string[]
+  /** Null from a console before 0.14 when the chart emptied the list. */
+  debugContainerImages: string[] | null
+  debugPodProfiles: string[] | null
+  nodeProfiles: string[] | null
   podCommands?: string[]
   nodeCommands?: string[]
   namespaces: Record<string, NamespaceTools>

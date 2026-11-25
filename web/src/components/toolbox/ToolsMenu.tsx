@@ -216,10 +216,10 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   let items: Item[]
   if (target.kind === 'pod') {
     const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => p.port))
-    const images = info?.debugContainerImages
+    const images = (info?.debugContainerImages ?? [])
       .map(
         (n) =>
-          info.images
+          info?.images
             .find((i) => i.name === n)
             ?.image.split('/')
             .pop()

@@ -209,7 +209,7 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	v := toolboxView{Enabled: cfg.Enabled, ReadOnly: c.ReadOnly || c.Locked != "", Production: c.Env == clusters.EnvProduction, TwoPerson: s.watsonTwoPerson(c), SignedIn: who.User != "", Admin: who.Admin, Me: who.Name,
 		Off: map[string]string{}, IdleSeconds: int(cfg.IdleTimeout.D() / time.Second), MaxMinutes: int(cfg.MaxDuration.D() / time.Minute), Transcripts: cfg.Transcripts, NodeApproval: cfg.NodeShell.Approval, NodeNamespace: cfg.NodeShell.Namespace,
 		MountVolumes: cfg.DebugContainer.MountVolumes, FileTransfer: cfg.Shell.FileTransfer, CLIMinVersion: cfg.PortForward.CLIMinVersion,
-		ContainerImgs: cfg.ImageNames(tb.ToolDebugContainer), PodProfiles: cfg.ImageNames(tb.ToolDebugPod), NodeProfiles: cfg.NodeShell.Profiles,
+		ContainerImgs: cfg.ImageNames(tb.ToolDebugContainer), PodProfiles: cfg.ImageNames(tb.ToolDebugPod), NodeProfiles: append([]string{}, cfg.NodeShell.Profiles...),
 		PodCommands: cfg.Shell.QuickCommands, NodeCommands: cfg.NodeShell.QuickCommands, Namespaces: map[string]namespaceTools{}, Nodes: map[string]string{}, Values: cfg}
 	if v.Transcripts == "" {
 		v.Transcripts = tb.TranscriptsNone
