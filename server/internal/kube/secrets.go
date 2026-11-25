@@ -375,10 +375,14 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 			return nil, err
 		}
 		defer zr.Close()
-		// A release record is small once the chart is dropped; 64 MB is far
-		// beyond anything Helm stores.
-		if raw, err = io.ReadAll(io.LimitReader(zr, 64<<20)); err != nil {
+		// A Secret holds at most 1 MiB, and Helm's records, chart and all,
+		// inflate to a few MiB; one that inflates past maxRecord is refused
+		// unread (kube#3).
+		if raw, err = io.ReadAll(io.LimitReader(zr, maxRecord+1)); err != nil {
 			return nil, err
+		}
+		if len(raw) > maxRecord {
+			return nil, fmt.Errorf("the release record inflates past %d MiB", maxRecord>>20)
 		}
 	}
 	var rec HelmRecord
@@ -388,7 +392,8 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 	r := &HelmRelease{
 		Name: rec.Name, Namespace: rec.Namespace, Revision: rec.Version,
 		Status: rec.Info.Status, Chart: rec.Chart.Metadata.Name, Version: rec.Chart.Metadata.Version,
-		App: rec.Chart.Metadata.AppVersion, Desc: rec.Info.Description, Notes: MaskNotes(rec.Info.Notes, rec.Config, rec.Chart.Values, rec.Manifest),
+		App: rec.Chart.Metadata.AppVersion, Desc: cut(rec.Info.Description, maxDescription),
+		Notes:    MaskNotes(rec.Info.Notes, rec.Config, rec.Chart.Values, rec.Manifest),
 		Deployed: parseHelmTime(rec.Info.LastDeployed), First: parseHelmTime(rec.Info.FirstDeployed),
 	}
 	if len(rec.Config) > 0 {
@@ -397,11 +402,54 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 		if b, err := json.Marshal(values); err == nil {
 			r.Values = b
 		}
+		if len(r.Values) > maxValues {
+			r.Values, _ = json.Marshal(fmt.Sprintf("(hidden by 221B: these values take %d KiB, more than the %d KiB it keeps of a release)", len(r.Values)>>10, maxValues>>10))
+		}
 		sort.Strings(masked)
+		if len(masked) > maxMasked {
+			masked = append(masked[:maxMasked:maxMasked], fmt.Sprintf("(and %d more)", len(masked)-maxMasked))
+		}
 		r.Masked = masked
 	}
 	r.Resources, r.Images = manifestResources(rec.Manifest)
 	return r, nil
+}
+
+// What the cache keeps of a release record is bounded, so a small Secret
+// cannot make it keep much more than the Secret holds (kube#3).
+const (
+	// maxRecord is the most a record may inflate to.
+	maxRecord = 32 << 20
+	// maxNotes is the most of a release's notes kept: longer notes, before
+	// or after masking, are replaced by NotesTooLong.
+	maxNotes = 64 << 10
+	// maxValues is the most of a release's masked values kept, as JSON.
+	maxValues = 256 << 10
+	// maxMasked is the most masked paths listed.
+	maxMasked = 1000
+	// maxKnown is the most distinct credentials notes are masked of: the
+	// notes of a release with more are hidden whole.
+	maxKnown = 1000
+	// maxResources and maxImages bound the lists read from a manifest.
+	maxResources = 5000
+	maxImages    = 500
+	// maxDescription is the most of a revision's description kept.
+	maxDescription = 4 << 10
+)
+
+// NotesTooLong stands for notes longer than the console keeps.
+const NotesTooLong = "(hidden by 221B: these notes are longer than the 64 KiB it keeps of a release's notes)"
+
+// cut shortens s to at most n bytes and an ellipsis, at a character
+// boundary.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 func parseHelmTime(s string) *time.Time {
@@ -541,6 +589,10 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 	if notes == "" {
 		return ""
 	}
+	// Notes longer than the console keeps are not read at all (kube#3).
+	if len(notes) > maxNotes {
+		return NotesTooLong
+	}
 	m := &masker{}
 	if config != nil {
 		m.mask(config, "")
@@ -548,8 +600,10 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 	if defaults != nil {
 		m.mask(defaults, "")
 	}
-	known := append(m.values, manifestSecrets(manifest)...)
-	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	known := distinct(append(m.values, manifestSecrets(manifest)...))
+	if len(known) > maxKnown {
+		return NotesHidden
+	}
 	out := scrub.Text(notes)
 	for _, v := range known {
 		if len(v) < shortCredential {
@@ -560,7 +614,26 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 		}
 		out = strings.ReplaceAll(out, v, MaskedValue)
 		out = strings.ReplaceAll(out, base64.StdEncoding.EncodeToString([]byte(v)), MaskedValue)
+		// Each value masked can make the notes longer.
+		if len(out) > maxNotes {
+			return NotesTooLong
+		}
 	}
+	return out
+}
+
+// distinct lists each value once, the longest first, so a longer value is
+// replaced before one it holds.
+func distinct(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
 	return out
 }
 
@@ -677,6 +750,11 @@ func manifestResources(manifest string) ([]ReleaseResource, []string) {
 	seen := map[string]bool{}
 	var images []string
 	for _, doc := range strings.Split(manifest, "\n---") {
+		// A release of more objects than any chart makes keeps the first
+		// (kube#3).
+		if len(out) >= maxResources {
+			break
+		}
 		doc = strings.TrimSpace(doc)
 		if doc == "" || strings.HasPrefix(doc, "#") && !strings.Contains(doc, "\nkind:") {
 			continue
@@ -701,7 +779,7 @@ func manifestResources(manifest string) ([]ReleaseResource, []string) {
 			continue
 		}
 		containerImages(body, func(img string) {
-			if !seen[img] {
+			if !seen[img] && len(images) < maxImages {
 				seen[img] = true
 				images = append(images, img)
 			}

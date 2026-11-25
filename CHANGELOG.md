@@ -146,6 +146,7 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 
 ### Security
 
+- **A few small Secrets can no longer keep the console out of memory** (kube#3). The Secret cache read any `helm.sh/release.v1` Secret, inflated its record up to 64 MiB and kept its notes, values and lists whole, and masking short values could make the notes grow tenfold: sixteen Secrets of 80 KB each passed the chart's 1 GiB limit, at every start. A record that inflates past 32 MiB is now not read (the Helm tab does not show that revision); notes over 64 KiB, values over 256 KiB, and notes that print over 1,000 distinct credentials are replaced by a sentence; the lists of masked paths, objects and images are bounded. Real releases are far below these limits.
 ### Fixed
 
 - **One crafted Secret no longer puts the console into a crash loop** (kube#1). A Helm release record whose manifest holds a short Secret value that is not text (`data: {a: /w==}`) made the masking of its notes panic in the Secret cache, which ended the process at every start. Such values are now looked for without a pattern, and a record that cannot be read for any other reason loses its release on the Helm tab, logged by the Secret's name, instead of stopping the console.
