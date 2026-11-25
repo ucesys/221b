@@ -28,6 +28,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube/kubetest"
+	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/sim"
 )
 
@@ -702,4 +703,33 @@ current-context: c
 	if st := signIn(whoSim(t, "")); strings.Contains(st.Text, "admin") {
 		t.Errorf("a sign-in the server would not name: %+v", st)
 	}
+}
+
+// Cut list: a connection started again (re-pointed, given another
+// credential, changed elsewhere) had a new store with no hosts outside
+// Kubernetes until the next read of them, up to 30 seconds on.
+func TestARestartedConnectionKeepsItsHosts(t *testing.T) {
+	_, srv := simServer(t)
+	m, ctx := started(t, clusters.NewMemoryStore())
+	spec := clusters.Spec{Name: "edge", Env: "development", Server: srv.URL, CA: "system", Auth: "token", Mode: "read"}
+	_, err := m.Add(ctx, clusters.Draft{Spec: spec, Credential: clusters.Credential{Token: saToken("edge")}})
+	must(t, err)
+	m.SetHosts("edge", []nodes.Row{{Name: "edge-host-1"}})
+	has := func(what string) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			st, _, _ := m.Lookup("edge")
+			if st != nil && strings.Contains(string(st.Snapshot([]string{"nodes"}, nil)), "edge-host-1") {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the host outside Kubernetes is not shown", what)
+			}
+		}
+	}
+	has("at first")
+	// A new credential starts the connection again.
+	_, err = m.Update(ctx, "edge", clusters.Draft{Spec: spec, Credential: clusters.Credential{Token: saToken("again")}})
+	must(t, err)
+	has("after a restart")
 }

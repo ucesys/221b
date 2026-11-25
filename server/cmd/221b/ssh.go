@@ -54,10 +54,10 @@ func (w *wiring) wireSSH(ctx context.Context) error {
 	hosts := nodessh.NewHosts(w.spendBackend)
 	hosts.OnRead(func(all map[string]nodessh.Host) {
 		by := nodessh.ByCluster(all)
+		// Through the manager, which gives them again to a connection
+		// started again (re-pointed, or changed elsewhere).
 		for _, c := range w.manager.List() {
-			if st, _, ok := w.manager.Lookup(c.ID); ok && st != nil {
-				st.SetHosts(nodessh.HostRows(by[c.ID]))
-			}
+			w.manager.SetHosts(c.ID, nodessh.HostRows(by[c.ID]))
 		}
 	})
 	go func() {

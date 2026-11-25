@@ -22,6 +22,7 @@ import (
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/nodes"
 )
 
 // LocalID is the connection of the cluster the console runs in, or was
@@ -95,6 +96,10 @@ type Manager struct {
 	// settings are the shared settings every store follows.
 	settingsRefresh time.Duration
 	settingsRaw     []byte
+	// hosts are each cluster's hosts outside Kubernetes (Phase 12), as
+	// last given: a connection started again has them at once, not at
+	// the next read of them.
+	hosts map[string][]nodes.Row
 }
 
 // New makes a manager over a store.
@@ -484,6 +489,9 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 	if m.settingsRaw != nil {
 		store.SetSettings(m.settingsRefresh, m.settingsRaw)
 	}
+	if rows, ok := m.hosts[spec.ID]; ok {
+		store.SetHosts(rows)
+	}
 	cluster.OnChange(store.Notify)
 	ctx, cancel := context.WithCancel(m.ctx)
 	inst.Cluster, inst.Store, inst.cancel = cluster, store, cancel
@@ -507,6 +515,24 @@ func (m *Manager) SetSettings(refresh time.Duration, raw []byte) {
 	m.mu.Unlock()
 	for _, s := range stores {
 		s.SetSettings(refresh, raw)
+	}
+}
+
+// SetHosts gives a cluster's hosts outside Kubernetes (Phase 12) to its
+// store, now and whenever the connection starts again.
+func (m *Manager) SetHosts(id string, rows []nodes.Row) {
+	m.mu.Lock()
+	if m.hosts == nil {
+		m.hosts = map[string][]nodes.Row{}
+	}
+	m.hosts[id] = rows
+	var st *live.Store
+	if inst := m.instances[id]; inst != nil {
+		st = inst.Store
+	}
+	m.mu.Unlock()
+	if st != nil {
+		st.SetHosts(rows)
 	}
 }
 
