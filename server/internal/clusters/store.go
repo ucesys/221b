@@ -425,25 +425,44 @@ func (s *SecretStore) all(ctx context.Context) ([]corev1.Secret, error) {
 	return list.Items, nil
 }
 
+// AnnotationServer marks a connection's Secret, with a database, with the
+// API server its credential was written for (its scheme, host and port).
+// The Secret is written before the row commits: a read that finds it
+// written for another server than the row's has met a save that did not
+// finish, and pairs neither (Spec.Unsettled).
+const AnnotationServer = "221b.ucesys.com/server"
+
+// held is what a connection's Secret holds, as a store with a database
+// reads it: the credential, and what says which server it is for.
+type held struct {
+	Credential
+	// found says there is a Secret: none is an empty credential.
+	found bool
+	// server is the origin the credential was written for (the
+	// annotation); "" in a Secret written before it, or by hand.
+	server string
+}
+
 // credential reads a connection's credential from its Secret, and says
 // whether there is a Secret: none is an empty credential, and a Secret
 // that could not be asked for is an error.
-func (s *SecretStore) credential(ctx context.Context, id string) (Credential, bool, error) {
+func (s *SecretStore) credential(ctx context.Context, id string) (held, error) {
 	sec, err := s.secrets.Get(ctx, s.name(id), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return Credential{}, false, nil
+		return held{}, nil
 	}
 	if err != nil {
-		return Credential{}, false, fmt.Errorf("reading the connection Secret %s: %w", s.name(id), err)
+		return held{}, fmt.Errorf("reading the connection Secret %s: %w", s.name(id), err)
 	}
-	return credentialOf(sec.Data), true, nil
+	return held{Credential: credentialOf(sec.Data), found: true, server: sec.Annotations[AnnotationServer]}, nil
 }
 
 // putCredential writes a connection's Secret to hold the credential and
-// nothing else, making it when it is not there. A record a console
-// without the database left in it ("spec.json") goes: the database keeps
-// the connection now. One a newer console wrote is not saved over (P7-03).
-func (s *SecretStore) putCredential(ctx context.Context, id string, c Credential) error {
+// nothing else, marked with the API server it is for (AnnotationServer),
+// making it when it is not there. A record a console without the
+// database left in it ("spec.json") goes: the database keeps the
+// connection now. One a newer console wrote is not saved over (P7-03).
+func (s *SecretStore) putCredential(ctx context.Context, id, server string, c Credential) error {
 	name := s.name(id)
 	existing, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
 	switch {
@@ -460,6 +479,10 @@ func (s *SecretStore) putCredential(ctx context.Context, id string, c Credential
 			existing.Labels[k] = v
 		}
 		existing.Labels[LabelCluster] = id
+		if existing.Annotations == nil {
+			existing.Annotations = map[string]string{}
+		}
+		existing.Annotations[AnnotationServer] = serverOrigin(server)
 		if _, err := s.secrets.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("updating the connection Secret %s: %w", name, err)
 		}
@@ -469,7 +492,7 @@ func (s *SecretStore) putCredential(ctx context.Context, id string, c Credential
 		for k, v := range s.labels {
 			labels[k] = v
 		}
-		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: labels}, Type: corev1.SecretTypeOpaque, Data: dataOf(c)}
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: labels, Annotations: map[string]string{AnnotationServer: serverOrigin(server)}}, Type: corev1.SecretTypeOpaque, Data: dataOf(c)}
 		if _, err := s.secrets.Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("creating the connection Secret %s: %w", name, err)
 		}

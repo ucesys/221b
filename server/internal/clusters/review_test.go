@@ -10,9 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
@@ -168,5 +172,73 @@ func TestAKubeconfigPastedAgainBringsItsOwnCA(t *testing.T) {
 				t.Fatal("a kubeconfig without a CA lost the saved one")
 			}
 		})
+	}
+}
+
+// Finding 5: a save wrote the Secret before its row committed, and a
+// read paired the committed row with the live Secret, so a save whose
+// COMMIT failed after its Secret was written (a request cancelled, a
+// failover) left every replica on the old server with the new token. A
+// removal deleted the Secret before its commit, so one reported as failed
+// could still lose the credential.
+func TestAWriteWhoseCommitFailsPairsNoTokenWithAnotherServer(t *testing.T) {
+	store, _, cs := clusterstest.PG(t, nil)
+	ctx := context.Background()
+	spec, a := fullSpec("prod"), fullCred("a")
+	spec.Server = "https://a.example:6443"
+	must(t, store.Save(ctx, spec, &a))
+	// The request ends just after the Secret is written: COMMIT fails.
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cut := false
+	for _, verb := range []string{"update", "delete"} {
+		cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			if cut {
+				cancel()
+			}
+			return false, nil, nil
+		})
+	}
+	cut = true
+	moved, b := spec, fullCred("b")
+	moved.Server = "https://b.example:6443"
+	if err := store.Save(wctx, moved, &b); err == nil {
+		t.Fatal("a save whose commit failed went through")
+	}
+	cut = false
+	got, cred, err := store.Get(ctx, "prod")
+	if err != nil || got.Server != spec.Server {
+		t.Fatalf("after the failed save: %v %s", err, got.Server)
+	}
+	if cred.Token == b.Token {
+		t.Fatal("the old server is paired with the new token")
+	}
+	// The connection starts as failed, saying why, and sends nothing.
+	m, mctx := started(t, store)
+	if s, _ := m.Summary("prod"); s.State != "failed" || !strings.Contains(s.Message, "did not finish") {
+		t.Errorf("the connection after the failed save: %s %q", s.State, s.Message)
+	}
+	// Edited with its credential, it is whole again.
+	edit := moved
+	edit.Name, edit.CA = "prod", "system"
+	if _, err := m.Update(mctx, "prod", clusters.Draft{Spec: edit, Credential: clusters.Credential{Token: saToken("prod")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, cred, _ := store.Get(ctx, "prod"); got.Server != moved.Server || cred.Token != saToken("prod") {
+		t.Fatalf("the edit after it: %s, token given %v", got.Server, cred.Token == saToken("prod"))
+	}
+
+	// A removal whose commit fails keeps the credential.
+	_, before, _ := store.Get(ctx, "prod")
+	dctx, cancelD := context.WithCancel(ctx)
+	defer cancelD()
+	cancel = cancelD
+	cut = true
+	if err := store.Delete(dctx, "prod"); err == nil {
+		t.Fatal("a removal whose commit failed went through")
+	}
+	cut = false
+	if _, cred, err := store.Get(ctx, "prod"); err != nil || cred != before {
+		t.Fatalf("a removal reported as failed lost the credential: %v, kept %v", err, cred == before)
 	}
 }

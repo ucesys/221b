@@ -86,6 +86,12 @@ type Spec struct {
 	// ErrConflict (DB-92). Not in the spec's JSON: the browser has it as
 	// Summary.EditVersion and gives it back as Draft.EditVersion.
 	RowVersion int `json:"-"`
+	// Unsettled says why the connection's credential cannot be used with
+	// its saved server, as a store that reads them apart finds it (a
+	// Secret written for another server by a save that did not finish);
+	// "" when it can. Such a connection is read with no credential, does
+	// not start, and is put right by editing it with its credential.
+	Unsettled string `json:"-"`
 }
 
 // LastTest is a connection's last test as it is kept with the

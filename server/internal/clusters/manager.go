@@ -265,6 +265,11 @@ func (m *Manager) Sync(ctx context.Context) error {
 		switch {
 		case inst == nil:
 			m.start(spec, cred)
+		case spec.Unsettled != "" && inst.Cluster != nil:
+			// A save that did not finish (or has not yet): the connection
+			// keeps running with the server and credential it has, which go
+			// together, until the row and its Secret do again.
+			m.log.Warn("connection left running as it was: its saved server and credential do not go together", "cluster", id, "why", spec.Unsettled)
 		case inst.conn != connKey(spec, cred):
 			m.log.Info("connection changed elsewhere; restarting it", "cluster", id)
 			m.start(spec, cred)
@@ -399,6 +404,12 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 		old.cancel()
 	}
 	inst := &Instance{Spec: spec, conn: connKey(spec, cred), tested: spec.Tested}
+	if spec.Unsettled != "" {
+		inst.startErr = spec.Unsettled
+		m.instances[spec.ID] = inst
+		m.log.Warn("connection cannot start", "cluster", spec.ID, "err", spec.Unsettled)
+		return inst
+	}
 	if cred.HasPlaceholder() {
 		inst.startErr = "Its credential is not in the backup it was restored from: edit the connection and paste it again."
 		m.instances[spec.ID] = inst
@@ -664,6 +675,9 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		// names another server (scheme, host or port) gives it again, so
 		// that neither a test nor a save sends it anywhere else (as the
 		// email settings keep their password, EM-01).
+		if orig.Unsettled != "" {
+			return Spec{}, nil, invalid(credField(spec.Auth), orig.Unsettled)
+		}
 		if spec.Server != "" && serverOrigin(spec.Server) != serverOrigin(orig.Server) {
 			return Spec{}, nil, invalid(credField(spec.Auth), fmt.Sprintf("Give the credentials again for the new API server: the saved ones are kept for %s alone.", orig.Server))
 		}

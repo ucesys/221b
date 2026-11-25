@@ -12,6 +12,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/jackc/pgx/v5"
 
@@ -343,9 +345,16 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 		return Spec{}, Credential{}, ErrNotFound
 	}
 	spec := specs[0]
-	cred, found, err := s.secrets.credential(ctx, id)
+	h, err := s.secrets.credential(ctx, id)
 	if err != nil {
 		return Spec{}, Credential{}, err
+	}
+	cred, found := h.Credential, h.found
+	// A credential written for another server than the row's is of a save
+	// that did not finish: paired, it would go to a server it is not for.
+	if why := unsettled(spec, h); why != "" {
+		spec.Unsettled = why
+		return spec, Credential{}, nil
 	}
 	// The local cluster signs in as the console itself and never had a
 	// credential kept.
@@ -357,6 +366,16 @@ func (s *PGStore) Get(ctx context.Context, id string) (Spec, Credential, error) 
 		s.said.Delete(id)
 	}
 	return spec, cred, nil
+}
+
+// unsettled says why a row and the credential its Secret holds do not go
+// together, or "": the Secret was written for another API server
+// (AnnotationServer) by a save whose row never committed.
+func unsettled(spec Spec, h held) string {
+	if h.found && h.server != "" && h.server != serverOrigin(spec.Server) {
+		return fmt.Sprintf("Its credential was written for %s, and the connection is saved for %s: a save did not finish. Edit the connection and give its credential again.", h.server, spec.Server)
+	}
+	return ""
 }
 
 // Save writes the row, then the Secret when a credential is given, then
@@ -392,7 +411,7 @@ func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 		}
 		// Safe to do again: the transaction is run again when another one
 		// changed the same row first.
-		return s.secrets.putCredential(ctx, spec.ID, *c)
+		return s.secrets.putCredential(ctx, spec.ID, spec.Server, *c)
 	})
 	if errors.Is(err, ErrConflict) {
 		return err
@@ -408,6 +427,10 @@ func (s *PGStore) Save(ctx context.Context, spec Spec, c *Credential) error {
 // the removal that deleted it and never answered is made again.
 func (s *PGStore) Delete(ctx context.Context, id string) error {
 	found := false
+	// The Secret as it was, to put back when the removal does not commit
+	// after the Secret went: a removal said to have failed keeps the
+	// connection whole, its credential with it.
+	var gone *corev1.Secret
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, emptySQL, id)
 		if err != nil {
@@ -424,12 +447,23 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 		if err := s.db.Notify(ctx, tx, Topic); err != nil {
 			return err
 		}
+		was, err := s.secrets.secrets.Get(ctx, s.secrets.name(id), metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("reading the connection Secret %s: %w", s.secrets.name(id), err)
+		}
 		if err := s.secrets.Delete(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		// A try run again after its Secret went keeps the first one's.
+		if was != nil && was.Name != "" {
+			gone = was
 		}
 		return nil
 	})
 	if err != nil {
+		if gone != nil {
+			s.putBack(ctx, gone)
+		}
 		return fmt.Errorf("removing the connection %s: %w", id, err)
 	}
 	if !found {
@@ -437,6 +471,19 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 	}
 	s.said.Delete(id)
 	return nil
+}
+
+// putBack makes a Secret a removal deleted again, as it was, when the
+// removal did not commit. Its request may be what ended: it is given a
+// moment of its own.
+func (s *PGStore) putBack(ctx context.Context, sec *corev1.Secret) {
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	again := sec.DeepCopy()
+	again.ResourceVersion, again.UID, again.CreationTimestamp = "", "", metav1.Time{}
+	if _, err := s.secrets.secrets.Create(pctx, again, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		s.log.Error("a removal that did not commit deleted the connection's Secret, and it could not be made again: the connection has nothing to sign in with until it is edited", "secret", sec.Name, "err", err)
+	}
 }
 
 // Revisions is each connection's revision: its row's version, the time of
