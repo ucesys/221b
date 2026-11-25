@@ -75,6 +75,13 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 **A kubeconfig connection whose user acts as another user no longer starts.** A kubeconfig whose user sets `as:`, `as-groups:`, `as-uid:` or `as-user-extra:` made the console's own reads, and its checks of each person's access, run as whoever it named. It is refused when pasted, and a saved one shows as failed with *the kubeconfig acts as another user*: paste a kubeconfig whose user signs in as itself.
 
+## 0.13.3 (unreleased)
+
+- **The Helm tab keeps less of a release record** (kube#3): a revision whose record inflates past 32 MiB is no longer shown; notes over 64 KiB, or that print more than 1,000 distinct credentials, and values over 256 KiB of JSON show a sentence in their place. Real releases are far below these limits; nothing is to be done.
+- **More of a Secret's annotations are hidden** (kube#2): `kapp.k14s.io/original`, `kapp.k14s.io/original-diff` and `objectset.rio.cattle.io/applied` show as their sizes, as the last-applied configuration does, in the drawer and the YAML view.
+- **A finding that names a namespaced object without its namespace is invalid** (kube#12): `Deployment/web` is kept on its run with why, and opens no case; an agent names it `shop/Deployment/web`. Cases opened from such findings by earlier releases stay as they are.
+- **A cluster's alerts start no alert job until it has listed every kind** (kube#13), and acknowledgements are not pruned before then (kube#14): after the upgrade, an alert that comes in the first seconds, while the events are still being listed, starts its job at the next look once they are.
+
 ## 0.13.2 (2026-11-25)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.
