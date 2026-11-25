@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as clustersApi from '../api/clusters'
 import type { ClusterSummary } from '../api/clusters'
-import { ClusterEditor, toDraft } from './ClusterEditor'
+import { ClusterEditor, formProblem, toDraft } from './ClusterEditor'
 
 vi.mock('../api/clusters', async (original) => ({ ...(await original<typeof import('../api/clusters')>()), saveCluster: vi.fn() }))
 
@@ -51,6 +51,19 @@ describe('the connection editor holds an edit to the version it opened (DB-92)',
     await waitFor(() => expect(screen.getByTestId('cluster-error').textContent).toBe(clustersApi.CONNECTION_CHANGED))
     expect(vi.mocked(clustersApi.saveCluster).mock.calls[0]![0].rowVersion).toBe(4)
     expect(onSaved).not.toHaveBeenCalled()
+  })
+})
+
+// Clusters review, finding 2: a server change kept the saved credentials, which the console then sent to the new server.
+describe('the connection editor asks for the credentials again for another API server', () => {
+  it('asks for them when the scheme, host or port changes', () => {
+    const moved = { ...toDraftForm(), name: 'analytics-dev', server: 'https://attacker.example:443' }
+    expect(formProblem(moved, orig)).toEqual({ field: 'token', msg: 'Paste the service account token.' })
+    expect(toDraft({ ...moved, token: 'eyJ.a.b' }, orig).token).toBe('eyJ.a.b')
+  })
+
+  it('keeps them for the same server', () => {
+    expect(formProblem({ ...toDraftForm(), name: 'analytics-dev', server: 'https://10.0.0.8:6443/' }, orig)).toBeNull()
   })
 })
 

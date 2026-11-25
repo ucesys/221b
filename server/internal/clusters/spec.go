@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -254,6 +255,35 @@ func ServerURL(server string) (*url.URL, error) {
 		return nil, errors.New("The API server address starts with https://, for example https://k8s-api.example.internal:6443.")
 	}
 	return u, nil
+}
+
+// serverOrigin is what of an API server address a credential is for:
+// its scheme, host and port, the port filled in; "" when it is no
+// address. Two addresses with one origin are the same server, whatever
+// their paths.
+func serverOrigin(server string) string {
+	u, err := ServerURL(server)
+	if err != nil {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	return u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+}
+
+// credField is the editor's field of a sign-in method's credential.
+func credField(auth string) string {
+	switch auth {
+	case AuthKubeconfig:
+		return "kubeconfig"
+	case AuthCert:
+		return "certPem"
+	case AuthOIDC:
+		return "issuer"
+	}
+	return "token"
 }
 
 // CredentialCheck is what a credential says about itself before it is

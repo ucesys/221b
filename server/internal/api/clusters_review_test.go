@@ -1,8 +1,11 @@
 package api
 
 import (
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fake"
@@ -69,5 +72,19 @@ func TestAVerdictIsKeptWithTheConnectionItWasReadThrough(t *testing.T) {
 	}
 	if why := s.RoleRefusal("prod"); why == "" {
 		t.Fatal("a change on B passed on A's verdict")
+	}
+}
+
+// Clusters review, finding 2: the audit of a connection test said how it
+// went and not where it went, so a test that sent a credential to another
+// server left no trace of that server.
+func TestTheAuditOfATestNamesTheServerTested(t *testing.T) {
+	srv, ops, _, auditOut, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	body := `{"name":"elsewhere","env":"development","server":"http://127.0.0.1:1","ca":"system","auth":"token","mode":"read","token":"` + saToken(time.Now().Add(time.Hour)) + `"}`
+	if resp, out := send(t, ops, http.MethodPost, srv.URL+"/api/v1/clusters/test", body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("test = %d %s", resp.StatusCode, out)
+	}
+	if log := auditOut.String(); !strings.Contains(log, "http://127.0.0.1:1") {
+		t.Fatalf("the audit does not name the server tested: %s", log)
 	}
 }

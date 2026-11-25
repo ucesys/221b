@@ -228,7 +228,7 @@ func (s *Server) testClusterDraft(w http.ResponseWriter, r *http.Request) {
 		clusterError(w, err)
 		return
 	}
-	s.recordCluster(r, audit.ActionClusterTest, firstOf(d.ID, d.Name), outcomeOf(res), res.Summary)
+	s.recordCluster(r, audit.ActionClusterTest, firstOf(d.ID, d.Name), outcomeOf(res), testDetail(res))
 	b, _ := json.Marshal(res)
 	writeJSON(w, r, b)
 }
@@ -243,9 +243,18 @@ func (s *Server) testCluster(w http.ResponseWriter, r *http.Request) {
 		clusterError(w, err)
 		return
 	}
-	s.recordCluster(r, audit.ActionClusterTest, id, outcomeOf(res), res.Summary)
+	s.recordCluster(r, audit.ActionClusterTest, id, outcomeOf(res), testDetail(res))
 	b, _ := json.Marshal(res)
 	writeJSON(w, r, b)
+}
+
+// testDetail is a test's audit detail: the server it went to, and how
+// it went.
+func testDetail(res clusters.TestResult) string {
+	if res.Server == "" {
+		return res.Summary
+	}
+	return res.Server + ": " + res.Summary
 }
 
 func outcomeOf(res clusters.TestResult) string {

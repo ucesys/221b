@@ -82,12 +82,33 @@ function initial(orig: ClusterSummary | null): Form {
   }
 }
 
+/** An API server's scheme, host and port, the port filled in: what a saved credential is for. "" for no address. */
+function serverOrigin(server: string): string {
+  try {
+    const u = new URL(server.trim())
+    const port = u.port || (u.protocol === 'https:' ? '443' : u.protocol === 'http:' ? '80' : '')
+    return `${u.protocol}//${u.hostname.toLowerCase()}:${port}`
+  } catch {
+    return ''
+  }
+}
+
+/** Whether the edit moves the connection to another API server, where the saved credentials are never sent. */
+export function serverMoved(f: Pick<Form, 'server'>, orig: ClusterSummary | null): boolean {
+  return !!orig && !orig.local && serverOrigin(f.server) !== serverOrigin(orig.server)
+}
+
+/** Whether the form asks for the credentials: a new connection, a new method, Replace, or another API server. */
+export function credNeeded(f: Pick<Form, 'credAsk' | 'auth' | 'server'>, orig: ClusterSummary | null): boolean {
+  return !orig || f.credAsk || orig.auth !== f.auth || serverMoved(f, orig)
+}
+
 /**
  * The draft as the server takes it: credential fields only when they are being replaced, and the
  * version of the connection the editor opened, which the save is held to (DB-92).
  */
 export function toDraft(f: Form, orig: ClusterSummary | null, rowVersion = orig?.rowVersion): Draft {
-  const needCred = !orig || f.credAsk || orig.auth !== f.auth
+  const needCred = credNeeded(f, orig)
   const needCA = f.ca === 'pem' && (!orig || f.caAsk || orig.ca !== 'pem')
   const d: Draft = { name: f.name.trim(), env: f.env, description: f.description.trim(), server: f.server.trim(), ca: f.ca, auth: f.auth, mode: f.mode }
   if (orig) d.id = orig.id
@@ -128,7 +149,7 @@ export function formProblem(f: Form, orig: ClusterSummary | null): { field: stri
   if (!URL_RE.test(f.server.trim())) return { field: 'server', msg: 'The API server address starts with https://, for example https://k8s-api.example.internal:6443.' }
   const needCA = f.ca === 'pem' && (!orig || f.caAsk || orig.ca !== 'pem')
   if (needCA && !f.caPem.trim()) return { field: 'caPem', msg: 'Paste the cluster’s CA certificate (PEM), or choose the system trust store.' }
-  const needCred = !orig || f.credAsk || orig.auth !== f.auth
+  const needCred = credNeeded(f, orig)
   if (needCred) {
     const note = credentialNote(toDraft({ ...f, credAsk: true }, null))
     if (!note) {
@@ -190,7 +211,7 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
   }, [])
 
   const local = orig?.local ?? false
-  const needCred = !orig || f.credAsk || orig.auth !== f.auth
+  const needCred = credNeeded(f, orig)
   const needCA = f.ca === 'pem' && (!orig || f.caAsk || orig.ca !== 'pem')
   const isProd = orig?.env === 'production'
   const note = needCred ? credentialNote(toDraft(f, orig), now) : null
@@ -433,6 +454,11 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
                   Replace
                 </button>
               </div>
+            )}
+            {needCred && serverMoved(f, orig) && (
+              <span className="rk-fhint" data-testid="cred-moved">
+                The saved credentials stay with {orig?.server}: give them again for the new API server.
+              </span>
             )}
             {needCred && f.auth === 'token' && (
               <Field label="Token" hint="kubectl -n kube-system create token cluster-console --duration=8760h">

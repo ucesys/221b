@@ -1343,6 +1343,11 @@ func testALastTestIsKept(t *testing.T, store clusters.Store) {
 	if len(r.Steps) == 0 || r.Nodes != 3 {
 		t.Fatalf("the test: %+v", r)
 	}
+	if r.Server != srv.URL {
+		t.Errorf("the test does not say where it went: %q", r.Server)
+	}
+	// The kept test is the connection's, without the server it went to.
+	r.Server = ""
 	kept := func(m *clusters.Manager, what string) {
 		t.Helper()
 		s, ok := m.Summary("tested")

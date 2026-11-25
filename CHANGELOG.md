@@ -88,6 +88,7 @@ Four notes on the credentials; [docs/upgrading.md](docs/upgrading.md) says more:
 ### Security
 
 - **With `rbac.enforce: strict`, a connection re-pointed at another cluster could run changes on the old cluster's role verdict** (clusters review, finding 1). A role check that had looked the connection up before the re-point kept the old cluster's "match" under the new connection's fingerprint, so Watson, Automation and approvals ran changes on the new cluster for up to 15 minutes without its roles ever being read. The verdict is now kept with the fingerprint of the connection it was read through, and a change is decided by the fingerprint of the configuration it runs with, both read with it at once.
+- **Testing an edited connection with another API server sent the saved token to that server** (clusters review, finding 2). An edit or a test that changes the API server's scheme, host or port now has to give the credentials again (the editor asks for them), so a saved credential never goes anywhere but its own server, by a test or by a save; the audit of a connection test names the server it went to.
 
 ## 0.13.2 (2026-11-25)
 

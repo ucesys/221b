@@ -658,6 +658,13 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		}
 		cred = &c
 	default:
+		// The saved credential is the saved server's alone: a draft that
+		// names another server (scheme, host or port) gives it again, so
+		// that neither a test nor a save sends it anywhere else (as the
+		// email settings keep their password, EM-01).
+		if spec.Server != "" && serverOrigin(spec.Server) != serverOrigin(orig.Server) {
+			return Spec{}, nil, invalid(credField(spec.Auth), fmt.Sprintf("Give the credentials again for the new API server: the saved ones are kept for %s alone.", orig.Server))
+		}
 		c := origCred
 		// A CA pasted alone replaces the saved one.
 		if pem := strings.TrimSpace(d.Credential.CAPEM); pem != "" {
@@ -947,6 +954,9 @@ func (m *Manager) TestSaved(ctx context.Context, id, by string) (TestResult, err
 		r = Test(ctx, spec, cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now})
 	}
 	kept := &LastTest{Result: r, At: m.opts.Now().UTC(), By: by}
+	// The server is said to whoever ran it and to the audit; the kept
+	// test is the connection's, whose server the page shows.
+	kept.Result.Server = ""
 	if k, ok := m.store.(TestKeeper); ok {
 		if err := k.SaveTest(ctx, id, *kept); err != nil && !errors.Is(err, ErrNotFound) {
 			m.log.Warn("the connection's test could not be kept; it is shown by this replica until it restarts", "cluster", id, "err", err)

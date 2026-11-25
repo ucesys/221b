@@ -42,6 +42,9 @@ type TestResult struct {
 	Who string `json:"who,omitempty"`
 	// Impersonate is true when the account may impersonate people (P3-02).
 	Impersonate bool `json:"impersonate"`
+	// Server is the API server the test went to, for whoever ran it and
+	// the audit; a kept test does not keep it.
+	Server string `json:"server,omitempty"`
 }
 
 // TestOptions tune a test.
@@ -118,7 +121,7 @@ func testWithConfig(ctx context.Context, s Spec, cfg *rest.Config, opts TestOpti
 func run(ctx context.Context, s Spec, cfg *rest.Config, cfgErr error, caPEM string, opts TestOptions) TestResult {
 	opts.defaults()
 	t := &tester{opts: opts}
-	r := TestResult{}
+	r := TestResult{Server: s.Server}
 	c := Credential{CAPEM: caPEM}
 
 	// 1. Address.
