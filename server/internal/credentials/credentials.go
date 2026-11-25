@@ -189,10 +189,15 @@ func (s Secret) parts() []string {
 
 func (s Secret) empty() bool { return s == Secret{} }
 
-// trimmed is the secret as typed, its one-line parts trimmed.
+// trimmed is the secret as typed, its one-line parts trimmed: a password
+// and a passphrase only of a pasted line end, since a space may be part
+// of them (credentials-unver-5).
 func (s Secret) trimmed() Secret {
-	for _, p := range []*string{&s.Token, &s.Password, &s.AccessKeyID, &s.SecretAccessKey, &s.SessionToken, &s.Passphrase, &s.ClientSecret} {
+	for _, p := range []*string{&s.Token, &s.AccessKeyID, &s.SecretAccessKey, &s.SessionToken, &s.ClientSecret} {
 		*p = strings.TrimSpace(*p)
+	}
+	for _, p := range []*string{&s.Password, &s.Passphrase} {
+		*p = strings.TrimRight(*p, "\r\n")
 	}
 	s.PrivateKey, s.KeyPEM = strings.TrimSpace(s.PrivateKey), strings.TrimSpace(s.KeyPEM)
 	return s

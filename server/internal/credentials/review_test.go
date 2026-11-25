@@ -1020,3 +1020,21 @@ func TestTheGitHubAPIOfEachGitHub(t *testing.T) {
 		}
 	}
 }
+
+// credentials-unver-5: a password and a passphrase are kept as typed,
+// spaces too: only a pasted line end is taken off.
+func TestAPasswordKeepsItsSpaces(t *testing.T) {
+	s, _ := newService(t, nil)
+	for typed, kept := range map[string]string{" fake pw ": " fake pw ", "fake-pw\r\n": "fake-pw", "fake-pw\n": "fake-pw"} {
+		c, err := s.Create(ctx, Credential{Name: fmt.Sprintf("up %q", typed), Kind: KindUserPass, Endpoint: "https://a.example", Username: "u"}, Secret{Password: typed}, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u, err := s.Resolve(ctx, c.ID, UseHTTP, "https://a.example/x"); err != nil || u.Token != kept {
+			t.Errorf("%q kept as %q: %v", typed, u.Token, err)
+		}
+	}
+	if got := (Secret{Passphrase: " fake phrase \n", Token: " fake-tok \n"}).trimmed(); got.Passphrase != " fake phrase " || got.Token != "fake-tok" {
+		t.Errorf("trimmed: %+v", got)
+	}
+}
