@@ -209,6 +209,13 @@ func readPairings(ctx context.Context, q db.Querier) (map[string]Pairing, bool, 
 	return m, len(m) > 0, err
 }
 
+// isNode says whether a row is a Kubernetes node's.
+func isNode(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
+	var node bool
+	err := tx.QueryRow(ctx, "SELECT is_kubernetes_node FROM hosts WHERE host_id = $1", id).Scan(&node)
+	return node, err
+}
+
 func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing) error {
 	if err := inventory.Lock(ctx, tx); err != nil {
 		return err
@@ -267,6 +274,21 @@ func writePairings(ctx context.Context, tx pgx.Tx, old, next map[string]Pairing)
 		if !p.PairedAt.IsZero() {
 			t := p.PairedAt.UTC()
 			paired = &t
+		}
+		node, err := isNode(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !node {
+			// A host outside Kubernetes: who paired it and when are the
+			// host's own columns, which its record writes once its first
+			// login worked; a pairing set before that login, and taken
+			// back when it failed, leaves them as they were.
+			if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, host_keys, ca_fingerprint) VALUES ($1, $2, $3)
+				ON CONFLICT (host_id) DO UPDATE SET host_keys = excluded.host_keys, ca_fingerprint = excluded.ca_fingerprint`, id, keys, p.CAFinger); err != nil {
+				return err
+			}
+			continue
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO host_pairings (host_id, host_keys, ca_fingerprint, paired_by, paired_at) VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (host_id) DO UPDATE SET host_keys = excluded.host_keys, ca_fingerprint = excluded.ca_fingerprint,

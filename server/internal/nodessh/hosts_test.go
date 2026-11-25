@@ -782,3 +782,20 @@ func TestAHostBehindAPortForwardPairs(t *testing.T) {
 		t.Fatalf("the pairing: %+v", p)
 	}
 }
+
+// A first check that fails, before the setup ran, leaves the host as it
+// was: pending, and not "Paired <time> by <who>" (finding 8 of the review
+// of November 24, 2026: with the database the check's pairing wrote the
+// host's own paired_by and paired_at, and its rollback left them).
+func TestAFailedFirstCheckLeavesNoPairedBy(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	if _, err := e.svc.CheckHost(ctx, "local", "backup-1", "Pat"); err == nil {
+		t.Fatal("the check passed before the setup")
+	}
+	h, _, err := NewHosts(e.hosts).Get(ctx, "local", "backup-1")
+	if err != nil || h.State != HostPending || h.PairedBy != "" || h.PairedAt != nil || h.HostKey == "" || h.TrustedBy != "Pat" {
+		t.Fatalf("after a failed check the host reads %+v (%v)", h, err)
+	}
+}
