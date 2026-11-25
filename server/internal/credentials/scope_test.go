@@ -37,6 +37,9 @@ func TestDotSegmentsAndEncodedSeparatorsAreUnderNoEndpoint(t *testing.T) {
 		for _, tail := range []string{
 			"/ucesys/../other/x", "/ucesys/%2e%2e/other/x", "/ucesys/%2E%2E/other", "/ucesys/.%2e/other",
 			"/ucesys/./x", "/ucesys/..", "/ucesys%2F..%2Fother", "/ucesys/x%2fy", "/ucesys%5C..%5Cother", `/ucesys/x\..\y`,
+			// Tomcat drops a segment's ;parameters before it normalizes
+			// (credentials#8).
+			"/ucesys/..;/other/x", "/ucesys/..;jsessionid=x/other", "/ucesys/..;/..;/x", "/ucesys/.;/x", "/ucesys/%2e%2e;/other", "/ucesys/..%3B/other", "/ucesys/..;a=b;c/other",
 		} {
 			target := scheme + "://" + host + tail
 			if e.Covers(target) {
@@ -47,7 +50,7 @@ func TestDotSegmentsAndEncodedSeparatorsAreUnderNoEndpoint(t *testing.T) {
 			t.Errorf("%s no longer covers its own", ep)
 		}
 	}
-	for _, ep := range []string{"https://github.com/ucesys/../other", "https://github.com/ucesys/%2e%2e", "https://github.com/a%2Fb", "https://github.com/a%5cb", "git@github.com:ucesys/../x", "oci://ghcr.io/org/./x"} {
+	for _, ep := range []string{"https://github.com/ucesys/../other", "https://github.com/ucesys/%2e%2e", "https://github.com/a%2Fb", "https://github.com/a%5cb", "git@github.com:ucesys/../x", "oci://ghcr.io/org/./x", "https://github.com/ucesys/..;/other", "https://github.com/ucesys/.;x"} {
 		if _, err := ParseEndpoint(ep); !errors.Is(err, ErrInvalid) {
 			t.Errorf("the endpoint %s: %v", ep, err)
 		}
@@ -62,7 +65,7 @@ func TestDotSegmentsAndEncodedSeparatorsAreUnderNoEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{"https://github.com/ucesys/../other", "https://github.com/ucesys/%2e%2e/other", "https://github.com/ucesys%2F..%2Fother", "https://github.com/ucesys%5C..%5Cother"} {
+	for _, raw := range []string{"https://github.com/ucesys/../other", "https://github.com/ucesys/%2e%2e/other", "https://github.com/ucesys%2F..%2Fother", "https://github.com/ucesys%5C..%5Cother", "https://github.com/ucesys/..;/other"} {
 		req, _ := http.NewRequest(http.MethodGet, raw, nil)
 		if err := u.Apply(req); !errors.Is(err, ErrOutside) || req.Header.Get("Authorization") != "" {
 			t.Errorf("signed %s: %v", raw, err)

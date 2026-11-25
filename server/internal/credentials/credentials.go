@@ -630,7 +630,7 @@ func parseAddress(raw string, endpoint bool) (Endpoint, error) {
 }
 
 // oddPath says a path could reach outside the endpoint's: a . or ..
-// segment (%2e%2e too), or an encoded / or \ (%2F, %5C) that a server
+// segment (%2e%2e too, and with ;parameters), or an encoded / or \ (%2F, %5C) that a server
 // may read as a separator. Neither an endpoint nor an address it covers
 // has one.
 func oddPath(u *url.URL) bool {
@@ -639,6 +639,10 @@ func oddPath(u *url.URL) bool {
 		return true
 	}
 	for _, seg := range strings.Split(u.Path, "/") {
+		// Tomcat (Confluence, Jira, Bitbucket Data Center) drops a
+		// segment's ;parameters before it resolves . and ..: "..;" and
+		// "..;jsessionid=x" are ".." there (credentials#8).
+		seg, _, _ = strings.Cut(seg, ";")
 		if seg == "." || seg == ".." {
 			return true
 		}

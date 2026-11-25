@@ -395,3 +395,21 @@ func TestALongAddressIsCovered(t *testing.T) {
 		t.Fatalf("an endpoint with a fragment: %v", err)
 	}
 }
+
+// credentials#8: a segment's ;parameters (Tomcat's ..;) do not get past
+// the endpoint's path, and a segment that only has parameters is still
+// covered.
+func TestASegmentsParametersStayUnderTheEndpoint(t *testing.T) {
+	s, _ := newService(t, nil)
+	c := token(t, s, "bitbucket", "https://git.corp/scm/teama", SendAs{}, "fake-tok")
+	for _, target := range []string{"https://git.corp/scm/teama/..;/teamb/repo.git", "https://git.corp/scm/teama/x/..;/..;/teamb/repo.git", "https://git.corp/scm/teama/..;jsessionid=1/teamb"} {
+		if _, err := s.CheckChoice(ctx, c.ID, UseGit, target); !errors.Is(err, ErrOutside) {
+			t.Errorf("accepted %s: %v", target, err)
+		}
+	}
+	for _, target := range []string{"https://git.corp/scm/teama/repo.git;jsessionid=1", "https://git.corp/scm/teama/x;v=1/y", "https://git.corp/scm/teama/...;/x"} {
+		if _, err := s.CheckChoice(ctx, c.ID, UseGit, target); err != nil {
+			t.Errorf("refused %s: %v", target, err)
+		}
+	}
+}
