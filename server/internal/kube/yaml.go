@@ -32,6 +32,11 @@ func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, n
 	if err := CheckPathNames(namespace, name); err != nil {
 		return "", err
 	}
+	// A namespaced kind needs its namespace: "/api/v1/namespaces//services/x"
+	// is cleaned to a read of the Namespace "services"'s x (kube#12).
+	if k.Namespaced && namespace == "" {
+		return "", apierrors.NewBadRequest(fmt.Sprintf("a %s is in a namespace: name it", k.Kind))
+	}
 	cs, err := c.as(p)
 	if err != nil {
 		return "", err

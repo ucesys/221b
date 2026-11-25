@@ -233,6 +233,12 @@ func init() {
 	}
 }
 
+// namespaced says whether a kind is one of those known to be in a
+// namespace.
+func namespaced(kind string) bool {
+	return kind != "" && kindAliases[strings.ToLower(kind)] == kind && !clusterScoped[kind]
+}
+
 // clusterScoped are the kinds without a namespace.
 var clusterScoped = map[string]bool{"Namespace": true, "Node": true, "PersistentVolume": true, "ClusterRole": true, "ClusterRoleBinding": true,
 	"StorageClass": true, "CustomResourceDefinition": true}
@@ -326,6 +332,12 @@ func (s *Service) keyOf(ctx context.Context, k Kind, rules Rules, f *Finding) {
 	}
 	if f.Cluster == "" {
 		f.Routing, f.InvalidReason = RoutedInvalid, "the finding names no cluster"
+		return
+	}
+	// A kind that is in a namespace, named without one, is no one object
+	// (kube#12): asked about, the cluster would answer for another.
+	if o.Namespace == "" && namespaced(o.Kind) {
+		f.Routing, f.InvalidReason = RoutedInvalid, fmt.Sprintf("%s names no namespace: a %s is in one, so name it as namespace/%s/name", o, o.Kind, o.Kind)
 		return
 	}
 	if o.Kind != "" && s.o.Objects != nil {
