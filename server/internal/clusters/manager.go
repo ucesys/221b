@@ -1175,11 +1175,13 @@ func (m *Manager) Stop() {
 	}
 }
 
-// Fingerprint is what a running connection connects to and with (the
-// server, how its certificate is checked, the credential), or "" for the
-// local cluster and a connection not running: the role check keeps its
+// Fingerprint is what a connection connects to and with (the server, how
+// its certificate is checked, the credential): the role check keeps its
 // verdict with it, so a connection re-pointed at another cluster is
-// compared again (RB-36).
+// compared again (RB-36). It is "" for the local cluster, whose
+// connection is the installation's, and for an id with no connection; a
+// connection that failed to start has its fingerprint, and no client to
+// read roles through. Read with the client, use Conn.
 func (m *Manager) Fingerprint(id string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
