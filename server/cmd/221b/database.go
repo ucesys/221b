@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/db/iamauth"
@@ -265,7 +266,11 @@ func (w *wiring) claimImport(id string) {
 // that other key: a waiting change's conversation is joined to the
 // change's row (DB-57), and is not kept without it, so the changes are
 // copied first and the conversations only once the changes are.
-var copiedAfter = map[string]string{cards.ChatsKey: cards.CardsKey}
+// Automation's variable changes, run requests and runs are hidden by the
+// names the variables mark sensitive (DB-71): they are copied once the
+// variables are, so no sensitive value of theirs is written in clear.
+var copiedAfter = map[string]string{cards.ChatsKey: cards.CardsKey,
+	automation.ChangesKey: automation.VariablesKey, automation.RunsKey: automation.VariablesKey}
 
 // copyOrder is the order a store's documents are copied in: by key, with
 // a key that is copied after another put behind it.
