@@ -69,6 +69,13 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#15 a quoted pair, half done":  {`password="[REDACTED] hunter2secret" next=1`, "hunter2secret", "next=1"},
 		// scrub-cut-1: a key's body not indented under its block key.
 		"cut-1 a key body not indented": {"privateKey: |\n  -----BEGIN RSA PRIVATE KEY-----\nMIIEfakeBODYline0123\n  -----END RSA PRIVATE KEY-----\nnext: 1\n", "MIIEfakeBODYline0123", "next: 1"},
+		// scrub-cut-5: auth as a word of a name still names a secret, and
+		// an Authorization value as a JSON pair goes.
+		"cut-5 auth":                  {"auth=F4keSecret0 next=1", "F4keSecret0", "next=1"},
+		"cut-5 basicAuth":             {"basicAuth: F4keSecret0", "F4keSecret0", "basicAuth"},
+		"cut-5 AUTH_KEY":              {"AUTH_KEY=F4keSecret0 next=1", "F4keSecret0", "next=1"},
+		"cut-5 an authorization pair": {`{"authorization":"F4keSecret0","n":1}`, "F4keSecret0", `"n":1`},
+		"cut-5 one in a JSON string":  {`{"msg":"{\"Authorization\":\"F4keSecret0\"}","n":1}`, "F4keSecret0", `"n":1`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
@@ -88,8 +95,10 @@ func TestScrubLeavesOrdinaryTextAlone(t *testing.T) {
 	for _, s := range []string{
 		"tests passed=5 passive: true",
 		"mysql -h db -P3306 shop",
-		"auth:\n  enabled: true\n  database: app\n",        // scrub#10
-		"pod payments-sk-worker-7f9c8d6b5-x2v7q restarted", // scrub-cut-2
+		"auth:\n  enabled: true\n  database: app\n",                                        // scrub#10
+		"pod payments-sk-worker-7f9c8d6b5-x2v7q restarted",                                 // scrub-cut-2
+		"kube-apiserver --authorization-mode=Node,RBAC --authorization-webhook-version v1", // scrub-cut-5
+		"authorization:\n  mode: Webhook\nauthor: alice\nauthority: ca.example.com",
 		"image: registry.example.com/risk.sk-scorer-v20240101-abc",
 		"client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNmYWtlRkFLRWZha2UwMTIzCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K", // scrub#14
 		"GET https://example.com/a?b=c 200",
@@ -105,6 +114,8 @@ func TestSecretNameTakesPassOnlyAsAWord(t *testing.T) {
 	for name, want := range map[string]bool{
 		"pass": true, "PASS": true, "DB_PASS": true, "smtp.pass": true, "smtpPass": true, "db_pass_file": true,
 		"pwd": true, "passwd": true, "password": true, "passphrase": true, "dsn": true, "connectionString": true, "connection_string": true,
+		"auth": true, "AUTH": true, "basicAuth": true, "BASIC_AUTH": true, "authKey": true, "auth_token": true, "AUTH2": true, // scrub-cut-5
+		"authorization-mode": false, "authorization": false, "AUTHORIZATION_MODE": false, "author": false, "authority": false, "authenticated": false,
 		"passed": false, "passive": false, "PASSED": false, "name": false, "value": false, "url": false, "mode": false,
 	} {
 		if SecretName(name) != want {
@@ -421,5 +432,14 @@ func TestScrubTextKeepsJSONValid(t *testing.T) {
 		if json.Unmarshal([]byte(out), &msg) == nil && msg.Msg != "" && !json.Valid([]byte(msg.Msg)) {
 			t.Errorf("%s: the JSON string %s is no JSON", in, msg.Msg)
 		}
+	}
+}
+
+// An Authorization header's value goes in a document too, while a
+// kubelet's authorization settings stay (scrub-cut-5).
+func TestScrubJSONTakesAnAuthorizationHeader(t *testing.T) {
+	out := string(JSON([]byte(`{"headers":{"Authorization":"F4keSecret0","Proxy-Authorization":"F4keSecret1"},"authorization":{"mode":"Webhook"},"authentication":{"anonymous":{"enabled":false}}}`)))
+	if strings.Contains(out, "F4keSecret") || !strings.Contains(out, `"mode":"Webhook"`) {
+		t.Errorf("%s", out)
 	}
 }

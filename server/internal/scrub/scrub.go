@@ -18,14 +18,15 @@ const Redacted = "[REDACTED]"
 
 // secretWords are what mark a name as holding a secret, in any case, for
 // the patterns below and SecretName alike.
-const secretWords = `password|passwd|passphrase|passcode|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth|dsn|connection[_-]?string|conn[_-]?str|cookie|key[_-]?data`
+const secretWords = `password|passwd|passphrase|passcode|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|dsn|connection[_-]?string|conn[_-]?str|cookie|key[_-]?data`
 
 const (
 	nameChars = `[A-Za-z0-9_.-]*`
-	// secretKey is a name that holds a secret, in text. "pass" counts only
-	// as a word of its own (db_pass, smtpPass, DB_PASS), so that passed and
-	// passive do not.
-	secretKey = `(?:(?i:` + nameChars + `(?:` + secretWords + `)` + nameChars + `)|` + nameChars + `(?:[Pp]ass(?:[_.A-Z-]` + nameChars + `)?|PASS(?:[_.-]` + nameChars + `)?))`
+	// secretKey is a name that holds a secret, in text. "pass" and "auth"
+	// count only as words of their own (db_pass, smtpPass, DB_PASS,
+	// basicAuth, AUTH_KEY), so that passed, passive, authorization-mode
+	// and author do not.
+	secretKey = `(?:(?i:` + nameChars + `(?:` + secretWords + `)` + nameChars + `)|` + nameChars + `(?:[Pp]ass(?:[_.A-Z-]` + nameChars + `)?|PASS(?:[_.-]` + nameChars + `)?|[Aa]uth(?:[_.A-Z0-9-]` + nameChars + `)?|AUTH(?:[_.0-9-]` + nameChars + `)?))`
 	// secretValue is a value after such a name: quoted, quoted inside a
 	// JSON string, or up to the next separator.
 	secretValue = `(?:\\+".*?\\+"(?:\s*[,}\]]|\s*$)|"[^"]*"|'[^']*'|[^\s,;&}\]]+)`
@@ -343,7 +344,8 @@ var scrubbers = []struct {
 	// themselves first).
 	{re: reBase64PEM, check: base64PrivateKey},
 	// Authorization and cookie headers, and bearer tokens.
-	{re: regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)`), keep: 1},
+	// Also as a JSON pair, and with the value on the header's line.
+	{re: regexp.MustCompile(`(?i)(\\*["']?\b(?:authorization|proxy-authorization|cookie|set-cookie)\\*["']?[ \t]*[:=][ \t]*)(?:\\*"[^"\n]*?\\*"|'[^'\n]*'|[^\r\n]+)`), keep: 1},
 	{re: regexp.MustCompile(`(?i)(\b(?:bearer|basic|token)\s+)[A-Za-z0-9\-._~+/]{8,}=*`), keep: 1},
 	// JSON Web Tokens, wherever they are.
 	{re: reJWT},
@@ -521,7 +523,7 @@ func Known(s string, known []string) string {
 }
 
 // secretName matches names that look like they hold a secret.
-var secretName = regexp.MustCompile(`(?i:` + secretWords + `)|[Pp]ass(?:$|[^a-z])|PASS(?:$|[^A-Z])`)
+var secretName = regexp.MustCompile(`(?i:` + secretWords + `)|[Pp]ass(?:$|[^a-z])|PASS(?:$|[^A-Z])|[Aa]uth(?:$|[^a-z])|AUTH(?:$|[^A-Z])`)
 
 // SecretName says whether a name looks like it holds a secret: an
 // environment variable's, a field's, a Helm value's.
@@ -594,7 +596,7 @@ func scrubValue(v any, field string, under bool) any {
 	secret := field != "" && SecretName(field) && !notSecretFields[field]
 	switch x := v.(type) {
 	case string:
-		if x != "" && (secret || under && !refFields[field]) {
+		if x != "" && (secret || under && !refFields[field] || authHeader(field)) {
 			return Redacted
 		}
 		return scrubString(x)
@@ -616,6 +618,13 @@ func scrubValue(v any, field string, under bool) any {
 		return x
 	}
 	return v
+}
+
+// authHeader says whether a field is an Authorization header, whose
+// value is a credential: not a secret's name (SecretName), since the
+// kubelet's authorization settings are none.
+func authHeader(field string) bool {
+	return strings.EqualFold(field, "authorization") || strings.EqualFold(field, "proxy-authorization")
 }
 
 // scrubString scrubs a string, value by value when it is itself JSON.
