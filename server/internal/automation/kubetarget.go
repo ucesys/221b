@@ -271,6 +271,12 @@ type Hook struct {
 	Header Header
 	// Identity is its service account, or "" for the person.
 	Identity string
+	// Script, Version and Hash name the approved version a script hook
+	// runs, which a production run checks again before each batch: "" for
+	// a built-in hook.
+	Script  string
+	Version int
+	Hash    string
 }
 
 // DrainHook and UncordonHook are the built-in hooks.
@@ -285,7 +291,7 @@ func UncordonHook() Hook {
 
 // HookOf makes a hook of an approved Kubernetes-target version.
 func HookOf(name string, v Version) Hook {
-	h := Hook{Label: fmt.Sprintf("%s v%d", name, v.N), Header: v.Header}
+	h := Hook{Label: fmt.Sprintf("%s v%d", name, v.N), Header: v.Header, Script: name, Version: v.N, Hash: v.Hash}
 	for _, l := range KubeLines(v.Text) {
 		if !strings.HasPrefix(l.Text, "#!") {
 			h.Lines = append(h.Lines, l.Text)

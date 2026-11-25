@@ -456,38 +456,51 @@ func (e *Engine) claimControlPlane(ctx context.Context, r Run, node string) (fun
 	}
 }
 
-// stillApproved says why the run's version may not go on: changed, or no
-// longer approved, since the run started. When the scripts cannot be read
-// after a few tries the run stops too: on production nothing runs that is
-// not known to be approved still.
-func (e *Engine) stillApproved(ctx context.Context, r Run) string {
-	var sc Script
-	var ok bool
-	var err error
-	for try := 0; try < recheckTries; try++ {
-		if try > 0 {
-			select {
-			case <-time.After(e.opts.RecheckRetry):
-			case <-ctx.Done():
-				return ""
+// stillApproved says why the run may not go on: its version, or the
+// version of a script it runs as a hook, changed or is no longer approved
+// since the run started. When the scripts cannot be read after a few
+// tries the run stops too: on production nothing runs that is not known
+// to be approved still.
+func (e *Engine) stillApproved(ctx context.Context, r Run, hooks []Hook) string {
+	type version struct {
+		script, hash, what string
+		n                  int
+	}
+	check := []version{{script: r.Script, n: r.Version, hash: r.Hash, what: fmt.Sprintf("%s v%d", r.Script, r.Version)}}
+	for _, h := range hooks {
+		if h.Script != "" {
+			check = append(check, version{script: h.Script, n: h.Version, hash: h.Hash, what: fmt.Sprintf("the hook %s v%d", h.Script, h.Version)})
+		}
+	}
+	for _, c := range check {
+		var sc Script
+		var ok bool
+		var err error
+		for try := 0; try < recheckTries; try++ {
+			if try > 0 {
+				select {
+				case <-time.After(e.opts.RecheckRetry):
+				case <-ctx.Done():
+					return ""
+				}
+			}
+			if sc, ok, err = e.opts.Store.Script(ctx, c.script); err == nil {
+				break
 			}
 		}
-		if sc, ok, err = e.opts.Store.Script(ctx, r.Script); err == nil {
-			break
+		if err != nil {
+			e.opts.Logger.Warn("a production run is stopped: whether what it runs is still approved could not be read", "run", r.ID, "script", c.script, "version", c.n, "err", err)
+			return fmt.Sprintf("stopped: whether %s is still approved could not be read (%v), so no further batch ran", c.what, err)
 		}
-	}
-	if err != nil {
-		e.opts.Logger.Warn("a production run is stopped: whether its version is still approved could not be read", "run", r.ID, "script", r.Script, "version", r.Version, "err", err)
-		return fmt.Sprintf("stopped: whether %s v%d is still approved could not be read (%v), so no further batch ran", r.Script, r.Version, err)
-	}
-	v, found := sc.Version(r.Version)
-	switch {
-	case !ok || !found:
-		return fmt.Sprintf("stopped: %s v%d is gone", r.Script, r.Version)
-	case v.Hash != r.Hash || Hash(v.Text) != r.Hash:
-		return fmt.Sprintf("stopped: %s v%d's text is not the one the run started with", r.Script, r.Version)
-	case v.State != StateApproved:
-		return fmt.Sprintf("stopped: %s v%d is %s now, no longer approved", r.Script, r.Version, v.State)
+		v, found := sc.Version(c.n)
+		switch {
+		case !ok || !found:
+			return fmt.Sprintf("stopped: %s is gone", c.what)
+		case v.Hash != c.hash || Hash(v.Text) != c.hash:
+			return fmt.Sprintf("stopped: %s's text is not the one the run started with", c.what)
+		case v.State != StateApproved:
+			return fmt.Sprintf("stopped: %s is %s now, no longer approved", c.what, v.State)
+		}
 	}
 	return ""
 }
@@ -539,7 +552,7 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 			a.mu.Lock()
 			r := a.run.Copy()
 			a.mu.Unlock()
-			if note = e.stillApproved(ctx, r); note != "" {
+			if note = e.stillApproved(ctx, r, append(append([]Hook(nil), a.before...), a.after...)); note != "" {
 				break
 			}
 		}

@@ -455,3 +455,48 @@ func TestARunStopsWhenItsApprovalCannotBeChecked(t *testing.T) {
 		t.Fatalf("%s %q, %d commands", done.State, done.Note, len(x.calls))
 	}
 }
+
+// Revoking a script that a production run uses as a hook stops the run at
+// its next batch (finding 12), as revoking the run's own script does.
+func TestRevokingAHookStopsTheRunThatUsesIt(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, nil)
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	approve := func(name, text string) Version {
+		t.Helper()
+		if _, err := st.Save(ctx, name, "", text, ann, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Submit(ctx, name, 1, ann); err != nil {
+			t.Fatal(err)
+		}
+		sc, err := st.Approve(ctx, name, 1, sam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sc.Latest()
+	}
+	v := approve("s", sshText)
+	hook := approve("drain-check", "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:target kubernetes\n# 221b:k8s get pods\nkubectl get pods -n default\n")
+	first := make(chan struct{})
+	x := &stubExec{run: func(node, _, _ string, _ io.Writer) (int, error) {
+		if node == "a" {
+			<-first
+		}
+		return 0, nil
+	}}
+	e := NewEngine(Options{Store: st, Exec: x, Kube: &stubKube{}})
+	r, err := e.Start(ctx, Spec{Script: "s", Version: v, Cluster: "local", Fleet: AllNodes, Nodes: []string{"a", "b"},
+		Rollout: Rollout{Mode: RolloutSize, Size: 1}, Recheck: true, Before: []Hook{HookOf("drain-check", hook)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Revoke(ctx, "drain-check", 1, sam); err != nil {
+		t.Fatal(err)
+	}
+	close(first)
+	done := waitRun(t, e, r.ID)
+	if done.State != RunStopped || !strings.Contains(done.Note, "drain-check v1") || done.Nodes[1].State != NodeSkipped {
+		t.Fatalf("%s %q %+v", done.State, done.Note, done.Nodes)
+	}
+}
