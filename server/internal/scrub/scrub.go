@@ -56,8 +56,12 @@ var (
 	// A password in an address: scheme://user:password@host. The password
 	// runs to the last @, as in Text, so it may hold @ itself.
 	reURLPassword = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:([^\s"'<>]+)@`)
-	reDigit       = regexp.MustCompile(`[0-9]`)
-	reLetter      = regexp.MustCompile(`[A-Za-z]`)
+	// What such a match takes for a password when the address has no user
+	// but a port: the port, then its path or query up to an @ further on
+	// (an image digest, PromQL's @, an e-mail address in the query).
+	rePortPath = regexp.MustCompile(`^[0-9]+[/?#]`)
+	reDigit    = regexp.MustCompile(`[0-9]`)
+	reLetter   = regexp.MustCompile(`[A-Za-z]`)
 	// What stands in for a password: $VAR, ${VAR}, $(command), <password>,
 	// {{ .x }}, [REDACTED], a format verb (%s, %(password)s) or %VAR%, ***
 	// or xxx, or a word for what goes there (password, your_password,
@@ -95,7 +99,20 @@ func Credential(s string) bool {
 			return true
 		}
 	}
+	return urlPassword(s)
+}
+
+// urlPassword says whether text holds an address with a password that is
+// not a placeholder. A port and its path are no password, but an address
+// inside that path (a redirect's target) may hold one.
+func urlPassword(s string) bool {
 	for _, m := range reURLPassword.FindAllStringSubmatch(s, -1) {
+		if rePortPath.MatchString(m[1]) {
+			if urlPassword(m[1] + "@") {
+				return true
+			}
+			continue
+		}
 		if !rePlaceholder.MatchString(m[1]) {
 			return true
 		}

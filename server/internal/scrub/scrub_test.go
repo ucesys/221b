@@ -203,6 +203,16 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"#3 two at signs":            {"mysql://root:Pass@w0rd!@db/x", true},
 		"#3 no user name":            {"redis://:Secret@2024@redis:6379/0", true},
 		"#3 a variable, then an at":  {"redis://:$REDIS_PASSWORD@redis:6379/0 mail ops@example.com", false},
+		// scrub#5: a host's port, then an @ further on, is no password.
+		"#5 an image digest":        {"helm pull oci://registry.example.com:5000/charts/app@sha256:4f9a2c1e7b3d", false},
+		"#5 PromQL's at":            {"http://prometheus:9090/api/v1/query?query=up@1700000000", false},
+		"#5 a Go module path":       {"curl http://athens:3000/github.com/gin-gonic/gin/@v/list", false},
+		"#5 an e-mail in the query": {"http://keycloak:8080/admin/realms/master/users?email=alice@example.com", false},
+		"#5 a port in a query":      {"http://keycloak:8080?email=alice@example.com", false},
+		"#5 a password with a hash": {"postgres://app:Pa#ss-41x@db/app", true},
+		"#5 a password with slash":  {"https://ci:pa/Fake9secret@registry.example.com/v2/", true},
+		"#5 digits, then a path":    {"https://ci:Fake9/secret@registry.example.com/v2/", true},
+		"#5 an address in the path": {"http://gw:8080/login?next=https://ci:Fake9secret@registry.example.com/v2/", true},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
