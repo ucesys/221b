@@ -210,6 +210,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **An upgrade line with no values no longer gets a card that says every value is removed** (HA-42, HA-43; review of November 24, 2026): Helm keeps a release's values when an upgrade is given none, but the card compared against no values, listed every value as removed, and refused such an upgrade of the console's own release. The card now renders with the release's values, says Helm keeps them, and removes none.
 - **A rollout undo card reads `--to-revision` as kubectl does** (P6-02; review of November 24, 2026): the card read it in base 10 and kubectl in base 0, so `--to-revision=010` was revision 10 on the card and 8 in the run; it is now read as kubectl reads it, and a revision that is not a number is refused.
 - **An object made after its card voids the card** (P6-04; review of November 24, 2026): a card that found an object absent (`There is no pod web/x`) set no guard on it, so if the object was created before the approval the change acted on it unseen. The card now lapses when such an object appears.
+- **The delete card says what `--force` does** (P6-04; review of November 24, 2026): it warned of an immediate removal for `--force --now`, which kubectl refuses, and said nothing for `--force` alone, which kubectl turns into an immediate deletion. It now follows kubectl: `--force` with no grace period or 0 removes the pod at once, and `--force` with a grace period (`--now` is one) or `--now` with `--grace-period` is said to be refused.
 
 ### Security
 

@@ -895,9 +895,12 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 	if _, mirror := p.Annotations[corev1.MirrorPodAnnotationKey]; mirror {
 		return fmt.Sprintf("Pod %s mirrors a static pod: the kubelet on %s recreates it at once.", id, p.Spec.NodeName)
 	}
+	if why := deleteFlagsRefused(c); why != "" {
+		return fmt.Sprintf("Pod %s is not deleted: kubectl will refuse: %s.", id, why)
+	}
 	ref := metav1.GetControllerOf(p)
 	tail := ""
-	if c.Has("force") && (c.Flag("grace-period") == "0" || c.Has("now")) {
+	if forceDeletes(c) {
 		tail = " It is removed at once, without waiting for its containers to stop: they may keep running on the node for a while."
 	}
 	if ref == nil {
@@ -912,6 +915,41 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 		return fmt.Sprintf("Pod %s is deleted; Job %s starts another if it has completions left.%s", id, ref.Name, tail)
 	}
 	return fmt.Sprintf("Pod %s is deleted; %s %s creates a replacement, which the scheduler may place on another node.%s", id, ref.Kind, ref.Name, tail)
+}
+
+// gracePeriod is --grace-period as kubectl reads it, -1 when not given.
+func gracePeriod(c *Command) int {
+	if !c.Has("grace-period") {
+		return -1
+	}
+	n, err := strconv.Atoi(c.Flag("grace-period"))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// deleteFlagsRefused says why kubectl refuses a delete's flags, as its
+// Complete and Validate do: --now with --grace-period, and --force with a
+// grace period above 0 (which --now is).
+func deleteFlagsRefused(c *Command) string {
+	grace := gracePeriod(c)
+	if c.Has("now") {
+		if grace != -1 {
+			return "--now and --grace-period cannot be specified together"
+		}
+		grace = 1
+	}
+	if c.Has("force") && grace > 0 {
+		return "--force and --grace-period greater than 0 cannot be specified together"
+	}
+	return ""
+}
+
+// forceDeletes says whether kubectl removes the object at once: --force
+// with no grace period, or with 0.
+func forceDeletes(c *Command) bool {
+	return c.Has("force") && !c.Has("now") && gracePeriod(c) <= 0
 }
 
 const psaPrefix = "pod-security.kubernetes.io/"

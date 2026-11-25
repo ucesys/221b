@@ -26,3 +26,25 @@ func TestAnObjectMadeAfterItsCardVoidsTheCard(t *testing.T) {
 		t.Fatalf("approved: %v", err)
 	}
 }
+
+// The delete card says what kubectl does with --force: a force deletion
+// without a grace period removes the pod at once, and --force with a grace
+// period (--now is one) is refused (review of November 24, 2026, cut by
+// the cap: impact.go:838).
+func TestTheDeleteCardSaysWhatForceDoes(t *testing.T) {
+	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "web"}}
+	for line, want := range map[string]string{
+		"kubectl delete pod x -n web --force":                   "removed at once",
+		"kubectl delete pod x -n web --force --grace-period=0":  "removed at once",
+		"kubectl delete pod x -n web --force --now":             "kubectl will refuse",
+		"kubectl delete pod x -n web --force --grace-period=30": "kubectl will refuse",
+		"kubectl delete pod x -n web --now --grace-period=5":    "kubectl will refuse",
+	} {
+		if got := deleteImpact(p, mustParse(t, line)); !strings.Contains(got, want) {
+			t.Errorf("%s: %s", line, got)
+		}
+	}
+	if got := deleteImpact(p, mustParse(t, "kubectl delete pod x -n web --now")); strings.Contains(got, "at once") || strings.Contains(got, "refuse") {
+		t.Errorf("--now: %s", got)
+	}
+}
