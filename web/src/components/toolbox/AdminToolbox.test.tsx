@@ -47,3 +47,25 @@ describe('Administration › Toolbox', () => {
     expect(screen.getByText('general')).toBeTruthy()
   })
 })
+
+describe('Administration › Toolbox warnings', () => {
+  it('says first what the server warns of', async () => {
+    info.v = {
+      enabled: true,
+      off: {},
+      idleSeconds: 600,
+      maxMinutes: 60,
+      images: [],
+      debugContainerImages: [],
+      debugPodProfiles: [],
+      nodeProfiles: [],
+      namespaces: {},
+      nodes: {},
+      values: {},
+      warnings: ['SSH is off on this console, but 2 node(s) are still paired'],
+    }
+    const props = { route: { cluster: 'local' }, me: null, now: 0, cluster: null, onToast: () => undefined } as unknown as AdminProps
+    render(<AdminToolbox {...props} />)
+    expect((await screen.findByRole('alert')).textContent).toContain('still paired')
+  })
+})

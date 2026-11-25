@@ -445,8 +445,9 @@ func (c Config) On(tool string) bool {
 	case ToolSSHUnpair:
 		// Unpairing too, with the console's own script; it is not held to
 		// the profiles, so a node paired before they changed can still be
-		// unpaired.
-		return c.SSH.Enabled && c.NodeShell.Enabled
+		// unpaired, nor to toolbox.ssh, so one paired before SSH was
+		// turned off can stop trusting the console's authority.
+		return c.NodeShell.Enabled
 	}
 	return false
 }

@@ -46,11 +46,18 @@ func TestParseRefusesValuesThatCannotWork(t *testing.T) {
 func TestOn(t *testing.T) {
 	c := Default()
 	for _, tool := range Tools {
-		ssh := tool == ToolSSH || tool == ToolSSHPair || tool == ToolSSHUnpair
+		// Unpairing works with SSH off, for the nodes paired before (the
+		// toolbox review, finding 4).
+		ssh := tool == ToolSSH || tool == ToolSSHPair
 		if c.On(tool) == ssh {
 			t.Errorf("%s: on by default is %v", tool, c.On(tool))
 		}
 	}
+	c.NodeShell.Enabled = false
+	if c.On(ToolSSHUnpair) {
+		t.Error("unpairing runs a node pod: off without node shells")
+	}
+	c.NodeShell.Enabled = true
 	c.SSH.Enabled = true
 	if !c.On(ToolSSH) || !c.On(ToolSSHPair) || !c.On(ToolSSHUnpair) {
 		t.Fatal("SSH asked for")

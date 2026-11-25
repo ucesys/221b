@@ -308,46 +308,64 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
       },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
       // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
-      ...(info?.ssh
-        ? [
-            {
-              key: 'ssh',
-              icon: <TerminalIcon />,
-              label: 'SSH…',
-              hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first',
-              off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'),
-              run: () => open('ssh'),
-            },
-            {
-              key: 'ssh-pair',
-              icon: <KeyIcon />,
-              label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…',
-              hint: (
-                <span className="rk-tag" data-tone="err">
-                  root
-                </span>
-              ),
-              off: why('ssh-pair'),
-              run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}),
-            },
-            ...(pairing
-              ? [
-                  {
-                    key: 'ssh-unpair',
-                    icon: <KeyIcon />,
-                    label: 'Unpair from SSH…',
-                    hint: (
-                      <span className="rk-tag" data-tone="err">
-                        root
-                      </span>
-                    ),
-                    off: why('ssh-unpair'),
-                    run: () => open('ssh-unpair'),
-                  },
-                ]
-              : []),
-          ]
-        : []),
+      ...(info?.ssh?.off
+        ? // SSH is off on this console, but a node paired before still trusts its authority: Unpair alone.
+          pairing
+          ? [
+              {
+                key: 'ssh-unpair',
+                icon: <KeyIcon />,
+                label: 'Unpair from SSH…',
+                hint: (
+                  <span className="rk-tag" data-tone="err">
+                    root
+                  </span>
+                ),
+                off: why('ssh-unpair'),
+                run: () => open('ssh-unpair'),
+              },
+            ]
+          : []
+        : info?.ssh
+          ? [
+              {
+                key: 'ssh',
+                icon: <TerminalIcon />,
+                label: 'SSH…',
+                hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first',
+                off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'),
+                run: () => open('ssh'),
+              },
+              {
+                key: 'ssh-pair',
+                icon: <KeyIcon />,
+                label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…',
+                hint: (
+                  <span className="rk-tag" data-tone="err">
+                    root
+                  </span>
+                ),
+                off: why('ssh-pair'),
+                run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}),
+              },
+              ...(pairing
+                ? [
+                    {
+                      key: 'ssh-unpair',
+                      icon: <KeyIcon />,
+                      label: 'Unpair from SSH…',
+                      hint: (
+                        <span className="rk-tag" data-tone="err">
+                          root
+                        </span>
+                      ),
+                      off: why('ssh-unpair'),
+                      run: () => open('ssh-unpair'),
+                    },
+                  ]
+                : []),
+            ]
+          : []),
       {
         key: 'cordon',
         icon: <CordonIcon />,

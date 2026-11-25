@@ -243,6 +243,11 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </h2>
         <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>From the chart’s toolbox values, read-only: a change is a helm upgrade. The roles decide who may use each tool.</span>
       </div>
+      {(info.warnings ?? []).map((w) => (
+        <div key={w} className="rk-callout" data-tone="warn" role="alert">
+          <span>{w}</span>
+        </div>
+      ))}
       <div className="tb-stats">
         <div className="tb-stat">
           <span>Idle timeout</span>

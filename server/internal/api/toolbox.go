@@ -127,10 +127,15 @@ type toolboxView struct {
 	// SSH is the SSH tools' state (Phase 11): the authority and the
 	// cluster's pairings, by node.
 	SSH *sshView `json:"ssh,omitempty"`
+	// Warnings are what Administration › Toolbox says first.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type sshView struct {
-	Enabled     bool                   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Off says the chart turned SSH off while nodes are still paired: the
+	// menu offers Unpair alone (the toolbox review, finding 4).
+	Off         bool                   `json:"off,omitempty"`
 	Port        int                    `json:"port"`
 	LoginUser   string                 `json:"loginUser"`
 	Principal   string                 `json:"principal"`
@@ -230,6 +235,22 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		v.SSH = sv
+	} else if s.opts.SSH != nil && r.URL.Query().Get("nodes") != "" {
+		// SSH is off, but the nodes paired before still trust the
+		// console's authority, whose key is kept: they are listed, so the
+		// menu offers Unpair, and the page says so.
+		sv := &sshView{Enabled: true, Off: true, Port: cfg.SSH.Port, LoginUser: cfg.SSH.LoginUser, Principal: s.opts.SSH.Principal(), Fingerprint: s.opts.SSH.Fingerprint(), Pairings: map[string]pairingView{}}
+		if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil && len(list) > 0 {
+			for _, p := range list {
+				sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, Principal: p.Principal, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && sv.Fingerprint != "" && p.CAFinger != sv.Fingerprint}
+			}
+			v.SSH = sv
+			how := "unpair them from each node's Tools menu (Unpair from SSH…)"
+			if !cfg.On(tb.ToolSSHUnpair) {
+				how = "turn node shells on (toolbox.nodeShell.enabled, with rbac.roles.superAdmin.template full) to unpair them"
+			}
+			v.Warnings = append(v.Warnings, fmt.Sprintf("SSH is off on this console, but %d node(s) of this cluster are still paired with its SSH authority, whose key is kept in the Secret <release>-ssh-ca: whoever can read it can still sign certificates they accept. %s.", len(list), strings.ToUpper(how[:1])+how[1:]))
+		}
 	}
 	names := make([]string, 0, len(cfg.Images))
 	for n := range cfg.Images {

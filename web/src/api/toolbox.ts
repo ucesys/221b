@@ -30,6 +30,8 @@ export interface SSHPairing {
 
 export interface SSHInfo {
   enabled: boolean
+  /** SSH is turned off on this console, and these nodes are still paired: only Unpair is offered. */
+  off?: boolean
   port: number
   loginUser: string
   principal: string
@@ -81,6 +83,8 @@ export interface ToolboxInfo {
   namespaces: Record<string, NamespaceTools>
   nodes: Partial<Record<ToolName, string>>
   values: unknown
+  /** What Administration › Toolbox says first. */
+  warnings?: string[]
 }
 
 /** What a dialog sends; the server checks it all again. */
