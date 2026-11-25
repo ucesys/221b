@@ -56,7 +56,7 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories, and from 0.13.0 the session key) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## 0.14.0 (unreleased)
+## 0.13.2 (unreleased)
 
 - **The bundled database's image** of this release adds PostgreSQL's `contrib` modules and pgvector (KN-51). It is the same PostgreSQL 18 (18.7); the upgrade rolls the database's pods as any change of image does, and at its first start the primary creates the extensions `pg_trgm` and `vector` in the console's database (`extensions.sh`, run by Patroni). Nothing is migrated by it.
 - **The knowledge index is rebuilt in the database at the first start** (KN-53): step `0055` adds its tables, and the leader fills them from the wiki in the background, at most 100 documents a transaction; a large wiki takes a few minutes, during which `ask_knowledge` finds what is indexed so far. Nothing is to be done; a start stopped half way goes on where it stopped.

@@ -505,7 +505,7 @@ func New(o Options) *Server {
 		// --- Show costs (Phase 12, wave 6c, CF-40).
 		s.handle("GET /api/v1/settings/ui", "settings-ui", s.getUISettings)
 		s.handle("PUT /api/v1/settings/ui", "settings-ui-update", s.putUISettings)
-		// --- Star us on GitHub (0.14.0, CU-21).
+		// --- Star us on GitHub (0.13.2, CU-21).
 		s.handle("GET /api/v1/star-prompt", "star-prompt", s.getStarPrompt)
 		s.handle("POST /api/v1/star-prompt/never", "star-prompt-never", s.postStarNever)
 		s.handle("PUT /api/v1/fleets", "fleets-update", s.putFleets)

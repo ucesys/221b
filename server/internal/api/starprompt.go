@@ -11,7 +11,7 @@ import (
 	"github.com/ucesys/221b/server/internal/settings"
 )
 
-// --- Star us on GitHub (0.14.0, CU-21; the owner's decisions) ---
+// --- Star us on GitHub (0.13.2, CU-21; the owner's decisions) ---
 //
 // After the installation, a dialog asks the people who installed the
 // console to star 221B on GitHub, with a link to the repository, Close and

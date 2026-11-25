@@ -1,4 +1,4 @@
-// Star us on GitHub (0.14.0, CU-21; the owner's decisions): after the
+// Star us on GitHub (0.13.2, CU-21; the owner's decisions): after the
 // installation, a dialog asks the people who installed the console, the
 // SuperAdmins the Helm values name and the first-run page's, to star 221B on GitHub, with a link to
 // the repository (a new tab), Close and Never show this again. The server

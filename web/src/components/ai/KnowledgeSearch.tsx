@@ -10,7 +10,7 @@ type Run = (fn: () => Promise<unknown>, msg?: string) => Promise<void>
  * index in the database (KN-53), the ways it searches (KN-54), the
  * embedding model of its semantic search (KN-55) and what it holds of each
  * source (KN-58). A source's trust and what it is about (KN-56, KN-57) are
- * set on its row of the Sources table (SourceIndexCell), since 0.14.0.
+ * set on its row of the Sources table (SourceIndexCell), since 0.13.2.
  */
 export function SearchCard({ v, run, busy }: { v: KnowledgeView; run: Run; busy: boolean }) {
   const ix = v.index

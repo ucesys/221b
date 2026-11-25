@@ -27,7 +27,7 @@
 // ("sandbox-knowledge › docs/a.csv", KN-49); Exclude everything under …
 // is never offered at the source's root, which is turned off in Administration › AI ›
 // Knowledge instead. In a source of uploaded documents each document's
-// row has its trust (0.14.0, KN-61): its source's by default, set by a
+// row has its trust (0.13.2, KN-61): its source's by default, set by a
 // SuperAdmin here (Source's, High, Normal, Low), audited; it ranks the
 // document in the search and says whether Mycroft writes pages from it by
 // itself. Sources themselves are changed in

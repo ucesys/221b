@@ -71,7 +71,7 @@ type Settings struct {
 	HideCosts bool `json:"hideCosts,omitempty"`
 	// StarPrompt says whether the console asks the people who installed
 	// it, the SuperAdmins the Helm values name and the first-run page's,
-	// to star 221B on GitHub, in a dialog at sign-in (0.14.0, CU-21); nil
+	// to star 221B on GitHub, in a dialog at sign-in (0.13.2, CU-21); nil
 	// is true. Never show this again turns it off, and a SuperAdmin turns
 	// it on again in Administration › Settings › General.
 	StarPrompt *bool `json:"starPrompt,omitempty"`

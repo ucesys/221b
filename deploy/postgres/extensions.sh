@@ -4,7 +4,7 @@
 # extensions the knowledge index uses in the console's database, pg_trgm
 # (fuzzy matching) and vector (pgvector, the passages' embeddings), as the
 # superuser over the local socket. The console's role may create pg_trgm
-# itself (it is trusted) but not vector. A database made before 0.14.0 gets
+# itself (it is trusted) but not vector. A database made before 0.13.2 gets
 # them at its first start on this image; post-bootstrap.sh does the same for
 # a new one. Standbys get them by replication. Patroni does not wait for
 # it: it tries for two minutes, then gives up, and the console searches

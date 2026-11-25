@@ -38,7 +38,7 @@ export function runModel(r: Pick<RunBrief, 'model' | 'provider' | 'movedUp'>): S
   return { text: modelLabel(r.model), hint: hint || undefined }
 }
 
-/** The highest effort a run's steps ran at, with Auto's reason; "—" for a run from before 0.14.0, which kept none. */
+/** The highest effort a run's steps ran at, with Auto's reason; "—" for a run from before 0.13.2, which kept none. */
 export function runEffort(r: Pick<RunBrief, 'effort' | 'pickBy' | 'pickWhy'>): Said {
   if (!r.effort) return { text: '—' }
   return { text: effortWords(r.effort), hint: r.pickBy ? (r.pickWhy ? `Auto: ${r.pickWhy}` : 'Auto') : undefined }

@@ -8,7 +8,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 )
 
-// A trust level per uploaded document (0.14.0, KN-61; asked by the owner
+// A trust level per uploaded document (0.13.2, KN-61; asked by the owner
 // on November 23, 2026). Every upload lands in one source (Added in
 // Mycroft; older ones in Uploaded documents), so a source's trust (KN-57)
 // was every upload's. A SuperAdmin now chooses a document's own level at

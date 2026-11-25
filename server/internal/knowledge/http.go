@@ -66,7 +66,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("POST sources/test", h.postSourceTestTyped)
 	route("POST sources/{id}/documents", h.postDocument)
 	route("DELETE sources/{id}/documents/{name}", h.deleteDocument)
-	// An uploaded document's own trust (0.14.0, KN-61).
+	// An uploaded document's own trust (0.13.2, KN-61).
 	route("PUT sources/{id}/documents/{name}/trust", h.putDocumentTrust)
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)

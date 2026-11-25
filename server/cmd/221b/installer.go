@@ -10,7 +10,7 @@ import (
 )
 
 // installerOf says who installed the console, for the Star us on GitHub
-// dialog (0.14.0, CU-21): a SuperAdmin the Helm values name. That is a name
+// dialog (0.13.2, CU-21): a SuperAdmin the Helm values name. That is a name
 // of auth.admins (a username, a subject or an email, as the sign-in
 // matches them), a member of a group of auth.adminGroups, of a group given
 // superAdmin under auth.ldap.roles or auth.oidc.roles, or a local user of

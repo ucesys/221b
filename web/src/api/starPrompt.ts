@@ -1,4 +1,4 @@
-// Star us on GitHub (0.14.0, CU-21): whether the dialog asks the person
+// Star us on GitHub (0.13.2, CU-21): whether the dialog asks the person
 // signed in, a SuperAdmin the Helm values name or the first-run page's, and its Never show this
 // again. The console never calls GitHub and keeps nothing about starring.
 import { call } from './call'
