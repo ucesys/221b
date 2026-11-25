@@ -62,6 +62,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **An edit of a credential's user, region, host key, certificate, GitHub App ids or OAuth2 token URL, client id or scope drops its last test** (credentials-cut-2), which kept showing an old passing test.
 - **A credential's Test is no longer kept over an edit, a Trust or a Forget made while it ran** (credentials-cut-3): its result was of the credential as it was before.
 - **An SSH credential keeps every host key pasted** (credentials-cut-4): `ssh-keyscan HOST` prints a line for each key, and only the first was kept, so a host that no longer had that key's type could not be tested. Every line is kept and any of the keys is accepted; an `@revoked` or `@cert-authority` line, which was read as a key to trust, is refused.
+- **A Test of `git@host:org/repo.git`, or of a bucket with a dot in its name, asks the address under the endpoint** (credentials-cut-5); both were read as another host and refused as outside the endpoint.
 
 ## 0.13.2 (2026-11-25)
 

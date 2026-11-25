@@ -919,3 +919,23 @@ func TestEveryHostKeyPastedIsKept(t *testing.T) {
 		}
 	}
 }
+
+// credentials-cut-5: the address a test asks is completed under the
+// endpoint for git's SSH form and for a bucket's dotted name.
+func TestATypedTestAddressStaysUnderTheEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		c           Credential
+		typed, want string
+	}{
+		{Credential{Kind: KindSSH, Endpoint: "git@github.com:ucesys"}, "git@github.com:ucesys/x.git", "ssh://git@github.com/ucesys/x.git"},
+		{Credential{Kind: KindAccessKey, Endpoint: "https://s3.amazonaws.com"}, "my.bucket", "https://s3.amazonaws.com/my.bucket"},
+		{Credential{Kind: KindAccessKey, Endpoint: "https://s3.amazonaws.com"}, "s3.amazonaws.com/my.bucket", "https://s3.amazonaws.com/my.bucket"},
+		{Credential{Kind: KindToken, Endpoint: "https://github.com/org"}, "221b.git", "https://github.com/org/221b.git"},
+		{Credential{Kind: KindToken, Endpoint: "github.com/org"}, "github.com/org/x", "https://github.com/org/x"},
+	} {
+		got := TestTarget(tc.c, tc.typed)
+		if got != tc.want || !tc.c.Covers(got) {
+			t.Errorf("%s under %s: %s (covered %v)", tc.typed, tc.c.Endpoint, got, tc.c.Covers(got))
+		}
+	}
+}

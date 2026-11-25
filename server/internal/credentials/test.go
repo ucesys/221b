@@ -56,9 +56,20 @@ func TestTarget(c Credential, typed string) string {
 	if strings.Contains(typed, "://") {
 		return typed
 	}
+	// git@host:org/repo.git, as git writes an SSH address
+	// (credentials-cut-5).
+	if m := scpLike.FindStringSubmatch(typed); m != nil && strings.Contains(typed, "@") {
+		user, _, _ := strings.Cut(typed, "@")
+		return "ssh://" + user + "@" + m[1] + "/" + m[2]
+	}
 	first, _, _ := strings.Cut(typed, "/")
-	if strings.Contains(first, ".") && !strings.HasSuffix(first, ".git") || strings.Contains(first, ":") {
-		// A host: the endpoint's scheme goes with it.
+	// A host: the endpoint's own, or for what is not a bucket's
+	// credential a name with a dot or a port. A bucket's name may have
+	// dots (credentials-cut-5).
+	host := strings.EqualFold(first, ep.Host) ||
+		!forBucket(c.Kind) && (strings.Contains(first, ".") && !strings.HasSuffix(first, ".git") || strings.Contains(first, ":"))
+	if host {
+		// The endpoint's scheme goes with it.
 		return base.Scheme + "://" + typed
 	}
 	return base.String() + "/" + strings.TrimLeft(typed, "/")
