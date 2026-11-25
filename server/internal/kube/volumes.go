@@ -148,16 +148,7 @@ func (c *Cluster) ReadVolumesNow(ctx context.Context) {
 			}
 		}()
 	}
-	sent := 0
-send:
-	for _, n := range todo {
-		select {
-		case work <- n:
-			sent++
-		case <-ctx.Done():
-			break send
-		}
-	}
+	sent := handOut(ctx, todo, work)
 	close(work)
 	wg.Wait()
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -183,6 +174,27 @@ send:
 		ch.Mark("storage", AllRows)
 		c.emit(ch)
 	}
+}
+
+// handOut gives the nodes to the workers in order until ctx is done, and
+// says how many it gave. Once ctx is done it gives none, even to a worker
+// that is waiting: a select with both cases ready picks either, and a
+// node given after the deadline would count as read, and the next read
+// would skip it (kube-cut-3).
+func handOut(ctx context.Context, todo []string, work chan<- string) int {
+	sent := 0
+	for _, n := range todo {
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case work <- n:
+			sent++
+		case <-ctx.Done():
+			return sent
+		}
+	}
+	return sent
 }
 
 // readVolumes asks one kubelet, through the API server, about the claims
