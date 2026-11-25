@@ -564,12 +564,25 @@ var scpLike = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):([^/][^
 // ParseEndpoint reads an address as the endpoint and the uses name them:
 // https://github.com/org, github.com/org, oci://ghcr.io/org,
 // ssh://git@host/org, git@host:org/repo.git.
-func ParseEndpoint(raw string) (Endpoint, error) {
+func ParseEndpoint(raw string) (Endpoint, error) { return parseAddress(raw, true) }
+
+// parseTarget reads an address a use goes to, as Covers compares it with
+// an endpoint: its query and fragment cut off, as a request splits them,
+// and of any length (credentials#7): only an endpoint is bounded.
+func parseTarget(raw string) (Endpoint, error) {
+	raw = strings.TrimSpace(raw)
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	return parseAddress(raw, false)
+}
+
+func parseAddress(raw string, endpoint bool) (Endpoint, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return Endpoint{}, invalid("give the endpoint: the address, or the start of the addresses, the credential is sent to (https://github.com/org)")
 	}
-	if len(raw) > 500 || strings.ContainsAny(raw, " \t\r\n") {
+	if endpoint && len(raw) > 500 || strings.ContainsAny(raw, " \t\r\n") {
 		return Endpoint{}, invalid("an endpoint is one address of at most 500 characters")
 	}
 	if !strings.Contains(raw, "://") {
@@ -637,7 +650,7 @@ func oddPath(u *url.URL) bool {
 // and port, a scheme the endpoint allows (an endpoint without one allows
 // any but plain http), and a path at or under its path.
 func (e Endpoint) Covers(target string) bool {
-	t, err := ParseEndpoint(target)
+	t, err := parseTarget(target)
 	if err != nil || t.Scheme == "" {
 		return false
 	}

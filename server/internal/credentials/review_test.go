@@ -353,3 +353,45 @@ func TestAPercentEscapedEndpointReadsBackTheSame(t *testing.T) {
 		}
 	}
 }
+
+// credentials#7: an address is covered whatever its length, its query
+// and its fragment: only an endpoint is bounded to 500 characters and
+// has neither.
+func TestALongAddressIsCovered(t *testing.T) {
+	s, _ := newService(t, nil)
+	c := token(t, s, "wiki", "https://wiki.example.com/confluence", SendAs{}, "fake-tok")
+	cql := url.QueryEscape(`siteSearch ~ "` + strings.Repeat("слово ", 20) + `"`)
+	long := "https://wiki.example.com/confluence/rest/api/search?cql=" + cql
+	if len(long) <= 500 {
+		t.Fatalf("not long: %d", len(long))
+	}
+	for _, target := range []string{long, "https://wiki.example.com/confluence/display/X#anchor", "https://wiki.example.com/confluence/" + strings.Repeat("a/", 300)} {
+		if !c.Covers(target) {
+			t.Errorf("not covered: %.80s…", target)
+		}
+		if _, err := s.CheckChoice(ctx, c.ID, UseHTTP, target); err != nil {
+			t.Errorf("refused %.80s…: %v", target, err)
+		}
+	}
+	u, err := s.Resolve(ctx, c.ID, UseHTTP, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, long, nil)
+	u.Signer()(req)
+	if req.Header.Get("Authorization") == "" {
+		t.Fatal("a long address went unsigned")
+	}
+	// Still under the endpoint only.
+	for _, target := range []string{"https://wiki.example.com/other?x=/confluence/", "https://wiki.example.com/other#/confluence/x", "https://evil.example/confluence?" + cql} {
+		if c.Covers(target) {
+			t.Errorf("covers %.80s", target)
+		}
+	}
+	if _, err := s.Create(ctx, Credential{Name: "long", Kind: KindToken, Endpoint: "https://wiki.example.com/" + strings.Repeat("a", 500)}, Secret{Token: "fake-tok"}, "ann"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a long endpoint: %v", err)
+	}
+	if _, err := s.Create(ctx, Credential{Name: "frag", Kind: KindToken, Endpoint: "https://wiki.example.com/x#y"}, Secret{Token: "fake-tok"}, "ann"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an endpoint with a fragment: %v", err)
+	}
+}
