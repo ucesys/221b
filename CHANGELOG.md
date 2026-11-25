@@ -18,6 +18,10 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **Elided and placeholder tokens pass the credential check** (AI-49, scrub#9): `Bearer eyJhbGciOiJSUzI1NiIs…` (what the cluster editor's token field shows), `sk-your-api-key-goes-here`, `xoxb-your-bot-token-here` and `ghp_` followed by X's failed it.
 - **A literal secret in a script or manifest fails the credential check again** (AI-49, scrub#4): since 0.13.2 the check knew no key, flag or header, so `docker login --password '…'`, `--from-literal=password=…`, `password: <base64>` under `data:`, `curl -u user:…` and a Cookie value passed unless the case had planted that exact value (a case saved from a conversation plants none). A value after a key, flag or header that names a secret now fails the check when it is no placeholder, has ten characters or more and holds a letter and a digit or a symbol.
 
+### Security
+
+- **A password under a secret-named parent key no longer reaches the Claude API** (P5-03, scrub#10): in `auth:\n  rootPassword: …` (a chart's values in a ConfigMap) and `{"auth": {"password": "…"}}` (a JSON log line) the scrubber took the child key, or the `{`, for the parent's value and kept the password. A pair's value now stays on its key's line and is no object, so the inner pair is scrubbed on its own.
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".

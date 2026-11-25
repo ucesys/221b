@@ -29,6 +29,10 @@ const (
 	// secretValue is a value after such a name: quoted, quoted inside a
 	// JSON string, or up to the next separator.
 	secretValue = `(?:\\+".*?\\+"(?:\s*[,}\]]|\s*$)|"[^"]*"|'[^']*'|[^\s,;&}\]]+)`
+	// pairValue is secretValue for a key=value pair: a list of plain
+	// values whole, and not an object or a list of them ({" or [{), nor a
+	// bare value that ends in : (a child key).
+	pairValue = `(?:\\+".*?\\+"(?:\s*[,}\]]|\s*$)|"[^"]*"|'[^']*'|\[[^\[\]{}\n]*\]|[{\[][^"'{\[\s\\,;&}\]][^\s,;&}\]]*|[^\s,;&}\]{\[](?:[^\s,;&}\]]*[^\s,;&}\]:])?)`
 )
 
 // The shapes of real credentials, whatever words stand around them. Text
@@ -317,8 +321,13 @@ var scrubbers = []struct {
 	// curl's user:password.
 	{regexp.MustCompile(`(\bcurl\b[^\n]*?\s(?:-u\s*|--user[=\s]\s*)\\*["']?[^\s:"'\\]*:)` + secretValue), 1},
 	// key=value and key: value pairs whose key names a secret, also inside
-	// a JSON string.
-	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?\s*[:=]\s*)` + secretValue), 1},
+	// a JSON string. The value is on the key's line, and is no object and
+	// no key of its own: under a secret-named parent (auth: in a chart's
+	// values, {"auth": {"password": …}}) the child pairs are matched on
+	// their own. A list of plain values is taken whole.
+	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), 1},
+	// A YAML plain value on the line below its key.
+	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), 1},
 	// Well-known token shapes.
 	{tokenShapes[0], 0}, {tokenShapes[1], 0}, {tokenShapes[2], 0}, {tokenShapes[3], 0},
 	{tokenShapes[4], 0}, {tokenShapes[5], 0}, {tokenShapes[6], 0},

@@ -8,7 +8,8 @@ import (
 // Text scrubbed again stays as it is: a case's shared draft is scrubbed
 // on every save (CF-59).
 func TestScrubTwiceChangesNothing(t *testing.T) {
-	for _, in := range []string{"password=hunter2 same as C-4", "token: abc123def, next", `{"api_key":"hunter2"}`, "--db-password hunter2secret --port 80"} {
+	for _, in := range []string{"password=hunter2 same as C-4", "token: abc123def, next", `{"api_key":"hunter2"}`, "--db-password hunter2secret --port 80",
+		"auth:\n  rootPassword: F4keRootPw\n", `{"auth": {"password": "hunter2secret"}}`, `{"passwords": ["hunter2secret"]}`, "password:\n  hunter2secret\n"} {
 		once := Text(in)
 		if twice := Text(once); twice != once {
 			t.Errorf("%q: %q, then %q", in, once, twice)
@@ -40,6 +41,12 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"a URL password with a slash":    {"https://user:pa/hunter2secret@host/x", "hunter2secret", "@host/x"},
 		"a URL password with an at sign": {"postgres://app:p@hunter2secret@db/x", "hunter2secret", "@db/x"},
 		"a URL with no user name":        {"redis://:hunter2secret@redis:6379/0", "hunter2secret", "@redis:6379"},
+		// scrub#10: a pair under a secret-named parent key.
+		"#10 a child of a secret-named key": {"auth:\n  rootPassword: F4keRootPw\n  database: app\n", "F4keRootPw", "database: app"},
+		"#10 an object under such a key":    {`{"auth": {"password": "hunter2secret"}, "db": "app"}`, "hunter2secret", `"db": "app"`},
+		"#10 an object in a JSON string":    {`{"msg":"{\"auth\":{\"password\":\"hunter2secret\"}}","level":"info"}`, "hunter2secret", `"level":"info"`},
+		"#10 a list under such a key":       {`{"passwords": ["hunter2secret", "hunter3"], "db": "app"}`, "hunter2secret", `"db": "app"`},
+		"#10 a value on the next line":      {"password:\n  hunter2secret\nnext: 1\n", "hunter2secret", "next: 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
@@ -59,6 +66,7 @@ func TestScrubLeavesOrdinaryTextAlone(t *testing.T) {
 	for _, s := range []string{
 		"tests passed=5 passive: true",
 		"mysql -h db -P3306 shop",
+		"auth:\n  enabled: true\n  database: app\n", // scrub#10
 		"GET https://example.com/a?b=c 200",
 	} {
 		if out := Text(s); out != s {
