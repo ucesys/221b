@@ -60,6 +60,10 @@ type NodeState struct {
 	Ready        bool
 	ControlPlane bool
 	Host         bool
+	// BootID is the boot the kubelet last reported
+	// (status.nodeInfo.bootID): a rebooted node is back once Kubernetes
+	// reports it Ready from the new boot, not from the one before.
+	BootID string
 }
 
 // isHost says whether a target is a host outside Kubernetes.
@@ -1068,7 +1072,7 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 		return fmt.Errorf("the reboot command exited with %d, so the node did not reboot", code)
 	}
 	// A lost connection is what a reboot looks like from here.
-	back, said := false, false
+	back, said, now := false, false, ""
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -1087,14 +1091,17 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 				}
 				continue
 			}
-			back = true
+			back, now = true, id
 			fmt.Fprintf(out, "[221B] %s answers again, from a new boot\n", node)
 		}
 		if e.opts.Node == nil {
 			return nil
 		}
+		// Ready as Kubernetes last heard it may still be the boot before:
+		// the node controller marks a node Unknown only after 40 s or so,
+		// and the new kubelet may not have reported yet.
 		st, known := e.opts.Node(r.Cluster, node)
-		if !known || st.Ready || st.Host {
+		if !known || st.Host || st.Ready && (st.BootID == "" || st.BootID == now) {
 			fmt.Fprintf(out, "[221B] %s is back\n", node)
 			return nil
 		}
@@ -1102,7 +1109,7 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 	m := int(wait / time.Minute)
 	switch {
 	case back:
-		return fmt.Errorf("the node came back from its reboot, but Kubernetes did not report it Ready within %d minutes", m)
+		return fmt.Errorf("the node came back from its reboot, but Kubernetes did not report it Ready from its new boot within %d minutes", m)
 	case said:
 		return fmt.Errorf("the node kept answering from the same boot for %d minutes: it did not reboot", m)
 	}

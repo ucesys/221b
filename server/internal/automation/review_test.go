@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -379,5 +380,44 @@ func TestAZeroByteInOutputDoesNotStopTheRunsSaves(t *testing.T) {
 	}
 	if run.State != RunSucceeded || !strings.Contains(run.Nodes[0].Tail, "init�splash") || run.Nodes[0].Msg != "read�it" || !strings.Contains(out["n1"], "init�splash") {
 		t.Fatalf("as the database keeps it: %+v %q", run, out)
+	}
+}
+
+// A rebooted Kubernetes node is back only once Kubernetes reports it Ready
+// from its new boot (finding 10): Ready from the boot before, which the
+// node controller keeps for 40 s or so, is not it.
+func TestARebootedNodeIsBackOnlyWhenReadyFromItsNewBoot(t *testing.T) {
+	run := func(boot func(calls int) string) (NodeResult, int) {
+		t.Helper()
+		ended := make(chan Run, 1)
+		calls := 0
+		var mu sync.Mutex
+		e := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: &fakeExec{}, OnEnd: func(r Run) { ended <- r },
+			RebootPoll: time.Millisecond, RebootWait: 300 * time.Millisecond, BeatEvery: time.Hour,
+			Node: func(string, string) (NodeState, bool) {
+				mu.Lock()
+				defer mu.Unlock()
+				calls++
+				return NodeState{Ready: true, BootID: boot(calls)}, true
+			}})
+		if _, err := e.Start(context.Background(), Spec{Script: "s", Version: approved(PrivilegeElevated), Cluster: "local", Nodes: []string{"boot-1"}, Rollout: Rollout{Mode: RolloutAll}}); err != nil {
+			t.Fatal(err)
+		}
+		n := wait(t, ended).Nodes[0]
+		mu.Lock()
+		defer mu.Unlock()
+		return n, calls
+	}
+	// The fake node answers from boot-0, and from boot-1 once rebooted.
+	if n, _ := run(func(int) string { return "boot-0" }); n.State != NodeFailed || !strings.Contains(n.Error, "Ready from its new boot") {
+		t.Fatalf("Ready from the boot before only: %+v", n)
+	}
+	if n, calls := run(func(calls int) string {
+		if calls < 20 {
+			return "boot-0"
+		}
+		return "boot-1"
+	}); n.State != NodeChanged || calls < 20 {
+		t.Fatalf("Ready from the new boot after %d reads: %+v", calls, n)
 	}
 }

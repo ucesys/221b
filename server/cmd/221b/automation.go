@@ -119,7 +119,7 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 					}
 					return automation.NodeState{}, false
 				}
-				st := automation.NodeState{}
+				st := automation.NodeState{BootID: n.Status.NodeInfo.BootID}
 				_, st.ControlPlane = n.Labels["node-role.kubernetes.io/control-plane"]
 				if _, master := n.Labels["node-role.kubernetes.io/master"]; master {
 					st.ControlPlane = true
