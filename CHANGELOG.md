@@ -25,6 +25,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **A JWT or token in an escaped or URL-encoded log line no longer reaches the Claude API** (P5-03, AI-49, scrub#12): nginx's `\x22eyJ…`, `%3DeyJ…` and `%22AKIA…` were missed, because a word character stood before the token, and so was a GitLab token whose last character is `-`.
 - **A URL whose user name holds `@` no longer keeps its password** (P5-03, AI-49, scrub#13): `smtps://alerts@example.com:…@smtp.example.com:465`, an e-mail address as an SMTP login, was left whole by the scrubber and passed the credential check.
 - **A private key in base64 no longer reaches the Claude API** (P5-03, AI-49, scrub#14): a kubeconfig's `client-key-data` in a ConfigMap, a pod log or an event passed every check. A base64 PEM block whose header is a private key's is now scrubbed and fails the credential check, and a name holding `key-data` counts as a secret's (also for `scrub.SecretName`).
+- **A secret beside an earlier redaction is no longer kept** (P5-03, scrub#15): in `DSN="postgres://app:pw@db/x?sslpassword=…"` the URL password was redacted first and the rest of the value was then kept whole, as was `sid` in `Cookie: a=[REDACTED]; sid=…`. Only a value that is nothing but a redaction is now left as it is.
 
 ## 0.13.2 (2026-11-25)
 

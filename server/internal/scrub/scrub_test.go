@@ -9,7 +9,8 @@ import (
 // on every save (CF-59).
 func TestScrubTwiceChangesNothing(t *testing.T) {
 	for _, in := range []string{"password=hunter2 same as C-4", "token: abc123def, next", `{"api_key":"hunter2"}`, "--db-password hunter2secret --port 80",
-		"auth:\n  rootPassword: F4keRootPw\n", `{"auth": {"password": "hunter2secret"}}`, `{"passwords": ["hunter2secret"]}`, "password:\n  hunter2secret\n"} {
+		"auth:\n  rootPassword: F4keRootPw\n", `{"auth": {"password": "hunter2secret"}}`, `{"passwords": ["hunter2secret"]}`, "password:\n  hunter2secret\n",
+		`DSN="postgres://app:pw1@db/x?sslpassword=hunter2secret"`, "Cookie: a=[REDACTED]; sid=hunter2secret", `{"password":"[REDACTED]"}`, `password: "[REDACTED]"`} {
 		once := Text(in)
 		if twice := Text(once); twice != once {
 			t.Errorf("%q: %q, then %q", in, once, twice)
@@ -61,6 +62,10 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"#14 client-key-data":       {"users:\n- name: admin\n  user:\n    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=\n", "LS0tLS1CRUdJTiBSU0Eg", "name: admin"},
 		"#14 a base64 key in a log": {"loaded key=LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFmYWtlCi0tLS0tRU5EIE9QRU5TU0ggUFJJVkFURSBLRVktLS0tLQo= ok", "LS0tLS1CRUdJTiBPUEVO", " ok"},
 		"#14 any key data":          {"keyData: QUJDREVGRzEyMzQ1Njc4OQ==", "QUJDREVGRzEyMzQ1Njc4OQ==", "keyData"},
+		// scrub#15: a value that holds a redaction and more.
+		"#15 a DSN with a URL password": {`DSN="postgres://app:pw1@db/x?sslpassword=hunter2secret" next=1`, "hunter2secret", "next=1"},
+		"#15 a cookie already masked":   {"Cookie: a=[REDACTED]; sid=hunter2secret\nnext line", "hunter2secret", "next line"},
+		"#15 a quoted pair, half done":  {`password="[REDACTED] hunter2secret" next=1`, "hunter2secret", "next=1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)

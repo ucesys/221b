@@ -425,10 +425,11 @@ func Text(s string) string {
 				if len(sub) <= sc.keep {
 					return Redacted
 				}
-				// A value that is itself already redacted stays as it is:
-				// cut at its "]" by a value that ends there, it starts with
-				// the redaction's rest, so scrubbing again changes nothing.
-				if v := m[len(sub[sc.keep]):]; strings.Contains(v, Redacted) || strings.HasPrefix(v, Redacted[:len(Redacted)-1]) {
+				// A value that is itself already redacted stays as it is, so
+				// scrubbing again changes nothing; one that holds a
+				// redaction and more (a DSN whose URL password went first)
+				// is redacted whole.
+				if onlyRedacted(m[len(sub[sc.keep]):]) {
 					return m
 				}
 				return sub[sc.keep] + Redacted
@@ -436,6 +437,12 @@ func Text(s string) string {
 		}
 	}
 	return s
+}
+
+// onlyRedacted says whether a value is a redaction and nothing else:
+// quoted or not, also cut at its "]" by a value that ends there.
+func onlyRedacted(v string) bool {
+	return strings.TrimRight(strings.Trim(v, `\"' `), "]") == Redacted[:len(Redacted)-1]
 }
 
 // Known also removes values known to be secret, wherever they appear:
