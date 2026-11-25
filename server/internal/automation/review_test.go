@@ -811,3 +811,36 @@ func TestCancelledFactsKeepWhatWasKnown(t *testing.T) {
 		t.Fatalf("after a cancelled collection: %+v %v", facts, err)
 	}
 }
+
+// A result that asks for a reboot gets one even when it says nothing
+// changed (cut by the review's cap; AU-09: a node whose result says
+// "reboot": true is rebooted), and the node counts as changed.
+func TestARebootIsDoneWhenAskedForWithoutAChange(t *testing.T) {
+	var mu sync.Mutex
+	boot, reboots := 0, 0
+	x := &stubExec{run: func(_, command, _ string, out io.Writer) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case command == BootIDCommand:
+			fmt.Fprintf(out, "boot-%d\n", boot)
+		case strings.Contains(command, "reboot"):
+			reboots++
+			boot++
+		default:
+			io.WriteString(out, `{"changed": false, "msg": "kernel updated", "reboot": true}`+"\n")
+		}
+		return 0, nil
+	}}
+	e := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: x, RebootPoll: time.Millisecond, RebootWait: time.Second})
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approved(PrivilegeElevated), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a"}, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRun(t, e, r.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if reboots != 1 || done.Nodes[0].State != NodeChanged {
+		t.Fatalf("%d reboots, %+v", reboots, done.Nodes[0])
+	}
+}

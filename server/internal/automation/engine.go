@@ -967,13 +967,16 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			}
 		}
 		switch {
-		case res.State != NodeChanged || !hasResult || !result.Reboot || r.DryRun:
+		// A result that asks for a reboot gets one, whatever it says of
+		// changed: the reboot is a change of its own.
+		case (res.State != NodeChanged && res.State != NodeNoChange) || !hasResult || !result.Reboot || r.DryRun:
 		case asNobody:
 			// Rebooting takes more than nobody may do: the script's privilege
 			// is what the reboot runs with, so a nobody script cannot ask for one.
 			res.State, res.Error = NodeFailed, "the script asked for a reboot, but it runs as nobody, which cannot reboot; declare privilege full to reboot"
 			fmt.Fprintf(out, "\n[221B] %s\n", res.Error)
 		default:
+			res.State = NodeChanged
 			e.setNode(a, node, func(n *NodeResult) { n.State, n.Msg = NodeRebooting, result.Msg })
 			if rerr := e.reboot(ctx, r, node, wait, out); rerr != nil {
 				res.State, res.Error = NodeFailed, rerr.Error()
