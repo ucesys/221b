@@ -8,6 +8,8 @@ Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-4
 
 ### Upgrading
 
+A `toolbox.portForward.cliMinVersion` that is not a version (`>=0.11.1`, `0.11.*`, `V0.11.1`) now stops the console's start; it was taken as no minimum. Leave it empty for none.
+
 An image named in `toolbox.debugContainer.images` must now be a DNS label (lowercase letters, digits and dashes, 53 characters at most), and every image a tool names must have an `image`; otherwise the console does not start. Both were refused by Kubernetes at every session before.
 
 A `toolbox.maxDuration` over `365d`, or a `toolbox.debugPod.ttlAfterFinished` below 0 or over `24855d`, now stops the console's start (the first broke node tools and debug pods on every request).
@@ -69,6 +71,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 
 ### Fixed
 
+- **A malformed `cliMinVersion` no longer turns the CLI minimum off** (TB-23): `toolbox.portForward.cliMinVersion: '>=0.11.1'` (or `0.11.*`, `V0.11.1`) passed the start, and the tunnel took a minimum it could not read as none, so a 0.10.0 CLI forwarded with no upgrade message while Administration › Toolbox read *>=0.11.1 or newer*. The start now refuses a minimum that is not a version.
 - **A very long toolbox duration is refused, not wrapped** (TB-48): `retention: 213504d` (meant as forever) became 25 minutes, so transcripts were pruned after about 25 minutes, and a number of seconds past 2^63 nanoseconds was converted as the platform does (the most negative duration on amd64, the largest on arm64), so `maxDuration: 10000000000` stopped an amd64 console and passed on arm64, where every node pod and debug Job was then refused. A duration over 106751 days is now refused at the start, and a bad duration names its key (`toolbox.debugPod.ttlAfterFinished: "soon" is not a duration`); a null one keeps its default.
 - **An image key that cannot name a container is refused at the start** (TB-24): a debug container is named `221b-<image>-<4 hex>`, a DNS label, so an image key in camelCase (`netTools`), with `_` or `.`, or over 53 characters passed the start and then every debug container's dry run and start was refused; and an entry without `image` (a Helm-style `repository` and `tag`) made every Job or pod from it fail with *image: Required value*. The start now refuses both.
 - **A debug pod's time to live and a long `maxDuration` no longer break whole tools** (TB-13, TB-28): `toolbox.debugPod.ttlAfterFinished: -1` (or `-10m`, or 24856 days and more, which wrapped negative as a Job's int32) made the dry run and the start of every debug pod fail while the menu showed it on, and a `maxDuration` of 24856 days and more (meant as no limit) pushed every node pod's deadline past what a pod takes, so every node command, SSH pairing and self-approved node shell was refused. The start now refuses a time to live outside 0 to 24855 days and a `maxDuration` over 365 days, and the seconds that reach Kubernetes are clamped, not wrapped.

@@ -100,6 +100,13 @@ func Older(a, b string) bool {
 	return false
 }
 
+// ValidVersion says whether Older can read v as a version: a minimum it
+// cannot read would refuse no CLI (the toolbox review, finding 11).
+func ValidVersion(v string) bool {
+	_, ok := parse(v)
+	return ok
+}
+
 // DevBuild says whether a CLI was built from a checkout rather than a
 // release ("dev", or git describe's "v0.7.1-12-gabc"): the minimum
 // version does not apply to it.

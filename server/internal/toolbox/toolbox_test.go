@@ -253,3 +253,19 @@ func TestDurationsAreRefusedRatherThanWrapped(t *testing.T) {
 		t.Fatalf("%v %v %v", err, c.MaxDuration.D(), c.Retention.D())
 	}
 }
+
+// A minimum CLI version that does not parse is refused: tunnel.Older took
+// it as no minimum while Administration said it was enforced (the toolbox
+// review, finding 11). Empty is no minimum.
+func TestParseRefusesACLIMinimumThatDoesNotParse(t *testing.T) {
+	for _, v := range []string{">=0.11.1", "0.11.*", "V0.11.1"} {
+		if _, err := Parse([]byte(`{"portForward":{"cliMinVersion":"` + v + `"}}`)); err == nil || !strings.Contains(err.Error(), "cliMinVersion") {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	for _, v := range []string{"", "0.11.1", "v0.12"} {
+		if _, err := Parse([]byte(`{"portForward":{"cliMinVersion":"` + v + `"}}`)); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+}

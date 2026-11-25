@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/tunnel"
 )
 
 // The tools, as the menus, the dialogs and the API name them.
@@ -374,6 +376,11 @@ func (c Config) Check() error {
 	}
 	// A node pod's deadline is maxDuration and the time to start, in a
 	// pod's int32 seconds: a year leaves room, and no session is longer.
+	// A minimum the tunnel cannot read refuses no CLI, while
+	// Administration › Toolbox shows it enforced.
+	if v := c.PortForward.CLIMinVersion; v != "" && !tunnel.ValidVersion(v) {
+		errs = append(errs, fmt.Sprintf("toolbox.portForward.cliMinVersion is a version such as 0.11.1, not %q", v))
+	}
 	if c.MaxDuration.D() > MaxSession {
 		errs = append(errs, "toolbox.maxDuration must be at most 365d")
 	}
