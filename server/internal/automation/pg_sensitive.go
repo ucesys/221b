@@ -50,6 +50,9 @@ func sensitiveFor(d *db.DB) SensitiveStore {
 func (st *Store) SensitiveInTables(d *db.DB, s SensitiveStore, log *slog.Logger) {
 	UseSensitive(d, s)
 	st.SetSensitive(s, true, log)
+	st.decideIn = func(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
+		return st.decideChangeTx(ctx, d, cluster, id, approve, comment, who)
+	}
 	st.collectIn = func(ctx context.Context, drop func(live map[string]map[string]bool) error) error {
 		return d.Tx(ctx, func(tx pgx.Tx) error {
 			if err := lockDocs(ctx, tx, VariablesKey, ChangesKey); err != nil {

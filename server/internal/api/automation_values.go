@@ -230,8 +230,9 @@ func (s *Server) getWaitingRuns(w http.ResponseWriter, r *http.Request) {
 	answerJSON(w, r, map[string]any{"waiting": list})
 }
 
-// waitingRunMu orders approvals of waiting runs from the check to the
-// record, as the twoperson store does: writes are the leader's (ADR-70).
+// waitingRunMu orders the decisions on waiting runs, an approval from the
+// check to the record and a rejection with them, as the twoperson store
+// does: writes are the leader's (ADR-70).
 // The run's request name stops a second start in any case.
 var waitingRunMu sync.Mutex
 
@@ -259,6 +260,11 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 	st := s.opts.AutomationStore
 	target := fmt.Sprintf("run request %d", id)
 	s.expireWaitingRuns(r)
+	// A decision is one critical section: a rejection waits for an
+	// approval that is between its check and its record (the run started),
+	// and then finds the request approved, and the other way round.
+	waitingRunMu.Lock()
+	defer waitingRunMu.Unlock()
 	if decision == "reject" {
 		wr, err := st.DecideWaitingRun(ctx, cluster, id, false, in.Comment, me, 0)
 		if err != nil {
@@ -270,8 +276,6 @@ func (s *Server) postWaitingRun(w http.ResponseWriter, r *http.Request) {
 		answerJSON(w, r, map[string]any{"waiting": wr})
 		return
 	}
-	waitingRunMu.Lock()
-	defer waitingRunMu.Unlock()
 	wr, err := st.WaitingRunFor(ctx, cluster, id, me)
 	if err != nil {
 		s.recordAutomation(r, audit.ActionAutomationRun, cluster, target, audit.OutcomeDenied, fmt.Sprintf("not approved: %v", err))

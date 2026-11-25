@@ -225,6 +225,11 @@ func (st *Store) WaitingChanges(ctx context.Context) ([]VariableChange, error) {
 // NewChange records a change.
 func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChange, error) {
 	c.At = st.now().UTC()
+	if st.decideIn == nil {
+		// Not between a decision's check and its effect.
+		st.decideMu.Lock()
+		defer st.decideMu.Unlock()
+	}
 	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
 		rec.Next++
 		c.ID = rec.Next
@@ -275,6 +280,15 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 	if len(comment) > MaxComment {
 		return VariableChange{}, fmt.Errorf("%w: a comment is at most %d characters", ErrInvalid, MaxComment)
 	}
+	// A decision is one critical section: what it checks, what it applies
+	// and how it marks the change, so a rejection (or a newer change) cannot
+	// come between an approval's check and its effect. In the database
+	// that is one transaction with the turns of both documents' writers.
+	if st.decideIn != nil {
+		return st.decideIn(ctx, cluster, id, approve, comment, who)
+	}
+	st.decideMu.Lock()
+	defer st.decideMu.Unlock()
 	if approve {
 		var rec changesRecord
 		if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
@@ -288,23 +302,15 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		// it again finds them in and only marks it.
 		// A change is what it alters: the fleet's values, marks, ceiling and
 		// reboot time it names, and the own values of the nodes it names.
-		// Those are compared and set, and nothing else of the fleet's.
-		items := Items(c.Before, c.After)
-		nodes := NamedNodes(c.Before, c.After)
-		// The values it sets are the asker's: the change names who
-		// approved them.
+		// Those are compared and set, and nothing else of the fleet's. The
+		// values it sets are the asker's: the change names who approved
+		// them.
 		err = change(SetBy(ctx, c.By), st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
-			vr.nodesOwn()
-			cur := View(vr.Clusters[cluster], c.Fleet, nodes)
-			done, moved := weigh(cur, items)
-			switch {
-			case done:
+			set, err := approveOver(vr, c)
+			if err == nil && !set {
 				return errNoChange
-			case len(moved) > 0:
-				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(moved, ", ")))
 			}
-			vr.put(cluster, c.Fleet, applyItems(cur, items), nodes)
-			return nil
+			return err
 		})
 		if err != nil {
 			return VariableChange{}, err
@@ -317,16 +323,8 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 			if c.ID != id || c.Cluster != cluster {
 				continue
 			}
-			if c.State != ChangeWaiting {
-				return fmt.Errorf("%w: change %d is %s", ErrInvalid, id, c.State)
-			}
-			if approve && who.Same(c.By) {
-				return fmt.Errorf("%w: you asked for this change", ErrOwnWork)
-			}
-			now := st.now().UTC()
-			c.State, c.DecidedBy, c.DecidedAt, c.Comment = ChangeRejected, &who, &now, comment
-			if approve {
-				c.State = ChangeApproved
+			if err := st.decide(c, approve, comment, who); err != nil {
+				return err
 			}
 			out = *c
 			return nil
@@ -334,6 +332,42 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		return ErrNotFound
 	})
 	return out, err
+}
+
+// decide marks a change approved or rejected, once its state is checked.
+func (st *Store) decide(c *VariableChange, approve bool, comment string, who Who) error {
+	if c.State != ChangeWaiting {
+		return fmt.Errorf("%w: change %d is %s", ErrInvalid, c.ID, c.State)
+	}
+	if approve && who.Same(c.By) {
+		return fmt.Errorf("%w: you asked for this change", ErrOwnWork)
+	}
+	now := st.now().UTC()
+	c.State, c.DecidedBy, c.DecidedAt, c.Comment = ChangeRejected, &who, &now, comment
+	if approve {
+		c.State = ChangeApproved
+	}
+	return nil
+}
+
+// approveOver is what approving c does to the variables, rec, and why it
+// cannot: the items the change alters are set, as they were when it was
+// asked for, and nothing else of the fleet's. It says whether there was
+// anything left to set.
+func approveOver(rec *variablesRecord, c VariableChange) (bool, error) {
+	rec.nodesOwn()
+	items := Items(c.Before, c.After)
+	nodes := NamedNodes(c.Before, c.After)
+	cur := View(rec.Clusters[c.Cluster], c.Fleet, nodes)
+	done, moved := weigh(cur, items)
+	switch {
+	case done:
+		return false, nil
+	case len(moved) > 0:
+		return false, busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(moved, ", ")))
+	}
+	rec.put(c.Cluster, c.Fleet, applyItems(cur, items), nodes)
+	return true, nil
 }
 
 // approvable is the waiting change id, when who may approve it and no

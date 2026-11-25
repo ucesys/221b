@@ -2,11 +2,23 @@ package api
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"k8s.io/client-go/rest"
+
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/sim"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // The fixes of the review of server/internal/automation (November 24,
@@ -36,5 +48,93 @@ func TestOnProductionASensitiveValueNeedsASecondAdminUnderAnyName(t *testing.T) 
 	}
 	if runs, _ := e.engine.Runs(context.Background()); len(runs) != 0 {
 		t.Fatalf("it started: %+v", runs)
+	}
+}
+
+// slowScripts is a store's backend whose reads of the scripts take a
+// while when slow is set: an approval of a run request stays between its
+// check and its record that long.
+type slowScripts struct {
+	kv.Backend
+	slow atomic.Bool
+}
+
+func (g *slowScripts) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if key == automation.ScriptsKey && g.slow.Load() {
+		time.Sleep(30 * time.Millisecond)
+	}
+	return g.Backend.LoadKey(ctx, key)
+}
+
+// autoSetupOver is autoSetup over the backend given.
+func autoSetupOver(t *testing.T, who, env string, b kv.Backend) autoEnv {
+	t.Helper()
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	st := automation.NewStore(b, nil)
+	eng := automation.NewEngine(automation.Options{Store: st, Exec: noExec{}})
+	srv, c, m, auditOut, local, store := multiSetupWith(t, who, nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Automation, o.AutomationStore = eng, st
+	})
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: env, Mode: clusters.ModeWrite}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	return autoEnv{srv: srv, c: c, store: st, engine: eng, audit: auditOut, local: local}
+}
+
+// A run request rejected while a second admin's approval is starting it
+// never both runs and stays rejected (finding 5): a rejection is one
+// critical section with the approvals. Each round asks for a run and has
+// it approved and rejected at once; whichever comes first decides it.
+func TestARunRequestRejectedWhileItIsApprovedDoesNotRunRejected(t *testing.T) {
+	g := &slowScripts{Backend: &kv.Memory{}}
+	e := autoSetupOver(t, "ops@corp.example", clusters.EnvProduction, g)
+	ctx := context.Background()
+	approved(t, e.store, "reads", valuesScript)
+	if err := e.store.SetVariables(ctx, clusters.LocalID, allNodes, automation.FleetVariables{Values: map[string]string{"MODE": "keep"}, Sensitive: []string{"MODE"}}); err != nil {
+		t.Fatal(err)
+	}
+	other := signIn(t, e.srv, "ops2@corp.example")
+	type answer struct {
+		code int
+		body string
+	}
+	for round := 1; round <= 20; round++ {
+		g.slow.Store(false)
+		if code, body := e.do(t, "POST", "/api/v1/automation/runs", runBody(`{"MODE":"wipe-`+strconv.Itoa(round)+`"}`)); code != http.StatusAccepted {
+			t.Fatalf("round %d: %d %s", round, code, body)
+		}
+		g.slow.Store(true)
+		path := "/api/v1/automation/waiting-runs/" + strconv.Itoa(round) + "/"
+		approvedAns, rejectedAns := make(chan answer, 1), make(chan answer, 1)
+		go func() {
+			code, body := e.do(t, "POST", path+"reject", `{"comment":"withdrawn"}`)
+			rejectedAns <- answer{code, body}
+		}()
+		go func() {
+			code, body := doAs(t, other, e, "POST", path+"approve", "")
+			approvedAns <- answer{code, body}
+		}()
+		a, r := <-approvedAns, <-rejectedAns
+		list, _ := e.store.WaitingRuns(ctx, "")
+		runs, _ := e.engine.Runs(ctx)
+		var state string
+		for _, w := range list {
+			if w.ID == round {
+				state = w.State
+			}
+		}
+		started := 0
+		for _, run := range runs {
+			if run.ValuesApproved != nil && run.ValuesApproved.Request == round {
+				started++
+			}
+		}
+		if (state == automation.ChangeApproved) != (started == 1) || started > 1 || (a.code == http.StatusOK) == (r.code == http.StatusOK) {
+			t.Fatalf("round %d: request %s with %d runs (approve %d %s; reject %d %s)", round, state, started, a.code, a.body, r.code, r.body)
+		}
 	}
 }

@@ -320,6 +320,12 @@ type Store struct {
 	// runs keeps the runs and the run requests in a database (KeepRunsIn,
 	// DB-87); nil keeps them in the documents RunsKey and ChangesKey.
 	runs RunRepo
+	// decideMu orders the decisions on variable changes, and the changes
+	// asked for, in a store of documents: a decision checks, applies and
+	// marks under it. decideIn, set with the tables, does all of it in one
+	// transaction instead (DecideChange).
+	decideMu sync.Mutex
+	decideIn func(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error)
 }
 
 // RunsKeys are the keys that may live apart from the scripts, so neither

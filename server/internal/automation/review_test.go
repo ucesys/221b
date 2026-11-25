@@ -3,12 +3,15 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/db/dbtest"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // The fixes of the review of server/internal/automation (November 24,
@@ -123,5 +126,91 @@ func TestAMarkApprovedThroughAChangeBlanksThePast(t *testing.T) {
 	}
 	if h := dbtest.Holding(t, d, marker); len(h) > 0 {
 		t.Fatalf("after the approved mark the database holds the old value in %v", h)
+	}
+}
+
+// racing is a backend that, armed, runs on once in the middle of the
+// first read of the changes that follows: what another admin does while a
+// decision is between its check and its effect.
+type racing struct {
+	kv.Backend
+	armed atomic.Bool
+	on    func()
+}
+
+func (r *racing) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	b, v, err := r.Backend.LoadKey(ctx, key)
+	if key == ChangesKey && r.armed.CompareAndSwap(true, false) {
+		r.on()
+	}
+	return b, v, err
+}
+
+// An approval and a rejection of one change never both take effect
+// (finding 5): whichever comes first decides it, and the other finds it
+// decided; the variables hold the change's values exactly when it is
+// approved. In a store of documents and in the database.
+func TestAnApprovalAndARejectionNeverBothTakeEffect(t *testing.T) {
+	for _, mode := range []string{"documents", "database"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			ann, sam, bob := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}, Who{Name: "Bob", User: "bob"}
+			var st *Store
+			r := &racing{}
+			if mode == "documents" {
+				r.Backend = &kv.Memory{}
+				st = NewStore(r, nil)
+			} else {
+				d := dbtest.Open(t)
+				r.Backend = NewChangesPG(d)
+				st = NewStore(&kv.Keyed{Keys: map[string]kv.Backend{VariablesKey: NewVariablesPG(d), ChangesKey: r, RunsKey: NewRunsPG(d), ScriptsKey: NewScriptsPG(d)}, Rest: &kv.Memory{}}, nil)
+				st.SensitiveInTables(d, NewMemorySensitive(), nil)
+				st.KeepRunsIn(d)
+			}
+			if err := st.SetVariables(ctx, "local", AllNodes, FleetVariables{Values: map[string]string{"THRESHOLD": "80"}}); err != nil {
+				t.Fatal(err)
+			}
+			c, err := st.NewChange(ctx, VariableChange{Cluster: "local", Fleet: AllNodes, By: ann, State: ChangeWaiting, Changed: []string{"THRESHOLD"},
+				Before: FleetVariables{Values: map[string]string{"THRESHOLD": "80"}}, After: FleetVariables{Values: map[string]string{"THRESHOLD": "90"}},
+				Impact: []ImpactItem{{Script: "s", Version: 1, Decision: ImpactApproval, Why: "a condition reads THRESHOLD", By: "rule"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rejected := make(chan error, 1)
+			r.on = func() {
+				go func() {
+					_, err := st.DecideChange(ctx, "local", c.ID, false, "not now", bob)
+					rejected <- err
+				}()
+				// Long enough for a rejection that does not wait to be done.
+				time.Sleep(300 * time.Millisecond)
+			}
+			r.armed.Store(true)
+			_, approveErr := st.DecideChange(ctx, "local", c.ID, true, "", sam)
+			var rejectErr error
+			if r.armed.Load() {
+				// Not armed by the approval (the database's transaction reads
+				// no document): the rejection comes after it.
+				r.armed.Store(false)
+				_, rejectErr = st.DecideChange(ctx, "local", c.ID, false, "not now", bob)
+			} else {
+				rejectErr = <-rejected
+			}
+			if (approveErr == nil) == (rejectErr == nil) {
+				t.Fatalf("approved: %v; rejected: %v", approveErr, rejectErr)
+			}
+			list, err := st.Changes(ctx, "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			vars, _ := st.Variables(ctx, "local")
+			state, value := list[0].State, vars[AllNodes].Values["THRESHOLD"]
+			if (state == ChangeApproved) != (value == "90") || (state != ChangeApproved && state != ChangeRejected) {
+				t.Fatalf("change %d is %s and THRESHOLD is %s (approved: %v; rejected: %v)", c.ID, state, value, approveErr, rejectErr)
+			}
+			if approveErr != nil && !errors.Is(approveErr, ErrInvalid) {
+				t.Fatalf("the approval that came second: %v", approveErr)
+			}
+		})
 	}
 }
