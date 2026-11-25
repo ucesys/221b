@@ -50,7 +50,14 @@ type Options struct {
 	Node func(cluster, node string) (NodeState, bool)
 	// MaxParallel bounds the nodes a batch runs at once.
 	MaxParallel int
+	// RecheckRetry is how long a production run waits before it reads the
+	// scripts again, when they could not be read at a batch's check.
+	RecheckRetry time.Duration
 }
+
+// recheckTries is how often a batch's check reads the scripts before the
+// run stops for want of them.
+const recheckTries = 3
 
 // NodeState is what the engine needs to know of a node from Kubernetes.
 // Host is a machine outside Kubernetes (Phase 12): reached by SSH alone,
@@ -134,6 +141,9 @@ func NewEngine(o Options) *Engine {
 	}
 	if o.BeatEvery <= 0 {
 		o.BeatEvery = defaultBeatEvery
+	}
+	if o.RecheckRetry <= 0 {
+		o.RecheckRetry = time.Second
 	}
 	if o.MaxParallel <= 0 || o.MaxParallel > MaxParallel {
 		o.MaxParallel = MaxParallel
@@ -447,11 +457,28 @@ func (e *Engine) claimControlPlane(ctx context.Context, r Run, node string) (fun
 }
 
 // stillApproved says why the run's version may not go on: changed, or no
-// longer approved, since the run started.
+// longer approved, since the run started. When the scripts cannot be read
+// after a few tries the run stops too: on production nothing runs that is
+// not known to be approved still.
 func (e *Engine) stillApproved(ctx context.Context, r Run) string {
-	sc, ok, err := e.opts.Store.Script(ctx, r.Script)
+	var sc Script
+	var ok bool
+	var err error
+	for try := 0; try < recheckTries; try++ {
+		if try > 0 {
+			select {
+			case <-time.After(e.opts.RecheckRetry):
+			case <-ctx.Done():
+				return ""
+			}
+		}
+		if sc, ok, err = e.opts.Store.Script(ctx, r.Script); err == nil {
+			break
+		}
+	}
 	if err != nil {
-		return ""
+		e.opts.Logger.Warn("a production run is stopped: whether its version is still approved could not be read", "run", r.ID, "script", r.Script, "version", r.Version, "err", err)
+		return fmt.Sprintf("stopped: whether %s v%d is still approved could not be read (%v), so no further batch ran", r.Script, r.Version, err)
 	}
 	v, found := sc.Version(r.Version)
 	switch {

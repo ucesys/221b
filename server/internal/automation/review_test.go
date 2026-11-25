@@ -421,3 +421,37 @@ func TestARebootedNodeIsBackOnlyWhenReadyFromItsNewBoot(t *testing.T) {
 		t.Fatalf("Ready from the new boot after %d reads: %+v", calls, n)
 	}
 }
+
+// failingScripts is a backend whose reads of the scripts fail while fail
+// is set: the database away at a batch's check.
+type failingScripts struct {
+	kv.Backend
+	fail atomic.Bool
+}
+
+func (f *failingScripts) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
+	if key == ScriptsKey && f.fail.Load() {
+		return nil, "", errors.New("the database is away")
+	}
+	return f.Backend.LoadKey(ctx, key)
+}
+
+// A production run whose scripts cannot be read at a batch's check stops
+// (finding 11), after a few tries, with a note that says why: it never
+// goes on with a version it cannot tell is still approved.
+func TestARunStopsWhenItsApprovalCannotBeChecked(t *testing.T) {
+	b := &failingScripts{Backend: &kv.Memory{}}
+	st := NewStore(b, nil)
+	x := &stubExec{}
+	e := NewEngine(Options{Store: st, Exec: x})
+	b.fail.Store(true)
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approvedText(sshText), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a", "b"},
+		Rollout: Rollout{Mode: RolloutSize, Size: 1}, Recheck: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRun(t, e, r.ID)
+	if done.State != RunStopped || !strings.Contains(done.Note, "could not be read") || len(x.calls) != 0 {
+		t.Fatalf("%s %q, %d commands", done.State, done.Note, len(x.calls))
+	}
+}
