@@ -121,11 +121,53 @@ so a read-only SuperAdmin definition turns it off too. Values kept by
 {{- if and $t.enabled $ssh.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
 {{- end -}}
 
+{{/* A toolbox key the chart does not know, or one in another case, is
+refused: the console's start refuses it too, and a misspelled restriction
+(nodeShell.aproval: always) would otherwise never apply (the toolbox
+review, finding 3). */}}
+{{- define "b221.toolboxKeys" -}}
+{{- $t := .Values.toolbox -}}
+{{- $known := dict
+  "" (list "enabled" "idleTimeout" "maxDuration" "transcripts" "transcriptsVolume" "retention" "history" "shell" "portForward" "debugContainer" "debugPod" "nodeShell" "ssh" "images")
+  "transcriptsVolume" (list "size" "storageClass" "accessMode")
+  "history" (list "keep")
+  "shell" (list "enabled" "oneCommand" "fileTransfer" "quickCommands")
+  "portForward" (list "enabled" "cliMinVersion")
+  "debugContainer" (list "enabled" "mountVolumes" "images")
+  "debugPod" (list "enabled" "ttlAfterFinished" "profiles")
+  "nodeShell" (list "enabled" "namespace" "image" "profiles" "approval" "quickCommands")
+  "ssh" (list "enabled" "port" "loginUser") -}}
+{{- range $k, $_ := $t -}}
+{{- if not (has $k (get $known "")) -}}
+{{- fail (printf "toolbox.%s is not a toolbox value (toolbox takes %s)" $k (join ", " (get $known ""))) -}}
+{{- end -}}
+{{- end -}}
+{{- range $block, $keys := omit $known "" -}}
+{{- $b := get $t $block -}}
+{{- if and $b (not (kindIs "map" $b)) -}}
+{{- fail (printf "toolbox.%s is a map of %s" $block (join ", " $keys)) -}}
+{{- end -}}
+{{- range $k, $_ := ($b | default dict) -}}
+{{- if not (has $k $keys) -}}
+{{- fail (printf "toolbox.%s.%s is not a toolbox value (toolbox.%s takes %s)" $block $k $block (join ", " $keys)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $im := ($t.images | default dict) -}}
+{{- range $k, $_ := ($im | default dict) -}}
+{{- if not (has $k (list "image" "caps" "tools")) -}}
+{{- fail (printf "toolbox.images.%s.%s is not a toolbox value (an image takes image, caps and tools)" $name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE).
 Each allowlist is rendered, so a list whose items are all commented out
 (null, which Helm drops) is none, not the console's defaults; a null item
 (one commented-out line) is refused (the toolbox review, finding 2). */}}
 {{- define "b221.toolboxConfig" -}}
+{{- include "b221.toolboxKeys" . -}}
 {{- $t := .Values.toolbox -}}
 {{- $c := omit $t "transcriptsVolume" -}}
 {{- $lists := dict "shell" (list "quickCommands") "debugContainer" (list "images") "debugPod" (list "profiles") "nodeShell" (list "profiles" "quickCommands") -}}

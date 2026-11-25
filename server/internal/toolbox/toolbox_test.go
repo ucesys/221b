@@ -110,3 +110,22 @@ func TestParseReadsNullsInListsAsNothing(t *testing.T) {
 		t.Fatalf("a list left out keeps its default: %v %+v", err, c)
 	}
 }
+
+// A misspelled or mis-cased key is refused, not dropped (the toolbox
+// review, finding 3): encoding/json alone ignores unknown keys and matches
+// keys whatever their case.
+func TestParseRefusesKeysItDoesNotKnow(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"nodeShell":{"aproval":"always"}}`:                       "toolbox.nodeShell.aproval",
+		`{"nodeShell":{"Approval":"always","approval":"cluster"}}`: "toolbox.nodeShell.Approval",
+		`{"debugPod":{"enable":false}}`:                            "toolbox.debugPod.enable",
+		`{"IdleTimeout":"5m"}`:                                     "toolbox.IdleTimeout",
+		`{"images":{"x":{"repository":"a","tag":"1"}}}`:            "toolbox.images.x.repository",
+		`{"history":{"keep":5,"max":9}}`:                           "toolbox.history.max",
+		`{} {}`:                                                    "not valid",
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+}

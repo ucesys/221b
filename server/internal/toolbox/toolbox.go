@@ -5,10 +5,12 @@
 package toolbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -238,7 +240,18 @@ func Parse(b []byte) (Config, error) {
 		*l.v = nil
 	}
 	c.Images = nil
-	if err := json.Unmarshal(b, &c); err != nil {
+	// A key the console does not know, or one in another case, is
+	// refused: encoding/json alone drops the first and matches the second
+	// whatever its case, so nodeShell.aproval: always was never applied.
+	var tree any
+	_ = json.Unmarshal(b, &tree)
+	if bad := unknownKeys(tree, reflect.TypeOf(c), "toolbox"); len(bad) > 0 {
+		sort.Strings(bad)
+		return Config{}, fmt.Errorf("the toolbox values are not valid: %s", strings.Join(bad, "; "))
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return Config{}, fmt.Errorf("the toolbox values are not valid: %w", err)
 	}
 	// A list given as null (or empty) is none; one left out is the
@@ -260,6 +273,43 @@ func Parse(b []byte) (Config, error) {
 		}
 	}
 	return c, c.Check()
+}
+
+// unknownKeys lists the keys of v that t does not name exactly, by their
+// path: t's fields by their json names, a map's values by its element type.
+func unknownKeys(v any, t reflect.Type, path string) []string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var bad []string
+	switch t.Kind() {
+	case reflect.Map:
+		for k, x := range m {
+			bad = append(bad, unknownKeys(x, t.Elem(), path+"."+k)...)
+		}
+	case reflect.Struct:
+		fields := map[string]reflect.Type{}
+		var names []string
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "" || name == "-" {
+				continue
+			}
+			fields[name] = f.Type
+			names = append(names, name)
+		}
+		for k, x := range m {
+			ft, ok := fields[k]
+			if !ok {
+				bad = append(bad, fmt.Sprintf("%s.%s is not a toolbox value (%s takes %s)", path, k, path, strings.Join(names, ", ")))
+				continue
+			}
+			bad = append(bad, unknownKeys(x, ft, path+"."+k)...)
+		}
+	}
+	return bad
 }
 
 // given says whether the values name a key, null included: path is the
