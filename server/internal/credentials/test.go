@@ -78,10 +78,36 @@ func (s *Service) RunTest(ctx context.Context, id, typed, by string) (Test, erro
 	}
 	t := s.test(ctx, c, sec, TestTarget(c, typed))
 	t.By = by
-	if err := s.NoteTest(ctx, id, t); err != nil {
+	if err := s.noteTestOf(ctx, c, t); err != nil {
 		s.o.Logger.Warn("a credential's test could not be kept", "credential", c.Name, "err", err)
 	}
 	return t, nil
+}
+
+// errChangedMeanwhile is a credential changed while it was tested.
+var errChangedMeanwhile = errors.New("changed while it was tested")
+
+// noteTestOf keeps a test of the credential c as it was read, unless an
+// edit, a Trust or a Forget changed it while the test ran: the result is
+// of the credential as it was, and is not kept over the change
+// (credentials-cut-3).
+func (s *Service) noteTestOf(ctx context.Context, c Credential, t Test) error {
+	was := c
+	was.LastTest = nil
+	before, _ := json.Marshal(was)
+	_, err := s.o.Repo.Update(ctx, c.ID, func(cur *Credential) error {
+		now := *cur
+		now.LastTest = nil
+		if after, _ := json.Marshal(now); string(after) != string(before) {
+			return errChangedMeanwhile
+		}
+		cur.LastTest = &t
+		return nil
+	})
+	if errors.Is(err, ErrNotFound) || errors.Is(err, errChangedMeanwhile) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) test(ctx context.Context, c Credential, sec Secret, target string) Test {

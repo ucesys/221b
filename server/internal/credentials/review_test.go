@@ -833,3 +833,52 @@ func TestAnEditOfWhatATestWentByDropsIt(t *testing.T) {
 		}
 	}
 }
+
+// credentials-cut-3: a test's result is not kept over an edit, a Trust
+// or a Forget made while it ran: it was of the credential as it was.
+func TestATestIsNotKeptOverAChangeMadeWhileItRan(t *testing.T) {
+	var s *Service
+	var id string
+	var during func()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		during()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	s, _ = newService(t, srv.Client())
+	c := token(t, s, "app", srv.URL, SendAs{}, "fake-tok")
+	id = c.ID
+	during = func() {
+		cur, _ := s.Get(ctx, id)
+		cur.Endpoint = srv.URL + "/api"
+		if _, err := s.Update(ctx, id, cur, nil, "bob"); err != nil {
+			t.Error(err)
+		}
+	}
+	res, err := s.RunTest(ctx, id, srv.URL+"/api/x", "ann")
+	if err != nil || !res.OK {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if kept, _ := s.Get(ctx, id); kept.LastTest != nil {
+		t.Fatalf("kept over an edit: %+v", kept.LastTest)
+	}
+	during = func() {
+		if _, err := s.o.Repo.Update(ctx, id, func(cur *Credential) error { cur.PinnedCert = &certpin.Pin{SHA256: "AA"}; return nil }); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := s.RunTest(ctx, id, srv.URL+"/api/x", "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := s.Get(ctx, id); kept.LastTest != nil {
+		t.Fatalf("kept over a Trust: %+v", kept.LastTest)
+	}
+	// Nothing changed meanwhile: kept.
+	during = func() {}
+	if _, err := s.RunTest(ctx, id, srv.URL+"/api/x", "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := s.Get(ctx, id); kept.LastTest == nil {
+		t.Fatal("a test of nothing changed is not kept")
+	}
+}

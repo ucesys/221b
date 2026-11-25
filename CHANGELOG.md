@@ -60,6 +60,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **Testing a credential of an `oci://` endpoint works** (credentials#15). It always failed with *Only an http:// or https:// address can be asked with this credential*, kept as a failed last test and audited as failed, including for the credentials the CR-12 upgrade made from OCI Helm repositories. The Test now asks the registry's API, `https://HOST/v2/`, and answers its challenge as Helm does (Basic, or the token service its Bearer challenge names).
 - **A client certificate's server can be trusted when it aborts on an empty client certificate** (credentials-cut-1). The Test's and Trust's look at the server's certificate never sent the credential's client certificate, so a server capped at TLS 1.2 that requires one (Apache's `SSLVerifyClient require`, HAProxy, Java's `clientAuth`) showed nothing to trust. They now send it.
 - **An edit of a credential's user, region, host key, certificate, GitHub App ids or OAuth2 token URL, client id or scope drops its last test** (credentials-cut-2), which kept showing an old passing test.
+- **A credential's Test is no longer kept over an edit, a Trust or a Forget made while it ran** (credentials-cut-3): its result was of the credential as it was before.
 
 ## 0.13.2 (2026-11-25)
 
