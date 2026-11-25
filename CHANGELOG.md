@@ -146,6 +146,7 @@ A kubeconfig connection whose user acts as another (`as:`, `as-groups:`, `as-uid
 
 ### Security
 
+- **The private key of a Secret deployed by kapp is no longer shown to those who may list Secrets** (kube#2). kapp keeps the applied object in the annotation `kapp.k14s.io/original` as JSON, where a multi-line value such as a TLS key is escaped (`\n`), so the drawer and the YAML view, which hid an annotation only when it held a value byte for byte or in base64, showed it whole although `secrets.reveal` is off. That annotation, `kapp.k14s.io/original-diff` and Rancher's `objectset.rio.cattle.io/applied` are now hidden like the last-applied configuration, and any annotation is hidden that holds a value escaped as JSON or in a string of the JSON it holds.
 - **A few small Secrets can no longer keep the console out of memory** (kube#3). The Secret cache read any `helm.sh/release.v1` Secret, inflated its record up to 64 MiB and kept its notes, values and lists whole, and masking short values could make the notes grow tenfold: sixteen Secrets of 80 KB each passed the chart's 1 GiB limit, at every start. A record that inflates past 32 MiB is now not read (the Helm tab does not show that revision); notes over 64 KiB, values over 256 KiB, and notes that print over 1,000 distinct credentials are replaced by a sentence; the lists of masked paths, objects and images are bounded. Real releases are far below these limits.
 ### Fixed
 

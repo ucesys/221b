@@ -263,47 +263,112 @@ func valuesOf(t corev1.SecretType, namespace string, data map[string][]byte) map
 }
 
 // secretValues lists every value a Secret holds, in the forms an annotation
-// might carry it: raw and base64.
+// might carry it: raw, base64, and escaped as a JSON string is, with and
+// without HTML escaping (kube#2).
 func secretValues(data map[string][]byte, stringData map[string]string) [][]byte {
 	var out [][]byte
+	add := func(v []byte) {
+		out = append(out, v, []byte(base64.StdEncoding.EncodeToString(v)))
+		for _, html := range []bool{true, false} {
+			if e := jsonEscaped(v, html); !bytes.Equal(e, v) {
+				out = append(out, e)
+			}
+		}
+	}
 	for _, v := range data {
 		if len(v) > 0 {
-			out = append(out, v, []byte(base64.StdEncoding.EncodeToString(v)))
+			add(v)
 		}
 	}
 	for _, v := range stringData {
 		if v != "" {
-			out = append(out, []byte(v), []byte(base64.StdEncoding.EncodeToString([]byte(v))))
+			add([]byte(v))
 		}
 	}
 	return out
 }
 
+// jsonEscaped is a value as it stands inside a JSON string, quotes left out.
+func jsonEscaped(v []byte, escapeHTML bool) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(escapeHTML)
+	if enc.Encode(string(v)) != nil {
+		return v
+	}
+	e := bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	return e[1 : len(e)-1]
+}
+
+// wholeObjectAnnotations are the annotations tools keep the whole applied
+// object in, values included: hidden whatever they hold (kube#2).
+var wholeObjectAnnotations = map[string]bool{
+	LastApplied:                       true,
+	"kapp.k14s.io/original":           true,
+	"kapp.k14s.io/original-diff":      true,
+	"objectset.rio.cattle.io/applied": true,
+}
+
 // HideSecretValues returns a Secret's annotations with every value that
-// could carry a Secret value replaced by its size (X-01): the last-applied
-// configuration, which kubectl apply writes with the whole object in it,
-// and any annotation holding one of the Secret's values in raw or base64
-// form, which tools such as kapp keep. Other annotations stay.
+// could carry a Secret value replaced by its size (X-01): those tools keep
+// the whole applied object in (the last-applied configuration, kapp's
+// original, Rancher's applied), and any annotation holding one of the
+// Secret's values raw, in base64 or escaped as JSON, or holding JSON with
+// a string that holds one (kube#2). Other annotations stay.
 func HideSecretValues(annotations map[string]string, values [][]byte) map[string]string {
 	if annotations == nil {
 		return nil
 	}
 	out := make(map[string]string, len(annotations))
 	for k, v := range annotations {
-		hide := k == LastApplied
-		for _, secret := range values {
-			if hide {
-				break
-			}
-			hide = bytes.Contains([]byte(v), secret)
-		}
-		if hide {
+		if wholeObjectAnnotations[k] || holdsValue(v, values) {
 			out[k] = fmt.Sprintf("<%d bytes, hidden by 221B>", len(v))
 		} else {
 			out[k] = v
 		}
 	}
 	return out
+}
+
+// holdsValue says whether an annotation holds one of the values: in its
+// text, or in a string of the JSON it holds.
+func holdsValue(v string, values [][]byte) bool {
+	for _, secret := range values {
+		if bytes.Contains([]byte(v), secret) {
+			return true
+		}
+	}
+	t := strings.TrimSpace(v)
+	if t == "" || t[0] != '{' && t[0] != '[' && t[0] != '"' {
+		return false
+	}
+	var doc any
+	if json.Unmarshal([]byte(t), &doc) != nil {
+		return false
+	}
+	found := false
+	var walk func(x any)
+	walk = func(x any) {
+		switch y := x.(type) {
+		case map[string]any:
+			for k, val := range y {
+				walk(k)
+				walk(val)
+			}
+		case []any:
+			for _, val := range y {
+				walk(val)
+			}
+		case string:
+			for _, secret := range values {
+				if !found && strings.Contains(y, string(secret)) {
+					found = true
+				}
+			}
+		}
+	}
+	walk(doc)
+	return found
 }
 
 func keySizes(data map[string][]byte, stringData map[string]string) []KeySize {
