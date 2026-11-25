@@ -564,8 +564,12 @@ const WarnBefore = 14 * 24 * time.Hour
 // with its port when not the scheme's own, and a path prefix.
 type Endpoint struct {
 	Scheme string
-	Host   string
-	Path   string
+	// User is an ssh:// endpoint's user (git@, deploy@), which its Test
+	// signs in as (credentials-unver-9); it does not change what the
+	// endpoint covers.
+	User string
+	Host string
+	Path string
 	// bucket is an endpoint of a bucket's credential (an access key, the
 	// pod's identity): its path is a bucket's name, where .git is part of
 	// the name, never git's suffix (credentials#9).
@@ -581,6 +585,9 @@ func forBucket(kind string) bool { return kind == KindAccessKey || kind == KindN
 // same path, not a fragment or a query (credentials#6).
 func (e Endpoint) String() string {
 	s := e.Host + (&url.URL{Path: e.Path}).EscapedPath()
+	if e.User != "" {
+		s = url.User(e.User).String() + "@" + s
+	}
 	if e.Scheme != "" {
 		s = e.Scheme + "://" + s
 	}
@@ -618,7 +625,8 @@ func parseAddress(raw string, endpoint bool) (Endpoint, error) {
 	if !strings.Contains(raw, "://") {
 		// git@host:org/repo.git, as git writes an SSH address.
 		if m := scpLike.FindStringSubmatch(raw); m != nil && strings.Contains(raw, "@") {
-			raw = "ssh://" + m[1] + "/" + m[2]
+			user, _, _ := strings.Cut(raw, "@")
+			raw = "ssh://" + user + "@" + m[1] + "/" + m[2]
 		}
 	}
 	scheme := ""
@@ -654,7 +662,11 @@ func parseAddress(raw string, endpoint bool) (Endpoint, error) {
 	} else if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	return Endpoint{Scheme: scheme, Host: host, Path: strings.TrimRight(u.Path, "/")}, nil
+	user := ""
+	if scheme == "ssh" && u.User != nil {
+		user = u.User.Username()
+	}
+	return Endpoint{Scheme: scheme, User: user, Host: host, Path: strings.TrimRight(u.Path, "/")}, nil
 }
 
 // oddPath says a path could reach outside the endpoint's: a . or ..

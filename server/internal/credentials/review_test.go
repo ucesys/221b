@@ -1161,3 +1161,28 @@ func TestRemovingAnUnnamedSecretSparesARestoredOne(t *testing.T) {
 		t.Fatalf("the restored credential lost its secret: %v", err)
 	}
 }
+
+// credentials-unver-9: an SSH endpoint keeps its user, which the test
+// signs in as; the user does not change what the endpoint covers.
+func TestAnSSHEndpointKeepsItsUser(t *testing.T) {
+	for raw, want := range map[string]string{
+		"ssh://deploy@git.example.com/org": "ssh://deploy@git.example.com/org",
+		"deploy@git.example.com:org":       "ssh://deploy@git.example.com/org",
+		"ssh://git.example.com/org":        "ssh://git.example.com/org",
+	} {
+		ep, err := ParseEndpoint(raw)
+		if err != nil || ep.String() != want {
+			t.Errorf("%s: %s %v", raw, ep.String(), err)
+		}
+		c := Credential{Kind: KindSSH, Endpoint: ep.String()}
+		if got := TestTarget(c, ""); got != want {
+			t.Errorf("%s tests %s", raw, got)
+		}
+		if !c.Covers("ssh://git@git.example.com/org/repo.git") || !c.Covers("ssh://git.example.com/org/repo.git") || c.Covers("ssh://deploy@git.example.com/other") {
+			t.Errorf("%s covers otherwise", raw)
+		}
+	}
+	if _, err := ParseEndpoint("https://user@git.example.com/org"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a user in an https:// endpoint: %v", err)
+	}
+}
