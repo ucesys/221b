@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- A sync of the connections held the lock every edit takes across reads of the store with no deadline of their own, so adding, changing or removing a connection could wait as long as a read that did not answer (clusters review, cut list). Each read of a sync now gives up after 10 seconds, and is made again at the next sync.
+
 - A connection's last test was read in two statements outside one snapshot, so a read while another replica kept a test could show one test's summary over the other's steps (clusters review, cut list). A connection is now read with its test on one snapshot.
 
 - A connection started again (re-pointed, given a new credential, or changed on another replica) showed no hosts outside Kubernetes on its Nodes tab for up to 30 seconds (clusters review, cut list). The manager now keeps each cluster's hosts and gives them to a connection as it starts.

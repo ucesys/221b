@@ -68,6 +68,9 @@ type Options struct {
 	// Activity says whether this replica reads the clusters (ADR-70); nil
 	// reads always.
 	Activity Activity
+	// ReadTimeout bounds each read of the store a sync makes while it
+	// holds the lock every edit takes; 0 is 10 seconds.
+	ReadTimeout time.Duration
 }
 
 // Manager keeps every connection running: the local one the server was
@@ -112,6 +115,9 @@ func New(store Store, o Options) *Manager {
 	}
 	if o.Refresh <= 0 {
 		o.Refresh = 3 * time.Second
+	}
+	if o.ReadTimeout <= 0 {
+		o.ReadTimeout = 10 * time.Second
 	}
 	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background(), soon: make(chan struct{}, 1)}
 	if o.Activity != nil {
@@ -241,7 +247,9 @@ func (m *Manager) load(ctx context.Context) error {
 // used (a format this console does not know) is said once and left until
 // it changes.
 func (m *Manager) Sync(ctx context.Context) error {
-	revs, err := m.store.Revisions(ctx)
+	rctx, cancel := context.WithTimeout(ctx, m.opts.ReadTimeout)
+	revs, err := m.store.Revisions(rctx)
+	cancel()
 	if err != nil {
 		m.syncLocal(ctx)
 		return err
@@ -258,7 +266,10 @@ func (m *Manager) Sync(ctx context.Context) error {
 		if m.seen[id] == rev {
 			continue
 		}
-		spec, cred, err := m.store.Get(ctx, id)
+		// Each read is bounded: the lock it holds is every edit's.
+		gctx, cancel := context.WithTimeout(ctx, m.opts.ReadTimeout)
+		spec, cred, err := m.store.Get(gctx, id)
+		cancel()
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
@@ -372,7 +383,9 @@ func (m *Manager) syncLocal(ctx context.Context) {
 	if _, ok := m.Get(LocalID); !ok {
 		return
 	}
-	saved, _, err := m.store.Get(ctx, LocalID)
+	gctx, cancel := context.WithTimeout(ctx, m.opts.ReadTimeout)
+	defer cancel()
+	saved, _, err := m.store.Get(gctx, LocalID)
 	switch {
 	case err == nil:
 		m.applyLocal(saved)

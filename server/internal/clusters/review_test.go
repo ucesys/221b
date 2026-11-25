@@ -788,3 +788,46 @@ func TestALastTestIsReadWhole(t *testing.T) {
 		}
 	}
 }
+
+// stuck is a store whose reads of one connection never answer until
+// their context ends, as a database holding a lock does.
+type stuck struct {
+	clusters.Store
+	id string
+}
+
+func (s *stuck) Get(ctx context.Context, id string) (clusters.Spec, clusters.Credential, error) {
+	if id == s.id {
+		<-ctx.Done()
+		return clusters.Spec{}, clusters.Credential{}, ctx.Err()
+	}
+	return s.Store.Get(ctx, id)
+}
+
+// Cut list: a sync held the lock every edit takes across its reads of
+// the store, with no deadline of its own, so an edit could wait as long
+// as a read that did not answer.
+func TestASyncThatCannotReadDoesNotHoldEditsUp(t *testing.T) {
+	inner := clusters.NewMemoryStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := quiet
+	opts.ReadTimeout = 300 * time.Millisecond
+	m := clusters.New(&stuck{Store: inner, id: "slow"}, opts)
+	must(t, m.Start(ctx))
+	defer m.Stop()
+	must(t, inner.Save(ctx, clusters.Spec{ID: "slow", Name: "slow", Env: "development", Server: "https://10.9.0.1:6443", CA: "system", Auth: "token", Mode: "read"}, &clusters.Credential{Token: saToken("slow")}))
+	go func() { _ = m.Sync(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Add(ctx, clusters.Draft{Spec: clusters.Spec{Name: "quick", Env: "development", Server: "https://10.9.0.2:6443", CA: "system", Auth: "token", Mode: "read"}, Credential: clusters.Credential{Token: saToken("quick")}})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		must(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("an edit waited for a sync whose read never answered")
+	}
+}
