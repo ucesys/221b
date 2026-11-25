@@ -490,8 +490,14 @@ var (
 // secret but whose values are not: counts, flags and references.
 var notSecretFields = map[string]bool{"secretsRead": true, "tokens": true, "secretRefs": true, "secrets": true, "secretName": true, "secretKeyRef": true, "secret": true, "authMethod": true}
 
+// refFields are the fields of an object under a secret-named field that
+// say what it refers to, not what it holds: imagePullSecrets' name,
+// secretRef's name and optional.
+var refFields = map[string]bool{"name": true, "namespace": true, "key": true, "path": true, "optional": true, "kind": true, "apiVersion": true}
+
 // JSON scrubs a JSON document value by value: every string is
-// scrubbed as text, a string field whose name looks secret is redacted,
+// scrubbed as text, a string field whose name looks secret is redacted, so
+// is every string of an object or list under one (but for refFields),
 // and so is the value of a {"name": …, "value": …} pair (an environment
 // variable) whose name does, and the argument after a flag that does. A
 // string that is itself JSON, such as a last-applied annotation, is
@@ -501,7 +507,7 @@ func JSON(b []byte) []byte {
 	if err := jsonUnmarshal(b, &v); err != nil {
 		return []byte(Text(string(b)))
 	}
-	v = scrubValue(v, "")
+	v = scrubValue(v, "", false)
 	out, err := jsonMarshal(v)
 	if err != nil {
 		return []byte(Text(string(b)))
@@ -524,17 +530,21 @@ func YAML(b []byte) []byte {
 	return out
 }
 
-func scrubValue(v any, field string) any {
+// scrubValue scrubs a value found under field. under says that an object
+// above it is under a secret-named field, so that every string goes but
+// those of refFields.
+func scrubValue(v any, field string, under bool) any {
+	secret := field != "" && SecretName(field) && !notSecretFields[field]
 	switch x := v.(type) {
 	case string:
-		if field != "" && SecretName(field) && !notSecretFields[field] && x != "" {
+		if x != "" && (secret || under && !refFields[field]) {
 			return Redacted
 		}
 		return scrubString(x)
 	case []any:
 		scrubArgs(x)
 		for i := range x {
-			x[i] = scrubValue(x[i], field)
+			x[i] = scrubValue(x[i], field, under)
 		}
 		return x
 	case map[string]any:
@@ -544,7 +554,7 @@ func scrubValue(v any, field string) any {
 			}
 		}
 		for k, e := range x {
-			x[k] = scrubValue(e, k)
+			x[k] = scrubValue(e, k, under || secret)
 		}
 		return x
 	}
@@ -556,7 +566,7 @@ func scrubString(s string) string {
 	if t := strings.TrimSpace(s); len(t) > 1 && (t[0] == '{' || t[0] == '[') && json.Valid([]byte(t)) {
 		var v any
 		if jsonUnmarshal([]byte(t), &v) == nil {
-			if out, err := jsonMarshal(scrubValue(v, "")); err == nil {
+			if out, err := jsonMarshal(scrubValue(v, "", false)); err == nil {
 				return string(out)
 			}
 		}

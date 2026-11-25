@@ -28,6 +28,7 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **A private key in base64 no longer reaches the Claude API** (P5-03, AI-49, scrub#14): a kubeconfig's `client-key-data` in a ConfigMap, a pod log or an event passed every check. A base64 PEM block whose header is a private key's is now scrubbed and fails the credential check, and a name holding `key-data` counts as a secret's (also for `scrub.SecretName`).
 - **A secret beside an earlier redaction is no longer kept** (P5-03, scrub#15): in `DSN="postgres://app:pw@db/x?sslpassword=…"` the URL password was redacted first and the rest of the value was then kept whole, as was `sid` in `Cookie: a=[REDACTED]; sid=…`. Only a value that is nothing but a redaction is now left as it is.
 - **A private key's body not indented under its YAML key no longer reaches the Claude API** (P5-03, scrub-cut-1): the block key's scrub stopped at the first line indented less than the key and removed the `BEGIN` line with it, so the PEM rule no longer saw the key. PEM blocks are now removed first.
+- **An object under a secret-named field no longer keeps its values** (P5-03, scrub-cut-3): in a JSON or YAML tool result, `credentials: {user: …, value: …}` kept both, because only the field's own name was judged. Every string under such a field is now redacted, but for those that name what it refers to (`imagePullSecrets`' and `secretRef`'s `name`).
 
 ## 0.13.2 (2026-11-25)
 

@@ -376,3 +376,20 @@ func TestScrubJSONTakesAPasswordAfterItsFlag(t *testing.T) {
 		t.Errorf("YAML: %s", out)
 	}
 }
+
+// Every value of an object under a secret-named field goes, but for the
+// fields that name what it refers to (scrub-cut-3).
+func TestScrubJSONTakesAnObjectUnderASecretName(t *testing.T) {
+	out := string(JSON([]byte(`{"credentials":{"user":"admin","value":"F4keSecretOne","nested":{"v":"F4keSecretTwo"}},` +
+		`"auth":["F4keSecretThree",{"k":"F4keSecretFour"}],` +
+		`"imagePullSecrets":[{"name":"regcred"}],"envFrom":[{"secretRef":{"name":"app-env","optional":"true"}}],` +
+		`"volumes":[{"secret":{"secretName":"tls","items":[{"key":"tls.crt","path":"tls.crt"}]}}],"mode":"prod"}`)))
+	if strings.Contains(out, "F4keSecret") || strings.Contains(out, `"admin"`) {
+		t.Errorf("a value stayed: %s", out)
+	}
+	for _, keep := range []string{`"name":"regcred"`, `"name":"app-env"`, `"secretName":"tls"`, `"key":"tls.crt"`, `"path":"tls.crt"`, `"mode":"prod"`} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("lost %s: %s", keep, out)
+		}
+	}
+}
