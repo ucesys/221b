@@ -196,6 +196,7 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 		c.ContentType = "application/json"
 		c.AcceptContentTypes = "application/json"
 	}
+	c.WarningHandlerWithContext = quietWarnings{next: warningsOf(cfg)}
 	cs, err := kubernetes.NewForConfig(c)
 	if err != nil {
 		return nil, fmt.Errorf("creating the Kubernetes client: %w", err)
@@ -259,6 +260,39 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 		cl.kinds = append(cl.kinds, k)
 	}
 	return cl, nil
+}
+
+// quietWarnings passes the API server's warnings on, but for the
+// deprecation of v1 Endpoints, which the console watches on purpose (a
+// Service's endpoints as kubectl shows them): logged at every watch, it
+// says nothing anyone can act on (kube-cut-6).
+type quietWarnings struct {
+	next rest.WarningHandlerWithContext
+}
+
+func (q quietWarnings) HandleWarningHeaderWithContext(ctx context.Context, code int, agent, text string) {
+	if strings.Contains(text, "v1 Endpoints is deprecated") {
+		return
+	}
+	q.next.HandleWarningHeaderWithContext(ctx, code, agent, text)
+}
+
+// warningsOf is the warning handler a configuration names, or client-go's
+// logger.
+func warningsOf(cfg *rest.Config) rest.WarningHandlerWithContext {
+	switch {
+	case cfg.WarningHandlerWithContext != nil:
+		return cfg.WarningHandlerWithContext
+	case cfg.WarningHandler != nil:
+		return withoutContext{cfg.WarningHandler}
+	}
+	return rest.WarningLogger{}
+}
+
+type withoutContext struct{ h rest.WarningHandler }
+
+func (w withoutContext) HandleWarningHeaderWithContext(_ context.Context, code int, agent, text string) {
+	w.h.HandleWarningHeader(code, agent, text)
 }
 
 // newInformer builds the informer of one kind: a typed list-and-watch for
