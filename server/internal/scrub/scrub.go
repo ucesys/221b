@@ -90,11 +90,15 @@ var (
 // "your" key), a bearer token written out (twenty characters or more,
 // letters and digits; not a JWT's header cut short, nor a placeholder),
 // an HTTP Basic value whose user:password has a password that is not a
-// placeholder, or a password in an address that is not one.
-// Words such as password or token, and key=value pairs, are not enough:
-// Text removes those from what tools return, erring towards too much,
-// while Credential is for what a model wrote, such as an answer, where
-// prose about a password is no leak.
+// placeholder, a password in an address that is not one, or a literal
+// value after a key, flag or header that names a secret (DB_PASSWORD=,
+// --password, --from-literal, mysql -p, curl -u, Cookie:, Authorization:)
+// when it is no placeholder, has ten characters or more and holds a
+// letter and a digit or a symbol. Words such as password or token, and a
+// key=value pair whose value is a word, are not enough: Text removes those
+// from what tools return, erring towards too much, while Credential is
+// for what a model wrote, such as an answer, where prose about a password
+// is no leak.
 func Credential(s string) bool {
 	for _, m := range rePrivateKey.FindAllStringSubmatch(s, -1) {
 		if keyMaterial(m[1] + m[2]) {
@@ -127,7 +131,105 @@ func Credential(s string) bool {
 			return true
 		}
 	}
-	return urlPassword(s)
+	if urlPassword(s) {
+		return true
+	}
+	for _, r := range valueRules {
+		// Each search goes on from where the value started, not from the
+		// match's end: a key's value may be the start of the next pair
+		// ({"msg":"{\"api_key\":…), and matches would not overlap.
+		for pos := 0; pos < len(s); {
+			m := r.re.FindStringSubmatchIndex(s[pos:])
+			if m == nil {
+				break
+			}
+			name := ""
+			if r.name > 0 {
+				name = s[pos+m[2*r.name] : pos+m[2*r.name+1]]
+			}
+			if (r.name == 0 || secretKeyName(name)) && realValue(s[pos+m[2*r.value]:pos+m[2*r.value+1]]) {
+				return true
+			}
+			pos += max(m[2*r.value], 1)
+		}
+	}
+	for _, m := range reAuthorization.FindAllStringSubmatch(s, -1) {
+		// Bearer and Basic are judged above.
+		if scheme := strings.ToLower(m[1]); scheme != "bearer" && scheme != "basic" && realValue(m[2]) {
+			return true
+		}
+	}
+	for _, m := range reCookie.FindAllStringSubmatch(s, -1) {
+		for _, c := range strings.Split(m[1], ";") {
+			if _, v, ok := strings.Cut(c, "="); ok && realValue(strings.TrimSpace(v)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// credValue is a value as Credential reads it: quoted, quoted inside a
+// JSON string, or up to the next separator, on the line it starts on.
+const credValue = `(\\*"[^"\n]*?\\*"|'[^'\n]*'|[^\s,;&}\]"'\x60]+)`
+
+// valueRules find a value by what stands before it: a key, a flag, a
+// command's option. name is the submatch that must be a secret's name
+// (secretKeyName), 0 for none; value is the value's.
+var valueRules = []struct {
+	re          *regexp.Regexp
+	name, value int
+}{
+	// key=value and key: value, also quoted and inside a JSON string.
+	{regexp.MustCompile(`(?:^|[^A-Za-z0-9_.-])\\*["']?([A-Za-z0-9_.-]+)\\*["']?[ \t]*[:=][ \t]*` + credValue), 1, 2},
+	// A flag and its value apart.
+	{regexp.MustCompile(`(?:^|[\s"'\[,(])(-{1,2}[A-Za-z0-9][A-Za-z0-9_.-]*)[ \t]+` + credValue), 1, 2},
+	// An environment variable's name and value: YAML on two lines, or JSON.
+	{regexp.MustCompile(`\\*["']?\bname\\*["']?[ \t]*:[ \t]*\\*["']?([A-Za-z0-9_.-]+)\\*["']?[ \t]*(?:,|\r?\n)[ \t]*(?:-[ \t]+)?\\*["']?value\\*["']?[ \t]*:[ \t]*` + credValue), 1, 2},
+	// A registry login's -p.
+	{regexp.MustCompile(`\b(?:docker|podman|nerdctl|buildah|skopeo|oras|helm)\b[^\n]*?\slogin\b[^\n]*?\s-p[ \t]+` + credValue), 0, 1},
+	// A MySQL client's password, joined to its -p.
+	{regexp.MustCompile(`\b(?:mysql|mysqldump|mysqladmin|mysqlsh|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s"'-]\S*)`), 0, 1},
+	// A Secret's literal value, whatever its key is called.
+	{regexp.MustCompile(`--from-literal[= ]\\*["']?[^=\s"'\\]+=` + credValue), 0, 1},
+	// user:password after -u or --user (curl, wget, httpie's -a).
+	{regexp.MustCompile(`(?:^|[\s"'])(?:-u|-a|--user|--proxy-user|--auth)[ \t=]*\\*["']?[^\s:"'\\]*:` + credValue), 0, 1},
+}
+
+var (
+	// An unquoted value that is code: sys.argv[1], os.getenv(…).
+	reCode = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*[\[(]`)
+	// An Authorization header: its scheme, if any, and its value.
+	reAuthorization = regexp.MustCompile(`(?i)\b(?:proxy-)?authorization\\*["']?[ \t]*[:=][ \t]*\\*["']?(?:(bearer|basic|token|apikey|api-key|key|digest|negotiate)[ \t]+)?([^\s"'\\,]+)`)
+	// A Cookie or Set-Cookie header's pairs.
+	reCookie = regexp.MustCompile(`(?i)\b(?:set-)?cookie\\*["']?[ \t]*:[ \t]*([^\r\n"]+)`)
+	// The names of the words a secret's name ends in; pass and pwd also
+	// need to stand as a word of their own (bypass and compass do not).
+	reSecretEnd = regexp.MustCompile(`(?i)(?:password|passwd|passphrase|passcode|secret|token|api[_.-]?key|access[_.-]?key|secret[_.-]?key|private[_.-]?key|credential|(?:^|[_.-])(?:pass|pwd)|[a-z0-9](?-i:Pass|Pwd)|(?-i:^[A-Z0-9_.-]*(?:PASS|PWD)))$`)
+)
+
+// secretKeyName says whether the name of a key or a flag ends in a word
+// that names a secret (db_password, client_secret, --token, smtpPass),
+// where one that ends otherwise (secretName, tokenPath, --password-stdin)
+// names something else, and an existing secret's name is a reference.
+func secretKeyName(name string) bool {
+	name = strings.TrimLeft(name, "-")
+	return reSecretEnd.MatchString(name) && !strings.HasPrefix(strings.ToLower(name), "existing")
+}
+
+// realValue says whether a value Credential found by its key is a secret:
+// not a placeholder nor code, ten characters or more, with a letter and a digit or
+// a symbol such as ! or base64's = (token: abc123def and password:
+// required-for-login are not).
+func realValue(v string) bool {
+	v = strings.ReplaceAll(v, `\`, "")
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		v = v[1 : len(v)-1]
+	} else if reCode.MatchString(v) {
+		return false
+	}
+	v = strings.TrimRight(v, ".,;:)")
+	return utf8.RuneCountInString(v) >= 10 && reLetter.MatchString(v) && (reDigit.MatchString(v) || strings.ContainsAny(v, "!#%^&*+=?~")) && !placeholder(v)
 }
 
 // urlPassword says whether text holds an address with a password that is
