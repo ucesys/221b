@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,15 +111,39 @@ func (s *Service) test(ctx context.Context, c Credential, sec Secret, target str
 	return t
 }
 
-// redact takes the secret values out of a test's text; nothing else is
-// changed, so the text can say how the credential was sent.
+// redact takes the secret values out of a test's text, in every form an
+// address may carry them (escaped for a query or a path, and escaped
+// again, as a login redirect's next= does); nothing else is changed, so
+// the text can say how the credential was sent.
 func redact(text string, secrets []string) string {
+	var forms []string
 	for _, v := range secrets {
-		if len(v) >= 4 {
-			text = strings.ReplaceAll(text, v, "[REDACTED]")
+		if len(v) < 4 {
+			continue
+		}
+		q := url.QueryEscape(v)
+		for _, f := range []string{v, q, url.PathEscape(v), url.QueryEscape(q), url.PathEscape(q)} {
+			if !slices.Contains(forms, f) {
+				forms = append(forms, f)
+			}
 		}
 	}
+	// The longest first: one form may hold another.
+	slices.SortStableFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	for _, f := range forms {
+		text = strings.ReplaceAll(text, f, "[REDACTED]")
+	}
 	return text
+}
+
+// redirectHost is the host a redirect goes to, a relative one resolved
+// against the request: never its path or query, which may carry the
+// request (a login's next=) and the credential with it.
+func redirectHost(res *http.Response) string {
+	if loc, err := res.Location(); err == nil && loc.Host != "" {
+		return loc.Host
+	}
+	return "another address"
 }
 
 // testHTTP asks the address with the credential on, a git repository's
@@ -157,7 +182,7 @@ func (s *Service) testHTTP(ctx context.Context, c Credential, use *Use, target s
 	t.OK = res.StatusCode/100 == 2
 	t.Text = fmt.Sprintf("Sent %s to %s; it answered %s.", t.Method, u.Host, res.Status)
 	if res.StatusCode/100 == 3 {
-		t.Text += " It redirects elsewhere (" + hostOf(res.Header.Get("Location")) + "); the credential does not follow."
+		t.Text += " It redirects elsewhere (" + redirectHost(res) + "); the credential does not follow."
 	}
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 		if sug, why := suggest(res.Header.Values("WWW-Authenticate"), use.Method); sug != "" {

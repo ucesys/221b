@@ -36,6 +36,12 @@ Fixes from the code reviews of November 25 (scrub, kube, clusters, credentials).
 - **A private key's body not indented under its YAML key no longer reaches the Claude API** (P5-03, scrub-cut-1): the block key's scrub stopped at the first line indented less than the key and removed the `BEGIN` line with it, so the PEM rule no longer saw the key. PEM blocks are now removed first.
 - **An object under a secret-named field no longer keeps its values** (P5-03, scrub-cut-3): in a JSON or YAML tool result, `credentials: {user: …, value: …}` kept both, because only the field's own name was judged. Every string under such a field is now redacted, but for those that name what it refers to (`imagePullSecrets`' and `secretRef`'s `name`).
 
+### Security
+
+- **A credential's Test no longer keeps a query-parameter token in its text** (credentials#1). A redirect is named by its host alone (before, the whole `Location`, which a login redirect's `next=` fills with the request and its token), and the token is taken out in every form an address carries it (escaped for a query or a path, and escaped twice). The text was kept as the last test, returned by `GET /api/v1/credentials`, written into backups and the audit log.
+
+### Fixed
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".
