@@ -424,7 +424,7 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 		// nothing it went by changed: the ones kept now, not the ones read
 		// before, which a Trust, a Forget or a Test may have changed.
 		c.PinnedCert, c.LastTest = nil, nil
-		if hostOf(c.Endpoint) == hostOf(cur.Endpoint) {
+		if sameEndpointHost(c.Endpoint, cur.Endpoint) {
 			c.PinnedCert = cur.PinnedCert
 		}
 		if !resetTest {
@@ -449,6 +449,18 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 		return Credential{}, err
 	}
 	return saved, nil
+}
+
+// sameEndpointHost says whether two endpoints are on one host and port,
+// with or without a scheme (credentials#12: a scheme-less endpoint has no
+// host for url.Parse).
+func sameEndpointHost(a, b string) bool {
+	ea, err := ParseEndpoint(a)
+	if err != nil {
+		return false
+	}
+	eb, err := ParseEndpoint(b)
+	return err == nil && ea.Host == eb.Host
 }
 
 // UsedBy is each credential's uses, by id.

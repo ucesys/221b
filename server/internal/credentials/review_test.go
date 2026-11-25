@@ -559,3 +559,31 @@ func TestTheUpgradeGoesPastAnAddThatFails(t *testing.T) {
 		t.Fatalf("again: %d %v", len(again), err)
 	}
 }
+
+// credentials#12: an edit keeps the pinned certificate while the
+// endpoint's host stays the same, with or without a scheme.
+func TestAnEditOfASchemelessEndpointKeepsThePin(t *testing.T) {
+	s, _ := newService(t, nil)
+	c := token(t, s, "internal", "git.internal/org", SendAs{}, "fake-tok")
+	pin := &certpin.Pin{SHA256: "AA:BB"}
+	for _, tc := range []struct {
+		endpoint string
+		kept     bool
+	}{
+		{"git.internal/org/team", true},
+		{"https://git.internal/org", true},
+		{"git.internal:8443/org", false},
+		{"other.internal/org", false},
+	} {
+		if _, err := s.o.Repo.Update(ctx, c.ID, func(cur *Credential) error { cur.Endpoint, cur.PinnedCert = "git.internal/org", pin; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		saved, err := s.Update(ctx, c.ID, Credential{Name: "internal", Kind: KindToken, Endpoint: tc.endpoint}, nil, "bob")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (saved.PinnedCert != nil) != tc.kept {
+			t.Errorf("git.internal/org to %s: pin kept %v", tc.endpoint, saved.PinnedCert != nil)
+		}
+	}
+}
