@@ -638,7 +638,7 @@ func (s *Service) verifyHost(ctx context.Context, h Host, by string) (Host, erro
 	}
 	// The host's own name comes back with the login, for a host named
 	// after its address.
-	var named syncBuffer
+	var named stdoutOnly
 	code, err := s.Exec(ctx, h.Cluster, h.Name, by+" via 221B host check", "uname -n", false, strings.NewReader(""), &named)
 	if err == nil && code != 0 {
 		err = fmt.Errorf("uname -n exited with %d", code)
@@ -753,6 +753,12 @@ func (s *Service) RemoveHost(ctx context.Context, cluster, name string) (Host, s
 	}
 	return h, s.cleanup(ctx), nil
 }
+
+// stdoutOnly keeps a command's standard output and drops its errors
+// (Streams): what a login prints there is no part of the answer.
+type stdoutOnly struct{ syncBuffer }
+
+func (*stdoutOnly) Stderr() io.Writer { return io.Discard }
 
 // syncBuffer takes the two streams of a session at once.
 type syncBuffer struct {

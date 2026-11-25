@@ -942,3 +942,15 @@ func TestAHostWhosePairingCannotFollowKeepsItsAddress(t *testing.T) {
 		t.Fatalf("a run on the host: %d %v", code, err)
 	}
 }
+
+// The host's name is read from what uname -n prints, not from what the
+// login prints on its errors (the review of November 24, 2026: a stray
+// line on standard error came first, read as the name, and the host kept
+// its address for good).
+func TestAHostsNameIsReadFromItsOutputAlone(t *testing.T) {
+	e := newHostEnv(t)
+	h, err := checkedAs(t, e, "echo 'bash: warning: setlocale: LC_ALL: cannot change locale' >&2; sleep 0.2; echo DB-Primary")
+	if err != nil || h.Name != "db-primary" {
+		t.Fatalf("after the check: %+v %v", h, err)
+	}
+}
