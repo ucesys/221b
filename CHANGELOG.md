@@ -8,6 +8,8 @@ Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-4
 
 ### Upgrading
 
+A toolbox allowlist with a commented-out item (`- # netadmin`, a null item) now stops `helm upgrade` with *toolbox.nodeShell.profiles has an empty item*: remove the line. A list whose items are all commented out is now empty (the tool it feeds is off), where before the chart's defaults came back.
+
 The schema's step `0052` adds columns only (an agent's effort and Auto's floor, the classifier's provider, what a run and a kept answer ran with); it runs at the first start, as every step does. Nothing changes until an administrator sets an effort or Auto: every agent sends no effort, as before.
 
 The schema's step `0054` adds the table `ai_provider_models` (the models a provider offers its agents, with their tiers) and the column `ai_providers.is_models_chosen`; it runs at the first start and changes no row. Until a SuperAdmin chooses a provider's offered models, it offers every model it lists and Auto picks on Anthropic among Claude Haiku, Sonnet and Opus 5.5, as before.
@@ -132,6 +134,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 
 ### Security
 
+- **A null in a toolbox allowlist no longer brings back the defaults** (TB-48): the console read the toolbox values over its defaults, and a null item kept the default's item at its index, so `nodeShell.profiles` with `- general` and two commented-out lines (`- # netadmin`, `- # sysadmin`) still allowed the privileged sysadmin profile; a list whose items were all commented out is null, which Helm drops, and the whole default list came back. The chart now renders every allowlist (`shell.quickCommands`, `debugContainer.images`, `debugPod.profiles`, `nodeShell.profiles`, `nodeShell.quickCommands`, `images`), so a nulled one is empty, and refuses a null item; the console decodes each list over nothing and refuses an empty name or capability.
 - **A SuperAdmin role taken away is gone from a session exchanged after an outage** (DB-65): a session signed in while the session store was away, and exchanged for a stored one when the store came back, was given the roles saved at the exchange on every later request that showed the signed cookie, so a person whose SuperAdmin role was removed kept it by replaying that cookie until it expired (30 minutes by default, up to 24 hours). The exchanged session is now checked as every session is, and refused when the account is disabled or gone.
 - **A password reset can no longer be undone or got round with the old password** (RB-46): for up to 5 seconds after a reset, another replica still held the old hash, so whoever knew the old password could sign in there (a session valid on every replica for up to 7 days) or change the password from the sign-in page, writing over the reset. The password is now checked against the account as saved.
 - **One SuperAdmin can no longer make a second alone through the admin list** (RB-51): creating a local user whose email or name is in `auth.admins` made a SuperAdmin at its first sign-in without the second SuperAdmin's approval (the same email set by editing a user was refused), and so did restoring a backup that carried such an email. Creating one is now refused with 409 when another SuperAdmin could approve, and a restore leaves the email out and says so.

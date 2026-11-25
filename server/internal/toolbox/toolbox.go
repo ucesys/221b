@@ -214,16 +214,71 @@ func Read(path string) (Config, error) {
 // Parse reads the values over the defaults, so a value left out keeps its
 // default, and checks them.
 func Parse(b []byte) (Config, error) {
-	c := Default()
-	// Lists and the image map are replaced, not merged, when given.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return Config{}, fmt.Errorf("the toolbox values are not valid: %w", err)
+	}
+	c, def := Default(), Default()
+	// Lists and the image map are replaced, not merged, when given, so
+	// they are decoded over nothing: decoded over the defaults, a null item
+	// kept the default's item at its index (a commented-out netadmin came
+	// back), where now it is an empty name that Check refuses.
+	lists := []struct {
+		v    *[]string
+		def  []string
+		path []string
+	}{
+		{&c.Shell.QuickCommands, def.Shell.QuickCommands, []string{"shell", "quickCommands"}},
+		{&c.DebugContainer.Images, def.DebugContainer.Images, []string{"debugContainer", "images"}},
+		{&c.DebugPod.Profiles, def.DebugPod.Profiles, []string{"debugPod", "profiles"}},
+		{&c.NodeShell.Profiles, def.NodeShell.Profiles, []string{"nodeShell", "profiles"}},
+		{&c.NodeShell.QuickCommands, def.NodeShell.QuickCommands, []string{"nodeShell", "quickCommands"}},
+	}
+	for _, l := range lists {
+		*l.v = nil
+	}
 	c.Images = nil
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, fmt.Errorf("the toolbox values are not valid: %w", err)
 	}
+	// A list given as null (or empty) is none; one left out is the
+	// default.
+	for _, l := range lists {
+		if *l.v == nil {
+			if given(raw, l.path...) {
+				*l.v = []string{}
+			} else {
+				*l.v = l.def
+			}
+		}
+	}
 	if c.Images == nil {
-		c.Images = Default().Images
+		if given(raw, "images") {
+			c.Images = map[string]Image{}
+		} else {
+			c.Images = def.Images
+		}
 	}
 	return c, c.Check()
+}
+
+// given says whether the values name a key, null included: path is the
+// keys from the top.
+func given(raw map[string]json.RawMessage, path ...string) bool {
+	for i, k := range path {
+		v, ok := raw[k]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return true
+		}
+		raw = nil
+		if json.Unmarshal(v, &raw) != nil || raw == nil {
+			return false
+		}
+	}
+	return false
 }
 
 // Check reports values that cannot work.
@@ -243,6 +298,24 @@ func (c Config) Check() error {
 		}
 	default:
 		errs = append(errs, fmt.Sprintf("toolbox.transcripts is none or pvc, not %q", c.Transcripts))
+	}
+	for _, l := range []struct {
+		key  string
+		list []string
+	}{{"shell.quickCommands", c.Shell.QuickCommands}, {"nodeShell.quickCommands", c.NodeShell.QuickCommands}} {
+		for _, q := range l.list {
+			if strings.TrimSpace(q) == "" {
+				errs = append(errs, fmt.Sprintf("toolbox.%s has an empty entry (a commented-out item is null: remove the line)", l.key))
+				break
+			}
+		}
+	}
+	for name, im := range c.Images {
+		for _, cp := range im.Caps {
+			if !capRE.MatchString(cp) {
+				errs = append(errs, fmt.Sprintf("toolbox.images.%s.caps: %q is not a capability such as NET_ADMIN", name, cp))
+			}
+		}
 	}
 	for _, name := range c.DebugContainer.Images {
 		if _, ok := c.Images[name]; !ok {
@@ -283,6 +356,9 @@ func (c Config) Check() error {
 	}
 	return nil
 }
+
+// capRE is a Linux capability's name, as a container adds it.
+var capRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // LoginUserRE is what a Unix user name looks like, as useradd takes it.
 var LoginUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)

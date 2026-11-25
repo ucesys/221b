@@ -121,11 +121,29 @@ so a read-only SuperAdmin definition turns it off too. Values kept by
 {{- if and $t.enabled $ssh.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
 {{- end -}}
 
-{{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE). */}}
+{{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE).
+Each allowlist is rendered, so a list whose items are all commented out
+(null, which Helm drops) is none, not the console's defaults; a null item
+(one commented-out line) is refused (the toolbox review, finding 2). */}}
 {{- define "b221.toolboxConfig" -}}
 {{- $t := .Values.toolbox -}}
 {{- $c := omit $t "transcriptsVolume" -}}
-{{- $node := deepCopy $t.nodeShell -}}
+{{- $lists := dict "shell" (list "quickCommands") "debugContainer" (list "images") "debugPod" (list "profiles") "nodeShell" (list "profiles" "quickCommands") -}}
+{{- range $block, $keys := $lists -}}
+{{- $b := deepCopy (get $t $block | default dict) -}}
+{{- range $k := $keys -}}
+{{- $l := get $b $k | default list -}}
+{{- range $l -}}
+{{- if or (kindIs "invalid" .) (eq (toString .) "") -}}
+{{- fail (printf "toolbox.%s.%s has an empty item: a commented-out item is null, remove its line" $block $k) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $b $k $l -}}
+{{- end -}}
+{{- $_ := set $c $block $b -}}
+{{- end -}}
+{{- $_ := set $c "images" ($t.images | default dict) -}}
+{{- $node := deepCopy (get $c "nodeShell") -}}
 {{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
 {{- $_ := set $node "namespace" (include "b221.toolboxNamespace" .) -}}
 {{- $_ := set $c "nodeShell" $node -}}

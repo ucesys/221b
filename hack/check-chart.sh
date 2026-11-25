@@ -832,6 +832,18 @@ toolbox_values() {
     ! render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set replicaCount=2 > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set toolbox.transcripts=s3 > /dev/null 2>&1
 }
+# A nulled allowlist (every item commented out, or --set …=null) is none,
+# not the chart's defaults; a null item is refused (the toolbox review,
+# finding 2).
+toolbox_null_lists() {
+  local o
+  o=$(render k8s-console --set clusterName=ci --set toolbox.nodeShell.profiles=null --set toolbox.debugPod.profiles=null --set toolbox.shell.quickCommands=null)
+  sed -n '/"nodeShell": {/,/^    }/p' <<<"$o" | has '"profiles": \[\]' &&
+    sed -n '/"debugPod": {/,/}/p' <<<"$o" | has '"profiles": \[\]' &&
+    sed -n '/"shell": {/,/}/p' <<<"$o" | has '"quickCommands": \[\]' &&
+    ! render k8s-console --set clusterName=ci --set-json 'toolbox.nodeShell.profiles=["general",null]' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set-json 'toolbox.debugContainer.images=["general",null]' > /dev/null 2>&1
+}
 toolbox_namespace() {
   sed -n '/^kind: Namespace$/,/^---/p' "$out" | has 'pod-security.kubernetes.io/enforce: privileged' &&
     netpol "$out" | has 'namespace: consoles-privileged' &&
@@ -902,6 +914,7 @@ check "an exposed Service is reachable through the network policy" open_when_exp
 check "the replicas elect a leader and reach each other, the standbys warm unless told otherwise; more than one adds a budget and a spread, and needs Secrets" replicas
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
+check "a nulled toolbox allowlist is empty, not the defaults, and a null item in one is refused" toolbox_null_lists
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress

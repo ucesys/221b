@@ -77,3 +77,36 @@ func TestImageNamesOfAnEmptyListIsEmpty(t *testing.T) {
 		}
 	}
 }
+
+// A null in an allowlist is an empty name Check refuses, not the default's
+// item at that index; a list given as null is empty, not the defaults (the
+// toolbox review, finding 2). A list left out keeps its default.
+func TestParseReadsNullsInListsAsNothing(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"nodeShell":{"profiles":["general",null,null]}}`:                                                      `""`,
+		`{"debugContainer":{"images":["general",null]}}`:                                                        `""`,
+		`{"debugPod":{"profiles":[null]}}`:                                                                      `""`,
+		`{"shell":{"quickCommands":["env",null]}}`:                                                              "quickCommands",
+		`{"nodeShell":{"quickCommands":[null]}}`:                                                                "quickCommands",
+		`{"images":{"general":{"image":"busybox","caps":[null]},"network":{"image":"x"},"node":{"image":"y"}}}`: "caps",
+	} {
+		if c, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v (%+v), want %q", in, err, c.NodeShell.Profiles, want)
+		}
+	}
+	c, err := Parse([]byte(`{"nodeShell":{"profiles":null,"quickCommands":null},"debugContainer":{"images":null},"debugPod":{"profiles":null},"shell":{"quickCommands":null}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.NodeShell.Profiles)+len(c.NodeShell.QuickCommands)+len(c.DebugContainer.Images)+len(c.DebugPod.Profiles)+len(c.Shell.QuickCommands) != 0 {
+		t.Fatalf("a null list brought the defaults back: %+v", c)
+	}
+	c, err = Parse([]byte(`{"images":null,"debugContainer":{"images":[]},"debugPod":{"profiles":[]},"nodeShell":{"enabled":false}}`))
+	if err != nil || len(c.Images) != 0 {
+		t.Fatalf("a null image map: %v %v", err, c.Images)
+	}
+	c, err = Parse([]byte(`{}`))
+	if err != nil || len(c.NodeShell.Profiles) != 3 || len(c.Images) != 3 || len(c.Shell.QuickCommands) != 3 {
+		t.Fatalf("a list left out keeps its default: %v %+v", err, c)
+	}
+}
