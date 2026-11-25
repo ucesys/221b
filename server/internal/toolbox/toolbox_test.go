@@ -1,6 +1,7 @@
 package toolbox
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -286,6 +287,28 @@ func TestParseRefusesAnUnboundedHistory(t *testing.T) {
 	for _, in := range []string{`{"history":{"keep":0}}`, `{"history":{"keep":-1}}`, `{"history":{"keep":100001}}`} {
 		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), "toolbox.history.keep") {
 			t.Errorf("%s: %v", in, err)
+		}
+	}
+}
+
+// Administration › Toolbox shows the values as written: durations as 10m,
+// 1h, 400d, and an emptied list as [] (the toolbox review, nit).
+func TestTheValuesReadAsTheyAreWritten(t *testing.T) {
+	c, err := Parse([]byte(`{"debugPod":{"profiles":[]},"shell":{"quickCommands":[]},"portForward":{"cliMinVersion":""}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(c)
+	for _, want := range []string{`"idleTimeout":"10m"`, `"maxDuration":"1h"`, `"retention":"400d"`, `"ttlAfterFinished":"10m"`, `"profiles":[]`, `"quickCommands":[]`, `"cliMinVersion":""`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("no %s in %s", want, b)
+		}
+	}
+	for d, want := range map[time.Duration]string{90 * time.Minute: "1h30m", 90 * time.Second: "1m30s", 0: "0s", 36 * time.Hour: "36h", 48 * time.Hour: "2d"} {
+		b, _ := json.Marshal(Duration(d))
+		var back Duration
+		if string(b) != `"`+want+`"` || json.Unmarshal(b, &back) != nil || back.D() != d {
+			t.Errorf("%v: %s, read back %v", d, b, back.D())
 		}
 	}
 }

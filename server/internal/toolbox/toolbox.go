@@ -105,8 +105,25 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON writes "10m0s".
-func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Duration(d).String()) }
+// MarshalJSON writes the duration as the values write it, which
+// UnmarshalJSON reads back: whole days as 400d, else 10m, 1h, 1h30m.
+func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+
+// String is the duration as the values write it.
+func (d Duration) String() string {
+	v := time.Duration(d)
+	if day := 24 * time.Hour; v > 0 && v%day == 0 {
+		return strconv.FormatInt(int64(v/day), 10) + "d"
+	}
+	s := v.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
 
 // D is the time.Duration.
 func (d Duration) D() time.Duration { return time.Duration(d) }
@@ -131,29 +148,31 @@ type Config struct {
 		Enabled       bool     `json:"enabled"`
 		OneCommand    bool     `json:"oneCommand"`
 		FileTransfer  bool     `json:"fileTransfer"`
-		QuickCommands []string `json:"quickCommands,omitempty"`
+		QuickCommands []string `json:"quickCommands"`
 	} `json:"shell"`
 	PortForward struct {
 		Enabled       bool   `json:"enabled"`
-		CLIMinVersion string `json:"cliMinVersion,omitempty"`
+		CLIMinVersion string `json:"cliMinVersion"`
 	} `json:"portForward"`
+	// The lists are written even when empty, so Administration ›
+	// Toolbox shows an emptied one as it is.
 	DebugContainer struct {
 		Enabled      bool     `json:"enabled"`
 		MountVolumes bool     `json:"mountVolumes"`
-		Images       []string `json:"images,omitempty"`
+		Images       []string `json:"images"`
 	} `json:"debugContainer"`
 	DebugPod struct {
 		Enabled          bool     `json:"enabled"`
 		TTLAfterFinished Duration `json:"ttlAfterFinished"`
-		Profiles         []string `json:"profiles,omitempty"`
+		Profiles         []string `json:"profiles"`
 	} `json:"debugPod"`
 	NodeShell struct {
 		Enabled       bool     `json:"enabled"`
 		Namespace     string   `json:"namespace"`
 		Image         string   `json:"image"`
-		Profiles      []string `json:"profiles,omitempty"`
+		Profiles      []string `json:"profiles"`
 		Approval      string   `json:"approval"`
-		QuickCommands []string `json:"quickCommands,omitempty"`
+		QuickCommands []string `json:"quickCommands"`
 	} `json:"nodeShell"`
 	// SSH is toolbox.ssh (Phase 11, ADR-72): SSH sessions to paired nodes.
 	SSH struct {
@@ -164,7 +183,7 @@ type Config struct {
 		// node; it must exist on the node.
 		LoginUser string `json:"loginUser"`
 	} `json:"ssh"`
-	Images map[string]Image `json:"images,omitempty"`
+	Images map[string]Image `json:"images"`
 	// AdminExec is rbac.roles.admin.exec: the full Admin role may open
 	// shells in its namespaces (TB-50). The roles decide; the console only
 	// shows it.
