@@ -844,3 +844,54 @@ func TestARebootIsDoneWhenAskedForWithoutAChange(t *testing.T) {
 		t.Fatalf("%d reboots, %+v", reboots, done.Nodes[0])
 	}
 }
+
+// A cancelled script is audited as stopped, not ok, and a node's reboot
+// is audited as a command (cut by the review's cap).
+func TestACancelledScriptAndARebootAreAuditedAsTheyWent(t *testing.T) {
+	var mu sync.Mutex
+	var commands []string
+	on := func(_ Run, node, what, outcome string) {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, node+" "+what+" "+outcome)
+	}
+	block := make(chan struct{})
+	f := &fakeExec{block: block}
+	e := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: f, OnCommand: on, RebootPoll: time.Millisecond, RebootWait: time.Second})
+	r, err := e.Start(context.Background(), Spec{Script: "s", Version: approved(PrivilegeElevated), Cluster: "local", Fleet: AllNodes, Nodes: []string{"a"}, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		f.mu.Lock()
+		started := f.running > 0
+		f.mu.Unlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the script never started")
+		}
+	}
+	e.Cancel(r.ID)
+	waitRun(t, e, r.ID)
+	mu.Lock()
+	got := strings.Join(commands, "; ")
+	commands = nil
+	mu.Unlock()
+	if !strings.Contains(got, "a script sha256") || !strings.HasSuffix(got, " stopped") {
+		t.Fatalf("a cancelled script is audited as %q", got)
+	}
+	// A reboot.
+	e2 := NewEngine(Options{Store: NewStore(&kv.Memory{}, nil), Exec: &fakeExec{}, OnCommand: on, RebootPoll: time.Millisecond, RebootWait: time.Second})
+	r, err = e2.Start(context.Background(), Spec{Script: "s", Version: approved(PrivilegeElevated), Cluster: "local", Fleet: AllNodes, Nodes: []string{"boot-1"}, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, e2, r.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if got := strings.Join(commands, "; "); !strings.Contains(got, "boot-1 reboot ok") {
+		t.Fatalf("a reboot is audited as %q", got)
+	}
+}

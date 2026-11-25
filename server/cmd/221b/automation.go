@@ -138,7 +138,11 @@ func (w *wiring) wireAutomation(ctx context.Context) error {
 			OutputDir:   outDir,
 			OnCommand: func(r automation.Run, node, what, outcome string) {
 				o := audit.OutcomeOK
-				if outcome != "ok" {
+				switch outcome {
+				case "ok":
+				case "stopped":
+					o = audit.OutcomeStopped
+				default:
 					o = audit.OutcomeFailed
 				}
 				w.auditLog.Record(audit.Event{Action: audit.ActionAutomationCommand, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: node, Outcome: o,

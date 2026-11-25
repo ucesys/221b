@@ -37,7 +37,8 @@ type Options struct {
 	// OnEnd is called once a run has ended, for the audit log.
 	OnEnd func(Run)
 	// OnCommand is called for every command a run gives, in Watson's
-	// words, for the audit log. Outcome is ok, failed or stopped.
+	// words, for the audit log, the reboot of a node included. Outcome is
+	// ok, failed or stopped (cancelled).
 	OnCommand func(r Run, node, what, outcome string)
 	// Kube runs the kubectl lines of Kubernetes scripts and hooks.
 	Kube KubeRunner
@@ -957,7 +958,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			x := exit
 			res.Exit = &x
 		}
-		e.command(r, node, fmt.Sprintf("script sha256 %.12s", r.Hash), outcomeOf(res.State == NodeFailed || res.State == NodeUnreachable))
+		outcome := outcomeOf(res.State == NodeFailed || res.State == NodeUnreachable)
+		if res.State == NodeCancelled {
+			outcome = "stopped"
+		}
+		e.command(r, node, fmt.Sprintf("script sha256 %.12s", r.Hash), outcome)
 		out.Flush()
 		result, hasResult = ParseResult(store.String())
 		if hasResult {
@@ -978,12 +983,18 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 		default:
 			res.State = NodeChanged
 			e.setNode(a, node, func(n *NodeResult) { n.State, n.Msg = NodeRebooting, result.Msg })
-			if rerr := e.reboot(ctx, r, node, wait, out); rerr != nil {
+			rerr := e.reboot(ctx, r, node, wait, out)
+			if rerr != nil {
 				res.State, res.Error = NodeFailed, rerr.Error()
 				if ctx.Err() != nil {
 					res.State, res.Error = NodeCancelled, "cancelled while the node rebooted"
 				}
 			}
+			outcome := outcomeOf(rerr != nil)
+			if res.State == NodeCancelled {
+				outcome = "stopped"
+			}
+			e.command(r, node, "reboot", outcome)
 		}
 	}
 	healthy := res.State == NodeChanged || res.State == NodeNoChange
