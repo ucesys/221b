@@ -181,3 +181,14 @@ func TestACardsDryRunOutputIsBounded(t *testing.T) {
 		t.Fatalf("%d bytes kept", size)
 	}
 }
+
+// One request makes at most MaxCommands cards; the rest are refused in one
+// item (review of November 24, 2026, sweep).
+func TestOneRequestMakesABoundedNumberOfCards(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	text := strings.Repeat("kubectl cordon worker-001\n", 500)
+	items := svc.Submit(context.Background(), cl, alice(), text, "typed", "", false)
+	if len(items) != 21 || items[20].Status != StatusRefused || !strings.Contains(items[20].Reason, "480") {
+		t.Fatalf("%d items, the last %+v", len(items), items[len(items)-1])
+	}
+}

@@ -218,6 +218,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A namespace's delete card lapses when what is in it changes** (NS-02, P6-04; review of November 24, 2026): the card counts the pods, claims, Secrets and ConfigMaps it deletes, but its guard held only the namespace's phase, so objects created or removed before the approval went with it unseen. The guard now holds those objects by name.
 - **An Automation dry run of a drain gives up after 12 seconds** (review of November 24, 2026): a card's dry run of a drain stops after 12 seconds, since a disruption budget that allows no eviction holds the dry run as it holds the drain, but a Kubernetes script's or hook's dry run had no such bound and could wait as long as the drain would.
 - **A chat's proposed change whose Watson command was stopped before it started waits on in the Inbox** (review of November 24, 2026): the proposed change was closed as Failed, though nothing ran; so was one whose command was refused when it was to start. It now waits on, as for a lapsed Watson card.
+- **One request makes at most 20 Watson commands** (P6-04; review of November 24, 2026): a block of commands was split into as many cards as it had lines, each planned against the cluster with a dry run and kept in memory, so one request could start thousands. Past 20, the rest are refused in one item that says how many were not run.
 
 ### Security
 

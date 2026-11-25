@@ -413,11 +413,25 @@ func (s *Service) Submit(ctx context.Context, cl Cluster, who Who, text, from, w
 		lines = []string{strings.TrimSpace(text)}
 	}
 	var out []*Item
-	for _, line := range lines {
+	for i, line := range lines {
+		if i == MaxCommands {
+			// One request makes a bounded number of cards: each plans
+			// against the cluster and holds memory until it ends.
+			now := s.opts.Now()
+			it := &Item{ID: newID(), Cluster: cl.ID, Line: fmt.Sprintf("(%d more commands)", len(lines)-i), From: from, Why: why, Requester: who, Created: now, Exit: -1,
+				Status: StatusRefused, Rule: "too many", Reason: fmt.Sprintf("Watson takes at most %d commands at once; the other %d were not run. Send them again.", MaxCommands, len(lines)-i)}
+			s.add(it)
+			s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
+			out = append(out, it)
+			break
+		}
 		out = append(out, s.submitOne(ctx, cl, who, line, from, why, run))
 	}
 	return out
 }
+
+// MaxCommands bounds the commands one request sends.
+const MaxCommands = 20
 
 func (s *Service) submitOne(ctx context.Context, cl Cluster, who Who, line, from, why string, run bool) *Item {
 	now := s.opts.Now()
