@@ -38,7 +38,7 @@ type Source struct {
 // New returns a synced, connected source with the named nodes.
 func New(nodeNames ...string) *Source {
 	s := &Source{
-		info:     kube.Info{Name: "test", State: kube.StateConnected, Synced: true, Warnings: []string{}, Metrics: kube.MetricsUnknown, Uptime: kube.UptimeUnknown, Secrets: "read"},
+		info:     kube.Info{Name: "test", State: kube.StateConnected, Synced: true, Complete: true, Warnings: []string{}, Metrics: kube.MetricsUnknown, Uptime: kube.UptimeUnknown, Secrets: "read"},
 		objects:  map[string]map[string]runtime.Object{},
 		usage:    map[string]nodes.Usage{},
 		podUsage: map[string]nodes.Usage{},

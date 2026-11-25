@@ -62,8 +62,13 @@ type Info struct {
 	State   string    `json:"state"`
 	Since   time.Time `json:"since"`
 	Message string    `json:"message,omitempty"`
-	// Synced is true once every kind has been listed at least once.
+	// Synced is true once the core kinds (nodes, pods and namespaces)
+	// have been listed: the screens are built from then on.
 	Synced bool `json:"synced"`
+	// Complete is true once every kind has been listed, or refused (one
+	// the console may not read, or the cluster does not serve). Until
+	// then a missing alert, event or claim says nothing (kube#7).
+	Complete bool `json:"complete"`
 	// Warnings are problems reading the cluster that do not stop the
 	// console, such as a missing permission.
 	Warnings []string `json:"warnings"`
@@ -165,6 +170,9 @@ type Cluster struct {
 type watchErr struct {
 	msg string
 	at  time.Time
+	// refused is a kind the console may not list, or the cluster does not
+	// serve: it will not be listed, and counts as settled (kube#7).
+	refused bool
 }
 
 // New prepares a Cluster. Nothing talks to the API server until Run.
@@ -387,17 +395,16 @@ func (c *Cluster) Run(ctx context.Context) {
 
 // RunWatches starts the informers, which list every kind and keep the
 // cache current until ctx is done, and returns at once; Ready says when
-// the core kinds are listed. A second call does nothing: a stopped
+// the core kinds are listed, Complete when every kind is. A second call does nothing: a stopped
 // informer cannot start again, so a replica that must stop watching
 // restarts instead (ADR-70).
 func (c *Cluster) RunWatches(ctx context.Context) {
 	if !c.watching.CompareAndSwap(false, true) {
 		return
 	}
-	var core, all []cache.InformerSynced
+	var core []cache.InformerSynced
 	for name, inf := range c.informers {
 		go inf.RunWithContext(ctx)
-		all = append(all, inf.HasSynced)
 		for _, k := range coreKinds {
 			if k == name {
 				core = append(core, inf.HasSynced)
@@ -413,11 +420,48 @@ func (c *Cluster) RunWatches(ctx context.Context) {
 		c.mu.Unlock()
 		c.log.Info("nodes, pods and namespaces listed", "nodes", c.Count("nodes", ""), "pods", c.Count("pods", ""), "namespaces", c.Count("namespaces", ""))
 		c.emit(c.everything())
-		if cache.WaitForCacheSync(ctx.Done(), all...) {
-			c.log.Info("every kind listed", "kinds", len(c.informers), "objects", c.totalObjects())
-			c.emit(c.everything())
+		// Every other kind is listed, or refused: a kind the console may
+		// not read never syncs, and must not keep the cluster from being
+		// complete (kube#7).
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for !c.settled() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
+		c.mu.Lock()
+		c.info.Complete = true
+		c.mu.Unlock()
+		c.log.Info("every kind listed", "kinds", len(c.informers), "objects", c.totalObjects())
+		c.emit(c.everything())
 	}()
+}
+
+// settled says whether every kind has been listed or refused.
+func (c *Cluster) settled() bool {
+	for name, inf := range c.informers {
+		if inf.HasSynced() {
+			continue
+		}
+		c.mu.RLock()
+		e, ok := c.watchErrs[name]
+		c.mu.RUnlock()
+		if !ok || !e.refused {
+			return false
+		}
+	}
+	return true
+}
+
+// Complete reports whether every kind has been listed, or refused: until
+// then what the cache lacks may only not be listed yet (kube#7).
+func (c *Cluster) Complete() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.info.Complete
 }
 
 // Watching says whether the informers were started.
@@ -522,7 +566,8 @@ func (c *Cluster) Info() Info {
 	return info
 }
 
-// Ready reports whether every kind has been listed.
+// Ready reports whether the core kinds (nodes, pods and namespaces) have
+// been listed; Complete says when every kind has.
 func (c *Cluster) Ready() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -989,7 +1034,8 @@ func (c *Cluster) watchError(resource string) cache.WatchErrorHandlerWithContext
 		}
 		msg := describeWatchError(resource, err)
 		c.mu.Lock()
-		c.watchErrs[resource] = watchErr{msg: msg, at: time.Now()}
+		refused := apierrors.IsForbidden(err) || apierrors.IsNotFound(err) || apierrors.IsUnauthorized(err)
+		c.watchErrs[resource] = watchErr{msg: msg, at: time.Now(), refused: refused}
 		c.mu.Unlock()
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			c.log.Error("cannot watch the cluster", "resource", resource, "err", err)

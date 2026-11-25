@@ -172,6 +172,9 @@ type view struct {
 	idle     time.Time // when the last subscriber left
 	lastFull time.Time
 	built    bool
+	// complete says the rows were last built whole after the cluster had
+	// listed every kind (kube#7).
+	complete bool
 }
 
 // Store holds the current rows and the browsers subscribed to changes.
@@ -725,6 +728,8 @@ type built struct {
 type rebuilt struct {
 	name    string
 	all     bool
+	// complete says the cluster had listed every kind when the build began.
+	complete bool
 	rows    []built
 	present map[string]struct{}
 	usage   map[string][]byte
@@ -859,7 +864,7 @@ func (s *Store) process(rows bool) {
 // build renders a view's rows: every row when all is set, the given keys
 // otherwise, and the usage when asked. buildMu must be held.
 func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.Time) rebuilt {
-	r := rebuilt{name: d.name, all: all}
+	r := rebuilt{name: d.name, all: all, complete: all && s.src.Info().Complete}
 	encode := func(key string, row any) {
 		b, err := json.Marshal(row)
 		if err != nil {
@@ -946,6 +951,7 @@ func (s *Store) applyLocked(v *view, r rebuilt, now time.Time) bool {
 		}
 	}
 	if r.all {
+		v.complete = r.complete
 		for key := range v.rows {
 			if _, ok := r.present[key]; !ok {
 				delete(v.rows, key)
@@ -1236,6 +1242,25 @@ func (s *Store) Snapshot(names []string, f Filter) []byte {
 	return s.snapshotLocked(names, f)
 }
 
+// CompleteSnapshot is Snapshot, and whether every view named was built
+// whole after the cluster had listed every kind, or refused it (kube#7):
+// until then a row that is missing, an alert say, may only not be built
+// yet.
+func (s *Store) CompleteSnapshot(names []string, f Filter) ([]byte, bool) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureViewsLocked(names)
+	complete := true
+	for _, name := range names {
+		if v := s.views[name]; v == nil || !v.complete {
+			complete = false
+		}
+	}
+	return s.snapshotLocked(names, f), complete
+}
+
 // ensureViewsLocked builds the named views that do not exist yet. buildMu
 // and s.mu must be held; s.mu is released while the rows are built.
 func (s *Store) ensureViewsLocked(names []string) {
@@ -1272,9 +1297,10 @@ func (s *Store) ensureViewsLocked(names []string) {
 	}
 }
 
-// Synced reports whether the store has taken the cluster's first full
-// listing, so a snapshot has every row: the cluster says it is synced a
-// moment before the rows reach the store.
+// Synced reports whether the store has taken the cluster's first listing
+// of the core kinds (nodes, pods and namespaces): the cluster says it is
+// synced a moment before the rows reach the store. Other kinds may still
+// be being listed; CompleteSnapshot says when every kind was (kube#7).
 func (s *Store) Synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -723,17 +723,17 @@ func (s *Server) cardCondition(ctx context.Context, cluster string, c cards.Cond
 			return false, "", fmt.Errorf("the cluster %s is not connected", cluster)
 		}
 		var snap struct {
-			Cluster *struct {
-				Synced bool `json:"synced"`
-			} `json:"cluster"`
 			Views map[string]struct {
 				Rows []map[string]any `json:"rows"`
 			} `json:"views"`
 		}
-		if err := json.Unmarshal(st.Snapshot([]string{live.ViewAlerts}, nil), &snap); err != nil {
+		raw, complete := st.CompleteSnapshot([]string{live.ViewAlerts}, nil)
+		if err := json.Unmarshal(raw, &snap); err != nil {
 			return false, "", err
 		}
-		if snap.Cluster == nil || !snap.Cluster.Synced {
+		// Until every kind is listed, events and claims among them, an
+		// alert missing says nothing about whether it resolved (kube#7).
+		if !complete {
 			return false, "", errors.New("the console has not read the cluster yet")
 		}
 		key := str("key")
