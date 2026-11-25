@@ -597,7 +597,7 @@ func (st *Store) usedVersions(ctx context.Context) (map[string]map[int]bool, err
 
 // prune drops superseded and rejected versions, oldest first, then drafts and reviews
 // older than a script's newest version, until the record fits; the newest
-// version, approved ones and those a kept run ran stay, so a run's record
+// version (rejected or not), approved ones and those a kept run ran stay, so a run's record
 // can always show the text it ran.
 func prune(rec *scriptsRecord, limit int, used map[string]map[int]bool) {
 	size := func() int {
@@ -605,8 +605,10 @@ func prune(rec *scriptsRecord, limit int, used map[string]map[int]bool) {
 		return len(b)
 	}
 	for _, drop := range []func(Script, int) bool{
+		// Never the newest: the next version is numbered after it, and a
+		// number is never given twice.
 		func(s Script, i int) bool {
-			return (s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected) && !used[s.Name][s.Versions[i].N]
+			return (s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected) && i < len(s.Versions)-1 && !used[s.Name][s.Versions[i].N]
 		},
 		func(s Script, i int) bool {
 			st := s.Versions[i].State

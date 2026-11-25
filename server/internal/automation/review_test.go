@@ -594,3 +594,18 @@ func TestRunOutputFilesDoNotFillTheTranscriptsVolume(t *testing.T) {
 		t.Fatalf("the output: %q %v", out, err)
 	}
 }
+
+// Pruning a full scripts.json never drops a script's newest version, a
+// rejected one included (cut by the review's cap): its number would be
+// given again to the next version.
+func TestPruningKeepsTheNewestRejectedVersion(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	rec := &scriptsRecord{Scripts: map[string]Script{"a": {Name: "a", Versions: []Version{
+		{N: 1, Text: "one", State: StateApproved, Created: now},
+		{N: 2, Text: strings.Repeat("x", 4096), State: StateRejected, Created: now.Add(time.Minute)},
+	}}}}
+	prune(rec, 1024, map[string]map[int]bool{})
+	if v := rec.Scripts["a"].Latest(); v.N != 2 {
+		t.Fatalf("the newest version is v%d", v.N)
+	}
+}
