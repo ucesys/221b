@@ -586,6 +586,11 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 					return []any{field(o, "status", "phase"), o.GetDeletionTimestamp() != nil}
 				}))
 				impact = append(impact, namespaceDeleteImpact(ctx, cs, t.name)...)
+				if g, err := namespaceContentsGuard(ctx, cs, t.name); err == nil {
+					guards = append(guards, g)
+				} else {
+					guards = append(guards, unreadableUnlessHidden("what is in namespace "+t.name, err)...)
+				}
 				continue
 			}
 			if t.kind == "Secret" {
@@ -1558,6 +1563,49 @@ func podReadsSecret(p *corev1.PodSpec, name string) bool {
 		}
 	}
 	return false
+}
+
+// namespaceContentsGuard holds a namespace's delete to what its card
+// counted: the pods, claims, Secrets and ConfigMaps in it, by name.
+func namespaceContentsGuard(ctx context.Context, cs *clients, name string) (guard, error) {
+	read := func(ctx context.Context, cs *clients) (string, error) {
+		var names []string
+		pods, err := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range pods.Items {
+			names = append(names, "pod/"+o.Name)
+		}
+		claims, err := cs.cs.CoreV1().PersistentVolumeClaims(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range claims.Items {
+			names = append(names, "pvc/"+o.Name)
+		}
+		secrets, err := cs.cs.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range secrets.Items {
+			names = append(names, "secret/"+o.Name)
+		}
+		cms, err := cs.cs.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for _, o := range cms.Items {
+			names = append(names, "configmap/"+o.Name)
+		}
+		sort.Strings(names)
+		return digest(names), nil
+	}
+	want, err := read(ctx, cs)
+	if err != nil {
+		return guard{}, err
+	}
+	return guard{what: "what is in namespace " + name, want: want, read: read}, nil
 }
 
 func namespaceDeleteImpact(ctx context.Context, cs *clients, name string) []string {

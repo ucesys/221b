@@ -48,3 +48,18 @@ func TestTheDeleteCardSaysWhatForceDoes(t *testing.T) {
 		t.Errorf("--now: %s", got)
 	}
 }
+
+// A namespace's delete card lapses when what is in the namespace changes:
+// it counted those objects (review of November 24, 2026, cut by the cap:
+// impact.go:524).
+func TestANamespaceDeleteCardLapsesWhenItsContentsChange(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	got := card(t, svc, cl, alice(), "kubectl delete namespace web")
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "arrived-later", Namespace: "web"}}
+	if _, err := simClient(t, cl).CoreV1().ConfigMaps("web").Create(context.Background(), cm, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Approve(context.Background(), cl, alice(), got.ID); err == nil || !strings.Contains(err.Error(), "what is in namespace web") {
+		t.Fatalf("approved: %v", err)
+	}
+}
