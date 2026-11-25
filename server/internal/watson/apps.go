@@ -730,10 +730,24 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		// one that failed: what it changes, deletes and resets is against
 		// that one.
 		base := upgradeBase(rels)
+		vals := a.vals
+		if len(vals) == 0 && len(base.Config) > 0 {
+			// An upgrade given no values keeps the release's (Helm's
+			// reuseValues): the card renders with them and removes none.
+			vals = base.Config
+			if again, err := a.load(); err == nil {
+				if rr, err := apps.Render(ctx, again, vals, name, ns, ""); err == nil {
+					r = rr
+				}
+			}
+		}
 		impact = append(impact, fmt.Sprintf("Upgrades release %s/%s from %s %s (revision %d, %s) to %s %s (app %s) from %s. Helm records it as revision %d.",
 			ns, name, chartName(base.Chart), base.Chart.Metadata.Version, base.Version, base.Info.Status, ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from, cur.Version+1))
 		if base != cur {
 			impact = append(impact, fmt.Sprintf("The newest revision, %d, is %s: Helm upgrades from revision %d, the last deployed, and this card compares against it.", cur.Version, cur.Info.Status, base.Version))
+		}
+		if len(a.vals) == 0 && len(base.Config) > 0 {
+			impact = append(impact, "The line gives no values, so Helm keeps the values the release has (helm get values).")
 		}
 		changed, added, removed := manifestDiff(base.Manifest, r.Manifest)
 		if len(changed)+len(added)+len(removed) == 0 {
@@ -750,7 +764,7 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		}
 		// The release's values the deploy would remove or change: an
 		// upgrade takes only the values it is given.
-		gone, changedVals := apps.ValueChanges(base.Config, a.vals)
+		gone, changedVals := apps.ValueChanges(base.Config, vals)
 		impact = append(impact, valueImpact(gone, changedVals)...)
 		if t.pin != nil {
 			t.pin.removed = len(gone)

@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/ucesys/221b/server/internal/apps"
 )
 
 // helmRecord writes a release record as Helm's secrets driver keeps it:
@@ -75,5 +77,19 @@ func TestAnUpgradeCardComparesAgainstTheLastDeployedRevision(t *testing.T) {
 	}
 	if got.Plan.pin == nil || got.Plan.pin.removed == 0 {
 		t.Fatalf("pin %+v", got.Plan.pin)
+	}
+}
+
+// An upgrade given no values keeps the release's, as Helm does: its card
+// removes none, and on the console's own release it is not refused for it
+// (review of November 24, 2026, cut by the cap: apps.go:716).
+func TestAnUpgradeWithNoValuesKeepsTheReleasesValues(t *testing.T) {
+	svc, cl, _ := pinSetup(t, Options{Self: apps.SelfRelease{Cluster: "local", Namespace: "web", Name: "shop4"}})
+	repo := gitChart(t)
+	helmRecord(t, cl, "web", "shop4", 1, `{"name":"shop4","namespace":"web","version":1,"info":{"status":"deployed"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"config":{"replicas":3,"extra":"kept"},"manifest":""}`)
+	got := card(t, svc, cl, manager(alice()), "helm upgrade shop4 --git "+repo+" --path charts/web --ref master -n web")
+	text := strings.Join(got.Plan.Impact, "\n")
+	if strings.Contains(text, "Removes") || !strings.Contains(text, "Helm keeps the values the release has") || got.Plan.refusal != "" {
+		t.Fatalf("impact:\n%s\nrefusal %q", text, got.Plan.refusal)
 	}
 }
