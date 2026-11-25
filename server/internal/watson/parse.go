@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -943,13 +944,33 @@ func only(v any, keys ...string) any {
 }
 
 func checkLabel(c *Command) *Refusal {
+	var objs []string
+	for _, p := range c.Positionals {
+		if !isChange(p) {
+			objs = append(objs, p)
+		}
+	}
+	types, _ := targets(objs)
+	// A Secret's annotations can hold its data: kubectl.kubernetes.io/
+	// last-applied-configuration holds all of it. --list prints them, and
+	// without --overwrite kubectl's refusal quotes the value an annotation
+	// has, in the card's dry run and in the output (X-01).
+	if c.Verb[0] == "annotate" && slices.Contains(types, "secrets") {
+		if c.Has("list") {
+			return refuse("secret values", "Watson does not list a Secret's annotations: they can hold its values. kubectl describe secret shows its keys and sizes.")
+		}
+		for _, p := range c.Positionals {
+			if isChange(p) && !strings.HasSuffix(p, "-") && !c.Has("overwrite") {
+				return refuse("secret values", "Annotate a Secret with --overwrite: without it, kubectl's refusal of an annotation the Secret has quotes its value, which can hold the Secret's data.")
+			}
+		}
+	}
 	if c.Has("list") {
 		return nil
 	}
 	// The access rules are written by the chart, and by a person who holds
 	// that right; Watson never changes them, whatever the person's role
 	// would let (RB-52).
-	types, _ := targets(c.Positionals)
 	for _, t := range types {
 		if isAccessRule(t) {
 			return refuse("access rules", "Watson does not change roles or bindings: they are set by the chart's values, and 221B never writes them.")
