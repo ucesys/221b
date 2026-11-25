@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -633,6 +635,12 @@ func (a watsonAction) Apply(ctx context.Context, c cards.Card, i int, by cards.A
 	return r, nil
 }
 
+// lineDigest stands for a command line where only its sameness counts.
+func lineDigest(line string) string {
+	sum := sha256.Sum256([]byte(line))
+	return hex.EncodeToString(sum[:16])
+}
+
 // watsonEnded tells the cards how a chat's command ended in the Watson
 // panel.
 func (s *Server) watsonEnded(it watson.Item) {
@@ -677,10 +685,14 @@ func (s *Server) proposeFromChat(r *http.Request, c watson.Cluster, who watson.W
 			Agent:     "sherlock",
 			Source:    cards.Source{Kind: cards.SourceChat, Label: "Asked by " + who.Name + " in a chat on " + c.Name, SetBy: who.Name},
 			Cluster:   c.ID,
-			Title:     it.Line,
+			// The title is recorded and sent to the notification channels:
+			// the line's parameters are hidden there (DB-74). The action keeps
+			// the line whole, to run; the key that tells the same line again
+			// is a digest of it.
+			Title:     watson.MaskLine(it.Line),
 			Reasoning: why,
 			Actions:   []cards.Action{{Kind: tool, Args: map[string]any{"command": it.Line}}},
-			DedupKey:  "chat:" + c.ID + ":" + it.Line,
+			DedupKey:  "chat:" + c.ID + ":" + lineDigest(it.Line),
 		}
 		if _, err := s.opts.Cards.ProposeFor(r.Context(), p, s.cardPerson(r), it.ID); err != nil {
 			s.opts.Logger.Warn("a chat's change was not kept as a proposal", "cluster", c.ID, "err", err)

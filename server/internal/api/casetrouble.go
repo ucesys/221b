@@ -255,7 +255,9 @@ func (s *Server) caseCommandFrom(w http.ResponseWriter, r *http.Request, n int, 
 
 // caseCommand is a Watson command as a case logs it: never its output.
 func caseCommand(it watson.Item) casework.Command {
-	cmd := casework.Command{ID: it.ID, Line: it.Line, By: it.Requester.Name, At: it.Created, Change: it.Change, Status: it.Status}
+	// The log is shown and audited: the line's parameters are hidden
+	// there, as in Watson's own records (DB-74).
+	cmd := casework.Command{ID: it.ID, Line: watson.MaskLine(it.Line), By: it.Requester.Name, At: it.Created, Change: it.Change, Status: it.Status}
 	if !it.Started.IsZero() && !it.Finished.IsZero() {
 		exit := it.Exit
 		cmd.Exit = &exit
