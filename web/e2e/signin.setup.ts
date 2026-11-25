@@ -40,6 +40,13 @@ setup('sign in', async ({ page }, testInfo) => {
     const cur = (await (await page.request.get('/api/v1/aiops/settings')).json()) as Record<string, unknown>
     const res = await page.request.put('/api/v1/aiops/settings', { headers: { 'Sec-Fetch-Site': 'same-origin' }, data: { ...cur, criticalAlertMinutes: 0 } })
     expect(res.status(), await res.text()).toBe(200)
+    // The test account installed the console (the first-run page's
+    // SuperAdmin, or one the values name), so the Star 221B on GitHub
+    // dialog (CU-21) would open over every page and take every click.
+    // Never show this again, as an installer would; a 403 means this
+    // account is not one the dialog asks.
+    const star = await page.request.post('/api/v1/star-prompt/never', { headers: { 'Sec-Fetch-Site': 'same-origin' }, data: {} })
+    expect([200, 403], await star.text()).toContain(star.status())
   }
   await page.context().storageState({ path: sessionFile(testInfo.project.name) })
 })
