@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -271,6 +272,10 @@ func (c *Credential) Check(sec Secret) error {
 	}
 	if len(c.Description) > 500 {
 		return invalid("the description is at most 500 characters")
+	}
+	// Postgres's text holds no NUL (credentials#5); no field needs one.
+	if b, _ := json.Marshal(c); strings.Contains(string(b), `\u0000`) {
+		return invalid("a credential's fields hold no NUL character")
 	}
 	ep, err := ParseEndpoint(c.Endpoint)
 	if err != nil {

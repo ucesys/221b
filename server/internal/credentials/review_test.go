@@ -273,3 +273,55 @@ func TestNoSecretIsUnnamedBeforeTheListIsCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// credentials#5: the copy of the list of before 0.13 goes past a record
+// Postgres refuses: a NUL character is replaced, two names the unique
+// index takes for one are told apart, and a record that still cannot be
+// kept is left out and said, in the note of the upgrade the page shows.
+// A NUL is refused when a credential is saved.
+func TestTheCopyGoesPastARecordPostgresRefuses(t *testing.T) {
+	d := dbtest.Open(t)
+	now, _ := ticking()
+	mem := &MemorySecret{}
+	list := []Credential{
+		{ID: "cr-nul", Name: "nul", Kind: KindToken, Endpoint: "https://a.example", Description: "a\x00b", LastTest: &Test{At: now(), Text: "HTTP/1.1 200 \x00OK"}},
+		{ID: "cr-upper", Name: "İzmir CI", Kind: KindToken, Endpoint: "https://b.example"},
+		{ID: "cr-lower", Name: "izmir ci", Kind: KindToken, Endpoint: "https://c.example"},
+		{ID: "cr-bad\x00id", Name: "bad", Kind: KindToken, Endpoint: "https://d.example"},
+		{ID: "cr-fine", Name: "fine", Kind: KindToken, Endpoint: "https://e.example"},
+	}
+	b, _ := json.Marshal(index{Credentials: list})
+	if err := mem.SaveKeyIf(ctx, indexKey, b, ""); err != nil {
+		t.Fatal(err)
+	}
+	n, err := CopyList(ctx, d, mem)
+	if err != nil || n != 4 {
+		m, _ := New(Options{Repo: NewPGRepo(d)}).Migration(ctx)
+		t.Fatalf("copied %d: %v %q", n, err, m.Notes)
+	}
+	s := New(Options{Secrets: mem, Repo: NewPGRepo(d), Now: now})
+	got, err := s.List(ctx)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("the list: %d %v", len(got), err)
+	}
+	names := map[string]string{}
+	for _, c := range got {
+		names[c.ID] = c.Name
+		if strings.Contains(c.Description, "\x00") || c.LastTest != nil && strings.Contains(c.LastTest.Text, "\x00") {
+			t.Errorf("%s kept a NUL", c.ID)
+		}
+	}
+	if names["cr-upper"] == "" || names["cr-lower"] == "" || !strings.Contains(names["cr-upper"]+names["cr-lower"], "(copied at upgrade") {
+		t.Errorf("the two names: %v", names)
+	}
+	m, err := s.Migration(ctx)
+	if err != nil || len(m.Notes) != 1 || !strings.Contains(m.Notes[0], "bad") || !strings.Contains(m.Notes[0], "left out") {
+		t.Fatalf("the note: %+v %v", m.Notes, err)
+	}
+	if ok, _ := d.Imported(ctx, ListImportID); !ok {
+		t.Fatal("the copy is not recorded")
+	}
+	if _, err := s.Create(ctx, Credential{Name: "x", Kind: KindToken, Endpoint: "https://a.example", Description: "a\x00b"}, Secret{Token: "fake-tok"}, "ann"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a NUL saved: %v", err)
+	}
+}

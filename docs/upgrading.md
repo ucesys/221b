@@ -65,6 +65,7 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 ## 0.13.3 (unreleased)
 
 - **A private key kept beside a credential's certificate leaves the list at the first start** (credentials#2): a client certificate's *Certificate* or a private CA saved with a `PRIVATE KEY` block in it (a combined `client.pem`) keeps its certificates alone; the log names the credentials changed. The key itself stays in the credential's secret, where it was given too. A backup made before keeps the key in clear in that credential's `certPEM` or `caPEM`: delete such backups, or restore them only into 0.13.3 or later, which drops the key. Saving such a field is now refused with why.
+- **From a release before 0.13, the copy of the credentials' list goes past a record the database refuses** (credentials#5): such a record is left out, and Administration › Credentials names it, with why, under *Created from existing settings*; its secret stays in the Secret, and the credential is made again by hand. A console already on 0.13 whose copy kept failing (the log said *copying a record set from its Secret into the database failed* at every start, and the list was empty) copies the others at the first start of 0.13.3.
 
 ## 0.13.2 (2026-11-25)
 

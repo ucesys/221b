@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/db"
@@ -163,7 +165,30 @@ func rowOf(c Credential) credRow {
 			r.CertSelfSigned, r.CertExpired, r.CertTrusted, r.CertPinned, r.CertPinnedWas, r.CertTrustable, r.CertProblem = x.SelfSigned, x.Expired, x.Trusted, x.Pinned, x.PinnedWas, x.Trustable, x.Problem
 		}
 	}
+	noNUL(&r)
 	return r
+}
+
+// noNUL replaces the NUL characters of a row's text, which Postgres's
+// text refuses, by U+FFFD (credentials#5): a tested server's status line
+// may hold one, and a list of before 0.13 kept them. The id is left as it
+// is: a row is never kept under another id.
+func noNUL(r *credRow) {
+	v := reflect.ValueOf(r).Elem()
+	for i := 1; i < v.NumField(); i++ {
+		switch f := v.Field(i); f.Kind() {
+		case reflect.String:
+			f.SetString(strings.ReplaceAll(f.String(), "\x00", "\uFFFD"))
+		case reflect.Slice:
+			if s, ok := f.Interface().([]string); ok {
+				out := make([]string, len(s))
+				for j, x := range s {
+					out[j] = strings.ReplaceAll(x, "\x00", "\uFFFD")
+				}
+				f.Set(reflect.ValueOf(out))
+			}
+		}
+	}
 }
 
 // credentialOf is a kept row as its credential.
@@ -256,18 +281,41 @@ func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		// One record Postgres refuses does not stop the others
+		// (credentials#5): each is written under a savepoint; a name the
+		// unique index takes for another's (lower(), which folds more
+		// than EqualFold) is told apart, and one that still cannot be
+		// written is left out and said in the note of the upgrade.
+		var left []string
 		for _, c := range ix.Credentials {
 			if c.ID == "" || slices.ContainsFunc(have, func(o Credential) bool { return o.ID == c.ID }) {
 				continue
 			}
-			if taken(have, c.Name) {
+			tried := have
+			if taken(tried, c.Name) {
+				tried = append(tried, Credential{Name: c.Name})
 				c.Name = suffixedName(have, c.Name, copiedSuffix)
 			}
-			if err := putRow(ctx, tx, c); err != nil {
-				return 0, err
+			err := copyRow(ctx, tx, c)
+			for range 5 {
+				if !db.IsUnique(err) {
+					break
+				}
+				tried = append(tried, Credential{Name: c.Name})
+				c.Name = suffixedName(tried, strings.TrimSpace(strings.Split(c.Name, " ("+copiedSuffix)[0]), copiedSuffix)
+				err = copyRow(ctx, tx, c)
+			}
+			if err != nil {
+				left = append(left, fmt.Sprintf("The credential %q (id %q) of before 0.13 could not be copied into the database, and is left out: %s. Its secret stays in the Secret; make it again in Administration › Credentials.", c.Name, c.ID, pgReason(err)))
+				continue
 			}
 			have = append(have, c)
 			n++
+		}
+		if len(left) > 0 {
+			if err := noteInMigration(ctx, tx, left); err != nil {
+				return 0, err
+			}
 		}
 		return n, nil
 	})
@@ -275,6 +323,54 @@ func CopyList(ctx context.Context, d *db.DB, from SecretStore) (int, error) {
 		n = 0
 	}
 	return n, err
+}
+
+// copyRow writes a credential of the copy under a savepoint: one that
+// fails leaves the copy's transaction as it was.
+func copyRow(ctx context.Context, tx pgx.Tx, c Credential) error {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	row := rowOf(c)
+	if _, err := sp.Exec(ctx, upsertSQL, db.Fields(&row)...); err != nil {
+		_ = sp.Rollback(ctx)
+		return err
+	}
+	return sp.Commit(ctx)
+}
+
+// pgReason is why Postgres refused a row, without what it held.
+func pgReason(err error) string {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return pe.Message
+	}
+	return err.Error()
+}
+
+// noteInMigration adds notes to the note of the upgrade, which the page
+// shows until a SuperAdmin dismisses it.
+func noteInMigration(ctx context.Context, tx pgx.Tx, notes []string) error {
+	var m Migration
+	b, _, err := db.LoadScope(ctx, tx, migrationScope)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(b, &m); err != nil {
+			return err
+		}
+	}
+	for _, n := range notes {
+		if !containsString(m.Notes, n) {
+			m.Notes = append(m.Notes, n)
+		}
+	}
+	m.Dismissed = false
+	next, _ := json.Marshal(m)
+	_, err = db.SaveScope(ctx, tx, migrationScope, next, db.AnyVersion, "")
+	return err
 }
 
 // Unmatched compares the two halves at a start: the ids of the secrets in
