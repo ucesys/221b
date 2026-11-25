@@ -146,3 +146,20 @@ func TestARollbackToANegativeRevisionIsRefusedOnItsCard(t *testing.T) {
 		t.Fatalf("impact %v", got.Plan.Impact)
 	}
 }
+
+// helm history --max below 1 is refused in words, not by a panic (review
+// of November 24, 2026, nit: helm.go:187).
+func TestHelmHistoryRefusesAMaxBelowOne(t *testing.T) {
+	_, cl, _, _, _ := setup(t, Options{})
+	helmRecord(t, cl, "web", "hist", 1, `{"name":"hist","namespace":"web","version":1,"info":{"status":"deployed"},"chart":{"metadata":{"name":"web","version":"1.0.0"}},"manifest":""}`)
+	var d Discovery
+	disc, err := d.For(cl.ID, cl.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := runHelm(context.Background(), mustParse(t, "helm history hist -n web --max -1"), Target{Config: cl.Config, Discovery: disc}, &out, &out)
+	if code == 0 || !strings.Contains(out.String(), "--max must be 1 or more") {
+		t.Fatalf("%d %s", code, out.String())
+	}
+}

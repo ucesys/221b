@@ -180,6 +180,9 @@ func helm(ctx context.Context, c *Command, t Target, out, errOut io.Writer) erro
 		if h.Max, err = atoi(c.Flag("max"), 256); err != nil {
 			return err
 		}
+		if h.Max < 1 {
+			return fmt.Errorf("--max must be 1 or more, not %d", h.Max)
+		}
 		res, err := h.Run(c.Positionals[0])
 		if err != nil {
 			return err
