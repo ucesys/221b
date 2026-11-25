@@ -867,6 +867,12 @@ func (st *Store) HideRunValues(ctx context.Context, cluster string, params map[s
 	hidden, typed = map[string]string{}, map[string]string{}
 	for name, v := range params {
 		hidden[name] = v
+		if IsHidden(v) && !sens[name] {
+			// A digest stands for a sensitive value, and stays under a
+			// sensitive name: given under another, the run would hand the
+			// value to a parameter nobody weighed as sensitive (FU-05).
+			return nil, nil, fmt.Errorf("%w: %s is given a hidden value, which stays under a sensitive name: type a value, or bind %s to the variable (var:NAME)", ErrInvalid, name, name)
+		}
 		if _, bound := Bound(v); bound || IsHidden(v) || !sens[name] {
 			continue
 		}

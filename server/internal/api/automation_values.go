@@ -83,6 +83,25 @@ func (s *Server) weighRun(r *http.Request, list automationFleets, sc automation.
 			changed = append(changed, name)
 		}
 	}
+	// A parameter that gets a sensitive value is weighed as sensitive,
+	// whatever its own name: one bound to a sensitive variable, or given a
+	// digest, would otherwise hand that value to any parameter of the
+	// script with no second admin (FU-05).
+	for name, val := range run {
+		if p, declared := v.Header.Param(name); !declared || p.Secret {
+			continue
+		}
+		hidden := automation.IsHidden(val)
+		if bound, ok := automation.Bound(val); ok && slices.Contains(sensitive, bound) {
+			hidden = true
+		}
+		for _, n := range targets {
+			hidden = hidden || automation.IsHidden(values[n][name])
+		}
+		if hidden && !slices.Contains(sensitive, name) {
+			sensitive = append(sensitive, name)
+		}
+	}
 	sort.Strings(changed)
 	out := runWeight{Changed: changed, Impact: []automation.ImpactItem{}}
 	if len(changed) == 0 {
