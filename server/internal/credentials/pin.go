@@ -2,9 +2,11 @@ package credentials
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,13 +37,46 @@ func baseRoots(hc *http.Client) *x509.CertPool {
 }
 
 // probe looks at the certificate an https:// address (an oci:// one's
-// registry) presents, with the credential's private CA and pin.
-func (s *Service) probe(ctx context.Context, target string, t certpin.Trust) (certpin.Cert, error) {
+// registry) presents, with the credential's private CA and pin. A client
+// certificate's credential shows its certificate when the server asks
+// for one: a server capped at TLS 1.2 that aborts on an empty one
+// (Apache's SSLVerifyClient require, HAProxy, Java's clientAuth) shows
+// nothing otherwise (credentials-cut-1).
+func (s *Service) probe(ctx context.Context, target string, t certpin.Trust, client *tls.Certificate) (certpin.Cert, error) {
 	if rest, ok := strings.CutPrefix(target, "oci://"); ok {
 		host, _, _ := strings.Cut(rest, "/")
 		target = "https://" + host
 	}
-	return certpin.Probe(ctx, s.o.Dial, target, baseRoots(s.o.HTTP), t)
+	if client == nil {
+		return certpin.Probe(ctx, s.o.Dial, target, baseRoots(s.o.HTTP), t)
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return certpin.Cert{}, certpin.ErrNotHTTPS
+	}
+	hostport := u.Host
+	if u.Port() == "" {
+		hostport = net.JoinHostPort(u.Hostname(), "443")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := s.o.Dial(ctx, "tcp", hostport)
+	if err != nil {
+		return certpin.Cert{}, fmt.Errorf("could not connect to %s: %w", hostport, err)
+	}
+	defer conn.Close()
+	sni := u.Hostname()
+	if net.ParseIP(sni) != nil {
+		sni = ""
+	}
+	// Only to read the certificate, as certpin.Probe does: Check verifies
+	// it below.
+	tc := tls.Client(conn, &tls.Config{ServerName: sni, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12, //nolint:gosec // verified by Check
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return client, nil }})
+	if err := tc.HandshakeContext(ctx); err != nil {
+		return certpin.Cert{}, fmt.Errorf("the TLS handshake with %s failed: %w", hostport, err)
+	}
+	return certpin.Check(tc.ConnectionState().PeerCertificates, u.Hostname(), certpin.Roots(baseRoots(s.o.HTTP), t.CAPEM), t.Pin, time.Now()), nil
 }
 
 // noteCertificate adds to a test the certificate its address presented,
@@ -54,7 +89,7 @@ func (s *Service) noteCertificate(ctx context.Context, use *Use, target string, 
 	if t.OK && use.Pin == "" {
 		return
 	}
-	c, err := s.probe(ctx, target, use.Trust())
+	c, err := s.probe(ctx, target, use.Trust(), use.Certificate())
 	if err != nil || c.Trusted && !c.Pinned {
 		return
 	}
@@ -96,8 +131,16 @@ func (s *Service) Trust(ctx context.Context, id, typed, sha256, by string) (Cred
 	if !c.Covers(target) {
 		return Credential{}, certpin.Cert{}, invalid("%s is not under the endpoint %s", target, c.Endpoint)
 	}
+	var client *tls.Certificate
+	if c.Kind == KindClientCert {
+		if sec, err := s.secret(ctx, id); err == nil {
+			if kp, err := tls.X509KeyPair([]byte(c.CertPEM), []byte(sec.KeyPEM)); err == nil {
+				client = &kp
+			}
+		}
+	}
 	cert, err := CheckTrust(ctx, func(ctx context.Context) (certpin.Cert, error) {
-		return s.probe(ctx, target, certpin.Trust{CAPEM: c.CAPEM})
+		return s.probe(ctx, target, certpin.Trust{CAPEM: c.CAPEM}, client)
 	}, hostOf(target), sha256)
 	if err != nil {
 		return Credential{}, certpin.Cert{}, err

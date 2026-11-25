@@ -11,6 +11,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -750,5 +751,40 @@ func TestAnOCIEndpointIsTestedAtTheRegistry(t *testing.T) {
 	}
 	if res, _ := s.RunTest(ctx, bad.ID, "", "ann"); res.OK || !strings.Contains(res.Text, "token service") {
 		t.Errorf("a wrong token: %+v", res)
+	}
+}
+
+// credentials-cut-1: a client certificate's Test and Trust look at the
+// server's certificate with the client certificate, so a server capped
+// at TLS 1.2 that aborts on an empty one (Apache's SSLVerifyClient
+// require) still shows its certificate, and it can be trusted.
+func TestTrustIsReachableForAClientCertificate(t *testing.T) {
+	server := certpintest.SelfSigned(t)
+	client := certpintest.SelfSigned(t, "client.example")
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TLS.PeerCertificates) == 0 || !r.TLS.PeerCertificates[0].Equal(client.Leaf) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Aborts on an empty client certificate, at TLS 1.2.
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{server.TLS}, ClientAuth: tls.RequireAnyClientCert, MaxVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	s := pinService(t)
+	c, err := s.Create(ctx, Credential{Name: "mtls", Kind: KindClientCert, Endpoint: srv.URL, CertPEM: client.PEM}, Secret{KeyPEM: keyPEM(t, client)}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.RunTest(ctx, c.ID, "", "ann")
+	if err != nil || res.Certificate == nil || !res.Certificate.Trustable {
+		t.Fatalf("no certificate shown: %+v %v", res, err)
+	}
+	if _, _, err := s.Trust(ctx, c.ID, "", res.Certificate.SHA256, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.RunTest(ctx, c.ID, "", "ann"); err != nil || !res.OK {
+		t.Fatalf("trusted: %+v %v", res, err)
 	}
 }
