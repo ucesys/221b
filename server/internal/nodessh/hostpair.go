@@ -661,7 +661,13 @@ func (s *Service) verifyHost(ctx context.Context, h Host, by string) (Host, erro
 		if strings.Contains(err.Error(), "unable to authenticate") {
 			return Host{}, fmt.Errorf("%s did not take the console's certificate for %s: run the setup command on it as root, then check again", h.Name, h.LoginUser)
 		}
-		return Host{}, fmt.Errorf("the console could not log in to %s with its certificate: %s", h.Name, strings.TrimPrefix(err.Error(), ErrUnreachable.Error()+": "))
+		why := cause{text: strings.TrimPrefix(err.Error(), ErrUnreachable.Error()+": "), errs: []error{err}}
+		if ctx.Err() != nil {
+			// A dial cut short says "i/o timeout"; the caller asks for
+			// the context's own error (504 for a deadline).
+			why.errs = append(why.errs, ctx.Err())
+		}
+		return Host{}, fmt.Errorf("the console could not log in to %s with its certificate: %w", h.Name, why)
 	}
 	x, err := s.opts.Hosts.update(ctx, h.Cluster, h.Name, func(x *Host) error {
 		x.State, x.PairedBy, x.PairedAt = HostPaired, by, &now
@@ -767,6 +773,16 @@ func (s *Service) RemoveHost(ctx context.Context, cluster, name string) (Host, s
 type stdoutOnly struct{ syncBuffer }
 
 func (*stdoutOnly) Stderr() io.Writer { return io.Discard }
+
+// cause is an error said in other words that still wraps what is behind
+// it, for errors.Is.
+type cause struct {
+	text string
+	errs []error
+}
+
+func (c cause) Error() string   { return c.text }
+func (c cause) Unwrap() []error { return c.errs }
 
 // syncBuffer takes the two streams of a session at once.
 type syncBuffer struct {

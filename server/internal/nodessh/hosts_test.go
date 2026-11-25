@@ -1005,3 +1005,17 @@ func TestASignInThatFailsBeforeThePasswordSaysWhy(t *testing.T) {
 	}
 	e.leaks(t, "a dropped connection", err.Error())
 }
+
+// A check that runs out of time says so to its caller, which answers 504
+// (the review of November 24, 2026: the error was rewritten as text, and
+// the API answered 502).
+func TestACheckOutOfTimeIsADeadline(t *testing.T) {
+	e := newHostEnv(t)
+	e.trust(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, err := e.svc.CheckHost(ctx, "local", "backup-1", "Pat")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.HasPrefix(err.Error(), "the console could not log in to backup-1 with its certificate: ") || strings.Contains(err.Error(), "unreachable: ") {
+		t.Fatalf("a check out of time: %v", err)
+	}
+}
