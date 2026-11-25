@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -699,7 +700,7 @@ func outcomeOf(failed bool) string {
 // kube runs kubectl lines, each checked against what the header declares,
 // and stops at the first that fails. It says whether any line ran that can
 // change something.
-func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity string, h Header, lines []string, env map[string]string, out io.Writer) (bool, error) {
+func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity string, h Header, lines []string, env map[string]string, out io.Writer, cordoned *bool) (bool, error) {
 	if e.opts.Kube == nil {
 		return false, errors.New("this console cannot run Kubernetes commands")
 	}
@@ -741,12 +742,42 @@ func (e *Engine) kube(ctx context.Context, r Run, a *activeRun, node, identity s
 		if err == nil && code != 0 {
 			err = fmt.Errorf("%q exited with %d", line, code)
 		}
+		e.noteCordon(a, r, node, line, err == nil, cordoned)
 		e.command(r, node, line, outcomeOf(err != nil))
 		if err != nil {
 			return changed, err
 		}
 	}
 	return changed, nil
+}
+
+// noteCordon records what a hook's line did to the node's scheduling, as
+// soon as it ran outside a dry run: a cordon or a drain of the node leaves
+// it cordoned whatever comes after (a drain cordons first, and one that
+// fails stays so), an uncordon that worked undoes it. cordoned is nil for
+// a line that is no hook's.
+func (e *Engine) noteCordon(a *activeRun, r Run, node, line string, ok bool, cordoned *bool) {
+	if cordoned == nil || r.DryRun {
+		return
+	}
+	words := strings.Fields(line)
+	if !slices.Contains(words, node) {
+		return
+	}
+	actions, err := KubeActionsOf(line)
+	if err != nil {
+		return
+	}
+	switch verb := actions[0].Verb; {
+	case verb == "cordon" || verb == "drain":
+		*cordoned = true
+	case verb == "uncordon" && ok:
+		*cordoned = false
+	default:
+		return
+	}
+	state := *cordoned
+	e.setNode(a, node, func(n *NodeResult) { n.Cordoned = state })
 }
 
 func readOnlyVerb(v string) bool {
@@ -757,14 +788,14 @@ func readOnlyVerb(v string) bool {
 	return false
 }
 
-func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer) error {
+func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, list []Hook, env map[string]string, out io.Writer, cordoned *bool) error {
 	for _, h := range list {
 		fmt.Fprintf(out, "[221B] %s on %s\n", h.Label, node)
 		identity := h.Identity
 		if identity == "" {
 			identity = r.Identity
 		}
-		if _, err := e.kube(ctx, r, a, node, identity, h.Header, h.Lines, env, out); err != nil {
+		if _, err := e.kube(ctx, r, a, node, identity, h.Header, h.Lines, env, out, cordoned); err != nil {
 			return fmt.Errorf("%s: %w", h.Label, err)
 		}
 	}
@@ -823,12 +854,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 		fmt.Fprintf(out, "[221B] %s is a host outside Kubernetes: the hooks around each node do not run on it\n", node)
 		before, after = nil, nil
 	}
-	hookErr := e.hooks(ctx, r, a, node, before, env, out)
-	// Drained, the node stays cordoned until the hooks after uncordon it.
-	cordoned := hookErr == nil && !r.DryRun && len(before) > 0 && len(after) > 0
-	if cordoned {
-		e.setNode(a, node, func(n *NodeResult) { n.Cordoned = true })
-	}
+	// Cordoned, by a hook's cordon or drain of the node, it stays so until
+	// a hook's uncordon works: whatever fails in between, the record says
+	// so (LeftCordoned).
+	cordoned := false
+	hookErr := e.hooks(ctx, r, a, node, before, env, out, &cordoned)
 	var result Result
 	hasResult := false
 	if hookErr != nil {
@@ -841,7 +871,7 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 			}
 		}
 		tctx, cancel := context.WithTimeout(ctx, time.Duration(ro.TimeoutMinutes)*time.Minute)
-		changed, err := e.kube(tctx, r, a, node, r.Identity, header, lines, env, out)
+		changed, err := e.kube(tctx, r, a, node, r.Identity, header, lines, env, out, nil)
 		cancel()
 		switch {
 		case ctx.Err() != nil:
@@ -917,10 +947,8 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	healthy := res.State == NodeChanged || res.State == NodeNoChange
 	switch {
 	case healthy:
-		if err := e.hooks(ctx, r, a, node, after, env, out); err != nil {
+		if err := e.hooks(ctx, r, a, node, after, env, out, &cordoned); err != nil {
 			res.State, res.Error = NodeFailed, "after the script: "+err.Error()
-		} else {
-			cordoned = false
 		}
 	case cordoned:
 		res.Error = strings.TrimPrefix(res.Error+"; the node stays cordoned: nothing ran after the script", "; ")
