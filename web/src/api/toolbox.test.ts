@@ -152,6 +152,15 @@ describe('session clocks', () => {
     expect(tabState({ ...base, state: 'ended' }, now)).toBe('ended')
   })
 
+  // The warning comes 120 s before the idle end, or halfway with a shorter
+  // idle limit: with toolbox.idleTimeout 1m it showed from the first
+  // second (the toolbox review's sweep).
+  it('warns of the idle end halfway with a short idle limit', () => {
+    const short = { ...base, idleSeconds: 60, lastActive: '2026-10-26T10:00:00Z' }
+    expect(tabState(short, Date.parse('2026-10-26T10:00:05Z'))).toBe('live')
+    expect(tabState(short, Date.parse('2026-10-26T10:00:40Z'))).toBe('idle')
+  })
+
   it('formats', () => {
     expect(clock(65)).toBe('1:05')
     expect(clock(3725)).toBe('1:02:05')
