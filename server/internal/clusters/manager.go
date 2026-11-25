@@ -262,7 +262,15 @@ func (m *Manager) Sync(ctx context.Context) error {
 		m.mu.Unlock()
 	}
 	var notAsked []error
-	for id, rev := range revs {
+	// In order of id, so that what could not be read is said the same way
+	// at every sync, and said once (Run).
+	ids := make([]string, 0, len(revs))
+	for id := range revs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rev := revs[id]
 		if m.seen[id] == rev {
 			continue
 		}

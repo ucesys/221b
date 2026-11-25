@@ -891,3 +891,29 @@ func TestAContextAloneIsNotTakenForAnEdit(t *testing.T) {
 		t.Fatalf("the same context: %v", err)
 	}
 }
+
+// Nit: a sync's "could not be read" error joined its connections' errors
+// in map order, so its text changed from one sync to the next and the
+// warning that is said once was said again and again.
+func TestASyncSaysTheSameErrorTheSameWay(t *testing.T) {
+	store := clusters.NewMemoryStore()
+	ctx := context.Background()
+	for _, id := range []string{"alpha", "beta", "gamma"} {
+		must(t, store.Save(ctx, clusters.Spec{ID: id, Name: id, Env: "development", Server: "https://10.9.0.1:6443", CA: "system", Auth: "token", Mode: "read"}, &clusters.Credential{Token: saToken(id)}))
+	}
+	f := &flaky{Store: store}
+	f.set(nil, fmt.Errorf("reading: %w", db.ErrUnavailable), nil)
+	m := clusters.New(f, quiet)
+	first := ""
+	for i := 0; i < 30; i++ {
+		err := m.Sync(ctx)
+		if err == nil {
+			t.Fatal("a sync whose connections cannot be read said nothing")
+		}
+		if i == 0 {
+			first = err.Error()
+		} else if err.Error() != first {
+			t.Fatalf("sync %d said it otherwise:\n%s\nthen\n%s", i, first, err)
+		}
+	}
+}
