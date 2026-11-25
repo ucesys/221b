@@ -1518,9 +1518,16 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 		// The dry run is added to the parsed command, not to the text: a
 		// comment at the end of the line would swallow it there, and the
 		// line would make the real change (asked November 24, 2026).
+		asked := c.DryRun()
 		c = asDryRun(c)
 		if !c.DryRun() {
 			return 1, fmt.Errorf("refused: Watson could not make %s a dry run, so it ran nothing", c.Name())
+		}
+		if !asked && c.Name() == "kubectl drain" && !c.Has("timeout") {
+			// As a card's dry run: a budget that allows no eviction would
+			// hold the dry run as it holds the drain.
+			c.Flags["timeout"] = []string{"12s"}
+			c.Args = append(c.Args, "--timeout=12s")
 		}
 	}
 	if c.Change && !c.DryRun() {

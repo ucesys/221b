@@ -216,6 +216,7 @@ A `users.yaml` of local accounts (`auth.local.existingSecret`) must be a list of
 - **A card's dry run keeps at most 64 KB of output** (P6-04; review of November 24, 2026): the bound was set but never applied, so a dry run that printed megabytes (a selector over many objects, a long error) kept them all in the card, in memory and in every answer that carried it. Past 64 KB the output is cut, and the card says so.
 - **`helm upgrade --install` after `helm uninstall --keep-history` installs, as the helm CLI does** (HA-06; review of November 24, 2026): Watson installed only when the release had no history at all, so a release uninstalled with its history kept failed as having no deployed revision, and its card said so. It now installs over the kept history (Helm's replace), and the card says it does.
 - **A namespace's delete card lapses when what is in it changes** (NS-02, P6-04; review of November 24, 2026): the card counts the pods, claims, Secrets and ConfigMaps it deletes, but its guard held only the namespace's phase, so objects created or removed before the approval went with it unseen. The guard now holds those objects by name.
+- **An Automation dry run of a drain gives up after 12 seconds** (review of November 24, 2026): a card's dry run of a drain stops after 12 seconds, since a disruption budget that allows no eviction holds the dry run as it holds the drain, but a Kubernetes script's or hook's dry run had no such bound and could wait as long as the drain would.
 
 ### Security
 

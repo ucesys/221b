@@ -45,3 +45,21 @@ func TestAnAutomationDryRunOfALineWithACommentChangesNothing(t *testing.T) {
 		t.Fatalf("--dry-run=none: %d %v %q", code, err, out.String())
 	}
 }
+
+// An Automation dry run of a drain gives up after 12 seconds, as a card's
+// does: a budget allowing no eviction would hold it as long as the drain
+// (review of November 24, 2026, cut by the cap: service.go:1354).
+func TestAnAutomationDryRunOfADrainHasATimeout(t *testing.T) {
+	var args []string
+	svc, cl, _, _, _ := setup(t, Options{Run: func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+		args = append(append([]string(nil), c.Args...), extra...)
+		return 0
+	}})
+	var out bytes.Buffer
+	if _, err := svc.RunLine(context.Background(), cl, kube.Person{}, "kubectl drain worker-001 --ignore-daemonsets", true, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(args, " "); !strings.Contains(got, "--timeout=12s") || !strings.Contains(got, "--dry-run=server") {
+		t.Fatalf("args %s", got)
+	}
+}
