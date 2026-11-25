@@ -10,6 +10,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/twoperson"
@@ -117,5 +118,36 @@ func TestAnEditThatFailsFilesNoEnvironmentRequest(t *testing.T) {
 		if it.State == approvalPending {
 			t.Fatalf("a failed edit left a request: %s", it.What)
 		}
+	}
+}
+
+// Clusters review, cut list: under strict, a console that lost read
+// access to ClusterRoles compared the roles its cache still held, and
+// stamped the old verdict as fresh at every check, so the 15-minute age
+// limit never tripped.
+func TestRolesThatCanNoLongerBeReadAreNotComparedAgain(t *testing.T) {
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	s := New(Options{Cluster: local, Logger: quietLog(), Roles: RolesOptions{Enforce: "strict"}})
+	if why := s.RoleRefusal(clusters.LocalID); why != "" {
+		t.Fatalf("shipped roles: %q", why)
+	}
+	// Twenty minutes on, the console may no longer list ClusterRoles: its
+	// cache still holds what it read.
+	d, _ := s.monitor().Get(clusters.LocalID)
+	d.CheckedAt = time.Now().Add(-20 * time.Minute)
+	s.monitor().Set(clusters.LocalID, d)
+	local.SetInfo(func(i *kube.Info) {
+		i.Warnings = []string{"Not allowed to list or watch clusterroles. Check the ClusterRole the chart installs."}
+	})
+	if why := s.RoleRefusal(clusters.LocalID); why == "" {
+		t.Fatal("roles that can no longer be read passed on the cache's old copy")
+	}
+	s.checkChangedRoles()
+	if d, _ := s.monitor().Get(clusters.LocalID); time.Since(d.CheckedAt) < time.Minute {
+		t.Error("a check stamped roles it could not read as fresh")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -14,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
@@ -73,9 +75,10 @@ func ruleOf(p rbacv1.PolicyRule) roles.Rule {
 // deployedRoles reads the four roles and the nodes role from the cache. ok
 // is false when the cache holds no ClusterRoles at all, which is not
 // something a cluster does: the console has not read them (yet), and
-// "missing" would be a false report.
+// "missing" would be a false report. It is false too while the cache
+// cannot follow them (rolesUnread): it keeps the copy it read last.
 func deployedRoles(src views.Source) (byID map[roles.ID]roles.Deployed, nodes roles.Deployed, ok bool) {
-	if len(src.Objects("clusterroles", "")) == 0 {
+	if len(src.Objects("clusterroles", "")) == 0 || rolesUnread(src) {
 		return nil, roles.Deployed{}, false
 	}
 	byID = map[roles.ID]roles.Deployed{}
@@ -94,6 +97,24 @@ func deployedRoles(src views.Source) (byID map[roles.ID]roles.Deployed, nodes ro
 		byID[id] = read(id.ClusterRole())
 	}
 	return byID, read(roles.NodesClusterRole), true
+}
+
+// rolesUnread says whether the cluster's watch of ClusterRoles has been
+// failing lately (the connection's warnings, kept for two minutes and
+// renewed at each retry): forbidden, unauthorized or cut off, its cache
+// keeps the roles it read last, and a comparison of them would stamp an
+// old verdict as fresh, so strict's age limit would never trip (RB-36).
+func rolesUnread(src views.Source) bool {
+	in, ok := src.(interface{ Info() kube.Info })
+	if !ok {
+		return false
+	}
+	for _, w := range in.Info().Warnings {
+		if strings.Contains(w, " clusterroles") {
+			return true
+		}
+	}
+	return false
 }
 
 // isOurRole says whether a binding's role is one of the four, or the
