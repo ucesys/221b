@@ -1203,7 +1203,7 @@ func TestATestsAddressIsKeptWithoutTheSecret(t *testing.T) {
 			t.Fatal(err)
 		}
 		kept, _ := s.Get(ctx, c.ID)
-		for _, target := range []string{res.Target, kept.LastTest.Target} {
+		for _, target := range []string{res.Target, kept.LastTest.Target, res.Text, kept.LastTest.Text} {
 			for _, f := range secretForms(tok) {
 				if strings.Contains(target, f) {
 					t.Errorf("the address kept holds the secret: %s", target)
