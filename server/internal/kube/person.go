@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -36,15 +37,25 @@ func (p Person) Key() string {
 }
 
 // groups are the person's groups as Kubernetes sees a signed-in user:
-// with system:authenticated, which every real user carries.
+// with system:authenticated, which every real user carries, and for a
+// ServiceAccount (system:serviceaccount:<ns>:<name>, as the automation
+// acts) the groups the API server gives its token, system:serviceaccounts
+// and system:serviceaccounts:<ns>: with a group impersonated it adds none
+// of them itself (kube#9).
 func (p Person) groups() []string {
 	out := append([]string(nil), p.Groups...)
-	for _, g := range out {
-		if g == "system:authenticated" {
-			return out
+	want := []string{"system:authenticated"}
+	if rest, ok := strings.CutPrefix(p.User, "system:serviceaccount:"); ok {
+		if ns, name, ok := strings.Cut(rest, ":"); ok && ns != "" && name != "" && !strings.Contains(name, ":") {
+			want = append(want, "system:serviceaccounts", "system:serviceaccounts:"+ns)
 		}
 	}
-	return append(out, "system:authenticated")
+	for _, g := range want {
+		if !slices.Contains(out, g) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // ImpersonationGroups are the groups to impersonate the person with.
