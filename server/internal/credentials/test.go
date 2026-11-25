@@ -241,7 +241,7 @@ func (s *Service) testBucket(ctx context.Context, c Credential, use *Use, target
 	creds := func(context.Context) (awsv4.Credentials, error) {
 		return awsv4.Credentials{AccessKeyID: use.AccessKeyID, SecretAccessKey: use.SecretAccessKey, SessionToken: use.SessionToken}, nil
 	}
-	client, err := s3.New(s3.Config{Endpoint: endpoint, Region: use.Region, Bucket: bucket, PathStyle: endpoint != "", Credentials: creds, HTTP: s.clientFor(c), Now: s.o.Now})
+	client, err := s3.New(s3.Config{Endpoint: endpoint, Region: use.Region, Bucket: bucket, PathStyle: endpoint != "", Credentials: creds, HTTP: s.clientFor(c, target), Now: s.o.Now})
 	if err != nil {
 		t.Text = err.Error()
 		return

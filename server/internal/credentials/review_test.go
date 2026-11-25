@@ -15,8 +15,10 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/ucesys/221b/server/internal/certpin"
 	"github.com/ucesys/221b/server/internal/certpin/certpintest"
 	"github.com/ucesys/221b/server/internal/db/dbtest"
 )
@@ -465,5 +467,55 @@ func TestTheGitSuffixStaysInItsScope(t *testing.T) {
 	}
 	if u.Covers(S3Address("", "docs.git")) {
 		t.Error("the access key's use covers the bucket docs.git")
+	}
+}
+
+// credentials#10: an endpoint's pinned certificate is trusted at the
+// endpoint's host alone: an OAuth2 token URL on another host that
+// presents it is refused, and the client secret is never posted there.
+func TestThePinIsTrustedAtTheEndpointsHostAlone(t *testing.T) {
+	cert := certpintest.SelfSigned(t, "api.internal.corp")
+	var mu sync.Mutex
+	posted := 0
+	srv := certpintest.Server(t, cert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			mu.Lock()
+			posted++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"fake-minted","token_type":"bearer","expires_in":3600}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	s := pinService(t)
+	pin := &certpin.Pin{SHA256: certpin.Fingerprint(cert.Leaf.Raw)}
+	newOAuth := func(name, endpoint, tokenURL string) Credential {
+		c, err := s.Create(ctx, Credential{Name: name, Kind: KindOAuth2, Endpoint: endpoint, TokenURL: tokenURL, ClientID: "client"}, Secret{ClientSecret: "fake-client-secret"}, "ann")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.o.Repo.Update(ctx, c.ID, func(cur *Credential) error { cur.PinnedCert = pin; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	// The endpoint is pinned; the token URL is another host presenting
+	// the same certificate.
+	other := newOAuth("other", "https://localhost:"+port, "https://127.0.0.1:"+port+"/token")
+	if _, err := s.Resolve(ctx, other.ID, UseHTTP, "https://localhost:"+port+"/x"); err == nil {
+		t.Fatal("the client secret went to another host that presented the pinned certificate")
+	}
+	mu.Lock()
+	n := posted
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("the token URL was posted to %d times", n)
+	}
+	// On the endpoint's own host, the pin holds.
+	same := newOAuth("same", "https://127.0.0.1:"+port, "https://127.0.0.1:"+port+"/token")
+	if u, err := s.Resolve(ctx, same.ID, UseHTTP, "https://127.0.0.1:"+port+"/x"); err != nil || u.Token != "fake-minted" {
+		t.Fatalf("the endpoint's own token URL: %v", err)
 	}
 }

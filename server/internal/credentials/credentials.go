@@ -700,6 +700,12 @@ func (e Endpoint) Covers(target string) bool {
 	return ok && slices.Contains(gitPaths, rest)
 }
 
+// sameHost says whether an address is on the endpoint's host and port.
+func (e Endpoint) sameHost(target string) bool {
+	t, err := parseTarget(target)
+	return err == nil && t.Host == e.Host
+}
+
 // gitPaths are what a git client asks under a repository's address that
 // ends with .git: the repository, and its smart HTTP paths.
 var gitPaths = []string{"", "/", "/info/refs", "/git-upload-pack", "/git-receive-pack"}

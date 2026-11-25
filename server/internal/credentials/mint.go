@@ -133,7 +133,7 @@ func (s *Service) githubToken(ctx context.Context, c Credential, sec Secret) (st
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	res, err := s.clientFor(c).Do(req)
+	res, err := s.clientFor(c, req.URL.String()).Do(req)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("asking GitHub for %s's installation token: %w", c.Name, err)
 	}
@@ -162,7 +162,7 @@ func (s *Service) oauth2Token(ctx context.Context, c Credential, sec Secret) (st
 	}
 	// The client secret goes to the token URL alone: a redirect is not
 	// followed (CR-04).
-	hc := *s.clientFor(c)
+	hc := *s.clientFor(c, c.TokenURL)
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, &hc)
 	tok, err := cfg.Token(ctx)
@@ -180,10 +180,17 @@ func (s *Service) oauth2Token(ctx context.Context, c Credential, sec Secret) (st
 	return tok.AccessToken, exp, nil
 }
 
-// clientFor is the service's client with the credential's private CA and
-// pinned certificate.
-func (s *Service) clientFor(c Credential) *http.Client {
+// clientFor is the service's client for an address with the credential's
+// private CA and pinned certificate. The pin is the endpoint's: it is
+// accepted under any name, so it is kept only for an address on the
+// endpoint's host (credentials#10); an OAuth2 token URL or a GitHub API
+// elsewhere is verified as any host is, with the private CA, which still
+// checks names.
+func (s *Service) clientFor(c Credential, target string) *http.Client {
 	u := &Use{CAPEM: c.CAPEM, Pin: c.PinnedCert.Fingerprint()}
+	if ep, err := ParseEndpoint(c.Endpoint); err != nil || !ep.sameHost(target) {
+		u.Pin = ""
+	}
 	if u.Trust().Empty() {
 		return s.o.HTTP
 	}
