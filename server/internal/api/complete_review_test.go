@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -55,5 +56,44 @@ func TestACardWaitsUntilTheClusterIsComplete(t *testing.T) {
 	st.Sweep(ctx)
 	if c, _ := st.Get(ctx, id); c.State != cards.Expired || !strings.Contains(c.Reason, "its alert resolved") {
 		t.Fatalf("once complete: %+v", c)
+	}
+}
+
+// An acknowledgement is not deleted for good because the cluster has not
+// listed its alert yet (kube#14): while it is not complete, acknowledging
+// one alert leaves the others' acknowledgements as they are.
+func TestAcknowledgementsOutliveAClusterNotListedYet(t *testing.T) {
+	srv, viewer, _, _, local, store := multiSetupWith(t, "viewer@corp.example", nil)
+	fail := func(ns, name string, failing bool) {
+		local.Update("pods", ns, name, func(o runtime.Object) {
+			p := o.(*corev1.Pod)
+			if failing {
+				p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", RestartCount: 4, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}
+			} else {
+				p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+			}
+		})
+		store.Notify(kube.Change{Info: true, Views: map[string][]string{live.ViewAlerts: {kube.AllRows}}})
+		store.Process()
+	}
+	fail("web", "shop", true)
+	fail("kube-system", "dns", true)
+	for _, key := range []string{"pod:web/shop", "pod:kube-system/dns"} {
+		if r, b := send(t, viewer, http.MethodPost, srv.URL+"/api/v1/alerts/ack", `{"key":"`+key+`","acknowledge":true}`); r.StatusCode != http.StatusOK {
+			t.Fatalf("ack %s: %d %s", key, r.StatusCode, b)
+		}
+	}
+	// A start: the events are not listed yet, so dns's alert is not built.
+	local.SetInfo(func(i *kube.Info) { i.Complete = false })
+	fail("kube-system", "dns", false)
+	if r, b := send(t, viewer, http.MethodPost, srv.URL+"/api/v1/alerts/ack", `{"key":"pod:web/shop","acknowledge":false}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("unack: %d %s", r.StatusCode, b)
+	}
+	// Listed: dns's alert is there again, still acknowledged.
+	local.SetInfo(func(i *kube.Info) { i.Complete = true })
+	fail("kube-system", "dns", true)
+	_, b := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/snapshot?views=alerts", "")
+	if !strings.Contains(b, `"key":"pod:kube-system/dns"`) || !strings.Contains(b, `"ack":{"by":"viewer@corp.example"`) {
+		t.Fatalf("the acknowledgement of dns went: %s", b)
 	}
 }

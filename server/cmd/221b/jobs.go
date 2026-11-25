@@ -144,21 +144,23 @@ func (w *jobsWiring) setIssues(s *issues.Service) {
 }
 
 // alertRows are a cluster's Alerts tab as the console sees it; ok is
-// false when the cluster is not served here.
-func alertRows(manager *clusters.Manager, cluster string) ([]views.AlertRow, bool) {
+// false when the cluster is not served here, and complete says the rows
+// were built once the cluster had listed every kind (kube#14).
+func alertRows(manager *clusters.Manager, cluster string) (rows []views.AlertRow, ok, complete bool) {
 	st, _, ok := manager.Lookup(cluster)
 	if !ok || st == nil {
-		return nil, false
+		return nil, false, false
 	}
 	var snap struct {
 		Views map[string]struct {
 			Rows []views.AlertRow `json:"rows"`
 		} `json:"views"`
 	}
-	if json.Unmarshal(st.Snapshot([]string{live.ViewAlerts}, nil), &snap) != nil {
-		return nil, false
+	raw, complete := st.CompleteSnapshot([]string{live.ViewAlerts}, nil)
+	if json.Unmarshal(raw, &snap) != nil {
+		return nil, false, false
 	}
-	return snap.Views[live.ViewAlerts].Rows, true
+	return snap.Views[live.ViewAlerts].Rows, true, complete
 }
 
 // alertsOf reads every cluster's Alerts tab, as the console sees it,
@@ -172,7 +174,7 @@ func alertsOf(manager *clusters.Manager) func(ctx context.Context) []jobs.Alert 
 			if ctx.Err() != nil {
 				break
 			}
-			rows, ok := alertRows(manager, c.ID)
+			rows, ok, _ := alertRows(manager, c.ID)
 			if !ok {
 				continue
 			}
@@ -213,8 +215,11 @@ type alertAcker struct {
 }
 
 func (a alertAcker) Ack(ctx context.Context, in jobs.AlertAck) (bool, error) {
+	// The list is pruned against the Alerts rows only when they were built
+	// from every kind: before, an alert missing may only not be read yet,
+	// and its acknowledgement would go for good (kube#14).
 	var current func(key string) (string, bool)
-	if rows, ok := alertRows(a.manager, in.Cluster); ok {
+	if rows, ok, complete := alertRows(a.manager, in.Cluster); ok && complete {
 		now := map[string]string{}
 		for _, r := range rows {
 			if r.Severity != views.SevRecovered {

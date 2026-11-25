@@ -60,7 +60,17 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.opts.Now().UTC()
 	grace := s.opts.Settings.Current().PendingGrace()
+	// Until the cluster has listed every kind an alert is made of (events,
+	// claims), a missing alert may only not be read yet (kube#14).
+	complete := true
+	if c, ok := cl.(interface{ Complete() bool }); ok {
+		complete = c.Complete()
+	}
 	row, exists := views.BuildAlert(cl, in.Key, now, grace)
+	if in.Acknowledge && !exists && !complete {
+		jsonError(w, http.StatusConflict, "the console is still reading this cluster: acknowledge the alert again in a moment")
+		return
+	}
 	if in.Acknowledge && (!exists || row.Severity == views.SevRecovered) {
 		jsonError(w, http.StatusConflict, "this alert has cleared: there is nothing to acknowledge")
 		return
@@ -76,7 +86,8 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 	}
 	id := clusterID(r)
 	// Acknowledgements of alerts that changed or cleared go as this one is
-	// saved, so the list keeps only what still holds.
+	// saved, so the list keeps only what still holds; while the cluster is
+	// not listed whole, only this one changes (kube#14).
 	current := func(key string) (string, bool) {
 		a, ok := views.BuildAlert(cl, key, now, grace)
 		if !ok || a.Severity == views.SevRecovered {
@@ -85,7 +96,9 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 		return views.AlertFingerprint(a), true
 	}
 	_, err := s.opts.Settings.UpdateAcks(r.Context(), id, func(list []acks.Ack) []acks.Ack {
-		list = acks.Prune(list, current)
+		if complete {
+			list = acks.Prune(list, current)
+		}
 		if in.Acknowledge {
 			return acks.Set(list, acks.Ack{Key: in.Key, Fingerprint: views.AlertFingerprint(row), By: who, At: now})
 		}

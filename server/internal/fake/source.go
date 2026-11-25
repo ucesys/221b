@@ -181,6 +181,9 @@ func kindOf(obj runtime.Object) (kube.Kind, bool) {
 
 func typeName(obj runtime.Object) string { return reflect.TypeOf(obj).String() }
 
+// Complete reports whether every kind is listed, as Info says.
+func (s *Source) Complete() bool { return s.Info().Complete }
+
 // Info returns the cluster details.
 func (s *Source) Info() kube.Info {
 	s.mu.Lock()
