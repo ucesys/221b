@@ -63,3 +63,18 @@ func TestANamespaceDeleteCardLapsesWhenItsContentsChange(t *testing.T) {
 		t.Fatalf("approved: %v", err)
 	}
 }
+
+// The taint card says kubectl refuses a taint the node has, value and all,
+// without --overwrite, as kubectl does (review of November 24, 2026,
+// sweep).
+func TestATaintTheNodeHasIsRefusedWithoutOverwrite(t *testing.T) {
+	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Spec: corev1.NodeSpec{Taints: []corev1.Taint{{Key: "k", Value: "v", Effect: corev1.TaintEffectNoSchedule}}}}
+	got := taintImpact(context.Background(), nil, mustParse(t, "kubectl taint nodes n1 k=v:NoSchedule"), n, []string{"k=v:NoSchedule"})
+	if !strings.Contains(got[0], "kubectl will refuse") {
+		t.Fatalf("%v", got)
+	}
+	got = taintImpact(context.Background(), nil, mustParse(t, "kubectl taint nodes n1 k=v:NoSchedule --overwrite"), n, []string{"k=v:NoSchedule"})
+	if !strings.Contains(got[0], "already there") {
+		t.Fatalf("with --overwrite: %v", got)
+	}
+}

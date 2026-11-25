@@ -1133,11 +1133,13 @@ func taintImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node, c
 			}
 		}
 		switch {
+		case same != nil && !c.Has("overwrite"):
+			// kubectl refuses a taint whose key and effect the node has,
+			// whatever its value, without --overwrite.
+			diffs = append(diffs, fmt.Sprintf("it has %s, and --overwrite is false: kubectl will refuse", taintText(*same)))
+			continue
 		case same != nil && same.Value == want.Value:
 			diffs = append(diffs, taintText(want)+" is already there")
-			continue
-		case same != nil && !c.Has("overwrite"):
-			diffs = append(diffs, fmt.Sprintf("it has %s, and --overwrite is false: kubectl will refuse", taintText(*same)))
 			continue
 		case same != nil:
 			diffs = append(diffs, fmt.Sprintf("%s → %s", taintText(*same), taintText(want)))
