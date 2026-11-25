@@ -829,11 +829,13 @@ toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
   # and node opens a shell, runs one command, forwards a port, adds a
   # debug container, starts a debug pod, or opens a shell on a node. Each
-  # is a Watson card first (approved by a second person on production, and
-  # by a second SuperAdmin for anything on a node), then a session in the
-  # Dock that runs as the person who asked, with their roles: the roles
-  # decide who may use what (rbac.roles.admin.exec below); these values
-  # are the ceiling the console never exceeds.
+  # is a Watson card first (approved by a second person where the cluster's
+  # two-person rule says so, and for anything on a node by a second
+  # SuperAdmin on every cluster with nodeShell.approval always), then a
+  # session in the Dock that runs as the person who asked, with their
+  # roles: the roles decide who may use what (rbac.roles.admin.exec
+  # below); these values are the ceiling the console never exceeds. A key
+  # the chart does not know is refused.
   enabled: true
   # No keystrokes, output or forwarded bytes for this long ends a session.
   idleTimeout: 10m
