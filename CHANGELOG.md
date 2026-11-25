@@ -87,6 +87,8 @@ A connection made again in 0.12, after a rollback, for another API server than t
 
 ### Fixed
 
+- **A connection test still running when its connection was removed and made again, or re-pointed, was kept as the new connection's last test** (clusters review, finding 11), timed after the change, where a connection made again starts untested. A test is now kept only while the connection is the one it went to: made at the same time, with the same server, certificate check, sign-in method and credential.
+
 - **The connection test said "Can't connect" for a cluster reached through a proxy** (clusters review, finding 9). Its address and TLS steps resolved and dialled the API server directly, while the connection goes through a kubeconfig's `proxy-url` or `HTTPS_PROXY`, so Sign-in, Kubernetes and Permissions were never checked. The test now goes through the same proxy: an https:// server through the proxy's tunnel (CONNECT), anything else by reaching the proxy and checking the server when signing in.
 
 - **The connection test failed for a kubeconfig that sets `tls-server-name`** (clusters review, finding 10). Its TLS step checked the certificate against the address's host, while the connection checks it against the kubeconfig's `tls-server-name`, so a working connection tested as "Can't connect: the tls step failed". The step now checks the name the connection checks.

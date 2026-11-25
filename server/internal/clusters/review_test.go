@@ -27,6 +27,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters/clusterstest"
 	"github.com/ucesys/221b/server/internal/db"
 	"github.com/ucesys/221b/server/internal/kube/kubetest"
+	"github.com/ucesys/221b/server/internal/sim"
 )
 
 // started is a manager over store, started, with what it needs stopped
@@ -441,4 +442,72 @@ func testALocalEditIsHeld(t *testing.T, store clusters.Store) {
 		_, err = m.Update(ctx, clusters.LocalID, clusters.Draft{Spec: clusters.Spec{Name: "Lakehouse", Env: "staging", Description: "fresh", Mode: "read"}, EditVersion: now.EditVersion})
 		must(t, err)
 	}
+}
+
+// heldSim is a simulator that holds the test's question of who it signs
+// in as until released, and says when it is asked.
+func heldSim(t *testing.T) (srv *httptest.Server, asked chan struct{}, release func()) {
+	t.Helper()
+	sm := sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7})
+	asked = make(chan struct{}, 1)
+	held := make(chan struct{})
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "selfsubjectreviews") {
+			select {
+			case asked <- struct{}{}:
+			default:
+			}
+			<-held
+		}
+		sm.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	var once sync.Once
+	release = func() { once.Do(func() { close(held) }) }
+	t.Cleanup(release)
+	return srv, asked, release
+}
+
+// Finding 11: a test still running when its connection was removed and
+// made again (or re-pointed) was kept as the new connection's last test,
+// timed after the change, where one made again starts untested (DB-64).
+func TestATestRunningAcrossARecreationIsNotTheNewConnections(t *testing.T) {
+	eachStore(t, func(t *testing.T, store clusters.Store) {
+		slow, asked, release := heldSim(t)
+		_, other := simServer(t)
+		m, ctx := started(t, store)
+		draft := func(server string) clusters.Draft {
+			return clusters.Draft{Spec: clusters.Spec{Name: "staging", Env: "staging", Server: server, CA: "system", Auth: "token", Mode: "read"}, Credential: clusters.Credential{Token: saToken("staging")}}
+		}
+		_, err := m.Add(ctx, draft(slow.URL))
+		must(t, err)
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.TestSaved(ctx, "staging", "ann")
+			done <- err
+		}()
+		select {
+		case <-asked:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the test never asked who it signs in as")
+		}
+		// Meanwhile staging is removed and made again, for another server.
+		must(t, m.Remove(ctx, "staging"))
+		_, err = m.Add(ctx, draft(other.URL))
+		must(t, err)
+		release()
+		must(t, <-done)
+		if s, _ := m.Summary("staging"); s.LastTest != nil {
+			t.Errorf("the connection made again shows the old one's test: %s", s.LastTest.Summary)
+		}
+		if spec, _, err := store.Get(ctx, "staging"); err != nil || spec.Tested != nil {
+			t.Errorf("the store keeps the old connection's test for the new one: %v", err)
+		}
+		// A test of the connection as it is now is kept.
+		_, err = m.TestSaved(ctx, "staging", "ann")
+		must(t, err)
+		if s, _ := m.Summary("staging"); s.LastTest == nil {
+			t.Error("a test of the connection as it is was not kept")
+		}
+	})
 }

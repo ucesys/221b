@@ -212,15 +212,32 @@ var saveTestSQL = func() string {
 	return "UPDATE clusters SET " + strings.Join(sets, ", ") + " WHERE cluster_id = $1 AND is_kept"
 }()
 
+// saveTestOfSQL is saveTestSQL held to the connection the test went to
+// (sameConnection): a row removed and made again, or given another
+// server, check or credential since, is not written.
+var saveTestOfSQL = func() string {
+	n := len(db.Columns(&testRow{})) + 2
+	marks := make([]string, 5)
+	for i := range marks {
+		marks[i] = "$" + strconv.Itoa(n+i)
+	}
+	return saveTestSQL + " AND created_at = " + marks[0] + " AND server_url = " + marks[1] + " AND ca_mode = " + marks[2] + " AND auth_method = " + marks[3] + " AND cred_set_at IS NOT DISTINCT FROM " + marks[4]
+}()
+
 // SaveTest keeps a connection's last test (DB-64): its row's columns and
 // its steps, in one transaction, and tells the other replicas. It never
-// touches the spec, and ErrNotFound is a connection with no kept row.
+// touches the spec; ErrNotFound is a connection with no kept row, and
+// ErrConflict a test of a connection that is no longer the one saved.
 func (s *PGStore) SaveTest(ctx context.Context, id string, t LastTest) error {
 	r := t.Result
 	row := testRow{At: nullable(t.At), By: t.By, Tone: r.Tone, Summary: r.Summary, Error: r.Error, Version: r.Version, Nodes: r.Nodes, NodesMore: r.NodesMore, Who: r.Who, Impersonate: r.Impersonate}
+	sql, args := saveTestSQL, append([]any{id}, db.Fields(&row)...)
+	if of := t.of; of != nil {
+		sql, args = saveTestOfSQL, append(args, of.Added.UTC(), of.Server, of.CA, of.Auth, nullable(of.Cred.Set))
+	}
 	found := false
 	err := s.db.Tx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, saveTestSQL, append([]any{id}, db.Fields(&row)...)...)
+		tag, err := tx.Exec(ctx, sql, args...)
 		if err != nil {
 			return err
 		}
@@ -241,6 +258,9 @@ func (s *PGStore) SaveTest(ctx context.Context, id string, t LastTest) error {
 		return fmt.Errorf("keeping the test of the connection %s: %w", id, err)
 	}
 	if !found {
+		if t.of != nil {
+			return ErrConflict
+		}
 		return ErrNotFound
 	}
 	return nil

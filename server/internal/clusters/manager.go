@@ -1019,17 +1019,28 @@ func (m *Manager) TestSaved(ctx context.Context, id, by string) (TestResult, err
 	} else {
 		r = Test(ctx, spec, cred, TestOptions{SecretsRead: m.opts.SecretsRead, Now: m.opts.Now})
 	}
-	kept := &LastTest{Result: r, At: m.opts.Now().UTC(), By: by}
+	// Kept with the connection the test went to, and only while it is
+	// still that one: removed and made again, re-pointed or given another
+	// credential while the test ran, it is not the new one's (DB-64).
+	tested := spec
+	kept := &LastTest{Result: r, At: m.opts.Now().UTC(), By: by, of: &tested}
 	// The server is said to whoever ran it and to the audit; the kept
 	// test is the connection's, whose server the page shows.
 	kept.Result.Server = ""
 	if k, ok := m.store.(TestKeeper); ok {
-		if err := k.SaveTest(ctx, id, *kept); err != nil && !errors.Is(err, ErrNotFound) {
+		err := k.SaveTest(ctx, id, *kept)
+		switch {
+		case errors.Is(err, ErrConflict):
+			m.log.Info("the connection changed while it was tested; the test is not kept as its last", "cluster", id)
+			return r, nil
+		case err != nil && !errors.Is(err, ErrNotFound):
 			m.log.Warn("the connection's test could not be kept; it is shown by this replica until it restarts", "cluster", id, "err", err)
 		}
 	}
+	kept.of = nil
+	key := connKey(spec, cred)
 	m.mu.Lock()
-	if inst := m.instances[id]; inst != nil {
+	if inst := m.instances[id]; inst != nil && (spec.Local || inst.conn == key && sameConnection(spec, inst.Spec)) {
 		inst.tested = kept
 	}
 	m.mu.Unlock()

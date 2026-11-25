@@ -101,6 +101,25 @@ type LastTest struct {
 	Result TestResult
 	At     time.Time
 	By     string
+	// of is the connection the test went to, as it was read for it: a
+	// store keeps the test only while that is still the connection (the
+	// same one, made at the same time, with the same server, check and
+	// credential), else ErrConflict. nil holds to nothing.
+	of *Spec
+}
+
+// sameConnection says whether a saved connection is still the one a test
+// read: made at the same time (not removed and made again), with the same
+// server, certificate check, sign-in method and credential.
+func sameConnection(was, now Spec) bool {
+	return sameTime(was.Added, now.Added) && was.Server == now.Server && was.CA == now.CA && was.Auth == now.Auth && sameTime(was.Cred.Set, now.Cred.Set)
+}
+
+// sameTime says whether two times are one, as a database that keeps
+// microseconds reads them back.
+func sameTime(a, b time.Time) bool {
+	d := a.Sub(b)
+	return d < time.Microsecond && d > -time.Microsecond
 }
 
 // CredInfo is what a saved credential says about itself (X-04: the

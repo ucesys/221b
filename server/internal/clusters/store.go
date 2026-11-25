@@ -68,7 +68,9 @@ type Store interface {
 type TestKeeper interface {
 	// SaveTest keeps t as the connection's last test; ErrNotFound for a
 	// connection the store does not keep (the local cluster before its
-	// name was ever saved).
+	// name was ever saved), and ErrConflict for a test of a connection
+	// that is no longer the one saved (removed and made again, or given
+	// another server or credential while the test ran).
 	SaveTest(ctx context.Context, id string, t LastTest) error
 }
 
@@ -136,10 +138,18 @@ func (m *MemoryStore) withTest(id string, s Spec) Spec {
 func (m *MemoryStore) SaveTest(_ context.Context, id string, t LastTest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.specs[id]; !ok {
+	now, ok := m.specs[id]
+	if !ok {
+		if t.of != nil {
+			return ErrConflict
+		}
 		return ErrNotFound
 	}
+	if t.of != nil && !sameConnection(*t.of, now) {
+		return ErrConflict
+	}
 	t.Result.Steps = append([]Step(nil), t.Result.Steps...)
+	t.of = nil
 	m.tests[id] = t
 	m.saves++
 	m.revs[id] = m.saves
