@@ -331,6 +331,14 @@ func (c *Credential) Check(sec Secret) error {
 	if c.Kind != KindClientCert {
 		c.CertPEM = ""
 	}
+	// The one-line parts of a secret hold no control character: a header
+	// cannot carry one, and a query or Basic would send it as typed, a
+	// token pasted wrapped over two lines (credentials-unver-3).
+	for _, p := range []struct{ v, what string }{{sec.Token, "token"}, {sec.Password, "password"}, {sec.AccessKeyID, "access key ID"}, {sec.SecretAccessKey, "secret access key"}, {sec.SessionToken, "session token"}, {sec.ClientSecret, "client secret"}, {sec.Passphrase, "passphrase"}} {
+		if strings.ContainsFunc(p.v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return invalid("the %s is one line, without a control character (a line break, a tab): paste it again", p.what)
+		}
+	}
 	need := func(v, what string) error {
 		if v == "" {
 			return invalid("give the %s", what)

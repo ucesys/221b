@@ -66,6 +66,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **A credential refused because the credentials' Secret is full says what frees room** (credentials-cut-7): it said to shorten private CAs and descriptions, which have been in the database since 0.13.
 - **A token sent as a query parameter leaves the rest of the query as it is** (credentials-unver-1). The whole query was sorted and escaped again (`flag` became `flag=`, `%7E` became `~`), which can break an API that reads its parameters in order or a signed address.
 - **A token sent as a cookie is sent whole or not at all** (credentials-unver-2). Go's cookie writer dropped the bytes a cookie cannot carry (`;`, `"`, `\`) and logged the byte it dropped, or quoted a value with a space or a comma, so a wrong token was sent without a word. Such a token is now refused when saved, and a minted one is not sent.
+- **A token, password, access key, client secret or passphrase with a control character in it is refused when saved** (credentials-unver-3), such as a token pasted wrapped over two lines: a header could not carry it, and a query or Basic sent it changed. A credential saved so before says *give its secret again* where it is used.
 
 ## 0.13.2 (2026-11-25)
 

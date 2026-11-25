@@ -981,3 +981,25 @@ func TestACookieTokenIsSentWholeOrNotAtAll(t *testing.T) {
 		t.Fatalf("%q: %v", req.Header.Get("Cookie"), err)
 	}
 }
+
+// credentials-unver-3: a one-line secret part with a control character
+// in it (a token pasted wrapped over two lines) is refused when saved:
+// a header cannot carry it, and a query or Basic would send it changed.
+func TestAOneLineSecretHasNoControlCharacter(t *testing.T) {
+	s, _ := newService(t, nil)
+	for _, tc := range []struct {
+		c   Credential
+		sec Secret
+	}{
+		{Credential{Kind: KindToken}, Secret{Token: "fake\ntok"}},
+		{Credential{Kind: KindToken}, Secret{Token: "fake\x00tok\x7f"}},
+		{Credential{Kind: KindUserPass, Username: "u"}, Secret{Password: "fake\rpw"}},
+		{Credential{Kind: KindAccessKey}, Secret{AccessKeyID: "AKIA\tFAKE", SecretAccessKey: "fake"}},
+		{Credential{Kind: KindOAuth2, TokenURL: "https://a.example/t", ClientID: "c"}, Secret{ClientSecret: "fake\x1bcs"}},
+	} {
+		tc.c.Name, tc.c.Endpoint = "c "+tc.c.Kind, "https://a.example"
+		if _, err := s.Create(ctx, tc.c, tc.sec, "ann"); !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "fake") {
+			t.Errorf("%s: %v", tc.c.Kind, err)
+		}
+	}
+}
