@@ -144,9 +144,12 @@ func (p *pgRuns) NewRun(ctx context.Context, r Run, now time.Time) (Run, error) 
 		if err := writeRun(ctx, tx, Run{}, kept, false); err != nil {
 			return err
 		}
-		// The newest MaxRuns are kept, as Run History lists them.
-		if _, err := tx.Exec(ctx, `DELETE FROM script_runs WHERE run_number IS NOT NULL AND run_number NOT IN (
-				SELECT run_number FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number DESC LIMIT $1)`, MaxRuns); err != nil {
+		// The newest MaxRuns are kept, as Run History lists them, and an
+		// older one that is still running, or whose row is a request's that
+		// is still kept (the requests' own count drops that part first).
+		if _, err := tx.Exec(ctx, `DELETE FROM script_runs WHERE run_number IS NOT NULL AND request_number IS NULL
+				AND NOT (state = $2 AND heartbeat_at > $3) AND run_number NOT IN (
+				SELECT run_number FROM script_runs WHERE run_number IS NOT NULL ORDER BY run_number DESC LIMIT $1)`, MaxRuns, RunRunning, now.Add(-staleAfter)); err != nil {
 			return err
 		}
 		return p.d.Notify(ctx, tx, "doc/"+RunsKey)

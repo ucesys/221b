@@ -681,3 +681,48 @@ func TestTheEndOfARunIsSavedAgainWhenTheSaveFails(t *testing.T) {
 		t.Fatalf("kept as %s (%v %v)", kept.State, found, err)
 	}
 }
+
+// Keeping the newest 200 runs drops neither an older run that is still
+// running nor a kept request whose row it shares (cut by the review's
+// cap).
+func TestKeepingTheNewestRunsDropsNoLiveRunAndNoKeptRequest(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	st := pgSensitiveStore(d, NewMemorySensitive(), nil)
+	ann, sam := Who{Name: "Ann", User: "ann"}, Who{Name: "Sam", User: "sam"}
+	now := time.Now().UTC()
+	live, err := st.NewRun(ctx, Run{Script: "long", Version: 1, Cluster: "local", Fleet: AllNodes, State: RunRunning, Started: now, Beat: now, Nodes: []NodeResult{{Node: "a", Batch: 1, State: NodeRunning}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := st.NewWaitingRun(ctx, WaitingRun{Cluster: "local", Script: "s", Version: 1, Fleet: AllNodes, Targets: []string{"b"}, By: ann, Rollout: Rollout{Mode: RolloutAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedRun, err := st.NewRun(ctx, Run{Script: "s", Version: 1, Cluster: "local", Fleet: AllNodes, State: RunRunning, Started: now, Beat: now, Request: w.RequestKey(),
+		ValuesApproved: &ValuesApproval{Request: w.ID, By: sam, At: now}, Nodes: []NodeResult{{Node: "b", Batch: 1, State: NodeWaiting}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideWaitingRun(ctx, "local", w.ID, true, "", sam, approvedRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	ended := now
+	approvedRun.State, approvedRun.Ended = RunSucceeded, &ended
+	if _, err := st.PutRun(ctx, approvedRun); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MaxRuns; i++ {
+		if _, err := st.NewRun(ctx, Run{Script: "s", Version: 1, Cluster: "local", Fleet: AllNodes, State: RunSucceeded, Started: now, Beat: now, Ended: &ended, DryRun: true,
+			Nodes: []NodeResult{{Node: "c", Batch: 1, State: NodeNoChange}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, found, err := st.Run(ctx, live.ID); err != nil || !found {
+		t.Errorf("the running run %d is gone: %v", live.ID, err)
+	}
+	list, err := st.WaitingRuns(ctx, "local")
+	if err != nil || len(list) != 1 || list[0].State != ChangeApproved {
+		t.Errorf("the approved request: %+v %v", list, err)
+	}
+}
