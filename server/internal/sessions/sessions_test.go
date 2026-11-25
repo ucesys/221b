@@ -9,6 +9,8 @@ import (
 	"io"
 	"math"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1718,4 +1720,46 @@ func TestADebugContainerStopsWhenItsSessionEnds(t *testing.T) {
 		}
 	}
 	t.Fatalf("the end left no mark: %v", f.execs)
+}
+
+// With transcripts kept, a terminal that cannot be recorded does not open
+// unrecorded: a transcript that cannot be made fails the session, and one
+// that cannot be written ends it, each saying why (the toolbox review,
+// finding 14).
+func TestATerminalThatCannotBeRecordedDoesNotRun(t *testing.T) {
+	m, f, _, _ := setup(t)
+	notDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.opts.Config.Transcripts, m.opts.Config.TranscriptDir = toolbox.TranscriptsPVC, notDir
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateEnded)
+	if got.EndedBy != EndFailed || got.Recorded || !strings.Contains(got.EndNote, "transcript") {
+		t.Fatalf("unrecordable: %s %q recorded=%v", got.EndedBy, got.EndNote, got.Recorded)
+	}
+	f.mu.Lock()
+	for _, e := range f.execs {
+		if e[0] == "web/api-1/api" {
+			t.Errorf("a shell ran unrecorded: %v", e)
+		}
+	}
+	f.noisy = true
+	f.mu.Unlock()
+	m.opts.Config.TranscriptDir = t.TempDir()
+	s, _ = m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.mu.Lock()
+	cast := m.all[s.ID].cast
+	m.mu.Unlock()
+	if cast == nil {
+		t.Fatal("no transcript")
+	}
+	cast.mu.Lock()
+	cast.f.Close() // as a full or vanished volume would fail every write
+	cast.mu.Unlock()
+	got = waitState(t, m, s.ID, StateEnded)
+	if got.EndedBy != EndFailed || !strings.Contains(got.EndNote, "transcript") {
+		t.Fatalf("unwritable: %s %q", got.EndedBy, got.EndNote)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"log/slog"
 	"sort"
 	"strings"
@@ -656,27 +657,48 @@ func (m *Manager) deadline(limit time.Duration, approver string) time.Duration {
 	return limit + m.opts.StartWithin
 }
 
-// live marks a session started: its hard limit counts from now.
+// live marks a session started: its hard limit counts from now. Where
+// transcripts are kept, a terminal opens only with one: one that cannot
+// be made fails the session, and one that can no longer be written ends
+// it, rather than run unrecorded while it says Recorded (the toolbox
+// review, finding 14).
 func (m *Manager) live(s *Session) bool {
+	now := m.opts.Now()
+	var cast *transcript
+	if m.opts.Config.Transcripts == toolbox.TranscriptsPVC && Interactive(s.Req.Tool) {
+		// Made outside the lock: a stalled volume must not freeze every
+		// session's terminal.
+		t, err := newTranscript(m.opts.Config.TranscriptDir, s, now)
+		if err != nil {
+			m.opts.Logger.Warn("transcript not kept: the session is not opened", "session", s.ID, "err", err)
+			m.end(s, EndFailed, fmt.Sprintf("The transcript could not be kept (%v), and this console records every terminal: the session was not opened unrecorded.", err), Who{})
+			return false
+		}
+		t.onFail = func(err error) {
+			m.opts.Logger.Warn("the transcript could not be written: the session ends", "session", s.ID, "err", err)
+			m.end(s, EndFailed, fmt.Sprintf("The transcript could not be written (%v): the session ended, so that nothing runs unrecorded.", err), Who{})
+		}
+		cast = t
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.State != StateStarting {
+		if cast != nil {
+			// Ended meanwhile: the empty transcript goes, off the lock.
+			go func() {
+				cast.close()
+				_ = os.Remove(TranscriptPath(m.opts.Config.TranscriptDir, s.Cluster, s.ID))
+			}()
+		}
 		return false
 	}
-	now := m.opts.Now()
 	s.State, s.Started, s.LastActive, s.Ends = StateLive, now, now, now.Add(s.limit)
 	s.MaxEnds = s.Ends
 	if s.Approver == "" {
 		s.MaxEnds = now.Add(m.opts.Config.MaxDuration.D())
 	}
+	s.cast, s.Recorded = cast, cast != nil
 	m.changedLocked(s)
-	if m.opts.Config.Transcripts == toolbox.TranscriptsPVC && Interactive(s.Req.Tool) {
-		if t, err := newTranscript(m.opts.Config.TranscriptDir, s, now); err == nil {
-			s.cast, s.Recorded = t, true
-		} else {
-			m.opts.Logger.Warn("transcript not kept", "session", s.ID, "err", err)
-		}
-	}
 	m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("approved_by=%q pod=%s/%s container=%s limit=%s", s.Approver, s.Ns, s.Pod, s.Container, s.limit))
 	return true
 }
