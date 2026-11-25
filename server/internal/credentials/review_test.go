@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -786,5 +787,49 @@ func TestTrustIsReachableForAClientCertificate(t *testing.T) {
 	}
 	if res, err := s.RunTest(ctx, c.ID, "", "ann"); err != nil || !res.OK {
 		t.Fatalf("trusted: %+v %v", res, err)
+	}
+}
+
+// credentials-cut-2: an edit of anything a test went by drops the last
+// test; one of the description alone keeps it.
+func TestAnEditOfWhatATestWentByDropsIt(t *testing.T) {
+	s, _ := newService(t, nil)
+	up, err := s.Create(ctx, Credential{Name: "up", Kind: KindUserPass, Endpoint: "https://a.example", Username: "reader"}, Secret{Password: "fake-pw"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oa, err := s.Create(ctx, Credential{Name: "oa", Kind: KindOAuth2, Endpoint: "https://a.example", TokenURL: "https://a.example/token", ClientID: "one", Scope: "read"}, Secret{ClientSecret: "fake-cs"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ak, err := s.Create(ctx, Credential{Name: "ak", Kind: KindAccessKey, Endpoint: "https://s3.amazonaws.com/docs", Region: "eu-west-1"}, Secret{AccessKeyID: "AKIAFAKE", SecretAccessKey: "fake-sk"}, "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		c    Credential
+		edit func(*Credential)
+		drop bool
+	}{
+		{"description", up, func(c *Credential) { c.Description = "read only" }, false},
+		{"username", up, func(c *Credential) { c.Username = "writer" }, true},
+		{"token URL", oa, func(c *Credential) { c.TokenURL = "https://a.example/oauth/token" }, true},
+		{"client id", oa, func(c *Credential) { c.ClientID = "two" }, true},
+		{"scope", oa, func(c *Credential) { c.Scope = "write" }, true},
+		{"region", ak, func(c *Credential) { c.Region = "us-east-1" }, true},
+	} {
+		if err := s.NoteTest(ctx, tc.c.ID, Test{At: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), OK: true, Text: "ok"}); err != nil {
+			t.Fatal(err)
+		}
+		cur, _ := s.Get(ctx, tc.c.ID)
+		tc.edit(&cur)
+		saved, err := s.Update(ctx, tc.c.ID, cur, nil, "bob")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if (saved.LastTest == nil) != tc.drop {
+			t.Errorf("%s: the last test dropped %v", tc.name, saved.LastTest == nil)
+		}
 	}
 }

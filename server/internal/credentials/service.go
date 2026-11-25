@@ -403,7 +403,11 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 	}
 	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
 	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
-	resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM
+	// The last test is kept while nothing it went by changed: everything
+	// but the name, the description and the expiry (credentials-cut-2).
+	resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM ||
+		c.Username != old.Username || c.Region != old.Region || c.HostKey != old.HostKey || c.AppID != old.AppID || c.InstallationID != old.InstallationID ||
+		c.TokenURL != old.TokenURL || c.ClientID != old.ClientID || c.Scope != old.Scope || c.CertPEM != old.CertPEM
 	// A name another credential has is refused before the secret is
 	// written (credentials#3); the list's own refusal below still holds
 	// for one taken meanwhile.
