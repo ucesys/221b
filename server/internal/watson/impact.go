@@ -268,6 +268,9 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name})
+				// The card says it is not there: one made before the approval
+				// voids it, as a change to an object would.
+				sets = append(sets, absentGuard(gvr, kind, tns, p.name))
 				continue
 			}
 			return out, sets, notRead{couldNotRead(target{kind: kind, ns: tns, name: p.name}.String(), err), err}
@@ -304,6 +307,24 @@ func selectorGuard(gvr schema.GroupVersionResource, ns, sel string, names []stri
 		}
 		sort.Strings(now)
 		return digest(now), nil
+	}}
+}
+
+// absentGuard voids a card when an object it found absent appears.
+func absentGuard(gvr schema.GroupVersionResource, kind, ns, name string) guard {
+	return guard{what: target{kind: kind, ns: ns, name: name}.String(), want: "absent", read: func(ctx context.Context, cs *clients) (string, error) {
+		var ri dynamic.ResourceInterface = cs.dyn.Resource(gvr)
+		if ns != "" {
+			ri = cs.dyn.Resource(gvr).Namespace(ns)
+		}
+		o, err := ri.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return "absent", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return "present " + string(o.GetUID()), nil
 	}}
 }
 
