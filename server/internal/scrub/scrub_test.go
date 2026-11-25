@@ -443,3 +443,16 @@ func TestScrubJSONTakesAnAuthorizationHeader(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+// Text scrubs every token shape Credential knows (scrub-cut-6).
+func TestScrubTakesEveryTokenShape(t *testing.T) {
+	for i, re := range tokenShapes {
+		found := false
+		for _, sc := range scrubbers {
+			found = found || sc.re == re
+		}
+		if !found {
+			t.Errorf("tokenShapes[%d] (%s) is not among the scrubbers", i, re)
+		}
+	}
+}

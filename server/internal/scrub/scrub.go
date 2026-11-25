@@ -332,14 +332,7 @@ func basicPassword(v string) bool {
 // scrubbers find what looks like a credential in text that leaves for the
 // Claude API (P5-03): log lines above all, but every tool result passes
 // through them. They err towards removing too much.
-var scrubbers = []struct {
-	re    *regexp.Regexp
-	keep  int               // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
-	check func(string) bool // for keep 0: whether a match is a credential, nil for always
-	// exempt: a JSON pair of notSecretFields whose value is of the kind
-	// that field holds stays (exemptPair), as JSON left it.
-	exempt bool
-}{
+var scrubbers = append([]scrubber{
 	// PEM and PGP private keys in base64 (Text removes the PEM blocks
 	// themselves first).
 	{re: reBase64PEM, check: base64PrivateKey},
@@ -371,9 +364,26 @@ var scrubbers = []struct {
 	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*[:=][ \t]*)` + pairValue), keep: 1, exempt: true},
 	// A YAML plain value on the line below its key.
 	{re: regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?[ \t]*:[ \t]*\r?\n[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s:#,;&}\]{\["'][^\s:,;&}\]]*)[ \t]*\r?$`), keep: 1},
-	// Well-known token shapes.
-	{re: tokenShapes[0], keep: -1}, {re: tokenShapes[1], keep: -1}, {re: tokenShapes[2], keep: -1}, {re: tokenShapes[3], keep: -1},
-	{re: tokenShapes[4], keep: -1}, {re: tokenShapes[5], keep: -1}, {re: tokenShapes[6], keep: -1},
+}, tokenScrubbers()...)
+
+// scrubber is one of scrubbers.
+type scrubber struct {
+	re    *regexp.Regexp
+	keep  int               // the submatch to keep in front of the redaction, 0 for none, -1 for the first in front and the second after
+	check func(string) bool // for keep 0: whether a match is a credential, nil for always
+	// exempt: a JSON pair of notSecretFields whose value is of the kind
+	// that field holds stays (exemptPair), as JSON left it.
+	exempt bool
+}
+
+// tokenScrubbers are the well-known token shapes, each, keeping what
+// stands before the token.
+func tokenScrubbers() []scrubber {
+	out := make([]scrubber, len(tokenShapes))
+	for i, re := range tokenShapes {
+		out[i] = scrubber{re: re, keep: -1}
+	}
+	return out
 }
 
 // blockKey is a YAML key that names a secret and whose value is the block
