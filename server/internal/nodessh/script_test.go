@@ -528,3 +528,36 @@ func TestNoSshdOnTheNode(t *testing.T) {
 		t.Fatalf("the unpairing failed:\n%s", out)
 	}
 }
+
+// fullCp stands for cp on a node whose disk is full: the copy of
+// sshd_config comes out empty and cp says so.
+const fullCp = `#!/bin/sh
+if [ -n "$FULL" ] && [ "$1" = -p ] && [ "$2" = "$ROOT/etc/ssh/sshd_config" ]; then : > "$3"; echo "cp: error writing '$3': No space left on device" >&2; exit 1; fi
+exec /bin/cp "$@"
+`
+
+// A copy that cannot be kept stops the pairing before anything changed:
+// sshd_config is never rebuilt from an empty copy (finding 1 of the
+// review of November 24, 2026: it was left holding the Include alone, and
+// the pairing said it worked).
+func TestAPairingThatCannotKeepACopyChangesNothing(t *testing.T) {
+	h := newHost(t)
+	if err := os.WriteFile(filepath.Join(h.bin, "cp"), []byte(fullCp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := h.read("etc/ssh/sshd_config")
+	out, ok := h.run(PairScript(testCA, testConsole, user(t), 22), "FULL=1")
+	if ok || strings.Contains(out, markPaired) || !strings.Contains(out, "nothing was changed") {
+		t.Fatalf("the pairing went on:\n%s", out)
+	}
+	if h.read("etc/ssh/sshd_config") != before || h.exists("etc/ssh/sshd_config.d/221b.conf") || h.exists("etc/ssh/221b") || h.exists("etc/ssh/221b.lock") {
+		t.Fatalf("the node was changed: sshd_config is now %q", h.read("etc/ssh/sshd_config"))
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.root, "etc/ssh/221b.undo.*")); len(left) != 0 {
+		t.Fatalf("the copies stayed: %v", left)
+	}
+	// Paired as it should be, sshd_config is the Include and all it held.
+	if out, ok := h.run(PairScript(testCA, testConsole, user(t), 22)); !ok || h.read("etc/ssh/sshd_config") != "Include "+h.root+"/etc/ssh/sshd_config.d/*.conf\n"+before {
+		t.Fatalf("the pairing:\n%s\nsshd_config:\n%s", out, h.read("etc/ssh/sshd_config"))
+	}
+}

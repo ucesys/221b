@@ -16,6 +16,9 @@ const (
 	nodeDir  = "/etc/ssh/221b"
 	nodeConf = "/etc/ssh/sshd_config.d/221b.conf"
 	nodeLock = "/etc/ssh/221b.lock"
+	// undoDir starts the name of the directory a pairing keeps its copies
+	// in until it is done.
+	undoDir = "/etc/ssh/221b.undo"
 )
 
 // consoleTag starts the comment that names a console's line in ca.pub.
@@ -52,25 +55,34 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		lockNode,
 		`cur=$(value trustedusercakeys)`,
 		`case "$cur" in ""|none|"$d/ca.pub") ;; *) echo "221B: sshd on this node already trusts another SSH authority ($cur); pairing would replace it, so nothing was changed"; exit 5;; esac`,
-		`b=$(mktemp -d)`,
-		`cp -p /etc/ssh/sshd_config "$b/sshd_config" 2>/dev/null || true`,
-		`cp -p ` + nodeConf + ` "$b/221b.conf" 2>/dev/null || true`,
-		`cp -Rp "$d" "$b/dir" 2>/dev/null || true`,
+		// The copies to put back sit beside the files, under /etc/ssh: a
+		// full /tmp then cannot lose one, and putting one back is a
+		// rename, which needs no room. A copy that fails stops the pairing
+		// before anything changed.
+		`nospace() { echo "221B: no copy of the node's SSH files could be kept under /etc/ssh (is it full?); nothing was changed"; exit 5; }`,
+		`b=$(mktemp -d ` + undoDir + `.XXXXXX) || nospace`,
+		`saved=`,
 		`undo() {`,
 		`  code=$?`,
 		`  trap - EXIT`,
 		`  set +e`,
-		`  if [ "$code" -ne 0 ]; then`,
-		`    if [ -f "$b/sshd_config" ]; then cp -p "$b/sshd_config" /etc/ssh/sshd_config; fi`,
-		`    rm -f ` + nodeConf + `; if [ -f "$b/221b.conf" ]; then cp -p "$b/221b.conf" ` + nodeConf + `; fi`,
-		`    rm -rf "$d"; if [ -d "$b/dir" ]; then cp -Rp "$b/dir" "$d"; fi`,
-		`    echo "221B: the pairing did not finish; the node's SSH configuration is as it was"`,
+		`  if [ "$code" -ne 0 ] && [ -n "$saved" ]; then`,
+		`    r=0`,
+		`    if [ -f "$b/sshd_config" ]; then mv -f "$b/sshd_config" /etc/ssh/sshd_config || r=1; fi`,
+		`    rm -f ` + nodeConf + `; if [ -f "$b/221b.conf" ]; then mv -f "$b/221b.conf" ` + nodeConf + ` || r=1; fi`,
+		`    rm -rf "$d"; if [ -d "$b/dir" ]; then mv "$b/dir" "$d" || r=1; fi`,
+		`    if [ "$r" -eq 0 ]; then echo "221B: the pairing did not finish; the node's SSH configuration is as it was"`,
+		`    else echo "221B: the pairing did not finish, and putting the node's SSH files back failed: check /etc/ssh/sshd_config, ` + nodeConf + ` and $d by hand; the copies are in $b"; b=; fi`,
 		`  fi`,
-		`  rm -rf "$b"`,
+		`  if [ -n "$b" ]; then rm -rf "$b"; fi`,
 		`  rmdir "$lock"`,
 		`  exit "$code"`,
 		`}`,
 		`trap undo EXIT`,
+		`if [ -f /etc/ssh/sshd_config ]; then cp -p /etc/ssh/sshd_config "$b/sshd_config" || nospace; fi`,
+		`if [ -f ` + nodeConf + ` ]; then cp -p ` + nodeConf + ` "$b/221b.conf" || nospace; fi`,
+		`if [ -d "$d" ]; then cp -Rp "$d" "$b/dir" || nospace; fi`,
+		`saved=1`,
 		`mkdir -p "$d" /etc/ssh/sshd_config.d`,
 		dropConsole,
 		`drop_console`,
@@ -82,8 +94,15 @@ func PairScript(caPublicKey, console, loginUser string, port int) string {
 		// At the top: sshd takes a setting's first value, and an Include
 		// at the end could land inside a Match block. A system with no
 		// /etc/ssh/sshd_config keeps a vendor file that reads the
-		// drop-ins by itself, and an /etc file would replace it.
-		`if [ -f /etc/ssh/sshd_config ] && ! grep -qs '^Include /etc/ssh/sshd_config.d/' /etc/ssh/sshd_config; then { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$b/sshd_config"; } > /etc/ssh/sshd_config; fi`,
+		// drop-ins by itself, and an /etc file would replace it. The new
+		// file is written beside the old one, checked whole, and renamed
+		// over it: sshd_config is never left part-written.
+		`if [ -f /etc/ssh/sshd_config ] && ! grep -qs '^Include /etc/ssh/sshd_config.d/' /etc/ssh/sshd_config; then`,
+		`  cp -p "$b/sshd_config" "$b/new"`,
+		`  { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$b/sshd_config"; } > "$b/new"`,
+		`  if [ "$(tail -n +2 "$b/new" | wc -c)" -ne "$(wc -c < "$b/sshd_config")" ]; then echo "221B: the new sshd_config could not be written whole (is /etc full?)"; exit 5; fi`,
+		`  mv -f "$b/new" /etc/ssh/sshd_config`,
+		`fi`,
 		`"$sshd_bin" -t`,
 		`if [ "$(value trustedusercakeys)" != "$d/ca.pub" ] || [ "$(value authorizedprincipalsfile)" != "$d/principals-%u" ]; then echo "221B: sshd on this node does not use the drop-in: another setting comes first, or the Include sits under a Match block"; exit 6; fi`,
 		fmt.Sprintf(`if ! value port | grep -qx %d; then echo "221B: sshd on this node listens on port $(value port | tr '\n' ' ')and not on %d"; exit 6; fi`, port, port),
