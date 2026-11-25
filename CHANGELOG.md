@@ -74,6 +74,7 @@ A private key kept beside a credential's certificate or private CA leaves the li
 - **Two edits of one credential at once take turns, its secret with its list row** (credentials-unver-7). Each wrote its secret and then its row, so two SuperAdmins (or two replicas) could leave one's row and the other's secret: a credential of one kind holding another's secret, which said *give its secret again* everywhere it was used.
 - **Removing a secret no credential names no longer removes one a restore brings back meanwhile** (credentials-unver-8): the restored credential was left without its secret.
 - **An SSH credential's endpoint keeps its user** (credentials-unver-9): `ssh://deploy@host/org` was kept as `ssh://host/org`, and its Test signed in as `git`. A credential saved so before is tested as `git` until its endpoint is given again.
+- **A scheme-less endpoint with a port covers the addresses on that port** (credentials-unver-11): `git.internal:443/org` covered nothing, since `https://git.internal` names no port; it now covers the addresses whose scheme reaches that port.
 
 ## 0.13.2 (2026-11-25)
 

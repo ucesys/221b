@@ -698,7 +698,7 @@ func (e Endpoint) Covers(target string) bool {
 	if err != nil || t.Scheme == "" {
 		return false
 	}
-	if t.Host != e.Host {
+	if !e.onHostOf(t) {
 		return false
 	}
 	switch {
@@ -731,7 +731,26 @@ func (e Endpoint) Covers(target string) bool {
 // sameHost says whether an address is on the endpoint's host and port.
 func (e Endpoint) sameHost(target string) bool {
 	t, err := parseTarget(target)
-	return err == nil && t.Host == e.Host
+	return err == nil && e.onHostOf(t)
+}
+
+// onHostOf says whether an address is on the endpoint's host and port. A
+// scheme-less endpoint's port is compared with the port the address
+// reaches, its scheme's own when it names none (git.internal:443 is
+// https://git.internal; credentials-unver-11).
+func (e Endpoint) onHostOf(t Endpoint) bool {
+	if e.Scheme != "" || t.Host == e.Host {
+		return t.Host == e.Host
+	}
+	eh, ep, err := net.SplitHostPort(e.Host)
+	if err != nil {
+		return false
+	}
+	th, tp, err := net.SplitHostPort(t.Host)
+	if err != nil {
+		th, tp = strings.Trim(t.Host, "[]"), defaultPort[t.Scheme]
+	}
+	return th == eh && tp == ep
 }
 
 // gitPaths are what a git client asks under a repository's address that

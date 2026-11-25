@@ -578,6 +578,8 @@ func TestAnEditOfASchemelessEndpointKeepsThePin(t *testing.T) {
 		{"git.internal/org/team", true},
 		{"https://git.internal/org", true},
 		{"git.internal:8443/org", false},
+		{"git.internal:443/org", false},
+		{"https://git.internal:443/org", true},
 		{"other.internal/org", false},
 	} {
 		if _, err := s.o.Repo.Update(ctx, c.ID, func(cur *Credential) error { cur.Endpoint, cur.PinnedCert = "git.internal/org", pin; return nil }); err != nil {
@@ -1207,6 +1209,34 @@ func TestATestsAddressIsKeptWithoutTheSecret(t *testing.T) {
 					t.Errorf("the address kept holds the secret: %s", target)
 				}
 			}
+		}
+	}
+}
+
+// credentials-unver-11: a scheme-less endpoint with a port covers the
+// addresses on that port, whatever scheme makes it the default.
+func TestASchemelessEndpointWithAPortCovers(t *testing.T) {
+	for _, tc := range []struct {
+		ep, target string
+		ok         bool
+	}{
+		{"git.internal:443/org", "https://git.internal/org/x", true},
+		{"git.internal:443/org", "https://git.internal:443/org/x", true},
+		{"git.internal:443/org", "oci://git.internal/org/x", true},
+		{"git.internal:443/org", "ssh://git.internal/org/x", false},
+		{"git.internal:443/org", "https://git.internal:8443/org/x", false},
+		{"git.internal:22/org", "ssh://git@git.internal/org/x", true},
+		{"git.internal:22/org", "https://git.internal/org/x", false},
+		{"git.internal:8443/org", "https://git.internal:8443/org/x", true},
+		{"git.internal/org", "https://git.internal/org/x", true},
+		{"git.internal/org", "https://git.internal:8443/org/x", false},
+	} {
+		ep, err := ParseEndpoint(tc.ep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ep.Covers(tc.target); got != tc.ok {
+			t.Errorf("%s covers %s: %v", tc.ep, tc.target, got)
 		}
 	}
 }

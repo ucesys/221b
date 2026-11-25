@@ -472,7 +472,7 @@ func sameEndpointHost(a, b string) bool {
 		return false
 	}
 	eb, err := ParseEndpoint(b)
-	return err == nil && ea.Host == eb.Host
+	return err == nil && (ea.onHostOf(eb) || eb.onHostOf(ea))
 }
 
 // UsedBy is each credential's uses, by id.
