@@ -27,7 +27,7 @@ ARG GO_IMAGE=golang:1.26.9
 # index apko builds from apko.lock.json (hack/wolfi-postgres.sh pin writes
 # it here after a new lock; hack/check-base-images.sh checks its form).
 ARG WOLFI_BASE_REPO=127.0.0.1:5123/221b-postgres-base
-ARG WOLFI_BASE_DIGEST=sha256:eceec4ce515ce762016ada019a9b98de60a98990695faa90f1b8329af1405918
+ARG WOLFI_BASE_DIGEST=sha256:7d55a1e1df6039501a6ae022dba099334b8f47e6b865d4f907e545e920186b96
 
 # WAL-G: WAL-G's own release. Wolfi's wal-g-pg is built
 # without libsodium, and the chart encrypts every backup with it
