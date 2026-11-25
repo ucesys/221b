@@ -54,19 +54,29 @@ func hostKeyChanged(name string) error {
 
 // hostKeyMismatch marks a host whose key changed, so every connection is
 // refused until it is trusted again, and the page says so.
-func (s *Service) hostKeyMismatch(cluster, name string, key ssh.PublicKey) {
+//
+// The mark is saved in the background, against the key pinned when the
+// connection compared (pinned): one that lands after the key was trusted
+// again, or for the key pinned since, is dropped.
+func (s *Service) hostKeyMismatch(cluster, name string, key ssh.PublicKey, pinned string) {
 	fp := ssh.FingerprintSHA256(key)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if _, err := s.opts.Hosts.update(ctx, cluster, name, func(h *Host) error {
+			if h.HostKey != pinned || h.Fingerprint == fp {
+				return errStale
+			}
 			h.Mismatch = fp
 			return nil
-		}); err != nil {
+		}); err != nil && !errors.Is(err, errStale) {
 			s.opts.Logger.Warn("marking a host's changed key failed", "host", name, "err", err)
 		}
 	}()
 }
+
+// errStale ends an edit that no longer applies, saving nothing.
+var errStale = errors.New("no longer applies")
 
 // AddHost registers a host, pending until it is paired.
 func (s *Service) AddHost(ctx context.Context, h Host, by string) (Host, error) {
@@ -421,7 +431,7 @@ func (s *Service) PairHost(ctx context.Context, cluster, name string, cred *Cred
 				return nil
 			}
 			s.opts.Logger.Warn("SSH host key mismatch", "host", name, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "pinned", h.Fingerprint)
-			s.hostKeyMismatch(cluster, name, key)
+			s.hostKeyMismatch(cluster, name, key, h.HostKey)
 			mismatch = hostKeyChanged(name)
 			return mismatch
 		},

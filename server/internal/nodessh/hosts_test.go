@@ -1041,3 +1041,39 @@ func TestAPasswordInsideAHostKeyStillPairs(t *testing.T) {
 		}
 	}
 }
+
+// A host's key marked changed late, after the key was trusted again, is
+// no mark (the review of November 24, 2026: the mark is saved in the
+// background, and one that landed after the new trust refused the host
+// again with the key it had just been trusted with).
+func TestALateKeyChangedMarkIsDropped(t *testing.T) {
+	ctx := context.Background()
+	e := newHostEnv(t)
+	e.trust(t)
+	was, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1")
+	e.host.setKey()
+	e.trust(t)
+	now, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1")
+	presented, _, _, _, err := ssh.ParseAuthorizedKey([]byte(now.HostKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The connection that saw the new key against the old pin marks it
+	// only now.
+	e.svc.hostKeyMismatch("local", "backup-1", presented, was.HostKey)
+	time.Sleep(300 * time.Millisecond)
+	if h, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1"); h.Mismatch != "" {
+		t.Fatalf("a late mark refuses the key just trusted: %+v", h)
+	}
+	// A mark against the key pinned now still lands.
+	e.host.setKey()
+	other, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(e.host.read("etc/ssh/ssh_host_ed25519_key.pub"))))
+	e.svc.hostKeyMismatch("local", "backup-1", other, now.HostKey)
+	for i := 0; i < 100; i++ {
+		if h, _, _ := e.svc.opts.Hosts.Get(ctx, "local", "backup-1"); h.Mismatch != "" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a mark against the key pinned now did not land")
+}

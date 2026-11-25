@@ -245,7 +245,7 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 			// October 30, 2026).
 			s.opts.Logger.Warn("SSH host key mismatch", "node", node, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "paired", fingerprints(pinned))
 			if isHost {
-				s.hostKeyMismatch(cluster, node, key)
+				s.hostKeyMismatch(cluster, node, key, host.HostKey)
 				mismatch = hostKeyChanged(node)
 				return mismatch
 			}
