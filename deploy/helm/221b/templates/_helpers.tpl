@@ -162,6 +162,21 @@ review, finding 3). */}}
 {{- end -}}
 {{- end -}}
 
+{{/* sshd's port on the nodes, for the network policy and the console
+alike: toolbox.ssh.port, 22 when it is left out or nulled (Helm drops a
+null, and an empty port in a NetworkPolicy matches every port), refused
+outside 1 to 65535 (the toolbox review, finding 15). */}}
+{{- define "b221.sshPort" -}}
+{{- $ssh := .Values.toolbox.ssh | default dict -}}
+{{- $p := 22 -}}
+{{- if not (kindIs "invalid" $ssh.port) -}}{{- $p = $ssh.port -}}{{- end -}}
+{{- $n := int $p -}}
+{{- if or (lt $n 1) (gt $n 65535) (ne (toString $n) (toString $p)) -}}
+{{- fail (printf "toolbox.ssh.port is a port, 1 to 65535, not %v" $p) -}}
+{{- end -}}
+{{- $n -}}
+{{- end -}}
+
 {{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE).
 Each allowlist is rendered, so a list whose items are all commented out
 (null, which Helm drops) is none, not the console's defaults; a null item
@@ -191,6 +206,7 @@ Each allowlist is rendered, so a list whose items are all commented out
 {{- $_ := set $c "nodeShell" $node -}}
 {{- $ssh := deepCopy ($t.ssh | default dict) -}}
 {{- $_ := set $ssh "enabled" (include "b221.sshOn" . | eq "true") -}}
+{{- $_ := set $ssh "port" (include "b221.sshPort" . | int) -}}
 {{- $_ := set $c "ssh" $ssh -}}
 {{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}

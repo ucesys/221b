@@ -295,6 +295,20 @@ ssh_egress() {
     ! netpol "$WORK/chart-ssh-off.yaml" | has 'port: 22$' &&
     netpol "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | has 'cidr: "192.168.1.0/24"'
 }
+# A nulled toolbox.ssh.port is 22 for the network policy and the console
+# alike, not a rule open on every port; one outside 1 to 65535 is refused
+# (the toolbox review, finding 15).
+ssh_port_nulled() {
+  local o
+  o=$(render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=null)
+  validate <<<"$o" > /dev/null &&
+    netpol <(cat <<<"$o") | grep -B1 -A1 'protocol: TCP' | has 'port: 22$' &&
+    ! netpol <(cat <<<"$o") | has 'port: *$' &&
+    sed -n '/"ssh": {/,/}/p' <<<"$o" | has '"port": 22' &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=0 > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=70000 > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=ssh > /dev/null 2>&1
+}
 # The scheduled backups' S3 endpoint (Phase 12): a rule only when its
 # CIDRs are listed, on its ports; values from an older release have none.
 backup_egress() {
@@ -933,6 +947,7 @@ check "a toolbox key the chart does not know, or in another case, is refused" to
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
+check "a nulled toolbox.ssh.port is 22 in the network policy and the console's values, and one outside 1 to 65535 is refused" ssh_port_nulled
 check "the database: bundled by default, as one member or three, closed to all but the console, changing only its own ConfigMaps and pods; external from values; the start waits for it and no value starts without it; none, values from before 0.13 and what cannot work are refused" database_modes
 check "an external database's IAM sign-in: the way and the region passed and no password; a password, no TLS, no region and an unknown way refused" database_iam
 check "the mode guard: a release without a database gets one, bundled by default or external; bundled and external do not flip without allowModeChange; one member in a production namespace only when acknowledged" database_guard
