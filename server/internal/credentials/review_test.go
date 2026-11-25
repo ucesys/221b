@@ -4,10 +4,12 @@ package credentials
 // the review's item it holds to.
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -141,5 +143,72 @@ func TestAPrivateKeyIsNeverKeptWithItsCertificate(t *testing.T) {
 	}
 	if list, _ := other.List(ctx); len(list) != 1 || hasKey(list) {
 		t.Fatalf("restored with its key: %+v", list)
+	}
+}
+
+// refusingRepo refuses every change of a credential with err.
+type refusingRepo struct {
+	Repo
+	err error
+}
+
+func (r *refusingRepo) Update(ctx context.Context, id string, change func(*Credential) error) (Credential, error) {
+	if r.err != nil {
+		return Credential{}, r.err
+	}
+	return r.Repo.Update(ctx, id, change)
+}
+
+// credentials#3: an edit that is refused leaves the credential's secret
+// as it was: a name another has, a list that cannot be written, a
+// credential removed meanwhile.
+func TestARefusedEditKeepsTheSecret(t *testing.T) {
+	s, _ := newService(t, nil)
+	gh := token(t, s, "GitHub", "https://github.com/org", SendAs{}, "fake-tok-1")
+	token(t, s, "gitlab", "https://gitlab.com/org", SendAs{}, "fake-tok-9")
+	secretOf := func() string {
+		t.Helper()
+		sec, err := s.secret(ctx, gh.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sec.Token + sec.Password
+	}
+	if _, err := s.Update(ctx, gh.ID, Credential{Name: "GitLab", Kind: KindToken, Endpoint: "https://github.com/org"}, &Secret{Token: "fake-tok-2"}, "bob"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a name another has: %v", err)
+	}
+	if got := secretOf(); got != "fake-tok-1" {
+		t.Fatalf("a refused rename changed the secret to %q", got)
+	}
+	repo := &refusingRepo{Repo: s.o.Repo, err: errors.New("the database is away")}
+	s.o.Repo = repo
+	for _, edit := range []struct {
+		c   Credential
+		sec *Secret
+	}{
+		{Credential{Name: "GitHub", Kind: KindToken, Endpoint: "https://github.com/org"}, &Secret{Token: "fake-tok-2"}},
+		{Credential{Name: "GitHub", Kind: KindUserPass, Endpoint: "https://github.com/org", Username: "u"}, &Secret{Password: "fake-pw-2"}},
+		{Credential{Name: "GitHub", Kind: KindNone, Endpoint: "https://github.com/org"}, nil},
+	} {
+		if _, err := s.Update(ctx, gh.ID, edit.c, edit.sec, "bob"); err == nil {
+			t.Fatalf("%s: saved", edit.c.Kind)
+		}
+		if got := secretOf(); got != "fake-tok-1" {
+			t.Fatalf("a refused change to %s left the secret %q", edit.c.Kind, got)
+		}
+	}
+	// Removed while it was edited: no secret comes back for it.
+	repo.err = fmt.Errorf("%w %q", ErrNotFound, gh.ID)
+	if _, err := s.Update(ctx, gh.ID, Credential{Name: "GitHub", Kind: KindToken, Endpoint: "https://github.com/org"}, &Secret{Token: "fake-tok-2"}, "bob"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed meanwhile: %v", err)
+	}
+	if _, _, found, _ := s.o.Secrets.LoadKey(ctx, secretKey(gh.ID)); found {
+		t.Fatal("the secret of a credential removed meanwhile was written")
+	}
+	repo.err = nil
+	u, err := s.Resolve(ctx, gh.ID, UseHTTP, "https://github.com/org/x")
+	_ = u
+	if err == nil {
+		t.Fatal("resolved a credential without its secret")
 	}
 }

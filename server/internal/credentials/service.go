@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -403,7 +404,16 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 	c.ID, c.Created, c.CreatedBy, c.From, c.Set = id, old.Created, old.CreatedBy, old.From, next.parts()
 	c.Changed, c.ChangedBy = s.o.Now().UTC(), by
 	resetTest := sec != nil || c.Kind != old.Kind || c.Endpoint != old.Endpoint || c.SendAs != old.SendAs || c.CAPEM != old.CAPEM
-	if next != have {
+	// A name another credential has is refused before the secret is
+	// written (credentials#3); the list's own refusal below still holds
+	// for one taken meanwhile.
+	if list, err := s.o.Repo.List(ctx); err != nil {
+		return Credential{}, err
+	} else if slices.ContainsFunc(list, func(o Credential) bool { return o.ID != id && strings.EqualFold(o.Name, c.Name) }) {
+		return Credential{}, errTaken(c.Name)
+	}
+	wrote := next != have
+	if wrote {
 		if err := s.saveSecret(ctx, id, next); err != nil {
 			return Credential{}, err
 		}
@@ -423,6 +433,17 @@ func (s *Service) Update(ctx context.Context, id string, c Credential, sec *Secr
 		*cur = c
 		return nil
 	})
+	if err != nil && wrote {
+		// The edit is refused: the secret goes back to what it was, and
+		// a credential removed meanwhile keeps none (credentials#3).
+		back := have
+		if errors.Is(err, ErrNotFound) {
+			back = Secret{}
+		}
+		if rerr := s.saveSecret(ctx, id, back); rerr != nil {
+			s.o.Logger.Error("a refused edit's secret could not be put back: give the credential's secret again", "credential", old.Name, "err", rerr)
+		}
+	}
 	s.forget(id)
 	if err != nil {
 		return Credential{}, err

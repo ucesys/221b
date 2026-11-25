@@ -45,6 +45,8 @@ A private key kept beside a credential's certificate or private CA leaves the li
 
 ### Fixed
 
+- **An edit of a credential that is refused no longer changes its secret** (credentials#3). The new secret was written before the list was, so a rename to a name another credential has, a change of kind, or a database error answered 400 or 502 and yet left the new secret in use (or none, for a change to *None*). A name taken is now refused before anything is written, and on any other refusal the secret goes back to what it was (none, for a credential removed meanwhile).
+
 ## 0.13.2 (2026-11-25)
 
 Phase 13.1, the AI phase: **the agents' effort and Auto** (part A; AI-43 to AI-48, JB-24). Select an agent's provider, "and then it's all auto".
