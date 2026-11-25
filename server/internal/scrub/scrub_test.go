@@ -17,66 +17,76 @@ func TestScrubTwiceChangesNothing(t *testing.T) {
 			t.Errorf("%q: %q, then %q", in, once, twice)
 		}
 	}
+	for name, c := range credentialForms {
+		once := Text(c.in)
+		if twice := Text(once); twice != once {
+			t.Errorf("%s: %q, then %q", name, once, twice)
+		}
+	}
+}
+
+// credentialForms are the forms of a credential Text removes: in, what of
+// it must go, and what beside it must stay.
+var credentialForms = map[string]struct{ in, gone, kept string }{
+	"a name ending in pass":          {"MYSQL_ROOT_PASS=hunter2secret next=1", "hunter2secret", "next=1"},
+	"a short name":                   {"DB_PASS: hunter2secret", "hunter2secret", "DB_PASS"},
+	"a camel-case name":              {"smtpPass=hunter2secret", "hunter2secret", "smtpPass"},
+	"a passphrase":                   {"passphrase: hunter2secret", "hunter2secret", "passphrase"},
+	"a data source name":             {"DSN=user:hunter2secret ok", "hunter2secret", "ok"},
+	"a connection string":            {"connectionString: hunter2secret", "hunter2secret", "connectionString"},
+	"a pair in JSON text":            {`{"name":"PASS","value":"hunter2secret"}`, "hunter2secret", `"name":"PASS"`},
+	"a pair in YAML text":            {"- name: DB_PASS\n  value: hunter2secret\n- name: MODE\n  value: prod\n", "hunter2secret", "value: prod"},
+	"a flag with its value apart":    {"run --db-password hunter2secret --port 80", "hunter2secret", "--port 80"},
+	"a flag in JSON text":            {`["--db-password","hunter2secret"]`, "hunter2secret", "--db-password"},
+	"a JSON string in a JSON log":    {`{"msg":"{\"password\":\"hunter2secret\"}","level":"info"}`, "hunter2secret", `"level":"info"`},
+	"a quote inside a JSON string":   {`{"msg":"{\"password\":\"hun\\\"ter2secret\"}"}`, "ter2secret", "password"},
+	"a MySQL client's joined value":  {"mysql -h db -uroot -phunter2secret shop", "hunter2secret", "-uroot"},
+	"a cookie header":                {"Cookie: session=hunter2secret; theme=dark\nnext line", "hunter2secret", "next line"},
+	"a set-cookie header":            {"Set-Cookie: sid=hunter2secret; Path=/\nnext line", "hunter2secret", "next line"},
+	"a PGP private key":              {"-----BEGIN PGP PRIVATE KEY BLOCK-----\nhunter2secret\n-----END PGP PRIVATE KEY BLOCK-----\nafter", "hunter2secret", "after"},
+	"a YAML block":                   {"password: |\n  hunter2secret\n  line two\nnext: 1\n", "hunter2secret", "next: 1"},
+	"a folded YAML block in a list":  {"users:\n- password: >-\n    hunter2secret\n- name: bob\n", "hunter2secret", "name: bob"},
+	"a URL password with a slash":    {"https://user:pa/hunter2secret@host/x", "hunter2secret", "@host/x"},
+	"a URL password with an at sign": {"postgres://app:p@hunter2secret@db/x", "hunter2secret", "@db/x"},
+	"a URL with no user name":        {"redis://:hunter2secret@redis:6379/0", "hunter2secret", "@redis:6379"},
+	// scrub#10: a pair under a secret-named parent key.
+	"#10 a child of a secret-named key": {"auth:\n  rootPassword: F4keRootPw\n  database: app\n", "F4keRootPw", "database: app"},
+	"#10 an object under such a key":    {`{"auth": {"password": "hunter2secret"}, "db": "app"}`, "hunter2secret", `"db": "app"`},
+	"#10 an object in a JSON string":    {`{"msg":"{\"auth\":{\"password\":\"hunter2secret\"}}","level":"info"}`, "hunter2secret", `"level":"info"`},
+	"#10 a list under such a key":       {`{"passwords": ["hunter2secret", "hunter3"], "db": "app"}`, "hunter2secret", `"db": "app"`},
+	"#10 a value on the next line":      {"password:\n  hunter2secret\nnext: 1\n", "hunter2secret", "next: 1"},
+	// scrub#12: a token right after an escape or a percent-encoded
+	// character, and a GitLab token that ends in -.
+	"#12 a JWT after \\x22":          {`{\x22access_token\x22:\x22eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl\x22}`, "eyJzdWIiOiJhZG1pbiJ9", `{\x22access_token\x22:`},
+	"#12 a JWT after %3D":            {"GET /cb?id_token%3DeyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl&x=1 200", "eyJzdWIiOiJhZG1pbiJ9", "&x=1 200"},
+	"#12 a GitHub token after \\x22": {`{\x22t\x22:\x22ghp_abcdefghijklmnopqrstuvwxyz0123456789\x22}`, "ghp_abcdefghij", `{\x22t\x22:\x22`},
+	"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22 200", "AKIAIOSFODNN7EXAMPLE", "q=%22"},
+	"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", "glpat-abcdefghij", " ok"},
+	"#12 a Slack token ending in -":  {"posted with xoxb-1234567890-abcdef- ok", "xoxb-1234567890", " ok"},
+	// scrub#13: a user name that holds @.
+	"#13 an e-mail as the user": {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", "F4keSmtp7x", "@smtp.example.com:465"},
+	// scrub#14: a private key in base64, as a kubeconfig holds one.
+	"#14 client-key-data":       {"users:\n- name: admin\n  user:\n    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=\n", "LS0tLS1CRUdJTiBSU0Eg", "name: admin"},
+	"#14 a base64 key in a log": {"loaded key=LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFmYWtlCi0tLS0tRU5EIE9QRU5TU0ggUFJJVkFURSBLRVktLS0tLQo= ok", "LS0tLS1CRUdJTiBPUEVO", " ok"},
+	"#14 any key data":          {"keyData: QUJDREVGRzEyMzQ1Njc4OQ==", "QUJDREVGRzEyMzQ1Njc4OQ==", "keyData"},
+	// scrub#15: a value that holds a redaction and more.
+	"#15 a DSN with a URL password": {`DSN="postgres://app:pw1@db/x?sslpassword=hunter2secret" next=1`, "hunter2secret", "next=1"},
+	"#15 a cookie already masked":   {"Cookie: a=[REDACTED]; sid=hunter2secret\nnext line", "hunter2secret", "next line"},
+	"#15 a quoted pair, half done":  {`password="[REDACTED] hunter2secret" next=1`, "hunter2secret", "next=1"},
+	// scrub-cut-1: a key's body not indented under its block key.
+	"cut-1 a key body not indented": {"privateKey: |\n  -----BEGIN RSA PRIVATE KEY-----\nMIIEfakeBODYline0123\n  -----END RSA PRIVATE KEY-----\nnext: 1\n", "MIIEfakeBODYline0123", "next: 1"},
+	// scrub-cut-5: auth as a word of a name still names a secret, and
+	// an Authorization value as a JSON pair goes.
+	"cut-5 auth":                  {"auth=F4keSecret0 next=1", "F4keSecret0", "next=1"},
+	"cut-5 basicAuth":             {"basicAuth: F4keSecret0", "F4keSecret0", "basicAuth"},
+	"cut-5 AUTH_KEY":              {"AUTH_KEY=F4keSecret0 next=1", "F4keSecret0", "next=1"},
+	"cut-5 an authorization pair": {`{"authorization":"F4keSecret0","n":1}`, "F4keSecret0", `"n":1`},
+	"cut-5 one in a JSON string":  {`{"msg":"{\"Authorization\":\"F4keSecret0\"}","n":1}`, "F4keSecret0", `"n":1`},
 }
 
 // Each credential form leaves the text, and what stands beside it stays.
 func TestScrubRemovesEveryCredentialForm(t *testing.T) {
-	for name, c := range map[string]struct{ in, gone, kept string }{
-		"a name ending in pass":          {"MYSQL_ROOT_PASS=hunter2secret next=1", "hunter2secret", "next=1"},
-		"a short name":                   {"DB_PASS: hunter2secret", "hunter2secret", "DB_PASS"},
-		"a camel-case name":              {"smtpPass=hunter2secret", "hunter2secret", "smtpPass"},
-		"a passphrase":                   {"passphrase: hunter2secret", "hunter2secret", "passphrase"},
-		"a data source name":             {"DSN=user:hunter2secret ok", "hunter2secret", "ok"},
-		"a connection string":            {"connectionString: hunter2secret", "hunter2secret", "connectionString"},
-		"a pair in JSON text":            {`{"name":"PASS","value":"hunter2secret"}`, "hunter2secret", `"name":"PASS"`},
-		"a pair in YAML text":            {"- name: DB_PASS\n  value: hunter2secret\n- name: MODE\n  value: prod\n", "hunter2secret", "value: prod"},
-		"a flag with its value apart":    {"run --db-password hunter2secret --port 80", "hunter2secret", "--port 80"},
-		"a flag in JSON text":            {`["--db-password","hunter2secret"]`, "hunter2secret", "--db-password"},
-		"a JSON string in a JSON log":    {`{"msg":"{\"password\":\"hunter2secret\"}","level":"info"}`, "hunter2secret", `"level":"info"`},
-		"a quote inside a JSON string":   {`{"msg":"{\"password\":\"hun\\\"ter2secret\"}"}`, "ter2secret", "password"},
-		"a MySQL client's joined value":  {"mysql -h db -uroot -phunter2secret shop", "hunter2secret", "-uroot"},
-		"a cookie header":                {"Cookie: session=hunter2secret; theme=dark\nnext line", "hunter2secret", "next line"},
-		"a set-cookie header":            {"Set-Cookie: sid=hunter2secret; Path=/\nnext line", "hunter2secret", "next line"},
-		"a PGP private key":              {"-----BEGIN PGP PRIVATE KEY BLOCK-----\nhunter2secret\n-----END PGP PRIVATE KEY BLOCK-----\nafter", "hunter2secret", "after"},
-		"a YAML block":                   {"password: |\n  hunter2secret\n  line two\nnext: 1\n", "hunter2secret", "next: 1"},
-		"a folded YAML block in a list":  {"users:\n- password: >-\n    hunter2secret\n- name: bob\n", "hunter2secret", "name: bob"},
-		"a URL password with a slash":    {"https://user:pa/hunter2secret@host/x", "hunter2secret", "@host/x"},
-		"a URL password with an at sign": {"postgres://app:p@hunter2secret@db/x", "hunter2secret", "@db/x"},
-		"a URL with no user name":        {"redis://:hunter2secret@redis:6379/0", "hunter2secret", "@redis:6379"},
-		// scrub#10: a pair under a secret-named parent key.
-		"#10 a child of a secret-named key": {"auth:\n  rootPassword: F4keRootPw\n  database: app\n", "F4keRootPw", "database: app"},
-		"#10 an object under such a key":    {`{"auth": {"password": "hunter2secret"}, "db": "app"}`, "hunter2secret", `"db": "app"`},
-		"#10 an object in a JSON string":    {`{"msg":"{\"auth\":{\"password\":\"hunter2secret\"}}","level":"info"}`, "hunter2secret", `"level":"info"`},
-		"#10 a list under such a key":       {`{"passwords": ["hunter2secret", "hunter3"], "db": "app"}`, "hunter2secret", `"db": "app"`},
-		"#10 a value on the next line":      {"password:\n  hunter2secret\nnext: 1\n", "hunter2secret", "next: 1"},
-		// scrub#12: a token right after an escape or a percent-encoded
-		// character, and a GitLab token that ends in -.
-		"#12 a JWT after \\x22":          {`{\x22access_token\x22:\x22eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl\x22}`, "eyJzdWIiOiJhZG1pbiJ9", `{\x22access_token\x22:`},
-		"#12 a JWT after %3D":            {"GET /cb?id_token%3DeyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl&x=1 200", "eyJzdWIiOiJhZG1pbiJ9", "&x=1 200"},
-		"#12 a GitHub token after \\x22": {`{\x22t\x22:\x22ghp_abcdefghijklmnopqrstuvwxyz0123456789\x22}`, "ghp_abcdefghij", `{\x22t\x22:\x22`},
-		"#12 an AWS key after %22":       {"q=%22AKIAIOSFODNN7EXAMPLE%22 200", "AKIAIOSFODNN7EXAMPLE", "q=%22"},
-		"#12 a GitLab token ending in -": {"pushed with glpat-abcdefghij012345678- ok", "glpat-abcdefghij", " ok"},
-		"#12 a Slack token ending in -":  {"posted with xoxb-1234567890-abcdef- ok", "xoxb-1234567890", " ok"},
-		// scrub#13: a user name that holds @.
-		"#13 an e-mail as the user": {"EMAIL_URL=smtps://alerts@example.com:F4keSmtp7x@smtp.example.com:465", "F4keSmtp7x", "@smtp.example.com:465"},
-		// scrub#14: a private key in base64, as a kubeconfig holds one.
-		"#14 client-key-data":       {"users:\n- name: admin\n  user:\n    client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFZmFrZUZBS0VmYWtlMDEyMwotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=\n", "LS0tLS1CRUdJTiBSU0Eg", "name: admin"},
-		"#14 a base64 key in a log": {"loaded key=LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFmYWtlCi0tLS0tRU5EIE9QRU5TU0ggUFJJVkFURSBLRVktLS0tLQo= ok", "LS0tLS1CRUdJTiBPUEVO", " ok"},
-		"#14 any key data":          {"keyData: QUJDREVGRzEyMzQ1Njc4OQ==", "QUJDREVGRzEyMzQ1Njc4OQ==", "keyData"},
-		// scrub#15: a value that holds a redaction and more.
-		"#15 a DSN with a URL password": {`DSN="postgres://app:pw1@db/x?sslpassword=hunter2secret" next=1`, "hunter2secret", "next=1"},
-		"#15 a cookie already masked":   {"Cookie: a=[REDACTED]; sid=hunter2secret\nnext line", "hunter2secret", "next line"},
-		"#15 a quoted pair, half done":  {`password="[REDACTED] hunter2secret" next=1`, "hunter2secret", "next=1"},
-		// scrub-cut-1: a key's body not indented under its block key.
-		"cut-1 a key body not indented": {"privateKey: |\n  -----BEGIN RSA PRIVATE KEY-----\nMIIEfakeBODYline0123\n  -----END RSA PRIVATE KEY-----\nnext: 1\n", "MIIEfakeBODYline0123", "next: 1"},
-		// scrub-cut-5: auth as a word of a name still names a secret, and
-		// an Authorization value as a JSON pair goes.
-		"cut-5 auth":                  {"auth=F4keSecret0 next=1", "F4keSecret0", "next=1"},
-		"cut-5 basicAuth":             {"basicAuth: F4keSecret0", "F4keSecret0", "basicAuth"},
-		"cut-5 AUTH_KEY":              {"AUTH_KEY=F4keSecret0 next=1", "F4keSecret0", "next=1"},
-		"cut-5 an authorization pair": {`{"authorization":"F4keSecret0","n":1}`, "F4keSecret0", `"n":1`},
-		"cut-5 one in a JSON string":  {`{"msg":"{\"Authorization\":\"F4keSecret0\"}","n":1}`, "F4keSecret0", `"n":1`},
-	} {
+	for name, c := range credentialForms {
 		t.Run(name, func(t *testing.T) {
 			out := Text(c.in)
 			if strings.Contains(out, c.gone) {
@@ -357,6 +367,33 @@ func TestCredentialFindsTheReviewedForms(t *testing.T) {
 		"cut-2 a pod name":      {"payments-sk-worker-7f9c8d6b5-x2v7q is crash-looping", false},
 		"cut-2 a key after =":   {"OPENAI_API_KEY=sk-proj-abcdefghij0123456789", true},
 		"cut-2 a key in quotes": {`"sk-ant-api03-abcdefghijklmnop0123"`, true},
+		// scrub-cut-7: each rule's edges, so that a change of one fails.
+		"cut-7 bearer, 19 characters":         {"Authorization: Bearer abcdefghij012345678", false},
+		"cut-7 bearer, 20 characters":         {"Authorization: Bearer abcdefghij0123456789", true},
+		"cut-7 bearer, letters only":          {"Authorization: Bearer abcdefghijklmnopqrstuvwxyz", false},
+		"cut-7 bearer, digits only":           {"Authorization: Bearer 012345678901234567890123", false},
+		"cut-7 AKIA, 15 after":                {"AKIAIOSFODNN7EXAMP", false},
+		"cut-7 ASIA, 16 after":                {"ASIAIOSFODNN7EXAMPLE", true},
+		"cut-7 ghp_, 29 after":                {"ghp_abcdefghijklmnopqrstuvwxyz012", false},
+		"cut-7 gho_, 30 after":                {"gho_abcdefghijklmnopqrstuvwxyz0123", true},
+		"cut-7 github_pat_, 39 after":         {"github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbb", false},
+		"cut-7 github_pat_, 40 after":         {"github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbb", true},
+		"cut-7 xoxb-, 9 after":                {"xoxb-123456789", false},
+		"cut-7 xoxp-, 10 after":               {"xoxp-1234567890", true},
+		"cut-7 sk-, 19 after":                 {"sk-abcdefghij012345678", false},
+		"cut-7 sk-, 20 after":                 {"sk-abcdefghij0123456789", true},
+		"cut-7 AIza, 34 after":                {"AIzaaaaaaaaaaaaaaaaaaaaaaaaa0123456789", false},
+		"cut-7 AIza, 35 after":                {"AIzaaaaaaaaaaaaaaaaaaaaaaaaaa0123456789", true},
+		"cut-7 glpat-, 19 after":              {"glpat-abcdefghij012345678", false},
+		"cut-7 a JWT, short claims":           {"eyJhbGciOiJIUzI1NiJ9.eyJzd.c2lnbmF0dXJl", false},
+		"cut-7 a JWT, six header characters":  {"eyJhbGciO.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", true},
+		"cut-7 a JWT, five header characters": {"eyJhbGci.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", false},
+		"cut-7 a value of 9":                  {"token: abc123def", false},
+		"cut-7 a value of 10":                 {"token: abc123defg", true},
+		"cut-7 a value with no digit":         {"token: abcdefghijklmn", false},
+		"cut-7 a URL with no password":        {"https://user@registry.example.com/v2/", false},
+		"cut-7 a URL with an empty password":  {"https://user:@registry.example.com/v2/", false},
+		"cut-7 basic of a user alone":         {"Authorization: Basic Y2k6", false},
 	} {
 		if got := Credential(c.in); got != c.want {
 			t.Errorf("%s: Credential(%q) = %v", name, c.in, got)
