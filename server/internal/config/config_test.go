@@ -148,12 +148,17 @@ func TestAUsageMessagePrintsNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Read while Parse writes: the usage message is longer than a small pipe
+	// buffer (4 KiB where the user is over fs.pipe-user-pages-soft), and a
+	// write nobody reads blocks for ever.
+	read := make(chan []byte)
+	go func() { b, _ := io.ReadAll(r); read <- b }()
 	stderr := os.Stderr
 	os.Stderr = w
 	_, parseErr := Parse([]string{"-no-such-flag"})
 	os.Stderr = stderr
 	w.Close()
-	usage, _ := io.ReadAll(r)
+	usage := <-read
 	if parseErr == nil || !strings.Contains(string(usage), "-oidc-client-secret") {
 		t.Fatalf("no usage message: %v %q", parseErr, usage)
 	}
